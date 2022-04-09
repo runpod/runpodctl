@@ -20,11 +20,22 @@ type MySelfData struct {
 	Pods []*Pod
 }
 type Pod struct {
-	Id            string
-	Name          string
-	ImageName     string
-	DesiredStatus string
-	Machine       *Machine
+	Id                string
+	ContainerDiskInGb int
+	CostPerHr         float32
+	DesiredStatus     string
+	DockerArgs        string
+	Env               []string
+	GpuCount          int
+	ImageName         string
+	MemoryInGb        int
+	Name              string
+	PodType           string
+	Ports             string
+	VcpuCount         int
+	VolumeInGb        int
+	VolumeMountPath   string
+	Machine           *Machine
 }
 type Machine struct {
 	GpuDisplayName string
@@ -37,25 +48,25 @@ func QueryPods() (pods []*Pod, err error) {
 			myself {
 			  pods {
 				id
-				machineId
-				name
-				dockerId
+				containerDiskInGb
+				costPerHr
+				desiredStatus
 				dockerArgs
+				dockerId
+				env
+				gpuCount
 				imageName
+				lastStatusChange
+				machineId
+				memoryInGb
+				name
+				podType
 				port
 				ports
-				podType
-				gpuCount
+				uptimeSeconds
 				vcpuCount
-				containerDiskInGb
-				memoryInGb
 				volumeInGb
 				volumeMountPath
-				desiredStatus
-				uptimeSeconds
-				costPerHr
-				env
-				lastStatusChange
 				machine {
 				  gpuDisplayName
 				}

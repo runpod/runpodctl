@@ -4,7 +4,6 @@ import (
 	"os"
 
 	"cli/cmd/config"
-	"cli/cmd/pod"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -12,9 +11,9 @@ import (
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "runpod-cli",
-	Short: "RunPod CLI",
-	Long:  "RUNPOD CLI",
+	Use:   "runpodctl",
+	Short: "runpodctl for runpod.io",
+	Long:  "runpodctl is a CLI tool to manage your pods for runpod.io",
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -28,7 +27,7 @@ func Execute() {
 
 func init() {
 	cobra.OnInitialize(initConfig)
-	rootCmd.AddCommand(pod.PodCmd)
+	rootCmd.AddCommand(getCmd)
 	rootCmd.AddCommand(config.ConfigCmd)
 }
 
