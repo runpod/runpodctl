@@ -2,7 +2,7 @@ package pod
 
 import (
 	"cli/api"
-	"cli/table"
+	"cli/format"
 	"fmt"
 	"os"
 	"strings"
@@ -53,7 +53,7 @@ var GetPodCmd = &cobra.Command{
 		tb := tablewriter.NewWriter(os.Stdout)
 		tb.SetHeader(header)
 		tb.AppendBulk(data)
-		table.Defaults(tb)
+		format.TableDefaults(tb)
 		tb.Render()
 	},
 }

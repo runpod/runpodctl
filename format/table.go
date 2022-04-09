@@ -1,10 +1,10 @@
-package table
+package format
 
 import (
 	"github.com/olekukonko/tablewriter"
 )
 
-func Defaults(table *tablewriter.Table) {
+func TableDefaults(table *tablewriter.Table) {
 	table.SetAutoWrapText(false)
 	table.SetAutoFormatHeaders(true)
 	table.SetHeaderAlignment(tablewriter.ALIGN_LEFT)
