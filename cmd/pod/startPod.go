@@ -13,13 +13,13 @@ var StartPodCmd = &cobra.Command{
 	Use:     "pod [podId]",
 	Aliases: []string{"pods"},
 	Args:    cobra.ExactArgs(1),
-	Short:   "get all pods",
-	Long:    "get all pods or specify pod id",
+	Short:   "start a pod",
+	Long:    "start a pod from runpod.io",
 	Run: func(cmd *cobra.Command, args []string) {
 		var err error
 		var pod map[string]interface{}
 		if bidPerGpu > 0 {
-			pod, err = api.PodBidResume(args[0], bidPerGpu)
+			pod, err = api.StartSpotPod(args[0], bidPerGpu)
 		}
 		cobra.CheckErr(err)
 

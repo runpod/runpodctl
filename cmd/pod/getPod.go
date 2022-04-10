@@ -23,8 +23,6 @@ var GetPodCmd = &cobra.Command{
 		pods, err := api.GetPods()
 		cobra.CheckErr(err)
 
-		fmt.Println(AllFields)
-
 		data := make([][]string, len(pods))
 		for i, p := range pods {
 			if len(args) == 1 && p.Id != strings.ToLower(args[0]) {
