@@ -14,7 +14,7 @@ var StopPodCmd = &cobra.Command{
 	Short:   "get all pods",
 	Long:    "get all pods or specify pod id",
 	Run: func(cmd *cobra.Command, args []string) {
-		pod, err := api.StopPod(args[0])
+		pod, err := api.PodStop(args[0])
 		cobra.CheckErr(err)
 
 		if pod["desiredStatus"] == "EXITED" {

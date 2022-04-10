@@ -77,37 +77,37 @@ func GetPods() (pods []*Pod, err error) {
 	}
 	res, err := Query(input)
 	if err != nil {
-		err = fmt.Errorf("QueryPods: %s", err.Error())
+		err = fmt.Errorf("GetPods: %s", err.Error())
 		return
 	}
 	if res.StatusCode != 200 {
-		err = fmt.Errorf("QueryPods: statuscode %d", res.StatusCode)
+		err = fmt.Errorf("GetPods: statuscode %d", res.StatusCode)
 		return
 	}
 	defer res.Body.Close()
 	rawData, err := ioutil.ReadAll(res.Body)
 	if err != nil {
-		err = fmt.Errorf("QueryPods: %s", err.Error())
+		err = fmt.Errorf("GetPods: %s", err.Error())
 		return
 	}
 	data := &PodOut{}
 	if err = json.Unmarshal(rawData, data); err != nil {
-		err = fmt.Errorf("QueryPods: %s", err.Error())
+		err = fmt.Errorf("GetPods: %s", err.Error())
 		return
 	}
 	if len(data.Errors) > 0 {
-		err = fmt.Errorf("pods query error: %s", data.Errors[0].Message)
+		err = fmt.Errorf("GetPods: %s", data.Errors[0].Message)
 		return
 	}
 	if data == nil || data.Data == nil || data.Data.Myself == nil || data.Data.Myself.Pods == nil {
-		err = fmt.Errorf("QueryPods: data is nil: %s", string(rawData))
+		err = fmt.Errorf("GetPods: data is nil: %s", string(rawData))
 		return
 	}
 	pods = data.Data.Myself.Pods
 	return
 }
 
-func StopPod(id string) (podStop map[string]interface{}, err error) {
+func PodStop(id string) (podStop map[string]interface{}, err error) {
 	input := Input{
 		Query: `
 		mutation stopPod($podId: String!) {
@@ -118,7 +118,7 @@ func StopPod(id string) (podStop map[string]interface{}, err error) {
 		    }
 		  }
 		`,
-		Variables: map[string]string{"podId": id},
+		Variables: map[string]interface{}{"podId": id},
 	}
 	res, err := Query(input)
 	if err != nil {
@@ -140,9 +140,10 @@ func StopPod(id string) (podStop map[string]interface{}, err error) {
 		err = fmt.Errorf("StopPod: %s", err.Error())
 		return
 	}
-	errors, ok := data["errors"].([]map[string]string)
+	errors, ok := data["errors"].([]interface{})
 	if ok && len(errors) > 0 {
-		err = fmt.Errorf("pods query error: %s", errors[0]["message"])
+		firstErr, _ := errors[0].(map[string]interface{})
+		err = fmt.Errorf("StopPod: %s", firstErr["message"])
 		return
 	}
 	gqldata, ok := data["data"].(map[string]interface{})
@@ -153,6 +154,60 @@ func StopPod(id string) (podStop map[string]interface{}, err error) {
 	podStop, ok = gqldata["podStop"].(map[string]interface{})
 	if !ok || podStop == nil {
 		err = fmt.Errorf("StopPod: podStop is nil: %s", string(rawData))
+		return
+	}
+	return
+}
+
+func PodBidResume(id string, bidPerGpu float32) (podBidResume map[string]interface{}, err error) {
+	input := Input{
+		Query: `
+		mutation Mutation($podId: String!, $bidPerGpu: Float!) {
+			podBidResume(input: {podId: $podId, bidPerGpu: $bidPerGpu}) {
+			  id
+			  consumerUserId
+			  desiredStatus
+			  machineId
+			  version
+			}
+		}
+		`,
+		Variables: map[string]interface{}{"podId": id, "bidPerGpu": bidPerGpu},
+	}
+	res, err := Query(input)
+	if err != nil {
+		err = fmt.Errorf("PodBidResume: %s", err.Error())
+		return
+	}
+	if res.StatusCode != 200 {
+		err = fmt.Errorf("PodBidResume: statuscode %d", res.StatusCode)
+		return
+	}
+	defer res.Body.Close()
+	rawData, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		err = fmt.Errorf("PodBidResume: %s", err.Error())
+		return
+	}
+	data := make(map[string]interface{})
+	if err = json.Unmarshal(rawData, &data); err != nil {
+		err = fmt.Errorf("PodBidResume: %s", err.Error())
+		return
+	}
+	errors, ok := data["errors"].([]interface{})
+	if ok && len(errors) > 0 {
+		firstErr, _ := errors[0].(map[string]interface{})
+		err = fmt.Errorf("PodBidResume: %s", firstErr["message"])
+		return
+	}
+	gqldata, ok := data["data"].(map[string]interface{})
+	if !ok || gqldata == nil {
+		err = fmt.Errorf("PodBidResume: data is nil: %s", string(rawData))
+		return
+	}
+	podBidResume, ok = gqldata["podBidResume"].(map[string]interface{})
+	if !ok || podBidResume == nil {
+		err = fmt.Errorf("PodBidResume: podBidResume is nil: %s", string(rawData))
 		return
 	}
 	return

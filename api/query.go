@@ -12,8 +12,8 @@ import (
 var apiUrl = "https://api.dev.runpod.io/graphql"
 
 type Input struct {
-	Query     string            `json:"query"`
-	Variables map[string]string `json:"variables"`
+	Query     string                 `json:"query"`
+	Variables map[string]interface{} `json:"variables"`
 }
 
 func Query(input Input) (res *http.Response, err error) {
