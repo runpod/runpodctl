@@ -27,8 +27,9 @@ func Execute() {
 
 func init() {
 	cobra.OnInitialize(initConfig)
-	rootCmd.AddCommand(getCmd)
 	rootCmd.AddCommand(config.ConfigCmd)
+	rootCmd.AddCommand(getCmd)
+	rootCmd.AddCommand(stopCmd)
 }
 
 // initConfig reads in config file and ENV variables if set.

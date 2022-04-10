@@ -41,7 +41,7 @@ type Machine struct {
 	GpuDisplayName string
 }
 
-func QueryPods() (pods []*Pod, err error) {
+func GetPods() (pods []*Pod, err error) {
 	input := Input{
 		Query: `
 		query myPods {
@@ -104,5 +104,56 @@ func QueryPods() (pods []*Pod, err error) {
 		return
 	}
 	pods = data.Data.Myself.Pods
+	return
+}
+
+func StopPod(id string) (podStop map[string]interface{}, err error) {
+	input := Input{
+		Query: `
+		mutation stopPod($podId: String!) {
+		  podStop(input: {podId:  $podId}) {
+			  id
+			  desiredStatus
+			  lastStatusChange
+		    }
+		  }
+		`,
+		Variables: map[string]string{"podId": id},
+	}
+	res, err := Query(input)
+	if err != nil {
+		err = fmt.Errorf("StopPod: %s", err.Error())
+		return
+	}
+	if res.StatusCode != 200 {
+		err = fmt.Errorf("StopPod: statuscode %d", res.StatusCode)
+		return
+	}
+	defer res.Body.Close()
+	rawData, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		err = fmt.Errorf("StopPod: %s", err.Error())
+		return
+	}
+	data := make(map[string]interface{})
+	if err = json.Unmarshal(rawData, &data); err != nil {
+		err = fmt.Errorf("StopPod: %s", err.Error())
+		return
+	}
+	errors, ok := data["errors"].([]map[string]string)
+	if ok && len(errors) > 0 {
+		err = fmt.Errorf("pods query error: %s", errors[0]["message"])
+		return
+	}
+	gqldata, ok := data["data"].(map[string]interface{})
+	if !ok || gqldata == nil {
+		err = fmt.Errorf("StopPod: data is nil: %s", string(rawData))
+		return
+	}
+	podStop, ok = gqldata["podStop"].(map[string]interface{})
+	if !ok || podStop == nil {
+		err = fmt.Errorf("StopPod: podStop is nil: %s", string(rawData))
+		return
+	}
 	return
 }

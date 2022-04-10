@@ -20,7 +20,7 @@ var GetPodCmd = &cobra.Command{
 	Short:   "get all pods",
 	Long:    "get all pods or specify pod id",
 	Run: func(cmd *cobra.Command, args []string) {
-		pods, err := api.QueryPods()
+		pods, err := api.GetPods()
 		cobra.CheckErr(err)
 
 		fmt.Println(AllFields)
