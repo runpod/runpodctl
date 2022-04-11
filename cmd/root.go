@@ -10,7 +10,7 @@ import (
 )
 
 // rootCmd represents the base command when called without any subcommands
-var rootCmd = &cobra.Command{
+var RootCmd = &cobra.Command{
 	Use:   "runpodctl",
 	Short: "runpodctl for runpod.io",
 	Long:  "runpodctl is a CLI tool to manage your pods for runpod.io",
@@ -19,7 +19,7 @@ var rootCmd = &cobra.Command{
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
-	err := rootCmd.Execute()
+	err := RootCmd.Execute()
 	if err != nil {
 		os.Exit(1)
 	}
@@ -27,11 +27,11 @@ func Execute() {
 
 func init() {
 	cobra.OnInitialize(initConfig)
-	rootCmd.AddCommand(config.ConfigCmd)
-	rootCmd.AddCommand(getCmd)
-	rootCmd.AddCommand(removeCmd)
-	rootCmd.AddCommand(startCmd)
-	rootCmd.AddCommand(stopCmd)
+	RootCmd.AddCommand(config.ConfigCmd)
+	RootCmd.AddCommand(getCmd)
+	RootCmd.AddCommand(removeCmd)
+	RootCmd.AddCommand(startCmd)
+	RootCmd.AddCommand(stopCmd)
 }
 
 // initConfig reads in config file and ENV variables if set.
