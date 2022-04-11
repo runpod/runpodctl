@@ -9,6 +9,8 @@ import (
 	"github.com/spf13/viper"
 )
 
+var version string
+
 // rootCmd represents the base command when called without any subcommands
 var RootCmd = &cobra.Command{
 	Use:   "runpodctl",
@@ -18,7 +20,8 @@ var RootCmd = &cobra.Command{
 
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
-func Execute() {
+func Execute(ver string) {
+	version = ver
 	err := RootCmd.Execute()
 	if err != nil {
 		os.Exit(1)
@@ -32,6 +35,7 @@ func init() {
 	RootCmd.AddCommand(removeCmd)
 	RootCmd.AddCommand(startCmd)
 	RootCmd.AddCommand(stopCmd)
+	RootCmd.AddCommand(versionCmd)
 }
 
 // initConfig reads in config file and ENV variables if set.
