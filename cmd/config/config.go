@@ -9,6 +9,7 @@ import (
 
 var ConfigFile string
 var apiKey string
+var apiUrl string
 
 var ConfigCmd = &cobra.Command{
 	Use:   "config",
@@ -27,7 +28,7 @@ func init() {
 	viper.BindPFlag("apiKey", ConfigCmd.Flags().Lookup("apiKey"))
 	viper.SetDefault("apiKey", "")
 
-	ConfigCmd.Flags().StringVar(&apiKey, "apiUrl", "", "runpod api url")
+	ConfigCmd.Flags().StringVar(&apiUrl, "apiUrl", "", "runpod api url")
 	viper.BindPFlag("apiUrl", ConfigCmd.Flags().Lookup("apiUrl"))
 	viper.SetDefault("apiUrl", "https://api.runpod.io/graphql")
 }
