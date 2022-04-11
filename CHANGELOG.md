@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.1.0](https://github.com/Run-Pod/runpodctl/compare/v1.0.0...v1.1.0) (2022-04-11)
+
+
+### Features
+
+* add darwin arm build ([9273929](https://github.com/Run-Pod/runpodctl/commit/92739299871660cd977681a782bca6d52c586a0e))
+* add to readme ([0986e69](https://github.com/Run-Pod/runpodctl/commit/0986e693ebc4d936b289b7b6e806f9fe500a5a27))
+* add version command ([bce6eeb](https://github.com/Run-Pod/runpodctl/commit/bce6eeb4e02737603f2aae3627c81ea1266459a9))
+
+
+### Bug Fixes
+
+* config api url ([aa8a6e6](https://github.com/Run-Pod/runpodctl/commit/aa8a6e603873df94d6930f4ec9155ed24273de24))
+
 ## 1.0.0 (2022-04-11)
 
 
