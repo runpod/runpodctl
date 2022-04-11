@@ -14,6 +14,7 @@ runpodctl config [flags]
 
 ```
       --apiKey string   runpod api key
+      --apiUrl string   runpod api url
   -h, --help            help for config
 ```
 
