@@ -1,0 +1,44 @@
+---
+name: release
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  release:
+    concurrency: main
+    name: release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: google-github-actions/release-please-action@v3
+        id: release
+        with:
+          release-type: go
+          package-name: runpodctl
+          pull-request-title-pattern: release${component} ${version}
+
+      - uses: actions/checkout@v2
+        if: ${{ steps.release.outputs.release_created }}
+      - uses: actions/setup-go@v2
+        if: ${{ steps.release.outputs.release_created }}
+        with:
+          go-version: 1.17
+
+      - name: build
+        if: ${{ steps.release.outputs.release_created }}
+        run: |
+          env GOOS=linux GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-amd .
+
+      - name: Upload release binary
+        if: ${{ steps.release.outputs.release_created }}
+        uses: actions/upload-release-asset@v1.0.2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          upload_url: ${{ steps.release.outputs.upload_url }}
+          asset_path: bin/runpodctl-amd
+          asset_name: runpodctl-amd
+          asset_content_type: application/octet-stream
