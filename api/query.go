@@ -9,8 +9,6 @@ import (
 	"github.com/spf13/viper"
 )
 
-var apiUrl = "https://api.dev.runpod.io/graphql"
-
 type Input struct {
 	Query     string                 `json:"query"`
 	Variables map[string]interface{} `json:"variables"`
@@ -21,7 +19,7 @@ func Query(input Input) (res *http.Response, err error) {
 	if err != nil {
 		return
 	}
-	req, err := http.NewRequest("POST", apiUrl+"?api_key="+viper.GetString("apiKey"), bytes.NewBuffer(jsonValue))
+	req, err := http.NewRequest("POST", viper.GetString("apiUrl")+"?api_key="+viper.GetString("apiKey"), bytes.NewBuffer(jsonValue))
 	if err != nil {
 		return
 	}

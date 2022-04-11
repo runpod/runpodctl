@@ -1,9 +1,7 @@
 package config
 
 import (
-	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -17,10 +15,6 @@ var ConfigCmd = &cobra.Command{
 	Short: "CLI Config",
 	Long:  "RunPod CLI Config Settings",
 	Run: func(c *cobra.Command, args []string) {
-		apiKey = strings.TrimSpace(apiKey)
-		if len(apiKey) == 0 {
-			cobra.CheckErr(errors.New("apiKey cannot be empty"))
-		}
 		err := viper.WriteConfig()
 		cobra.CheckErr(err)
 
@@ -30,7 +24,10 @@ var ConfigCmd = &cobra.Command{
 
 func init() {
 	ConfigCmd.Flags().StringVar(&apiKey, "apiKey", "", "runpod api key")
-	ConfigCmd.MarkFlagRequired("apiKey")
 	viper.BindPFlag("apiKey", ConfigCmd.Flags().Lookup("apiKey"))
 	viper.SetDefault("apiKey", "")
+
+	ConfigCmd.Flags().StringVar(&apiKey, "apiUrl", "", "runpod api url")
+	viper.BindPFlag("apiUrl", ConfigCmd.Flags().Lookup("apiUrl"))
+	viper.SetDefault("apiUrl", "https://api.runpod.io/graphql")
 }
