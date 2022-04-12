@@ -105,6 +105,77 @@ func GetPods() (pods []*Pod, err error) {
 	return
 }
 
+type CreatePodInput struct {
+	CloudType         string    `json:"cloudType"`
+	ContainerDiskInGb int       `json:"containerDiskInGb"`
+	DeployCost        float32   `json:"deployCost"`
+	DockerArgs        string    `json:"dockerArgs"`
+	Env               []*PodEnv `json:"env"`
+	GpuCount          int       `json:"gpuCount"`
+	GpuTypeId         string    `json:"gpuTypeId"`
+	ImageName         string    `json:"imageName"`
+	MinMemoryInGb     int       `json:"minMemoryInGb"`
+	MinVcpuCount      int       `json:"minVcpuCount"`
+	Name              string    `json:"name"`
+	Ports             string    `json:"ports"`
+	VolumeInGb        int       `json:"volumeInGb"`
+	VolumeMountPath   string    `json:"volumeMountPath"`
+}
+type PodEnv struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+func CreatePod(podInput *CreatePodInput) (pod map[string]interface{}, err error) {
+	input := Input{
+		Query: `
+		mutation createPod($input: PodFindAndDeployOnDemandInput!) {
+			podFindAndDeployOnDemand(input: $input) {
+			  id
+			  costPerHr
+			  desiredStatus
+			  lastStatusChange
+			}
+		}
+		`,
+		Variables: map[string]interface{}{"input": podInput},
+	}
+	res, err := Query(input)
+	if err != nil {
+		return
+	}
+	defer res.Body.Close()
+	rawData, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return
+	}
+	if res.StatusCode != 200 {
+		err = fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
+		return
+	}
+	data := make(map[string]interface{})
+	if err = json.Unmarshal(rawData, &data); err != nil {
+		return
+	}
+	gqlErrors, ok := data["errors"].([]interface{})
+	if ok && len(gqlErrors) > 0 {
+		firstErr, _ := gqlErrors[0].(map[string]interface{})
+		err = errors.New(firstErr["message"].(string))
+		return
+	}
+	gqldata, ok := data["data"].(map[string]interface{})
+	if !ok || gqldata == nil {
+		err = fmt.Errorf("data is nil: %s", string(rawData))
+		return
+	}
+	pod, ok = gqldata["podFindAndDeployOnDemand"].(map[string]interface{})
+	if !ok || pod == nil {
+		err = fmt.Errorf("pod is nil: %s", string(rawData))
+		return
+	}
+	return
+}
+
 func StopPod(id string) (podStop map[string]interface{}, err error) {
 	input := Input{
 		Query: `
@@ -201,8 +272,8 @@ func StartOnDemandPod(id string) (pod map[string]interface{}, err error) {
 		mutation podResume($podId: String!) {
 		  podResume(input: {podId: $podId}) {
 			id
-			desiredStatus
 			costPerHr
+			desiredStatus
 			lastStatusChange
 		  }
 		}
@@ -251,8 +322,8 @@ func StartSpotPod(id string, bidPerGpu float32) (podBidResume map[string]interfa
 		mutation Mutation($podId: String!, $bidPerGpu: Float!) {
 			podBidResume(input: {podId: $podId, bidPerGpu: $bidPerGpu}) {
 			  id
-			  desiredStatus
 			  costPerHr
+			  desiredStatus
 			  lastStatusChange
 			}
 		}
