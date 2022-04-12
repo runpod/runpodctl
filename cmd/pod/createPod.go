@@ -76,7 +76,7 @@ func init() {
 	CreatePodCmd.Flags().BoolVar(&communityCloud, "communityCloud", false, "create in community cloud")
 	CreatePodCmd.Flags().BoolVar(&secureCloud, "secureCloud", false, "create in secure cloud")
 	CreatePodCmd.Flags().IntVar(&containerDiskInGb, "containerDiskSize", 20, "container disk size in GB")
-	CreatePodCmd.Flags().Float32Var(&deployCost, "cost", 0, "max $ / hr your willing to pay")
+	CreatePodCmd.Flags().Float32Var(&deployCost, "cost", 0, "$/hr price ceiling, if not defined, pod will be created with lowest price available")
 	CreatePodCmd.Flags().StringVar(&dockerArgs, "args", "", "container arguments")
 	CreatePodCmd.Flags().StringSliceVar(&env, "env", nil, "container arguments")
 	CreatePodCmd.Flags().IntVar(&gpuCount, "gpuCount", 1, "number of GPUs for the pod")
@@ -89,7 +89,6 @@ func init() {
 	CreatePodCmd.Flags().IntVar(&volumeInGb, "volumeSize", 1, "persistant volume disk size in GB")
 	CreatePodCmd.Flags().StringVar(&volumeMountPath, "volumePath", "/runpod", "container volume path")
 
-	CreatePodCmd.MarkFlagRequired("cost")
 	CreatePodCmd.MarkFlagRequired("gpuType")
 	CreatePodCmd.MarkFlagRequired("imageName")
 }
