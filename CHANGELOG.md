@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.2.0](https://github.com/Run-Pod/runpodctl/compare/v1.1.0...v1.2.0) (2022-04-12)
+
+
+### Features
+
+* add ondemand pod start ([2b8ddfa](https://github.com/Run-Pod/runpodctl/commit/2b8ddfaf87436785b12cbc03541d43f8e499b6b1))
+* update docs ([00ef4d3](https://github.com/Run-Pod/runpodctl/commit/00ef4d377adba4fa69667a081a70869c3c7fcbfe))
+
+
+### Bug Fixes
+
+* api key argument ([ad750c8](https://github.com/Run-Pod/runpodctl/commit/ad750c8079e447158729e6ca0718a835608039e7))
+* release link ([5929dc7](https://github.com/Run-Pod/runpodctl/commit/5929dc74ea6fefcc7560c4b95fb0e5ae74b34f22))
+* release link ([6180027](https://github.com/Run-Pod/runpodctl/commit/61800275ab24f40bcadf909a1386ebad01032544))
+
 ## [1.1.0](https://github.com/Run-Pod/runpodctl/compare/v1.0.0...v1.1.0) (2022-04-11)
 
 
