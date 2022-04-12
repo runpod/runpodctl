@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.3.0](https://github.com/Run-Pod/runpodctl/compare/v1.2.0...v1.3.0) (2022-04-12)
+
+
+### Features
+
+* add windows build ([7e1d614](https://github.com/Run-Pod/runpodctl/commit/7e1d614e478bfe3bf92ff1a85a806d7961b8e129))
+* create pod ([fddf882](https://github.com/Run-Pod/runpodctl/commit/fddf882211f30e6f5822f59e2cdc2ebb3077c24f))
+* implement get cloud ([bf4cad6](https://github.com/Run-Pod/runpodctl/commit/bf4cad661ca0a14d3a13afbe6b3263a749e4efd2))
+* update readme ([11ea5b6](https://github.com/Run-Pod/runpodctl/commit/11ea5b6af9863fbf0b89a209f92323b932eec3d3))
+
 ## [1.2.0](https://github.com/Run-Pod/runpodctl/compare/v1.1.0...v1.2.0) (2022-04-12)
 
 
