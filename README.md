@@ -9,7 +9,7 @@ Visit [docs](doc/runpodctl.md) for details of all commands.
 
 First configure the API key. You can get API key from [runpod](https://runpod.io/client/settings).
 ```
-runpodctl config --api-key={key}
+runpodctl config --apiKey={key}
 ```
 Get all pods:
 ```
