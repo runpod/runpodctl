@@ -20,11 +20,13 @@ var StartPodCmd = &cobra.Command{
 		var pod map[string]interface{}
 		if bidPerGpu > 0 {
 			pod, err = api.StartSpotPod(args[0], bidPerGpu)
+		} else {
+			pod, err = api.StartOnDemandPod(args[0])
 		}
 		cobra.CheckErr(err)
 
 		if pod["desiredStatus"] == "RUNNING" {
-			fmt.Printf(`pod "%s" started`, args[0])
+			fmt.Printf(`pod "%s" started with $%.3f / hr`, args[0], pod["costPerHr"])
 			fmt.Println()
 		} else {
 			cobra.CheckErr(fmt.Errorf(`pod "%s" start failed; status is %s`, args[0], pod["desiredStatus"]))

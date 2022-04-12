@@ -195,16 +195,65 @@ func RemovePod(id string) (ok bool, err error) {
 	return
 }
 
+func StartOnDemandPod(id string) (pod map[string]interface{}, err error) {
+	input := Input{
+		Query: `
+		mutation podResume($podId: String!) {
+		  podResume(input: {podId: $podId}) {
+			id
+			desiredStatus
+			costPerHr
+			lastStatusChange
+		  }
+		}
+		`,
+		Variables: map[string]interface{}{"podId": id},
+	}
+	res, err := Query(input)
+	if err != nil {
+		return
+	}
+	if res.StatusCode != 200 {
+		err = fmt.Errorf("PodBidResume: statuscode %d", res.StatusCode)
+		return
+	}
+	defer res.Body.Close()
+	rawData, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return
+	}
+	data := make(map[string]interface{})
+	if err = json.Unmarshal(rawData, &data); err != nil {
+		return
+	}
+	gqlErrors, ok := data["errors"].([]interface{})
+	if ok && len(gqlErrors) > 0 {
+		firstErr, _ := gqlErrors[0].(map[string]interface{})
+		err = errors.New(firstErr["message"].(string))
+		return
+	}
+	gqldata, ok := data["data"].(map[string]interface{})
+	if !ok || gqldata == nil {
+		err = fmt.Errorf("data is nil: %s", string(rawData))
+		return
+	}
+	pod, ok = gqldata["podResume"].(map[string]interface{})
+	if !ok || pod == nil {
+		err = fmt.Errorf("pod is nil: %s", string(rawData))
+		return
+	}
+	return
+}
+
 func StartSpotPod(id string, bidPerGpu float32) (podBidResume map[string]interface{}, err error) {
 	input := Input{
 		Query: `
 		mutation Mutation($podId: String!, $bidPerGpu: Float!) {
 			podBidResume(input: {podId: $podId, bidPerGpu: $bidPerGpu}) {
 			  id
-			  consumerUserId
 			  desiredStatus
-			  machineId
-			  version
+			  costPerHr
+			  lastStatusChange
 			}
 		}
 		`,
