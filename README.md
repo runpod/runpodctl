@@ -15,11 +15,19 @@ Get all pods:
 ```
 runpodctl get pod
 ```
+Get a pod:
+```
+runpodctl get pod {podId}
+```
+Start an ondemand pod.
+```
+runpodctl start pod {podId}
+```
+Start a spot pod with bid. The bid price you set is the price you will pay if not outbid:
+```
+runpodctl start pod {podId} --bid=0.3
+```
 Stop a pod:
 ```
 runpodctl stop pod {podId}
-```
-Start a pod with bid (only for spot pods). The bid price you set is the price you will pay if not outbid:
-```
-runpodctl start pod {podId} --bid=0.3
 ```
