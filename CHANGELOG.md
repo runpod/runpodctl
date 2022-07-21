@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/Run-Pod/runpodctl/compare/v1.3.0...v1.4.0) (2022-07-21)
+
+
+### Features
+
+* allow RUNPOD_API_KEY env to overwrite config api key ([e38f6a3](https://github.com/Run-Pod/runpodctl/commit/e38f6a3ead2b5dbaa5ef4d4d7014ee925a07b128))
+
 ## [1.3.0](https://github.com/Run-Pod/runpodctl/compare/v1.2.0...v1.3.0) (2022-04-12)
 
 
