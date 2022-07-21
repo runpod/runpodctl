@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/spf13/viper"
@@ -19,7 +20,12 @@ func Query(input Input) (res *http.Response, err error) {
 	if err != nil {
 		return
 	}
-	req, err := http.NewRequest("POST", viper.GetString("apiUrl")+"?api_key="+viper.GetString("apiKey"), bytes.NewBuffer(jsonValue))
+
+	apiKey := os.Getenv("RUNPOD_API_KEY")
+	if apiKey == "" {
+		apiKey = viper.GetString("apiKey")
+	}
+	req, err := http.NewRequest("POST", viper.GetString("apiUrl")+"?api_key="+apiKey, bytes.NewBuffer(jsonValue))
 	if err != nil {
 		return
 	}
