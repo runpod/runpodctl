@@ -21,11 +21,15 @@ func Query(input Input) (res *http.Response, err error) {
 		return
 	}
 
+	apiUrl := os.Getenv("RUNPOD_API_URL")
+	if apiUrl == "" {
+		apiUrl = viper.GetString("apiUrl")
+	}
 	apiKey := os.Getenv("RUNPOD_API_KEY")
 	if apiKey == "" {
 		apiKey = viper.GetString("apiKey")
 	}
-	req, err := http.NewRequest("POST", viper.GetString("apiUrl")+"?api_key="+apiKey, bytes.NewBuffer(jsonValue))
+	req, err := http.NewRequest("POST", apiUrl+"?api_key="+apiKey, bytes.NewBuffer(jsonValue))
 	if err != nil {
 		return
 	}
