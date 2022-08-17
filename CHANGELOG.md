@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/Run-Pod/runpodctl/compare/v1.4.0...v1.5.0) (2022-08-17)
+
+
+### Features
+
+* allow RUNPOD_API_URL env if api url is not defined in config ([6e012f6](https://github.com/Run-Pod/runpodctl/commit/6e012f6f55680a72192c144192a10556d9cc497a))
+
 ## [1.4.0](https://github.com/Run-Pod/runpodctl/compare/v1.3.0...v1.4.0) (2022-07-21)
 
 
