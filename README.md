@@ -2,12 +2,10 @@
 runpodctl is a CLI tool to automate / manage GPU pods for [rundpod.io](https://runpod.io).
 
 <br />
-<br />
 
 # install
 get latest binary from [releases](https://github.com/Run-Pod/runpodctl/releases)
 
-<br />
 <br />
 
 # how to transfer data
@@ -33,7 +31,6 @@ Receiving (<-149.36.0.243:8692)
 data.txt 100% |████████████████████| ( 5/ 5B, 0.040 kB/s)
 ```
 
-<br />
 <br />
 
 # how to manage pods
@@ -66,7 +63,10 @@ runpodctl stop pod {podId}
 
 <br />
 <br />
-<br />
 
 # thanks to
+- [cobra](https://github.com/spf13/cobra)
 - [croc](https://github.com/schollz/croc)
+- [golang](https://go.dev/)
+- [nebula](https://github.com/slackhq/nebula)
+- [viper](https://github.com/spf13/viper)
