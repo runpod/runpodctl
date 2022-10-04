@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.1](https://github.com/Run-Pod/runpodctl/compare/v1.6.0...v1.6.1) (2022-10-04)
+
+
+### Bug Fixes
+
+* add modules ([99af571](https://github.com/Run-Pod/runpodctl/commit/99af571227a41e4eab106e78af7e5097910ef8db))
+
 ## [1.6.0](https://github.com/Run-Pod/runpodctl/compare/v1.5.0...v1.6.0) (2022-10-04)
 
 
