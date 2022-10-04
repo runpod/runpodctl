@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"cli/cmd/config"
+	"cli/cmd/croc"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -31,12 +32,17 @@ func Execute(ver string) {
 func init() {
 	cobra.OnInitialize(initConfig)
 	RootCmd.AddCommand(config.ConfigCmd)
+	// RootCmd.AddCommand(connectCmd)
+	// RootCmd.AddCommand(copyCmd)
 	RootCmd.AddCommand(createCmd)
 	RootCmd.AddCommand(getCmd)
 	RootCmd.AddCommand(removeCmd)
 	RootCmd.AddCommand(startCmd)
 	RootCmd.AddCommand(stopCmd)
 	RootCmd.AddCommand(versionCmd)
+
+	RootCmd.AddCommand(croc.ReceiveCmd)
+	RootCmd.AddCommand(croc.SendCmd)
 }
 
 // initConfig reads in config file and ENV variables if set.
