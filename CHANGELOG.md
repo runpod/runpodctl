@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.0](https://github.com/Run-Pod/runpodctl/compare/v1.5.0...v1.6.0) (2022-10-04)
+
+
+### Features
+
+* use croc lib to add send and receive ([be3c162](https://github.com/Run-Pod/runpodctl/commit/be3c1620ff5c37060714e026fd810d1069e985ac))
+
 ## [1.5.0](https://github.com/Run-Pod/runpodctl/compare/v1.4.0...v1.5.0) (2022-08-17)
 
 
