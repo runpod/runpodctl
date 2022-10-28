@@ -6,9 +6,11 @@ runpodctl is a CLI tool to automate / manage GPU pods for [rundpod.io](https://r
 # install
 get latest binary from [releases](https://github.com/Run-Pod/runpodctl/releases)
 
+```
 wget --quiet --show-progress https://github.com/Run-Pod/runpodctl/releases/download/v1.6.1/runpodctl-linux-amd -O runpodctl
 chmod +x runpodctl
 cp runpodctl /usr/bin/runpodctl
+```
 
 <br />
 
