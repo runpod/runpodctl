@@ -1,5 +1,5 @@
 # runpodctl
-runpodctl is a CLI tool to automate / manage GPU pods for [rundpod.io](https://runpod.io).
+runpodctl is a CLI tool to automate / manage GPU pods for [runpod.io](https://runpod.io).
 
 <br />
 
