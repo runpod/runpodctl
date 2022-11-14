@@ -1,11 +1,10 @@
 # runpodctl
 runpodctl is a CLI tool to automate / manage GPU pods for [runpod.io](https://runpod.io).
+all pods automatically come with runpodctl installed with a pod-scoped API key!
 
 <br />
 
-## pods automatically come with runpodctl installed!
-
-# install linux/osx command line
+## install linux/osx command line
 get latest binary from [releases](https://github.com/Run-Pod/runpodctl/releases)
 
 ```
@@ -16,7 +15,7 @@ cp runpodctl /usr/bin/runpodctl
 
 ![](https://github.com/runpod/runpodctl/blob/main/runpodctllinux.gif)
 
-# how to transfer data
+## how to transfer data
 Using send or receive command does not require API keys due to built-in security of one-time codes.
 
 Run the following on the computer that has the file you want to send
@@ -48,7 +47,7 @@ data.txt 100% |████████████████████| ( 5
 
 <br />
 
-# download with windows powershell
+## download with windows powershell
 
 ```
 wget https://github.com/runpod/runpodctl/releases/download/v1.6.1/runpodctl-win-amd -O runpodctl.exe
@@ -58,7 +57,7 @@ wget https://github.com/runpod/runpodctl/releases/download/v1.6.1/runpodctl-win-
 
 <br />
 
-# how to transfer data
+## how to transfer data
 Using send or receive command does not require API keys due to built-in security of one-time codes.
 
 Run the following on the computer that has the file you want to send
