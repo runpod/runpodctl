@@ -25,10 +25,13 @@ wget https://github.com/runpod/runpodctl/releases/download/v1.6.1/runpodctl-win-
 # how to transfer data
 Using send or receive command does not require API keys due to built-in security of one-time codes.
 
-Send a file or folder
+Run the following on the computer that has the file you want to send
 ```
 runpodctl send data.txt
+```
 
+The command should output something like
+```
 Sending 'data.txt' (5 B)
 Code is: 8338-galileo-collect-fidel
 On the other computer run
@@ -36,9 +39,13 @@ On the other computer run
 runpodctl receive 8338-galileo-collect-fidel
 ```
 
-Receive on any other computer or pod
+Run the following on the computer that you want to send the file to
 ```
 runpodctl receive 8338-galileo-collect-fidel
+```
+
+It should start transferring with output that looks like
+```
 Receiving 'data.txt' (5 B)
 
 Receiving (<-149.36.0.243:8692)
