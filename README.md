@@ -18,6 +18,8 @@ cp runpodctl /usr/bin/runpodctl
 wget https://github.com/runpod/runpodctl/releases/download/v1.6.1/runpodctl-win-amd -O runpodctl.exe
 ```
 
+![](https://github.com/runpod/runpodctl/blob/main/runpodctlwindows.gif)
+
 *Note that you must either put runpoodctl.exe in your PATH or navigate to it and use ./runpodctl.exe (instead of just runpodctl as in linux)*
 
 <br />
