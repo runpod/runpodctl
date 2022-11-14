@@ -3,6 +3,8 @@ runpodctl is a CLI tool to automate / manage GPU pods for [runpod.io](https://ru
 
 <br />
 
+# pods automatically come with runpodctl installed!
+
 # install linux/osx command line
 get latest binary from [releases](https://github.com/Run-Pod/runpodctl/releases)
 
@@ -12,6 +14,40 @@ chmod +x runpodctl
 cp runpodctl /usr/bin/runpodctl
 ```
 
+![](https://github.com/runpod/runpodctl/blob/main/runpodctllinux.gif)
+
+# how to transfer data
+Using send or receive command does not require API keys due to built-in security of one-time codes.
+
+Run the following on the computer that has the file you want to send
+```
+runpodctl send data.txt
+```
+
+The command should output something like
+```
+Sending 'data.txt' (5 B)
+Code is: 8338-galileo-collect-fidel
+On the other computer run
+
+runpodctl receive 8338-galileo-collect-fidel
+```
+
+Run the following on the computer that you want to send the file to
+```
+runpodctl receive 8338-galileo-collect-fidel
+```
+
+It should start transferring with output that looks like
+```
+Receiving 'data.txt' (5 B)
+
+Receiving (<-149.36.0.243:8692)
+data.txt 100% |████████████████████| ( 5/ 5B, 0.040 kB/s)
+```
+
+<br />
+
 # download with windows powershell
 
 ```
@@ -20,8 +56,6 @@ wget https://github.com/runpod/runpodctl/releases/download/v1.6.1/runpodctl-win-
 
 ![](https://github.com/runpod/runpodctl/blob/main/runpodctlwindows.gif)
 
-*Note that you must either put runpoodctl.exe in your PATH or navigate to it and use ./runpodctl.exe (instead of just runpodctl as in linux)*
-
 <br />
 
 # how to transfer data
@@ -29,7 +63,7 @@ Using send or receive command does not require API keys due to built-in security
 
 Run the following on the computer that has the file you want to send
 ```
-runpodctl send data.txt
+./runpodctl.exe send data.txt
 ```
 
 The command should output something like
