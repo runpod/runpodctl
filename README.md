@@ -3,7 +3,7 @@ runpodctl is a CLI tool to automate / manage GPU pods for [runpod.io](https://ru
 
 <br />
 
-# install
+# install linux/osx command line
 get latest binary from [releases](https://github.com/Run-Pod/runpodctl/releases)
 
 ```
@@ -11,6 +11,14 @@ wget --quiet --show-progress https://github.com/Run-Pod/runpodctl/releases/downl
 chmod +x runpodctl
 cp runpodctl /usr/bin/runpodctl
 ```
+
+# download with windows powershell
+
+```
+wget https://github.com/runpod/runpodctl/releases/download/v1.6.1/runpodctl-win-amd -O runpodctl.exe
+```
+
+*Note that you must either put runpoodctl.exe in your PATH or navigate to it and use ./runpodctl.exe (instead of just runpodctl as in linux)*
 
 <br />
 
