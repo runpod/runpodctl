@@ -3,7 +3,7 @@ runpodctl is a CLI tool to automate / manage GPU pods for [runpod.io](https://ru
 
 <br />
 
-# pods automatically come with runpodctl installed!
+## pods automatically come with runpodctl installed!
 
 # install linux/osx command line
 get latest binary from [releases](https://github.com/Run-Pod/runpodctl/releases)
