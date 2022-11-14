@@ -9,9 +9,7 @@ All pods automatically come with runpodctl installed with a pod-scoped API key!
 get latest binary from [releases](https://github.com/Run-Pod/runpodctl/releases)
 
 ```
-wget --quiet --show-progress https://github.com/Run-Pod/runpodctl/releases/download/v1.6.1/runpodctl-linux-amd -O runpodctl
-chmod +x runpodctl
-cp runpodctl /usr/bin/runpodctl
+wget --quiet --show-progress https://github.com/Run-Pod/runpodctl/releases/download/v1.6.1/runpodctl-linux-amd -O runpodctl && chmod +x runpodctl && sudo cp runpodctl /usr/bin/runpodctl
 ```
 
 ![](https://github.com/runpod/runpodctl/blob/main/runpodctllinux.gif)
