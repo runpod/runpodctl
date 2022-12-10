@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"strings"
 )
 
 type PodOut struct {
@@ -108,7 +109,7 @@ func GetPods() (pods []*Pod, err error) {
 type CreatePodInput struct {
 	CloudType         string    `json:"cloudType"`
 	ContainerDiskInGb int       `json:"containerDiskInGb"`
-	DeployCost        float32   `json:"deployCost"`
+	DeployCost        float32   `json:"deployCost,omitempty"`
 	DockerArgs        string    `json:"dockerArgs"`
 	Env               []*PodEnv `json:"env"`
 	GpuCount          int       `json:"gpuCount"`
@@ -127,6 +128,11 @@ type PodEnv struct {
 }
 
 func CreatePod(podInput *CreatePodInput) (pod map[string]interface{}, err error) {
+	if podInput.Name == "" {
+		names := strings.Split(podInput.ImageName, ":")
+		podInput.Name = names[0]
+	}
+
 	input := Input{
 		Query: `
 		mutation createPod($input: PodFindAndDeployOnDemandInput!) {
