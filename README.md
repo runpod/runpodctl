@@ -94,6 +94,14 @@ data.txt 100% |████████████████████| ( 5
 
 <br />
 
+# Using google drive
+
+You can use the following links for google colab
+
+[Send](https://colab.research.google.com/drive/1UaODD9iGswnKF7SZfsvwHDGWWwLziOsr#scrollTo=YlEgSwgKgDlu)
+
+[Receive](https://colab.research.google.com/drive/1ot8pODgystx1D6_zvsALDSvjACBF1cj6#scrollTo=RF1bMqhBOpSZ)
+
 # how to manage pods
 Visit [docs](doc/runpodctl.md) for details of all commands.
 
