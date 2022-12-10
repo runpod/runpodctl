@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.7.0](https://github.com/runpod/runpodctl/compare/v1.6.1...v1.7.0) (2022-12-10)
+
+
+### Features
+
+* add more thanks to readme ([9200b06](https://github.com/runpod/runpodctl/commit/9200b0613d0ccfd2ad94f34ee07ef0cdb3a132bd))
+* omit deployCost if 0, and populate pod name if empty ([76c420f](https://github.com/runpod/runpodctl/commit/76c420f34c633e5c0edee0fa7f15157d82aa891a))
+* update readme with how to transfer data ([a07026f](https://github.com/runpod/runpodctl/commit/a07026f53171febc5754fb93a977e84b06320f36))
+
 ## [1.6.1](https://github.com/Run-Pod/runpodctl/compare/v1.6.0...v1.6.1) (2022-10-04)
 
 
