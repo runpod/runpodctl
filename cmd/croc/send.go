@@ -3,11 +3,25 @@ package croc
 import (
 	"fmt"
 	"strings"
+	"encoding/json"
+	"math/rand"
+	"net/http"
+	"time"
 
 	"github.com/schollz/croc/v9/src/models"
 	"github.com/schollz/croc/v9/src/utils"
 	"github.com/spf13/cobra"
 )
+
+type Relay struct {
+	Address    string   `json:"address"`
+	Password	string `json:"password"`
+	Ports  string    `json:"ports"`
+}
+
+type Response struct {
+	Relays []Relay `json:"relays"`
+}
 
 var code string
 
@@ -17,6 +31,31 @@ var SendCmd = &cobra.Command{
 	Short: "send file(s), or folder",
 	Long:  "send file(s), or folder to pod or any computer",
 	Run: func(cmd *cobra.Command, args []string) {
+
+		rand.Seed(time.Now().UnixNano())
+
+		// Make a GET request to the URL
+		res, err := http.Get("https://gist.githubusercontent.com/zhl146/bd1d6fac2d64a93db63f04b20b053667/raw/11f6348581a2ee05b49ad0e842f9957a01f2f9da/relays.json")
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		defer res.Body.Close()
+	
+		// Decode the JSON response
+		var response Response
+		err = json.NewDecoder(res.Body).Decode(&response)
+		if err != nil {
+			fmt.Println("Could not get list of relays. Please contact support for help!")
+			return
+		}
+
+		fmt.Println(response)
+	
+		// Choose a random relay from the array
+		randomIndex := rand.Intn(len(response.Relays))
+		relay := response.Relays[randomIndex]
+
 		portsString := ""
 		if portsString == "" {
 			portsString = "9009,9010,9011,9012,9013"
@@ -29,9 +68,9 @@ var SendCmd = &cobra.Command{
 			IsSender:      true,
 			NoPrompt:      true,
 			Overwrite:     true,
-			RelayAddress:  "relay1.runpod.io",
-			RelayPassword: "Op7X0378LX7ZB602&qIX#@qHU",
-			RelayPorts:    strings.Split(portsString, ","),
+			RelayAddress:  relay.Address,
+			RelayPassword: relay.Password,
+			RelayPorts:    strings.Split(relay.Ports, ","),
 			SharedSecret:  code,
 			ZipFolder:     true,
 		}
