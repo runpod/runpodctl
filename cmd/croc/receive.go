@@ -14,7 +14,7 @@ import (
 
 func GetRelays() ([]Relay, error) {
 	// Make a GET request to the URL
-	res, err := http.Get("https://gist.githubusercontent.com/zhl146/bd1d6fac2d64a93db63f04b20b053667/raw/3e9e836e7860abf94a4a6972bbba10dbee1ff988/relays.json")
+	res, err := http.Get("https://raw.githubusercontent.com/runpod/runpodctl/main/relay_list.json")
 	if err != nil {
 		return nil, err
 	}
@@ -44,17 +44,10 @@ var ReceiveCmd = &cobra.Command{
 			return
 		}
 
-		fmt.Println(relays) 
+		SharedSecret := args[0]
 
-		secretPlusIndex := args[0]
+		split := strings.Split(SharedSecret, "::")
 
-		split := strings.Split(secretPlusIndex, "::")
-
-		fmt.Println(split)
-
-		
-
-		SharedSecret := split[0]
 		relayIndexString := split[1]
 
 		relayIndex, err := strconv.Atoi(relayIndexString)
@@ -64,15 +57,8 @@ var ReceiveCmd = &cobra.Command{
 			return
 		}
 
-		fmt.Println("SECRET")
-		fmt.Println(SharedSecret)
-		fmt.Println("INDEX")
-		fmt.Println(relayIndex)
-
-
 		relay := relays[relayIndex]
 
-		fmt.Println(relay)
 		crocOptions := croc.Options{
 			Curve:         "p256",
 			Debug:         false,
@@ -90,16 +76,16 @@ var ReceiveCmd = &cobra.Command{
 			crocOptions.RelayAddress = ""
 		}
 
-		fmt.Println(crocOptions)
-
 		cr, err := croc.New(crocOptions)
 
 		if err != nil {
 			fmt.Println(err)
+			return
 		}
 
 		if err = cr.Receive(); err != nil {
 			fmt.Println(err)
+			return
 		} 
 
 	},

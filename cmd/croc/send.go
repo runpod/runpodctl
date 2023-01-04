@@ -36,7 +36,7 @@ var SendCmd = &cobra.Command{
 		rand.Seed(time.Now().UnixNano())
 
 		// Make a GET request to the URL
-		res, err := http.Get("https://gist.githubusercontent.com/zhl146/bd1d6fac2d64a93db63f04b20b053667/raw/3e9e836e7860abf94a4a6972bbba10dbee1ff988/relays.json")
+		res, err := http.Get("https://raw.githubusercontent.com/runpod/runpodctl/main/relay_list.json")
 		if err != nil {
 			fmt.Println(err)
 			return
@@ -47,20 +47,15 @@ var SendCmd = &cobra.Command{
 		var response Response
 		err = json.NewDecoder(res.Body).Decode(&response)
 		if err != nil {
+			fmt.Println(err)
 			fmt.Println("Could not get list of relays. Please contact support for help!")
 			return
 		}
-
-		fmt.Println(response)
 	
 		// Choose a random relay from the array
 		randomIndex := rand.Intn(len(response.Relays))
 		relay := response.Relays[randomIndex]
 
-		portsString := ""
-		if portsString == "" {
-			portsString = "9009,9010,9011,9012,9013"
-		}
 		crocOptions := Options{
 			Curve:         "p256",
 			Debug:         false,
@@ -93,8 +88,6 @@ var SendCmd = &cobra.Command{
 		}
 
 		crocOptions.SharedSecret = crocOptions.SharedSecret + "::" + strconv.Itoa(randomIndex)
-
-		fmt.Println(crocOptions.SharedSecret)
 
 		minimalFileInfos, emptyFoldersToTransfer, totalNumberFolders, err := GetFilesInfo(fnames, crocOptions.ZipFolder)
 		if err != nil {
