@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"net/http"
 	"time"
+	"strconv"
 
 	"github.com/schollz/croc/v9/src/models"
 	"github.com/schollz/croc/v9/src/utils"
@@ -35,7 +36,7 @@ var SendCmd = &cobra.Command{
 		rand.Seed(time.Now().UnixNano())
 
 		// Make a GET request to the URL
-		res, err := http.Get("https://gist.githubusercontent.com/zhl146/bd1d6fac2d64a93db63f04b20b053667/raw/11f6348581a2ee05b49ad0e842f9957a01f2f9da/relays.json")
+		res, err := http.Get("https://gist.githubusercontent.com/zhl146/bd1d6fac2d64a93db63f04b20b053667/raw/3e9e836e7860abf94a4a6972bbba10dbee1ff988/relays.json")
 		if err != nil {
 			fmt.Println(err)
 			return
@@ -90,6 +91,11 @@ var SendCmd = &cobra.Command{
 			// generate code phrase
 			crocOptions.SharedSecret = utils.GetRandomName()
 		}
+
+		crocOptions.SharedSecret = crocOptions.SharedSecret + "::" + strconv.Itoa(randomIndex)
+
+		fmt.Println(crocOptions.SharedSecret)
+
 		minimalFileInfos, emptyFoldersToTransfer, totalNumberFolders, err := GetFilesInfo(fnames, crocOptions.ZipFolder)
 		if err != nil {
 			return
