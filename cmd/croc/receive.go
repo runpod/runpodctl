@@ -46,9 +46,9 @@ var ReceiveCmd = &cobra.Command{
 
 		SharedSecret := args[0]
 
-		split := strings.Split(SharedSecret, "::")
+		split := strings.Split(SharedSecret, "-")
 
-		relayIndexString := split[1]
+		relayIndexString := split[4]
 
 		relayIndex, err := strconv.Atoi(relayIndexString)
 

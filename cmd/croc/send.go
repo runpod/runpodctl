@@ -87,7 +87,7 @@ var SendCmd = &cobra.Command{
 			crocOptions.SharedSecret = utils.GetRandomName()
 		}
 
-		crocOptions.SharedSecret = crocOptions.SharedSecret + "::" + strconv.Itoa(randomIndex)
+		crocOptions.SharedSecret = crocOptions.SharedSecret + "-" + strconv.Itoa(randomIndex)
 
 		minimalFileInfos, emptyFoldersToTransfer, totalNumberFolders, err := GetFilesInfo(fnames, crocOptions.ZipFolder)
 		if err != nil {
