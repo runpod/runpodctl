@@ -1,0 +1,24 @@
+{
+  "relays": [
+    {
+      "address": "relay0.runpod.io",
+      "password": "Op7X0378LX7ZB602&qIX#@qHU",
+      "ports": "9009,9010,9011,9012,9013"
+    },
+    {
+      "address": "relay1.runpod.io",
+      "password": "Op7X0378LX7ZB602&qIX#@qHU",
+      "ports": "9009,9010,9011,9012,9013"
+    },
+    {
+      "address": "relay2.runpod.io",
+      "password": "Op7X0378LX7ZB602&qIX#@qHU",
+      "ports": "9009,9010,9011,9012,9013"
+    },
+    {
+      "address": "relay3.runpod.io",
+      "password": "Op7X0378LX7ZB602&qIX#@qHU",
+      "ports": "9009,9010,9011,9012,9013"
+    }
+  ]
+}
