@@ -44,15 +44,27 @@ var ReceiveCmd = &cobra.Command{
 
 		SharedSecret := args[0]
 		split := strings.Split(SharedSecret, "-")
-		relayIndexString := split[4]
-		relayIndex, err := strconv.Atoi(relayIndexString)
 
-		if err != nil {
-			fmt.Println("Malformed relay, please try again.")
-			return
+		var RelayAddress string
+		var RelayPassword string
+
+		if (len(split) == 5) {
+			relayIndexString := split[4]
+
+			relayIndex, err := strconv.Atoi(relayIndexString)
+
+			if err != nil {
+				fmt.Println("Malformed relay, please try again.")
+				return
+			}
+
+			relay:= relays[relayIndex]
+			RelayAddress = relay.Address
+			RelayPassword = relay.Password
+		} else {
+			RelayAddress = "relay1.runpod.io"
+			RelayPassword = "Op7X0378LX7ZB602&qIX#@qHU"
 		}
-
-		relay := relays[relayIndex]
 
 		crocOptions := croc.Options{
 			Curve:         "p256",
@@ -60,8 +72,8 @@ var ReceiveCmd = &cobra.Command{
 			IsSender:      false,
 			NoPrompt:      true,
 			Overwrite:     true,
-			RelayAddress:  relay.Address,
-			RelayPassword: relay.Password,
+			RelayAddress:  RelayAddress,
+			RelayPassword: RelayPassword,
 			SharedSecret:  SharedSecret,
 		}
 
