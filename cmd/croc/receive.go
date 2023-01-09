@@ -36,8 +36,6 @@ var ReceiveCmd = &cobra.Command{
 	Short: "receive file(s), or folder",
 	Long:  "receive file(s), or folder from pod or any computer",
 	Run: func(cmd *cobra.Command, args []string) {
-
-
 		relays, err := GetRelays()
 		if err != nil {
 			fmt.Println("There was an issue getting the relay list. Please try again.")
@@ -45,11 +43,8 @@ var ReceiveCmd = &cobra.Command{
 		}
 
 		SharedSecret := args[0]
-
 		split := strings.Split(SharedSecret, "-")
-
 		relayIndexString := split[4]
-
 		relayIndex, err := strconv.Atoi(relayIndexString)
 
 		if err != nil {
