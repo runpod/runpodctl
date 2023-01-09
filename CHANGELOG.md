@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.8.0](https://github.com/runpod/runpodctl/compare/v1.7.0...v1.8.0) (2023-01-09)
+
+
+### Features
+
+* encode relay index into secret ([2b3a0a3](https://github.com/runpod/runpodctl/commit/2b3a0a326760606121dd6746e1dbc62dcdeb0c79))
+* support multiple relays ([b14ca04](https://github.com/runpod/runpodctl/commit/b14ca04737efad73312b958816a735ead3137787))
+* use - instead of :: ([e587638](https://github.com/runpod/runpodctl/commit/e587638a75cdb02b280944e5d15f6f6aaf36d379))
+* use file in main branch for relays ([4ee50fc](https://github.com/runpod/runpodctl/commit/4ee50fcc403230d2f7789802ed4408660be591c4))
+* use main file ([710a883](https://github.com/runpod/runpodctl/commit/710a8830d51ca8b343600009dea7538ae7ae6903))
+
 ## [1.7.0](https://github.com/runpod/runpodctl/compare/v1.6.1...v1.7.0) (2022-12-10)
 
 
