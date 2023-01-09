@@ -3,13 +3,30 @@ package croc
 import (
 	"fmt"
 	"strings"
+	"encoding/json"
+	"math/rand"
+	"net/http"
+	"time"
+	"strconv"
 
 	"github.com/schollz/croc/v9/src/models"
 	"github.com/schollz/croc/v9/src/utils"
 	"github.com/spf13/cobra"
 )
 
+type Relay struct {
+	Address    string   `json:"address"`
+	Password	string `json:"password"`
+	Ports  string    `json:"ports"`
+}
+
+type Response struct {
+	Relays []Relay `json:"relays"`
+}
+
 var code string
+
+var relayUrl = "https://raw.githubusercontent.com/runpod/runpodctl/main/cmd/croc/relays.json"
 
 var SendCmd = &cobra.Command{
 	Use:   "send [filename(s) or folder]",
@@ -17,10 +34,30 @@ var SendCmd = &cobra.Command{
 	Short: "send file(s), or folder",
 	Long:  "send file(s), or folder to pod or any computer",
 	Run: func(cmd *cobra.Command, args []string) {
-		portsString := ""
-		if portsString == "" {
-			portsString = "9009,9010,9011,9012,9013"
+
+		rand.Seed(time.Now().UnixNano())
+
+		// Make a GET request to the URL
+		res, err := http.Get(relayUrl)
+		if err != nil {
+			fmt.Println(err)
+			return
 		}
+		defer res.Body.Close()
+
+		// Decode the JSON response
+		var response Response
+		err = json.NewDecoder(res.Body).Decode(&response)
+		if err != nil {
+			fmt.Println(err)
+			fmt.Println("Could not get list of relays. Please contact support for help!")
+			return
+		}
+	
+		// Choose a random relay from the array
+		randomIndex := rand.Intn(len(response.Relays))
+		relay := response.Relays[randomIndex]
+
 		crocOptions := Options{
 			Curve:         "p256",
 			Debug:         false,
@@ -29,9 +66,9 @@ var SendCmd = &cobra.Command{
 			IsSender:      true,
 			NoPrompt:      true,
 			Overwrite:     true,
-			RelayAddress:  "relay1.runpod.io",
-			RelayPassword: "Op7X0378LX7ZB602&qIX#@qHU",
-			RelayPorts:    strings.Split(portsString, ","),
+			RelayAddress:  relay.Address,
+			RelayPassword: relay.Password,
+			RelayPorts:    strings.Split(relay.Ports, ","),
 			SharedSecret:  code,
 			ZipFolder:     true,
 		}
@@ -51,6 +88,9 @@ var SendCmd = &cobra.Command{
 			// generate code phrase
 			crocOptions.SharedSecret = utils.GetRandomName()
 		}
+
+		crocOptions.SharedSecret = crocOptions.SharedSecret + "-" + strconv.Itoa(randomIndex)
+
 		minimalFileInfos, emptyFoldersToTransfer, totalNumberFolders, err := GetFilesInfo(fnames, crocOptions.ZipFolder)
 		if err != nil {
 			return
