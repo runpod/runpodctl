@@ -26,6 +26,8 @@ type Response struct {
 
 var code string
 
+var relayUrl = "https://raw.githubusercontent.com/runpod/runpodctl/main/cmd/croc/relays.json"
+
 var SendCmd = &cobra.Command{
 	Use:   "send [filename(s) or folder]",
 	Args:  cobra.ExactArgs(1),
@@ -36,13 +38,13 @@ var SendCmd = &cobra.Command{
 		rand.Seed(time.Now().UnixNano())
 
 		// Make a GET request to the URL
-		res, err := http.Get("https://raw.githubusercontent.com/runpod/runpodctl/main/relay_list.json")
+		res, err := http.Get(relayUrl)
 		if err != nil {
 			fmt.Println(err)
 			return
 		}
 		defer res.Body.Close()
-	
+
 		// Decode the JSON response
 		var response Response
 		err = json.NewDecoder(res.Body).Decode(&response)

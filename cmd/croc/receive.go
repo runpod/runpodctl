@@ -14,7 +14,7 @@ import (
 
 func GetRelays() ([]Relay, error) {
 	// Make a GET request to the URL
-	res, err := http.Get("https://raw.githubusercontent.com/runpod/runpodctl/main/relay_list.json")
+	res, err := http.Get(relayUrl)
 	if err != nil {
 		return nil, err
 	}
