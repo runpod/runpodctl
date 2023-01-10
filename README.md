@@ -1,6 +1,8 @@
 # runpodctl
 runpodctl is a CLI tool to automate / manage GPU pods for [runpod.io](https://runpod.io).
 
+**Please note that there is a breaking change in 1.8.0 that is incompatible with previous versions. You can check your version by typing 'runpodctl version'**
+
 All pods automatically come with runpodctl installed with a pod-scoped API key!
 
 <br />
