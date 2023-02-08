@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"strings"
 )
 
@@ -86,7 +86,7 @@ func GetPods() (pods []*Pod, err error) {
 		return
 	}
 	defer res.Body.Close()
-	rawData, err := ioutil.ReadAll(res.Body)
+	rawData, err := io.ReadAll(res.Body)
 	if err != nil {
 		return
 	}
@@ -151,7 +151,7 @@ func CreatePod(podInput *CreatePodInput) (pod map[string]interface{}, err error)
 		return
 	}
 	defer res.Body.Close()
-	rawData, err := ioutil.ReadAll(res.Body)
+	rawData, err := io.ReadAll(res.Body)
 	if err != nil {
 		return
 	}
@@ -204,7 +204,7 @@ func StopPod(id string) (podStop map[string]interface{}, err error) {
 		return
 	}
 	defer res.Body.Close()
-	rawData, err := ioutil.ReadAll(res.Body)
+	rawData, err := io.ReadAll(res.Body)
 	if err != nil {
 		return
 	}
@@ -249,7 +249,7 @@ func RemovePod(id string) (ok bool, err error) {
 		return
 	}
 	defer res.Body.Close()
-	rawData, err := ioutil.ReadAll(res.Body)
+	rawData, err := io.ReadAll(res.Body)
 	if err != nil {
 		return
 	}
@@ -295,7 +295,7 @@ func StartOnDemandPod(id string) (pod map[string]interface{}, err error) {
 		return
 	}
 	defer res.Body.Close()
-	rawData, err := ioutil.ReadAll(res.Body)
+	rawData, err := io.ReadAll(res.Body)
 	if err != nil {
 		return
 	}
@@ -345,7 +345,7 @@ func StartSpotPod(id string, bidPerGpu float32) (podBidResume map[string]interfa
 		return
 	}
 	defer res.Body.Close()
-	rawData, err := ioutil.ReadAll(res.Body)
+	rawData, err := io.ReadAll(res.Body)
 	if err != nil {
 		return
 	}

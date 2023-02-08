@@ -291,7 +291,7 @@ func GetFilesInfo(fnames []string, zipfolder bool) (filesInfo []FileInfo, emptyF
 			}
 			path := filepath.Dir(path)
 			dest := filepath.Base(path) + ".zip"
-			utils.ZipDirectory(dest, path)
+			utils.ZipDirectory(dest, path) //nolint
 			stat, errStat = os.Lstat(dest)
 			if errStat != nil {
 				err = errStat
@@ -909,7 +909,7 @@ func (c *Client) transfer() (err error) {
 	if c.SuccessfulTransfer && !c.Options.IsSender {
 		for _, file := range c.FilesToTransfer {
 			if file.TempFile {
-				utils.UnzipDirectory(".", file.Name)
+				utils.UnzipDirectory(".", file.Name) //nolint
 				os.Remove(file.Name)
 				log.Debugf("Removing %s\n", file.Name)
 			}
@@ -961,7 +961,7 @@ func (c *Client) createEmptyFolder(i int) (err error) {
 		progressbar.OptionSetWriter(os.Stderr),
 		progressbar.OptionSetVisibility(!c.Options.SendingText),
 	)
-	c.bar.Finish()
+	c.bar.Finish() //nolint
 	return
 }
 
@@ -1276,7 +1276,7 @@ func (c *Client) processMessage(payload []byte) (done bool, err error) {
 			}
 		}
 	case message.TypeCloseSender:
-		c.bar.Finish()
+		c.bar.Finish() //nolint
 		log.Debug("close-sender received...")
 		c.Step4FileTransferred = false
 		c.Step3RecipientRequestFile = false
@@ -1482,7 +1482,7 @@ func (c *Client) createEmptyFileAndFinish(fileInfo FileInfo, i int) (err error) 
 		progressbar.OptionSetWriter(os.Stderr),
 		progressbar.OptionSetVisibility(!c.Options.SendingText),
 	)
-	c.bar.Finish()
+	c.bar.Finish() //nolint
 	return
 }
 
@@ -1560,7 +1560,7 @@ func (c *Client) updateIfRecipientHasFileInfo() (err error) {
 			break
 		}
 	}
-	c.recipientGetFileReady(finished)
+	c.recipientGetFileReady(finished) //nolint
 	return
 }
 
@@ -1611,7 +1611,7 @@ func (c *Client) updateState() (err error) {
 						progressbar.OptionSetWriter(os.Stderr),
 						progressbar.OptionSetVisibility(!c.Options.SendingText),
 					)
-					c.bar.Finish()
+					c.bar.Finish() //nolint
 				}
 			}
 		}
@@ -1667,7 +1667,7 @@ func (c *Client) setBar() {
 		log.Debug(c.FilesToTransfer[c.FilesToTransferCurrentNum].Size)
 		log.Debug(bytesDone)
 		if bytesDone > 0 {
-			c.bar.Add64(bytesDone)
+			c.bar.Add64(bytesDone) //nolint
 		}
 	}
 }
@@ -1706,7 +1706,7 @@ func (c *Client) receiveData(i int) {
 		if err != nil {
 			panic(err)
 		}
-		c.bar.Add(len(data[8:]))
+		c.bar.Add(len(data[8:])) //nolint
 		c.TotalSent += int64(len(data[8:]))
 		c.TotalChunksTransferred++
 		// log.Debug(len(c.CurrentFileChunks), c.TotalChunksTransferred, c.TotalSent, c.FilesToTransfer[c.FilesToTransferCurrentNum].Size)
@@ -1806,7 +1806,7 @@ func (c *Client) sendData(i int) {
 				if err != nil {
 					panic(err)
 				}
-				c.bar.Add(n)
+				c.bar.Add(n) //nolint
 				c.TotalSent += int64(n)
 				// time.Sleep(100 * time.Millisecond)
 			}

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 )
 
 type GetCloudInput struct {
@@ -38,7 +38,7 @@ func GetCloud(in *GetCloudInput) (gpuTypes []interface{}, err error) {
 		return
 	}
 	defer res.Body.Close()
-	rawData, err := ioutil.ReadAll(res.Body)
+	rawData, err := io.ReadAll(res.Body)
 	if err != nil {
 		return
 	}

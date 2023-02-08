@@ -89,6 +89,6 @@ func init() {
 	CreatePodCmd.Flags().IntVar(&volumeInGb, "volumeSize", 1, "persistant volume disk size in GB")
 	CreatePodCmd.Flags().StringVar(&volumeMountPath, "volumePath", "/runpod", "container volume path")
 
-	CreatePodCmd.MarkFlagRequired("gpuType")
-	CreatePodCmd.MarkFlagRequired("imageName")
+	CreatePodCmd.MarkFlagRequired("gpuType")   //nolint
+	CreatePodCmd.MarkFlagRequired("imageName") //nolint
 }
