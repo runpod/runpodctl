@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.9.0](https://github.com/runpod/runpodctl/compare/v1.8.0...v1.9.0) (2023-02-09)
+
+
+### Features
+
+* allow multiple gpu type ids using comma ([79918c6](https://github.com/runpod/runpodctl/commit/79918c6ca973a05c20acdc4e5ff622d0566f0fe9))
+* allow multiple pods to be created / removed ([fd88b4f](https://github.com/runpod/runpodctl/commit/fd88b4f39f6c4e700226f09f12b8e9db512f303e))
+
+
+### Bug Fixes
+
+* lint ([53baa35](https://github.com/runpod/runpodctl/commit/53baa35e1deee68f409c4fcbad296c2553649655))
+
 ## [1.8.0](https://github.com/runpod/runpodctl/compare/v1.7.0...v1.8.0) (2023-01-09)
 
 
