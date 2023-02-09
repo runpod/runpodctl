@@ -31,12 +31,13 @@ var CreatePodsCmd = &cobra.Command{
 	Short: "create a group of pods",
 	Long:  "create a group of pods on runpod.io",
 	Run: func(cmd *cobra.Command, args []string) {
+		gpus := strings.Split(gpuTypeId, ",")
+		gpusIndex := 0
 		input := &api.CreatePodInput{
 			ContainerDiskInGb: containerDiskInGb,
 			DeployCost:        deployCost,
 			DockerArgs:        dockerArgs,
 			GpuCount:          gpuCount,
-			GpuTypeId:         gpuTypeId,
 			ImageName:         imageName,
 			MinMemoryInGb:     minMemoryInGb,
 			MinVcpuCount:      minVcpuCount,
@@ -62,7 +63,13 @@ var CreatePodsCmd = &cobra.Command{
 		}
 
 		for x := 0; x < podCount; x++ {
+			input.GpuTypeId = gpus[gpusIndex]
 			pod, err := api.CreatePod(input)
+			if err != nil && len(gpus) > gpusIndex+1 && strings.Contains(err.Error(), "no longer any instances available") {
+				gpusIndex++
+				x--
+				continue
+			}
 			cobra.CheckErr(err)
 
 			if pod["desiredStatus"] == "RUNNING" {
