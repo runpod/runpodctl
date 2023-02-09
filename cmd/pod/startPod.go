@@ -10,11 +10,10 @@ import (
 var bidPerGpu float32
 
 var StartPodCmd = &cobra.Command{
-	Use:     "pod [podId]",
-	Aliases: []string{"pods"},
-	Args:    cobra.ExactArgs(1),
-	Short:   "start a pod",
-	Long:    "start a pod from runpod.io",
+	Use:   "pod [podId]",
+	Args:  cobra.ExactArgs(1),
+	Short: "start a pod",
+	Long:  "start a pod from runpod.io",
 	Run: func(cmd *cobra.Command, args []string) {
 		var err error
 		var pod map[string]interface{}

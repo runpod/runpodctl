@@ -8,11 +8,10 @@ import (
 )
 
 var StopPodCmd = &cobra.Command{
-	Use:     "pod [podId]",
-	Aliases: []string{"pods"},
-	Args:    cobra.ExactArgs(1),
-	Short:   "stop a pod",
-	Long:    "stop a pod from runpod.io",
+	Use:   "pod [podId]",
+	Args:  cobra.ExactArgs(1),
+	Short: "stop a pod",
+	Long:  "stop a pod from runpod.io",
 	Run: func(cmd *cobra.Command, args []string) {
 		pod, err := api.StopPod(args[0])
 		cobra.CheckErr(err)

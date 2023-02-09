@@ -1,13 +1,13 @@
-## runpodctl create pod
+## runpodctl create pods
 
-start a pod
+create a group of pods
 
 ### Synopsis
 
-start a pod from runpod.io
+create a group of pods on runpod.io
 
 ```
-runpodctl create pod [flags]
+runpodctl create pods [flags]
 ```
 
 ### Options
@@ -20,10 +20,11 @@ runpodctl create pod [flags]
       --env strings             container arguments
       --gpuCount int            number of GPUs for the pod (default 1)
       --gpuType string          gpu type id, e.g. 'NVIDIA GeForce RTX 3090'
-  -h, --help                    help for pod
+  -h, --help                    help for pods
       --imageName string        container image name
       --mem int                 minimum system memory needed (default 20)
       --name string             any pod name for easy reference
+      --podCount int            number of pods to create with the same name (default 1)
       --ports strings           ports to expose; max only 1 http and 1 tcp allowed; e.g. '8888/http'
       --secureCloud             create in secure cloud
       --vcpu int                minimum vCPUs needed (default 1)

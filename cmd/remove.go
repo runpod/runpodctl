@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"cli/cmd/pod"
+	"cli/cmd/pods"
 
 	"github.com/spf13/cobra"
 )
@@ -14,4 +15,5 @@ var removeCmd = &cobra.Command{
 
 func init() {
 	removeCmd.AddCommand(pod.RemovePodCmd)
+	removeCmd.AddCommand(pods.RemovePodsCmd)
 }

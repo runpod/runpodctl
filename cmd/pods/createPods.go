@@ -1,0 +1,99 @@
+package pods
+
+import (
+	"cli/api"
+	"fmt"
+	"strings"
+
+	"github.com/spf13/cobra"
+)
+
+var communityCloud bool
+var containerDiskInGb int
+var deployCost float32
+var dockerArgs string
+var env []string
+var gpuCount int
+var gpuTypeId string
+var imageName string
+var minMemoryInGb int
+var minVcpuCount int
+var name string
+var podCount int
+var ports []string
+var secureCloud bool
+var volumeInGb int
+var volumeMountPath string
+
+var CreatePodsCmd = &cobra.Command{
+	Use:   "pods",
+	Args:  cobra.ExactArgs(0),
+	Short: "create a group of pods",
+	Long:  "create a group of pods on runpod.io",
+	Run: func(cmd *cobra.Command, args []string) {
+		input := &api.CreatePodInput{
+			ContainerDiskInGb: containerDiskInGb,
+			DeployCost:        deployCost,
+			DockerArgs:        dockerArgs,
+			GpuCount:          gpuCount,
+			GpuTypeId:         gpuTypeId,
+			ImageName:         imageName,
+			MinMemoryInGb:     minMemoryInGb,
+			MinVcpuCount:      minVcpuCount,
+			Name:              name,
+			VolumeInGb:        volumeInGb,
+			VolumeMountPath:   volumeMountPath,
+		}
+		if len(ports) > 0 {
+			input.Ports = strings.Join(ports, ",")
+		}
+		input.Env = make([]*api.PodEnv, len(env))
+		for i, v := range env {
+			e := strings.Split(v, "=")
+			if len(e) != 2 {
+				cobra.CheckErr(fmt.Errorf("wrong env value: %s", e))
+			}
+			input.Env[i] = &api.PodEnv{Key: e[0], Value: e[1]}
+		}
+		if secureCloud {
+			input.CloudType = "SECURE"
+		} else {
+			input.CloudType = "COMMUNITY"
+		}
+
+		for x := 0; x < podCount; x++ {
+			pod, err := api.CreatePod(input)
+			cobra.CheckErr(err)
+
+			if pod["desiredStatus"] == "RUNNING" {
+				fmt.Printf(`pod "%s" created for $%.3f / hr`, pod["id"], pod["costPerHr"])
+				fmt.Println()
+			} else {
+				cobra.CheckErr(fmt.Errorf(`pod "%s" start failed; status is %s`, args[0], pod["desiredStatus"]))
+			}
+		}
+	},
+}
+
+func init() {
+	CreatePodsCmd.Flags().BoolVar(&communityCloud, "communityCloud", false, "create in community cloud")
+	CreatePodsCmd.Flags().BoolVar(&secureCloud, "secureCloud", false, "create in secure cloud")
+	CreatePodsCmd.Flags().Float32Var(&deployCost, "cost", 0, "$/hr price ceiling, if not defined, pod will be created with lowest price available")
+	CreatePodsCmd.Flags().IntVar(&containerDiskInGb, "containerDiskSize", 20, "container disk size in GB")
+	CreatePodsCmd.Flags().IntVar(&gpuCount, "gpuCount", 1, "number of GPUs for the pod")
+	CreatePodsCmd.Flags().IntVar(&minMemoryInGb, "mem", 20, "minimum system memory needed")
+	CreatePodsCmd.Flags().IntVar(&minVcpuCount, "vcpu", 1, "minimum vCPUs needed")
+	CreatePodsCmd.Flags().IntVar(&podCount, "podCount", 1, "number of pods to create with the same name")
+	CreatePodsCmd.Flags().IntVar(&volumeInGb, "volumeSize", 1, "persistant volume disk size in GB")
+	CreatePodsCmd.Flags().StringSliceVar(&env, "env", nil, "container arguments")
+	CreatePodsCmd.Flags().StringSliceVar(&ports, "ports", nil, "ports to expose; max only 1 http and 1 tcp allowed; e.g. '8888/http'")
+	CreatePodsCmd.Flags().StringVar(&dockerArgs, "args", "", "container arguments")
+	CreatePodsCmd.Flags().StringVar(&gpuTypeId, "gpuType", "", "gpu type id, e.g. 'NVIDIA GeForce RTX 3090'")
+	CreatePodsCmd.Flags().StringVar(&imageName, "imageName", "", "container image name")
+	CreatePodsCmd.Flags().StringVar(&name, "name", "", "any pod name for easy reference")
+	CreatePodsCmd.Flags().StringVar(&volumeMountPath, "volumePath", "/runpod", "container volume path")
+
+	CreatePodsCmd.MarkFlagRequired("gpuType")   //nolint
+	CreatePodsCmd.MarkFlagRequired("imageName") //nolint
+	CreatePodsCmd.MarkFlagRequired("name")      //nolint
+}

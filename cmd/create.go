@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"cli/cmd/pod"
+	"cli/cmd/pods"
 
 	"github.com/spf13/cobra"
 )
@@ -14,4 +15,5 @@ var createCmd = &cobra.Command{
 
 func init() {
 	createCmd.AddCommand(pod.CreatePodCmd)
+	createCmd.AddCommand(pods.CreatePodsCmd)
 }

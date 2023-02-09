@@ -1,19 +1,19 @@
-## runpodctl version
+## runpodctl receive
 
-runpodctl version
+receive file(s), or folder
 
 ### Synopsis
 
-runpodctl version
+receive file(s), or folder from pod or any computer
 
 ```
-runpodctl version [flags]
+runpodctl receive [code] [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for version
+  -h, --help   help for receive
 ```
 
 ### SEE ALSO
