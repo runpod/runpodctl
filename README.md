@@ -8,7 +8,9 @@ runpodctl version
 
 All pods automatically come with runpodctl installed with a pod-scoped API key!
 
-<br />
+## Tutorial
+A very detailed tutorial that shows how to utilize runpodctl in multiple situations: https://www.youtube.com/watch?v=QN1vdGhjcRc
+
 
 ## install linux/osx command line
 get latest binary from [releases](https://github.com/Run-Pod/runpodctl/releases)
