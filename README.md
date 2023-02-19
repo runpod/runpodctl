@@ -19,7 +19,7 @@ runpodctl chapters:
 
 [How to send files from your PC to RunPod via runpodctl](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2106s)
 
-[How to download a folder from RunPod to your PC via runpodctl very quickly](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2549s)
+[How to download a folder from RunPod to your PC via runpodctl](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2549s)
 
 [How to add runpodctl to environment path to use from every folder](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2589s)
 
