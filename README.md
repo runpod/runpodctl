@@ -13,7 +13,7 @@ A very detailed tutorial that shows how to utilize runpodctl in multiple situati
 
 runpodctl chapters: 
 
-[How to install runpodctl latest version to transfer files very quickly between Pods and PC](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=1384s)
+[How to install runpodctl latest version to transfer files between Pods and PC](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=1384s)
 
 [How to upload thousands of images (big data) from your computer to RunPod via runpodctl](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2068s)
 
@@ -23,7 +23,7 @@ runpodctl chapters:
 
 [How to add runpodctl to environment path to use from every folder](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2589s)
 
-[How to download your trained model files (ckpt) into your PC very fast via runpodctl](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=4871s)
+[How to download your trained model files (ckpt) into your PC via runpodctl](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=4871s)
 
 
 ## install linux/osx command line
