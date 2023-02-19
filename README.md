@@ -11,6 +11,20 @@ All pods automatically come with runpodctl installed with a pod-scoped API key!
 ## Tutorial
 A very detailed tutorial that shows how to utilize runpodctl in multiple situations: https://www.youtube.com/watch?v=QN1vdGhjcRc
 
+runpodctl chapters: 
+
+[How to install runpodctl latest version to transfer files very quickly between Pods and PC](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=1384s)
+
+[How to upload thousands of images (big data) from your computer to RunPod via runpodctl](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2068s)
+
+[How to send files from your PC to RunPod via runpodctl](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2106s)
+
+[How to download a folder from RunPod to your PC via runpodctl very quickly](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2549s)
+
+[How to add runpodctl to environment path to use from every folder](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2589s)
+
+[How to download your trained model files (ckpt) into your PC very fast via runpodctl](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=4871s)
+
 
 ## install linux/osx command line
 get latest binary from [releases](https://github.com/Run-Pod/runpodctl/releases)
