@@ -14,6 +14,21 @@
       "address": "relay2.runpod.net",
       "password": "Op7X0378LX7ZB602&qIX#@qHU",
       "ports": "9009,9010,9011,9012,9013,9014,9015,9016,9017,9018,9019,9020"
+    },
+    {
+      "address": "relay3.runpod.net",
+      "password": "Op7X0378LX7ZB602&qIX#@qHU",
+      "ports": "9009,9010,9011,9012,9013,9014,9015,9016,9017,9018,9019,9020"
+    },
+    {
+      "address": "relay4.runpod.net",
+      "password": "Op7X0378LX7ZB602&qIX#@qHU",
+      "ports": "9009,9010,9011,9012,9013,9014,9015,9016,9017,9018,9019,9020"
+    },
+    {
+      "address": "relay5.runpod.net",
+      "password": "Op7X0378LX7ZB602&qIX#@qHU",
+      "ports": "9009,9010,9011,9012,9013,9014,9015,9016,9017,9018,9019,9020"
     }
   ]
 }
