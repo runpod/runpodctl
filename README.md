@@ -38,6 +38,10 @@ osx (ARM)
 ```
 wget --quiet --show-progress https://github.com/runpod/runpodctl/releases/download/v1.9.0/runpodctl-darwin-arm -O runpodctl && chmod +x runpodctl && sudo mv runpodctl /usr/local/bin/runpodctl
 ```
+osx (AMD) - For Intel Processors
+```
+wget --quiet --show-progress https://github.com/runpod/runpodctl/releases/download/v1.9.0/runpodctl-darwin-amd -O runpodctl && chmod +x runpodctl && sudo mv runpodctl /usr/local/bin/runpodctl
+```
 
 ![](https://github.com/runpod/runpodctl/blob/main/runpodctllinux.gif)
 
