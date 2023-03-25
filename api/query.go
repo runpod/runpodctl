@@ -35,6 +35,6 @@ func Query(input Input) (res *http.Response, err error) {
 	}
 	req.Header.Add("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: time.Second * 5}
+	client := &http.Client{Timeout: time.Second * 10}
 	return client.Do(req)
 }
