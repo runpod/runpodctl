@@ -119,6 +119,7 @@ type CreatePodInput struct {
 	MinVcpuCount      int       `json:"minVcpuCount"`
 	Name              string    `json:"name"`
 	Ports             string    `json:"ports"`
+	TemplateId        string    `json:"templateId"`
 	VolumeInGb        int       `json:"volumeInGb"`
 	VolumeMountPath   string    `json:"volumeMountPath"`
 }

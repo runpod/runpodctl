@@ -21,6 +21,7 @@ var minMemoryInGb int
 var minVcpuCount int
 var name string
 var ports []string
+var templateId string
 var volumeInGb int
 var volumeMountPath string
 
@@ -40,6 +41,7 @@ var CreatePodCmd = &cobra.Command{
 			MinMemoryInGb:     minMemoryInGb,
 			MinVcpuCount:      minVcpuCount,
 			Name:              name,
+			TemplateId:        templateId,
 			VolumeInGb:        volumeInGb,
 			VolumeMountPath:   volumeMountPath,
 		}
@@ -85,6 +87,7 @@ func init() {
 	CreatePodCmd.Flags().IntVar(&minVcpuCount, "vcpu", 1, "minimum vCPUs needed")
 	CreatePodCmd.Flags().StringVar(&name, "name", "", "any pod name for easy reference")
 	CreatePodCmd.Flags().StringSliceVar(&ports, "ports", nil, "ports to expose; max only 1 http and 1 tcp allowed; e.g. '8888/http'")
+	CreatePodCmd.Flags().StringVar(&templateId, "templateId", "", "templateId to use with the pod")
 	CreatePodCmd.Flags().IntVar(&volumeInGb, "volumeSize", 1, "persistant volume disk size in GB")
 	CreatePodCmd.Flags().StringVar(&volumeMountPath, "volumePath", "/runpod", "container volume path")
 
