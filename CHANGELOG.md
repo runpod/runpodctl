@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.10.0](https://github.com/runpod/runpodctl/compare/v1.9.0...v1.10.0) (2023-04-08)
+
+
+### Features
+
+* add templateId to create pod ([073fd04](https://github.com/runpod/runpodctl/commit/073fd04052f05df3db0312c000d5d70aac8ca0ec))
+* update docs ([05be3be](https://github.com/runpod/runpodctl/commit/05be3be33826f3840adf7f315c502865480fa91d))
+
+
+### Bug Fixes
+
+* Updated README to include mac (amd) intel installation steps ([82b91d6](https://github.com/runpod/runpodctl/commit/82b91d6ebd4b2fea214155346134d84161387b30))
+
 ## [1.9.0](https://github.com/runpod/runpodctl/compare/v1.8.0...v1.9.0) (2023-02-09)
 
 
