@@ -29,7 +29,7 @@ runpodctl create pod [flags]
       --templateId string       templateId to use with the pod
       --vcpu int                minimum vCPUs needed (default 1)
       --volumePath string       container volume path (default "/runpod")
-      --volumeSize int          persistant volume disk size in GB (default 1)
+      --volumeSize int          persistent volume disk size in GB (default 1)
 ```
 
 ### SEE ALSO
