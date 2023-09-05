@@ -88,7 +88,7 @@ func init() {
 	CreatePodCmd.Flags().StringVar(&name, "name", "", "any pod name for easy reference")
 	CreatePodCmd.Flags().StringSliceVar(&ports, "ports", nil, "ports to expose; max only 1 http and 1 tcp allowed; e.g. '8888/http'")
 	CreatePodCmd.Flags().StringVar(&templateId, "templateId", "", "templateId to use with the pod")
-	CreatePodCmd.Flags().IntVar(&volumeInGb, "volumeSize", 1, "persistant volume disk size in GB")
+	CreatePodCmd.Flags().IntVar(&volumeInGb, "volumeSize", 1, "persistent volume disk size in GB")
 	CreatePodCmd.Flags().StringVar(&volumeMountPath, "volumePath", "/runpod", "container volume path")
 
 	CreatePodCmd.MarkFlagRequired("gpuType")   //nolint
