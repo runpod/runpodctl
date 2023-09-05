@@ -130,7 +130,7 @@ You can use the following links for google colab
 # how to manage pods
 Visit [docs](doc/runpodctl.md) for details of all commands.
 
-First configure the API key. You can get API key from [runpod](https://runpod.io/client/settings).
+First configure the API key. You can get API key from [runpod](https://runpod.io/console/user/settings).
 ```
 runpodctl config --apiKey={key}
 ```
