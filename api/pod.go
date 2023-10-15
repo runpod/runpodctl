@@ -38,9 +38,22 @@ type Pod struct {
 	VolumeInGb        int
 	VolumeMountPath   string
 	Machine           *Machine
+	Runtime           *Runtime
 }
 type Machine struct {
 	GpuDisplayName string
+}
+
+type Runtime struct {
+	Ports []*Ports
+}
+
+type Ports struct {
+	Ip string
+	IsIpPublic bool
+	PrivatePort int
+	PublicPort int
+	PortType string
 }
 
 func GetPods() (pods []*Pod, err error) {
@@ -71,6 +84,15 @@ func GetPods() (pods []*Pod, err error) {
 				volumeMountPath
 				machine {
 				  gpuDisplayName
+				}
+				runtime {
+				  ports	{
+					ip
+					isIpPublic
+					privatePort
+					publicPort
+					PortType: type
+				  }
 				}
 			  }
 			}
