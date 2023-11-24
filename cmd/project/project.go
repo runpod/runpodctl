@@ -59,12 +59,12 @@ var NewProjectCmd = &cobra.Command{
 		promptTemplates := &promptui.SelectTemplates{
 			Help:     "",
 			Label:    inputPromptPrefix + "{{ . }}",
-			Active:   ` ● {{ . | cyan }}`,
-			Inactive: ` ○ {{ . | white }}`,
+			Active:   ` {{ "●" | cyan }} {{ . | cyan }}`,
+			Inactive: `   {{ . | white }}`,
 			Selected: `{{ "✔" | green }} {{ . | white }}`,
 		}
 		getNetworkVolume := promptui.Select{
-			Label:     "Select a Network Volume",
+			Label:     "Select a Network Volume:",
 			Items:     []string{"Option1", "Option2", "Option3"},
 			Templates: promptTemplates,
 		}
@@ -77,7 +77,6 @@ var NewProjectCmd = &cobra.Command{
 			[]string{"11.1.1", "11.8.0", "12.1.0"}, "11.8.0")
 		pythonVersion := promptChoice("Select a Python version, or press enter to use the default",
 			[]string{"3.8", "3.9", "3.10", "3.11"}, "3.10")
-		fmt.Println(networkVolumeId, cudaVersion, pythonVersion)
 
 		fmt.Printf(`
 Project Summary:
