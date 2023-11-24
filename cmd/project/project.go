@@ -1,6 +1,7 @@
 package project
 
 import (
+	"cli/api"
 	"fmt"
 	"strings"
 
@@ -44,6 +45,12 @@ func promptChoice(message string, choices []string, defaultChoice string) string
 	return s
 }
 
+// Define a struct that holds the display string and the corresponding value
+type NetVolOption struct {
+	Name  string // The string to display
+	Value string // The actual value to use
+}
+
 var NewProjectCmd = &cobra.Command{
 	Use:   "new",
 	Args:  cobra.ExactArgs(0),
@@ -51,7 +58,6 @@ var NewProjectCmd = &cobra.Command{
 	Long:  "create a new Runpod project folder",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Creating a new project...")
-		//prompt project name (if not provided)
 		if projectName == "" {
 			projectName = prompt("Enter the project name")
 		} else {
@@ -59,20 +65,31 @@ var NewProjectCmd = &cobra.Command{
 		}
 		promptTemplates := &promptui.SelectTemplates{
 			Label:    inputPromptPrefix + "{{ . }}",
-			Active:   ` {{ "●" | cyan }} {{ . | cyan }}`,
-			Inactive: `   {{ . | white }}`,
-			Selected: `{{ "✔" | green }} {{ . | white }}`,
+			Active:   ` {{ "●" | cyan }} {{ .Name | cyan }}`,
+			Inactive: `   {{ .Name | white }}`,
+			Selected: `   {{ .Name | white }}`,
+		}
+		networkVolumes, err := api.GetNetworkVolumes()
+		if err != nil {
+			fmt.Println("Something went wrong trying to fetch network volumes")
+			fmt.Println(err)
+			return
+		}
+		options := []NetVolOption{}
+		for _, networkVolume := range networkVolumes {
+			options = append(options, NetVolOption{Name: fmt.Sprintf("%s: %s (%d GB, %s)", networkVolume.Id, networkVolume.Name, networkVolume.Size, networkVolume.DataCenterId), Value: networkVolume.Id})
 		}
 		getNetworkVolume := promptui.Select{
 			Label:     "Select a Network Volume:",
-			Items:     []string{"Option1", "Option2", "Option3"},
+			Items:     options,
 			Templates: promptTemplates,
 		}
-		_, networkVolumeId, err := getNetworkVolume.Run()
+		i, _, err := getNetworkVolume.Run()
 		if err != nil {
 			//ctrl c for example
 			return
 		}
+		networkVolumeId := options[i].Value
 		cudaVersion := promptChoice("Select a CUDA version, or press enter to use the default",
 			[]string{"11.1.1", "11.8.0", "12.1.0"}, "11.8.0")
 		pythonVersion := promptChoice("Select a Python version, or press enter to use the default",

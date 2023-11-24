@@ -19,7 +19,8 @@ type PodData struct {
 	Myself *MySelfData
 }
 type MySelfData struct {
-	Pods []*Pod
+	Pods           []*Pod
+	NetworkVolumes []*NetworkVolume
 }
 type Pod struct {
 	Id                string
