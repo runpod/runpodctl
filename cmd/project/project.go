@@ -86,6 +86,7 @@ Project Summary:
    - CUDA Version: %s
    - Python Version: %s
 		`, projectName, networkVolumeId, cudaVersion, pythonVersion)
+		fmt.Println()
 		//create files
 		//folder structure (check for --init)
 		//project toml
