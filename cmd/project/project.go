@@ -57,6 +57,17 @@ var NewProjectCmd = &cobra.Command{
 	Short: "create a new project",
 	Long:  "create a new Runpod project folder",
 	Run: func(cmd *cobra.Command, args []string) {
+		networkVolumes, err := api.GetNetworkVolumes()
+		if err != nil {
+			fmt.Println("Something went wrong trying to fetch network volumes")
+			fmt.Println(err)
+			return
+		}
+		if len(networkVolumes) == 0 {
+			fmt.Println("You do not have any network volumes.")
+			fmt.Println("Please create a network volume (https://runpod.io/console/user/storage) and try again.")
+			return
+		}
 		fmt.Println("Creating a new project...")
 		if projectName == "" {
 			projectName = prompt("Enter the project name")
@@ -68,12 +79,6 @@ var NewProjectCmd = &cobra.Command{
 			Active:   ` {{ "●" | cyan }} {{ .Name | cyan }}`,
 			Inactive: `   {{ .Name | white }}`,
 			Selected: `   {{ .Name | white }}`,
-		}
-		networkVolumes, err := api.GetNetworkVolumes()
-		if err != nil {
-			fmt.Println("Something went wrong trying to fetch network volumes")
-			fmt.Println(err)
-			return
 		}
 		options := []NetVolOption{}
 		for _, networkVolume := range networkVolumes {
