@@ -34,6 +34,7 @@ func contains(input string, choices []string) bool {
 func promptChoice(message string, choices []string, defaultChoice string) string {
 	var s string = ""
 	for !contains(s, choices) {
+		s = ""
 		fmt.Print(inputPromptPrefix + message + " (" + strings.Join(choices, ", ") + ") " + "[" + defaultChoice + "]" + ": ")
 		fmt.Scanln(&s)
 		if s == "" {
@@ -57,7 +58,6 @@ var NewProjectCmd = &cobra.Command{
 			fmt.Println("Project name: " + projectName)
 		}
 		promptTemplates := &promptui.SelectTemplates{
-			Help:     "",
 			Label:    inputPromptPrefix + "{{ . }}",
 			Active:   ` {{ "●" | cyan }} {{ . | cyan }}`,
 			Inactive: `   {{ . | white }}`,
