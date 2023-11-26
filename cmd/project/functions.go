@@ -44,7 +44,7 @@ func createNewProject(projectName string, networkVolumeId string, cudaVersion st
 					return err
 				}
 				//if requirements, replace <<RUNPOD>> with runpod-python import
-				return os.WriteFile(newPath, content, os.ModePerm)
+				return os.WriteFile(newPath, content, 0644)
 			}
 		})
 
