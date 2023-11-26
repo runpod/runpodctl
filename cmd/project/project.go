@@ -108,9 +108,13 @@ Project Summary:
    - Python Version: %s
 		`, projectName, networkVolumeId, cudaVersion, pythonVersion)
 		fmt.Println()
-		//create files
-		//folder structure (check for --init)
-		//project toml
+		fmt.Println("The project will be created in the current directory.")
+		//TODO confirm
+		createNewProject(projectName, networkVolumeId, cudaVersion,
+			pythonVersion, modelType, modelName, initCurrentDir)
+		fmt.Printf("Project %s created successfully!", projectName)
+		fmt.Println()
+		fmt.Println("From your project root run `runpod project start` to start a development pod.")
 	},
 }
 
