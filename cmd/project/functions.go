@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/pelletier/go-toml"
@@ -68,7 +69,13 @@ func createNewProject(projectName string, networkVolumeId string, cudaVersion st
 		if err != nil {
 			panic(err)
 		}
+		requirementsPath := filepath.Join(projectFolder, "builder", "requirements.txt")
+		requirementsContentBytes, _ := os.ReadFile(requirementsPath)
+		requirementsContent := string(requirementsContentBytes)
 		//in requirements, replace <<RUNPOD>> with runpod-python import
+		//TODO determine version to lock runpod-python at
+		requirementsContent = strings.ReplaceAll(requirementsContent, "<<RUNPOD>>", "runpod")
+		os.WriteFile(requirementsPath, []byte(requirementsContent), 0644)
 	}
 	//generate project toml
 	tomlBytes, _ := tomlTemplate.ReadFile("example.toml")
