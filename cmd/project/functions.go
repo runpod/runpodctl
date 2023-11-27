@@ -1,6 +1,7 @@
 package project
 
 import (
+	"cli/api"
 	"embed"
 	"fmt"
 	"io/fs"
@@ -87,4 +88,55 @@ func createNewProject(projectName string, networkVolumeId string, cudaVersion st
 	projectToml.SetPath([]string{"runtime", "python_version"}, pythonVersion)
 	tomlPath := filepath.Join(projectFolder, "runpod.toml")
 	os.WriteFile(tomlPath, []byte(projectToml.String()), 0644)
+}
+
+func loadProjectConfig() *toml.Tree {
+	projectFolder, _ := os.Getwd()
+	tomlPath := filepath.Join(projectFolder, "runpod.toml")
+	toml, err := toml.LoadFile(tomlPath)
+	if err != nil {
+		panic("runpod.toml not found in the current directory.")
+	}
+	return toml
+
+}
+
+func getProjectPod(projectId string) (string, error) {
+	pods, err := api.GetPods()
+	if err != nil {
+		return "", err
+	}
+	for _, pod := range pods {
+		if strings.Contains(pod.Name, projectId) {
+			return pod.Id, nil
+		}
+	}
+	return "", nil
+}
+
+func launchDevPod(config *toml.Tree) (string, error) {
+	//TODO create pod
+	return "", nil
+}
+func startProject() error {
+	//parse project toml
+	config := loadProjectConfig()
+	fmt.Println(config)
+	projectId := config.GetPath([]string{"project", "uuid"}).(string)
+	//check for existing pod
+	projectPodId, err := getProjectPod(projectId)
+	if projectPodId == "" || err != nil {
+		//or try to get pod with one of gpu types
+		projectPodId, err = launchDevPod(config)
+		if err != nil {
+			return err
+		}
+	}
+	//open ssh connection
+	//create remote folder structure
+	//rsync project files
+	//activate venv on remote
+	//create file watcher
+	//run launch api server / hot reload loop
+	return nil
 }

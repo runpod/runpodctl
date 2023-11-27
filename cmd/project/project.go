@@ -124,15 +124,7 @@ var StartProjectCmd = &cobra.Command{
 	Short: "start current project",
 	Long:  "start a development pod session for the Runpod project in the current folder",
 	Run: func(cmd *cobra.Command, args []string) {
-		//parse project toml
-		//check for existing pod or
-		//try to get pod with one of gpu types
-		//open ssh connection
-		//create remote folder structure
-		//rsync project files
-		//activate venv on remote
-		//create file watcher
-		//run launch api server / hot reload loop
+		startProject()
 	},
 }
 
