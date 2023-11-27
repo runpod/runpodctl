@@ -83,5 +83,6 @@ func createNewProject(projectName string, networkVolumeId string, cudaVersion st
 	projectToml.SetPath([]string{"template", "model_type"}, modelType)
 	projectToml.SetPath([]string{"template", "model_name"}, modelName)
 	projectToml.SetPath([]string{"runtime", "python_version"}, pythonVersion)
-	fmt.Println(projectToml)
+	tomlPath := filepath.Join(projectFolder, "runpod.toml")
+	os.WriteFile(tomlPath, []byte(projectToml.String()), 0644)
 }
