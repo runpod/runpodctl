@@ -20,11 +20,6 @@ var tomlTemplate embed.FS
 
 const basePath string = "starter_templates"
 
-var defaultGpuTypes = [...]string{
-	"NVIDIA RTX A4000", "NVIDIA RTX A4500", "NVIDIA RTX A5000",
-	"NVIDIA GeForce RTX 3090", "NVIDIA RTX A6000",
-}
-
 func baseDockerImage(cudaVersion string) string {
 	return fmt.Sprintf("runpod/base:0.4.0-cuda%s", cudaVersion)
 }
@@ -81,7 +76,7 @@ func createNewProject(projectName string, networkVolumeId string, cudaVersion st
 	tomlBytes, _ := tomlTemplate.ReadFile("example.toml")
 	projectToml, _ := toml.LoadBytes(tomlBytes)
 	projectUuid := uuid.New().String()[0:8]
-	projectToml.SetComment("RunPod Project Configuration")
+	projectToml.SetComment("RunPod Project Configuration") //TODO why does this not appear
 	projectToml.SetPath([]string{"title"}, projectName)
 	projectToml.SetPath([]string{"project", "name"}, projectName)
 	projectToml.SetPath([]string{"project", "uuid"}, projectUuid)
