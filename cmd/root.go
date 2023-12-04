@@ -50,11 +50,11 @@ func init() {
 func initConfig() {
 	home, err := os.UserHomeDir()
 	cobra.CheckErr(err)
-
-	viper.AddConfigPath(home)
+	configPath := home + "/.runpod"
+	viper.AddConfigPath(configPath)
 	viper.SetConfigType("yaml")
-	viper.SetConfigName(".runpod")
-	config.ConfigFile = home + "/.runpod.yaml"
+	viper.SetConfigName("config.yaml")
+	config.ConfigFile = configPath + "/config.yaml"
 
 	viper.AutomaticEnv() // read in environment variables that match
 
