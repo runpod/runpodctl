@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cli/api"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -25,16 +26,24 @@ var ConfigCmd = &cobra.Command{
 	Run: func(c *cobra.Command, args []string) {
 		err := viper.WriteConfig()
 		cobra.CheckErr(err)
+		fmt.Println("saved apiKey into config file: " + ConfigFile)
 		home, err := os.UserHomeDir()
 		if err != nil {
 			fmt.Println("couldn't get user home dir path")
 			return
 		}
-		sshPath := filepath.Join(home, ".runpod", "ssh", "RunPod-Key-Go")
-		if _, err := os.Stat(sshPath); errors.Is(err, os.ErrNotExist) {
-			makeRSAKey(sshPath)
+		privateSshPath := filepath.Join(home, ".runpod", "ssh", "RunPod-Key-Go")
+		publicSshPath := filepath.Join(home, ".runpod", "ssh", "RunPod-Key-Go.pub")
+		publicKey, _ := os.ReadFile(publicSshPath)
+		if _, err := os.Stat(privateSshPath); errors.Is(err, os.ErrNotExist) {
+			publicKey = makeRSAKey(privateSshPath)
 		}
-		fmt.Println("saved apiKey into config file: " + ConfigFile)
+		keys, _ := api.GetPublicSSHKey()
+		fmt.Println("keys before", keys)
+		api.AddPublicSSHKey(publicKey)
+		keys, _ = api.GetPublicSSHKey()
+		fmt.Println("keys after", keys)
+
 	},
 }
 
@@ -49,7 +58,7 @@ func init() {
 	viper.SetDefault("apiUrl", "https://api.runpod.io/graphql")
 }
 
-func makeRSAKey(filename string) {
+func makeRSAKey(filename string) []byte {
 	bitSize := 2048
 
 	// Generate RSA key.
@@ -87,4 +96,5 @@ func makeRSAKey(filename string) {
 		panic(err)
 	}
 	fmt.Println("saved new SSH public key into", filename+".pub")
+	return pubPEM
 }

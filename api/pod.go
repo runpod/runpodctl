@@ -8,6 +8,10 @@ import (
 	"strings"
 )
 
+type UserOut struct {
+	Data   *PodData        `json:"data"`
+	Errors []*GraphQLError `json:"errors"`
+}
 type PodOut struct {
 	Data   *PodData        `json:"data"`
 	Errors []*GraphQLError `json:"errors"`
@@ -19,6 +23,7 @@ type PodData struct {
 	Myself *MySelfData
 }
 type MySelfData struct {
+	PubKey         string
 	Pods           []*Pod
 	NetworkVolumes []*NetworkVolume
 }

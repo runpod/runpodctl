@@ -109,7 +109,7 @@ Project Summary:
 		`, projectName, networkVolumeId, cudaVersion, pythonVersion)
 		fmt.Println()
 		fmt.Println("The project will be created in the current directory.")
-		//TODO confirm
+		//TODO confirm y/n
 		createNewProject(projectName, networkVolumeId, cudaVersion,
 			pythonVersion, modelType, modelName, initCurrentDir)
 		fmt.Printf("Project %s created successfully!", projectName)
