@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"golang.org/x/crypto/ssh"
 )
 
 var ConfigFile string
@@ -63,7 +64,7 @@ func makeRSAKey(filename string) []byte {
 	}
 
 	// Extract public component.
-	pub := key.Public()
+	pub := key.PublicKey
 
 	// Encode private key to PKCS#1 ASN.1 PEM.
 	keyPEM := pem.EncodeToMemory(
@@ -73,23 +74,26 @@ func makeRSAKey(filename string) []byte {
 		},
 	)
 
-	// Encode public key to PKCS#1 ASN.1 PEM.
-	pubPEM := pem.EncodeToMemory(
-		&pem.Block{
-			Type:  "RSA PUBLIC KEY",
-			Bytes: x509.MarshalPKCS1PublicKey(pub.(*rsa.PublicKey)),
-		},
-	)
+	// generate and write public key
+	publicKey, err := ssh.NewPublicKey(&pub)
+	if err != nil {
+		fmt.Println("err in NewPublicKey")
+		fmt.Println(err)
+	}
+	pubBytes := ssh.MarshalAuthorizedKey(publicKey)
+	pubBytes = append(pubBytes, []byte(" "+filename)...)
 
 	// Write private key to file.
 	if err := os.WriteFile(filename, keyPEM, 0600); err != nil {
+		fmt.Println("err writing priv")
 		panic(err)
 	}
 
 	// Write public key to file.
-	if err := os.WriteFile(filename+".pub", pubPEM, 0600); err != nil {
+	if err := os.WriteFile(filename+".pub", pubBytes, 0600); err != nil {
+		fmt.Println("err writing pub")
 		panic(err)
 	}
 	fmt.Println("saved new SSH public key into", filename+".pub")
-	return pubPEM
+	return pubBytes
 }
