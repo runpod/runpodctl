@@ -38,12 +38,7 @@ var ConfigCmd = &cobra.Command{
 		if _, err := os.Stat(privateSshPath); errors.Is(err, os.ErrNotExist) {
 			publicKey = makeRSAKey(privateSshPath)
 		}
-		keys, _ := api.GetPublicSSHKey()
-		fmt.Println("keys before", keys)
 		api.AddPublicSSHKey(publicKey)
-		keys, _ = api.GetPublicSSHKey()
-		fmt.Println("keys after", keys)
-
 	},
 }
 

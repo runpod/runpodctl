@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-func GetPublicSSHKey() (key string, err error) {
+func GetPublicSSHKeys() (keys string, err error) {
 	input := Input{
 		Query: `
 		query myself {
@@ -49,7 +49,7 @@ func GetPublicSSHKey() (key string, err error) {
 
 func AddPublicSSHKey(key []byte) error {
 	//pull existing pubKey
-	existingKeys, err := GetPublicSSHKey()
+	existingKeys, err := GetPublicSSHKeys()
 	if err != nil {
 		return err
 	}
