@@ -134,12 +134,12 @@ func startProject() error {
 	}
 	//open ssh connection
 	sshConn, err := PodSSHConnection(projectPodId)
-	println(sshConn)
 	// Run a command
-	// cmd := "ls -l"
-	// if err := sshConn.Run(cmd); err != nil {
-	// 	fmt.Println("Failed to run: %s", err)
-	// }
+	cmd := "mkdir testdir"
+	if err := sshConn.session.Run(cmd); err != nil {
+		fmt.Println("Failed to run: %s", err)
+	}
+	sshConn.session.Close()
 	//create remote folder structure
 	//rsync project files
 	//activate venv on remote

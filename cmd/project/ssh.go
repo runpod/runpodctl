@@ -28,7 +28,7 @@ func getPodSSHInfo(podId string) (podIp string, podPort int, err error) {
 	}
 	for _, port := range pod.Runtime.Ports {
 		if port.PrivatePort == 22 {
-			return podIp, port.PublicPort, nil
+			return port.Ip, port.PublicPort, nil
 		}
 	}
 	return "", 0, errors.New("no SSH port exposed on pod")
@@ -41,7 +41,7 @@ type SSHConnection struct {
 
 func PodSSHConnection(podId string) (*SSHConnection, error) {
 	//check ssh key exists
-	home, _ := os.Getwd()
+	home, _ := os.UserHomeDir()
 	sshFilePath := filepath.Join(home, ".runpod", "ssh", "RunPod-Key-Go")
 	privateKeyBytes, err := os.ReadFile(sshFilePath)
 	if err != nil {
@@ -74,7 +74,8 @@ func PodSSHConnection(podId string) (*SSHConnection, error) {
 	}
 
 	// Connect to the SSH server
-	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", podIp, podPort), config)
+	host := fmt.Sprintf("%s:%d", podIp, podPort)
+	client, err := ssh.Dial("tcp", host, config)
 	if err != nil {
 		fmt.Println("Failed to dial for ssh conn: %s", err)
 		return nil, err
