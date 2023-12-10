@@ -144,6 +144,7 @@ type CreatePodInput struct {
 	MinMemoryInGb     int       `json:"minMemoryInGb"`
 	MinVcpuCount      int       `json:"minVcpuCount"`
 	Name              string    `json:"name"`
+	NetworkVolumeId   string    `json:"networkVolumeId"`
 	Ports             string    `json:"ports"`
 	SupportPublicIp   bool      `json:"supportPublicIp"`
 	StartSSH          bool      `json:"startSsh"`
