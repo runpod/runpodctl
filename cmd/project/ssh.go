@@ -23,8 +23,14 @@ func getPodSSHInfo(podId string) (podIp string, podPort int, err error) {
 		}
 	}
 	//is pod ready for ssh yet?
-	if !(pod.DesiredStatus == "RUNNING" && pod.Runtime != nil && pod.Runtime.Ports != nil) {
-		return "", 0, errors.New("pod ports not ready for ssh conn")
+	if pod.DesiredStatus != "RUNNING" {
+		return "", 0, errors.New("pod desired status not RUNNING")
+	}
+	if pod.Runtime == nil {
+		return "", 0, errors.New("pod runtime is nil")
+	}
+	if pod.Runtime.Ports == nil {
+		return "", 0, errors.New("pod runtime ports is nil")
 	}
 	for _, port := range pod.Runtime.Ports {
 		if port.PrivatePort == 22 {
@@ -57,15 +63,14 @@ func PodSSHConnection(podId string) (*SSHConnection, error) {
 	pollIntervalSeconds := 1
 	maxPollTimeSeconds := 300
 	startTime := time.Now()
+	fmt.Print("Waiting for pod to come online... ")
 	//look up ip and ssh port for pod id
 	var podIp string
 	var podPort int
 	for podIp, podPort, err = getPodSSHInfo(podId); err != nil && time.Since(startTime) < time.Duration(maxPollTimeSeconds*int(time.Second)); {
-		fmt.Println("sleepin")
-		time.Sleep(time.Second * time.Duration(pollIntervalSeconds))
+		time.Sleep(time.Duration(pollIntervalSeconds * int(time.Second)))
+		podIp, podPort, err = getPodSSHInfo(podId)
 	}
-	fmt.Println("podIp", podIp)
-	fmt.Println("podPort", podPort)
 
 	// Configure the SSH client
 	config := &ssh.ClientConfig{

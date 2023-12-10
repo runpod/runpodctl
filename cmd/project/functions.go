@@ -144,17 +144,15 @@ func attemptPodLaunch(config *toml.Tree, environmentVariables map[string]string,
 			VolumeInGb:      0,
 			VolumeMountPath: projectConfig.Get("volume_mount_path").(string),
 		}
-		fmt.Println(input)
 		pod, err := api.CreatePod(&input)
 		if err != nil {
-			fmt.Println(err)
 			fmt.Println("Unavailable.")
 			continue
 		}
 		fmt.Println("Success!")
 		return pod, nil
 	}
-	return nil, errors.New("None of the selected GPU types were available")
+	return nil, errors.New("none of the selected GPU types were available")
 }
 func launchDevPod(config *toml.Tree) (string, error) {
 	fmt.Println("Deploying development pod on RunPod...")
@@ -186,7 +184,6 @@ func launchDevPod(config *toml.Tree) (string, error) {
 		fmt.Println(err)
 		return "", err
 	}
-	fmt.Println(new_pod)
 	return new_pod["id"].(string), nil
 }
 func startProject() error {
@@ -194,6 +191,7 @@ func startProject() error {
 	config := loadProjectConfig()
 	fmt.Println(config)
 	projectId := config.GetPath([]string{"project", "uuid"}).(string)
+	projectName := config.GetPath([]string{"project", "name"}).(string)
 	//check for existing pod
 	projectPodId, err := getProjectPod(projectId)
 	if projectPodId == "" || err != nil {
@@ -202,21 +200,20 @@ func startProject() error {
 		if err != nil {
 			return err
 		}
-		//TODO: wait until pod is ready
 	}
-	fmt.Println("project pod id:", projectPodId)
 	//open ssh connection
 	sshConn, err := PodSSHConnection(projectPodId)
+	fmt.Println(fmt.Sprintf("Project %s pod (%s) created.", projectName, projectPodId))
 	// Run a command
 	cmd := "mkdir testdir"
 	if err := sshConn.session.Run(cmd); err != nil {
 		fmt.Println("Failed to run: %s", err)
 	}
-	sshConn.session.Close()
 	//create remote folder structure
 	//rsync project files
 	//activate venv on remote
 	//create file watcher
 	//run launch api server / hot reload loop
+	sshConn.session.Close()
 	return nil
 }
