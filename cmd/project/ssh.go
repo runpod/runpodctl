@@ -60,9 +60,12 @@ func PodSSHConnection(podId string) (*SSHConnection, error) {
 	//look up ip and ssh port for pod id
 	var podIp string
 	var podPort int
-	for podIp, podPort, err = getPodSSHInfo(podId); err != nil && int(time.Now().Sub(startTime)) < maxPollTimeSeconds; {
+	for podIp, podPort, err = getPodSSHInfo(podId); err != nil && time.Since(startTime) < time.Duration(maxPollTimeSeconds*int(time.Second)); {
+		fmt.Println("sleepin")
 		time.Sleep(time.Second * time.Duration(pollIntervalSeconds))
 	}
+	fmt.Println("podIp", podIp)
+	fmt.Println("podPort", podPort)
 
 	// Configure the SSH client
 	config := &ssh.ClientConfig{

@@ -146,6 +146,7 @@ type CreatePodInput struct {
 	Name              string    `json:"name"`
 	Ports             string    `json:"ports"`
 	SupportPublicIp   bool      `json:"supportPublicIp"`
+	StartSSH          bool      `json:"startSsh"`
 	TemplateId        string    `json:"templateId"`
 	VolumeInGb        int       `json:"volumeInGb"`
 	VolumeMountPath   string    `json:"volumeMountPath"`
