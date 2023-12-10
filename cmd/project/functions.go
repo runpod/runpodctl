@@ -3,6 +3,7 @@ package project
 import (
 	"cli/api"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -114,9 +115,79 @@ func getProjectPod(projectId string) (string, error) {
 	return "", nil
 }
 
+func attemptPodLaunch(config *toml.Tree, environmentVariables map[string]string, selectedGpuTypes []string) (pod map[string]interface{}, err error) {
+	projectConfig := config.Get("project").(*toml.Tree)
+	//attempt to launch a pod with the given configuration.
+	for _, gpuType := range selectedGpuTypes {
+		fmt.Printf("Trying to get a pod with %s... ", gpuType)
+		podEnv := []*api.PodEnv{}
+		for k, v := range environmentVariables {
+			podEnv = append(podEnv, &api.PodEnv{Key: k, Value: v})
+		}
+		input := api.CreatePodInput{
+			CloudType: "ALL",
+			// ContainerDiskInGb: config.GetPath([]string{}	),
+			// DeployCost:      projectConfig.Get(""),
+			// DockerArgs:      projectConfig.Get(""),
+			Env:       podEnv,
+			GpuCount:  int(projectConfig.Get("gpu_count").(int64)),
+			GpuTypeId: gpuType,
+			ImageName: projectConfig.Get("base_image").(string),
+			// MinMemoryInGb:   projectConfig.Get(""),
+			// MinVcpuCount:    projectConfig.Get(""),
+			Name:            fmt.Sprintf("%s-dev (%s)", projectConfig.Get("name"), projectConfig.Get("uuid")),
+			Ports:           projectConfig.Get("ports").(string),
+			SupportPublicIp: true,
+			// TemplateId:      projectConfig.Get(""),
+			// VolumeInGb:      projectConfig.Get(""),
+			VolumeMountPath: projectConfig.Get("volume_mount_path").(string),
+		}
+		fmt.Println(input)
+		pod, err := api.CreatePod(&input)
+		if err != nil {
+			fmt.Println(err)
+			fmt.Println("Unavailable.")
+			continue
+		}
+		fmt.Println("Success!")
+		return pod, nil
+	}
+	return nil, errors.New("None of the selected GPU types were available")
+}
 func launchDevPod(config *toml.Tree) (string, error) {
-	//TODO create pod
-	return "", nil
+	fmt.Println("Deploying development pod on RunPod...")
+	//construct env vars
+	environmentVariables := map[string]string{}
+	tomlEnvVars := config.GetPath([]string{"project", "env_vars"})
+	if tomlEnvVars != nil {
+		tomlEnvVarsMap := tomlEnvVars.(*toml.Tree).ToMap()
+		for k, v := range tomlEnvVarsMap {
+			environmentVariables[k] = v.(string)
+		}
+	}
+	environmentVariables["RUNPOD_PROJECT_ID"] = config.GetPath([]string{"project", "uuid"}).(string)
+	// prepare gpu types
+	selectedGpuTypes := []string{}
+	fmt.Println("befoer get gpus")
+	tomlGpuTypes := config.GetPath([]string{"project", "gpu_types"})
+	if tomlGpuTypes != nil {
+		for _, v := range tomlGpuTypes.([]interface{}) {
+			selectedGpuTypes = append(selectedGpuTypes, v.(string))
+		}
+	}
+	tomlGpu := config.GetPath([]string{"project", "gpu"}) //legacy
+	if tomlGpu != nil {
+		selectedGpuTypes = append(selectedGpuTypes, tomlGpu.(string))
+	}
+	fmt.Println("after get gpus")
+	// attempt to launch a pod with the given configuration
+	new_pod, err := attemptPodLaunch(config, environmentVariables, selectedGpuTypes)
+	if err != nil {
+		fmt.Println(err)
+		return "", err
+	}
+	fmt.Println(new_pod)
+	return new_pod["id"].(string), nil
 }
 func startProject() error {
 	//parse project toml
@@ -131,6 +202,7 @@ func startProject() error {
 		if err != nil {
 			return err
 		}
+		//TODO: wait until pod is ready
 	}
 	//open ssh connection
 	sshConn, err := PodSSHConnection(projectPodId)
