@@ -114,7 +114,7 @@ Project Summary:
 			pythonVersion, modelType, modelName, initCurrentDir)
 		fmt.Printf("Project %s created successfully!", projectName)
 		fmt.Println()
-		fmt.Println("From your project root run `runpod project start` to start a development pod.")
+		fmt.Println("From your project root run `runpodctl project start` to start a development pod.")
 	},
 }
 
