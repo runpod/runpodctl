@@ -392,6 +392,14 @@ func deployProject() (endpointId string, err error) {
 	pythonCmd := fmt.Sprintf("python -u /runpod-volume/%s/prod/%s/%s", projectId, projectName, handlerPath)
 	dockerStartCmd := "bash -c \"" + activateCmd + " && " + pythonCmd + "\""
 	//deploy new template
+	// projectEndpointTemplate,err := api.CreateTemplate()
 	//deploy / update endpoint
+	// deployedEndpoint, err := getProjectEndpoint()
+	// if err != nil {
+	// 	deployedEndpoint = api.CreateEndpoint()
+	// } else {
+	// 	deployedEndpoint = api.UpdateEndpointTemplate()
+	// }
+	// return deployedEndpoint["id"].(string), nil
 	return "", nil
 }
