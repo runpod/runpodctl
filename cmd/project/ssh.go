@@ -1,6 +1,7 @@
 package project
 
 import (
+	"bufio"
 	"cli/api"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/fatih/color"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -41,8 +43,70 @@ func getPodSSHInfo(podId string) (podIp string, podPort int, err error) {
 }
 
 type SSHConnection struct {
-	podId   string
-	session *ssh.Session
+	podId  string
+	client *ssh.Client
+}
+
+// func (sshConn *SSHConnection) Rsync(localDir string, remoteDir string) error {
+// 	rsyncCmd := []string{"rsync", "-avz", "--no-owner", "--no-group"}
+// 	for _, pat := range getIgnoreList() {
+// 		rsyncCmd = append(rsyncCmd, "--exclude", pat)
+// 	}
+// 	return nil
+// }
+
+func (sshConn *SSHConnection) RunCommand(command string) error {
+	return sshConn.RunCommands([]string{command})
+}
+func (sshConn *SSHConnection) RunCommands(commands []string) error {
+
+	stdoutColor := color.New(color.FgGreen)
+	stderrColor := color.New(color.FgRed)
+
+	for _, command := range commands {
+		// Create a session
+		fmt.Println("running command", command)
+		session, err := sshConn.client.NewSession()
+		if err != nil {
+			fmt.Println("Failed to create session: %s", err)
+			return err
+		}
+
+		stdout, err := session.StdoutPipe()
+		if err != nil {
+			return err
+		}
+		stderr, err := session.StderrPipe()
+		if err != nil {
+			return err
+		}
+
+		//listen to stdout
+		go func() {
+			scanner := bufio.NewScanner(stdout)
+			for scanner.Scan() {
+				stdoutColor.Printf("[%s] ", sshConn.podId)
+				fmt.Println(scanner.Text())
+			}
+		}()
+
+		//listen to stderr
+		go func() {
+			scanner := bufio.NewScanner(stderr)
+			for scanner.Scan() {
+				stderrColor.Printf("[%s] ", sshConn.podId)
+				fmt.Println(scanner.Text())
+			}
+		}()
+
+		err = session.Run(command)
+		if err != nil {
+			session.Close()
+			return err
+		}
+		session.Close()
+	}
+	return nil
 }
 
 func PodSSHConnection(podId string) (*SSHConnection, error) {
@@ -89,13 +153,6 @@ func PodSSHConnection(podId string) (*SSHConnection, error) {
 		return nil, err
 	}
 
-	// Create a session
-	session, err := client.NewSession()
-	if err != nil {
-		client.Close()
-		fmt.Println("Failed to create session: %s", err)
-		return nil, err
-	}
-	return &SSHConnection{podId: podId, session: session}, nil
+	return &SSHConnection{podId: podId, client: client}, nil
 
 }

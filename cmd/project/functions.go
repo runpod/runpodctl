@@ -154,6 +154,7 @@ func attemptPodLaunch(config *toml.Tree, environmentVariables map[string]string,
 	}
 	return nil, errors.New("none of the selected GPU types were available")
 }
+
 func launchDevPod(config *toml.Tree) (string, error) {
 	fmt.Println("Deploying development pod on RunPod...")
 	//construct env vars
@@ -186,6 +187,7 @@ func launchDevPod(config *toml.Tree) (string, error) {
 	}
 	return new_pod["id"].(string), nil
 }
+
 func startProject() error {
 	//parse project toml
 	config := loadProjectConfig()
@@ -204,16 +206,18 @@ func startProject() error {
 	//open ssh connection
 	sshConn, err := PodSSHConnection(projectPodId)
 	fmt.Println(fmt.Sprintf("Project %s pod (%s) created.", projectName, projectPodId))
-	// Run a command
-	cmd := "mkdir testdir"
-	if err := sshConn.session.Run(cmd); err != nil {
-		fmt.Println("Failed to run: %s", err)
-	}
 	//create remote folder structure
+	projectConfig := config.Get("project").(*toml.Tree)
+	projectPathUuid := filepath.Join(projectConfig.Get("volume_mount_path").(string), projectConfig.Get("uuid").(string))
+	projectPathUuidDev := filepath.Join(projectPathUuid, "dev")
+	projectPathUuidProd := filepath.Join(projectPathUuid, "prod")
+	remoteProjectPath := filepath.Join(projectPathUuidDev, projectConfig.Get("name").(string))
+	fmt.Printf("Checking pod project folder: %s on pod %s\n", remoteProjectPath, projectPodId)
+	sshConn.RunCommands([]string{fmt.Sprintf("mkdir -p %s %s", remoteProjectPath, projectPathUuidProd)})
 	//rsync project files
+	fmt.Printf("Syncing files to pod %s\n", projectPodId)
 	//activate venv on remote
 	//create file watcher
 	//run launch api server / hot reload loop
-	sshConn.session.Close()
 	return nil
 }
