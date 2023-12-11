@@ -226,10 +226,11 @@ func startProject() error {
 	venvPath := filepath.Join(projectPathUuidDev, "venv")
 	sshConn.RunCommands([]string{
 		fmt.Sprintf("python%s -m venv %s", config.GetPath([]string{"runtime", "python_version"}).(string), venvPath),
-		fmt.Sprintf("source %s/bin/activate", venvPath),
-		fmt.Sprintf("cd %s", remoteProjectPath),
-		"python -m pip install --upgrade pip",
-		fmt.Sprintf("python -m pip install -v --requirement %s", config.GetPath([]string{"runtime", "requirements_path"}).(string)),
+		fmt.Sprintf(`source %s/bin/activate && 
+		cd %s && 
+		python -m pip install --upgrade pip && 
+		python -m pip install -v --requirement %s`,
+			venvPath, remoteProjectPath, config.GetPath([]string{"runtime", "requirements_path"}).(string)),
 	})
 	//create file watcher
 	go sshConn.SyncDir(cwd, projectPathUuidDev)

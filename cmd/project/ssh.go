@@ -146,7 +146,6 @@ func (sshConn *SSHConnection) RunCommands(commands []string) error {
 
 	for _, command := range commands {
 		// Create a session
-		fmt.Println("running command", command)
 		session, err := sshConn.client.NewSession()
 		if err != nil {
 			fmt.Println("Failed to create session: %s", err)
