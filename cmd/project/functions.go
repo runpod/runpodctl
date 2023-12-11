@@ -297,7 +297,7 @@ func startProject() error {
 	update_exclude_pattern
 
 	# Start the API server in the background, and save the PID
-	python -m scalene --html --no-browser --profile-all --outfile %s/profile.html --- %s --rp_serve_api --rp_api_host="0.0.0.0" --rp_api_port=8080 --rp_api_concurrency=1 &
+	python %s --rp_serve_api --rp_api_host="0.0.0.0" --rp_api_port=8080 --rp_api_concurrency=1 &
 	last_pid=$!
 
 	echo -e "- Started API server with PID: $last_pid" && echo ""
@@ -323,12 +323,12 @@ func startProject() error {
 			update_exclude_pattern
 		fi
 
-		python -m scalene --html --no-browser --profile-all --outfile %s/profile.html --- %s --rp_serve_api --rp_api_host="0.0.0.0" --rp_api_port=8080 --rp_api_concurrency=1 &
+		python %s --rp_serve_api --rp_api_host="0.0.0.0" --rp_api_port=8080 --rp_api_concurrency=1 &
 		last_pid=$!
 
 		echo "Restarted API server with PID: $last_pid"
 	done
-	`, projectPathUuidDev, projectPathUuidDev, projectName, remoteProjectPath, handlerPath, remoteProjectPath, pipReqPath, remoteProjectPath, handlerPath)
+	`, projectPathUuidDev, projectPathUuidDev, projectName, handlerPath, remoteProjectPath, pipReqPath, handlerPath)
 	fmt.Println()
 	fmt.Println("Starting project development endpoint...")
 	sshConn.RunCommand(launchApiServer)

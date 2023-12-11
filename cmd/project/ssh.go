@@ -63,21 +63,23 @@ func (sshConn *SSHConnection) getSshOptions() []string {
 	}
 }
 func (sshConn *SSHConnection) Rsync(localDir string, remoteDir string, quiet bool) error {
-	rsyncCmd := []string{"rsync", "-avz", "--no-owner", "--no-group"}
+	rsyncCmdArgs := []string{"-avz", "--no-owner", "--no-group"}
 	patterns, err := GetIgnoreList()
 	if err != nil {
 		return err
 	}
 	for _, pat := range patterns {
-		rsyncCmd = append(rsyncCmd, "--exclude", pat)
+		rsyncCmdArgs = append(rsyncCmdArgs, "--exclude", pat)
 	}
 	if quiet {
-		rsyncCmd = append(rsyncCmd, "--quiet")
+		rsyncCmdArgs = append(rsyncCmdArgs, "--quiet")
 	}
 
-	rsyncCmd = append(rsyncCmd, sshConn.getSshOptions()...)
-	rsyncStr := strings.Join(rsyncCmd, " ")
-	cmd := exec.Command(rsyncStr)
+	sshOptions := strings.Join(sshConn.getSshOptions(), " ")
+	rsyncCmdArgs = append(rsyncCmdArgs, "-e", fmt.Sprintf("ssh %s", sshOptions))
+	rsyncCmdArgs = append(rsyncCmdArgs, localDir, fmt.Sprintf("root@%s:%s", sshConn.podIp, remoteDir))
+	fmt.Println(rsyncCmdArgs)
+	cmd := exec.Command("rsync", rsyncCmdArgs...)
 	cmd.Stdout = os.Stdout
 	if err := cmd.Run(); err != nil {
 		fmt.Println("could not run rsync command: ", err)
@@ -102,10 +104,14 @@ func (sshConn *SSHConnection) SyncDir(localDir string, remoteDir string) {
 
 	// Start listening for events.
 	go func() {
+		fmt.Println("start goroutine")
 		for {
+			fmt.Println("start for loop")
 			select {
 			case event, ok := <-watcher.Events:
+				fmt.Println("got event")
 				if !ok {
+					fmt.Println("not ok")
 					return
 				}
 				if event.Op&fsnotify.Write == fsnotify.Write {
@@ -119,6 +125,7 @@ func (sshConn *SSHConnection) SyncDir(localDir string, remoteDir string) {
 					mu.Unlock()
 				}
 			case err, ok := <-watcher.Errors:
+				fmt.Println("got watcher err")
 				if !ok {
 					return
 				}
