@@ -12,9 +12,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dietsche/rfsnotify"
 	"github.com/fatih/color"
-	"github.com/fsnotify/fsnotify"
 	"golang.org/x/crypto/ssh"
+	"gopkg.in/fsnotify.v1"
 )
 
 func getPodSSHInfo(podId string) (podIp string, podPort int, err error) {
@@ -78,7 +79,6 @@ func (sshConn *SSHConnection) Rsync(localDir string, remoteDir string, quiet boo
 	sshOptions := strings.Join(sshConn.getSshOptions(), " ")
 	rsyncCmdArgs = append(rsyncCmdArgs, "-e", fmt.Sprintf("ssh %s", sshOptions))
 	rsyncCmdArgs = append(rsyncCmdArgs, localDir, fmt.Sprintf("root@%s:%s", sshConn.podIp, remoteDir))
-	fmt.Println(rsyncCmdArgs)
 	cmd := exec.Command("rsync", rsyncCmdArgs...)
 	cmd.Stdout = os.Stdout
 	if err := cmd.Run(); err != nil {
@@ -94,7 +94,7 @@ func (sshConn *SSHConnection) SyncDir(localDir string, remoteDir string) {
 		sshConn.Rsync(localDir, remoteDir, true)
 	}
 	// Create new watcher.
-	watcher, err := fsnotify.NewWatcher()
+	watcher, err := rfsnotify.NewWatcher()
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -104,18 +104,20 @@ func (sshConn *SSHConnection) SyncDir(localDir string, remoteDir string) {
 
 	// Start listening for events.
 	go func() {
-		fmt.Println("start goroutine")
 		for {
-			fmt.Println("start for loop")
 			select {
 			case event, ok := <-watcher.Events:
-				fmt.Println("got event")
 				if !ok {
-					fmt.Println("not ok")
 					return
 				}
-				if event.Op&fsnotify.Write == fsnotify.Write {
-					fmt.Println("Modified file:", event.Name)
+				//if directory modified or created, ignore
+				if event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Create == fsnotify.Create {
+					if event.Op&fsnotify.Write == fsnotify.Write {
+						fmt.Println("Modified file:", event.Name)
+					}
+					if event.Op&fsnotify.Create == fsnotify.Create {
+						fmt.Println("Created file:", event.Name)
+					}
 
 					mu.Lock()
 					if timer != nil {
@@ -125,7 +127,6 @@ func (sshConn *SSHConnection) SyncDir(localDir string, remoteDir string) {
 					mu.Unlock()
 				}
 			case err, ok := <-watcher.Errors:
-				fmt.Println("got watcher err")
 				if !ok {
 					return
 				}
@@ -135,7 +136,7 @@ func (sshConn *SSHConnection) SyncDir(localDir string, remoteDir string) {
 	}()
 
 	// Add a path.
-	err = watcher.Add(localDir)
+	err = watcher.AddRecursive(localDir)
 	if err != nil {
 		fmt.Println(err)
 	}
