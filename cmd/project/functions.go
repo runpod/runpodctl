@@ -120,10 +120,7 @@ func attemptPodLaunch(config *toml.Tree, environmentVariables map[string]string,
 	//attempt to launch a pod with the given configuration.
 	for _, gpuType := range selectedGpuTypes {
 		fmt.Printf("Trying to get a pod with %s... ", gpuType)
-		podEnv := []*api.PodEnv{}
-		for k, v := range environmentVariables {
-			podEnv = append(podEnv, &api.PodEnv{Key: k, Value: v})
-		}
+		podEnv := mapToApiEnv(environmentVariables)
 		input := api.CreatePodInput{
 			CloudType:         "ALL",
 			ContainerDiskInGb: int(projectConfig.Get("container_disk_size_gb").(int64)),
@@ -158,15 +155,7 @@ func attemptPodLaunch(config *toml.Tree, environmentVariables map[string]string,
 func launchDevPod(config *toml.Tree) (string, error) {
 	fmt.Println("Deploying development pod on RunPod...")
 	//construct env vars
-	environmentVariables := map[string]string{}
-	tomlEnvVars := config.GetPath([]string{"project", "env_vars"})
-	if tomlEnvVars != nil {
-		tomlEnvVarsMap := tomlEnvVars.(*toml.Tree).ToMap()
-		for k, v := range tomlEnvVarsMap {
-			environmentVariables[k] = v.(string)
-		}
-	}
-	environmentVariables["RUNPOD_PROJECT_ID"] = config.GetPath([]string{"project", "uuid"}).(string)
+	environmentVariables := createEnvVars(config)
 	// prepare gpu types
 	selectedGpuTypes := []string{}
 	tomlGpuTypes := config.GetPath([]string{"project", "gpu_types"})
@@ -186,6 +175,26 @@ func launchDevPod(config *toml.Tree) (string, error) {
 		return "", err
 	}
 	return new_pod["id"].(string), nil
+}
+
+func createEnvVars(config *toml.Tree) map[string]string {
+	environmentVariables := map[string]string{}
+	tomlEnvVars := config.GetPath([]string{"project", "env_vars"})
+	if tomlEnvVars != nil {
+		tomlEnvVarsMap := tomlEnvVars.(*toml.Tree).ToMap()
+		for k, v := range tomlEnvVarsMap {
+			environmentVariables[k] = v.(string)
+		}
+	}
+	environmentVariables["RUNPOD_PROJECT_ID"] = config.GetPath([]string{"project", "uuid"}).(string)
+	return environmentVariables
+}
+func mapToApiEnv(env map[string]string) []*api.PodEnv {
+	podEnv := []*api.PodEnv{}
+	for k, v := range env {
+		podEnv = append(podEnv, &api.PodEnv{Key: k, Value: v})
+	}
+	return podEnv
 }
 
 func startProject() error {
@@ -224,6 +233,7 @@ func startProject() error {
 	sshConn.Rsync(cwd, projectPathUuidDev, false)
 	//activate venv on remote
 	venvPath := filepath.Join(projectPathUuidDev, "venv")
+	fmt.Printf("Activating Python virtual environment: %s on pod %s\n", venvPath, projectPodId)
 	sshConn.RunCommands([]string{
 		fmt.Sprintf("python%s -m venv %s", config.GetPath([]string{"runtime", "python_version"}).(string), venvPath),
 		fmt.Sprintf(`source %s/bin/activate && 
@@ -333,4 +343,55 @@ func startProject() error {
 	fmt.Println("Starting project development endpoint...")
 	sshConn.RunCommand(launchApiServer)
 	return nil
+}
+
+func deployProject() (endpointId string, err error) {
+	//parse project toml
+	config := loadProjectConfig()
+	projectId := config.GetPath([]string{"project", "uuid"}).(string)
+	//check for existing pod
+	projectPodId, err := getProjectPod(projectId)
+	if projectPodId == "" || err != nil {
+		//or try to get pod with one of gpu types
+		projectPodId, err = launchDevPod(config)
+		if err != nil {
+			return "", err
+		}
+	}
+	//open ssh connection
+	sshConn, err := PodSSHConnection(projectPodId)
+	if err != nil {
+		fmt.Println("error establishing ssh connection to pod: ", err)
+		return "", err
+	}
+	//sync remote dev to remote prod
+	projectConfig := config.Get("project").(*toml.Tree)
+	projectPathUuid := filepath.Join(projectConfig.Get("volume_mount_path").(string), projectConfig.Get("uuid").(string))
+	projectPathUuidDev := filepath.Join(projectPathUuid, "dev")
+	projectPathUuidProd := filepath.Join(projectPathUuid, "prod")
+	remoteProjectPath := filepath.Join(projectPathUuidDev, projectConfig.Get("name").(string))
+	sshConn.RunCommand(fmt.Sprintf("mkdir -p %s", remoteProjectPath))
+	fmt.Printf("Syncing files to pod %s prod\n", projectPodId)
+	cwd, _ := os.Getwd()
+	sshConn.Rsync(cwd, projectPathUuidProd, false)
+	//activate venv on remote
+	venvPath := filepath.Join(projectPathUuidProd, "venv")
+	fmt.Printf("Activating Python virtual environment: %s on pod %s\n", venvPath, projectPodId)
+	sshConn.RunCommands([]string{
+		fmt.Sprintf("python%s -m venv %s", config.GetPath([]string{"runtime", "python_version"}).(string), venvPath),
+		fmt.Sprintf(`source %s/bin/activate && 
+		cd %s && 
+		python -m pip install --upgrade pip && 
+		python -m pip install -v --requirement %s`,
+			venvPath, remoteProjectPath, config.GetPath([]string{"runtime", "requirements_path"}).(string)),
+	})
+	env := mapToApiEnv(createEnvVars(config))
+	// Construct the docker start command
+	handlerPath := filepath.Join(remoteProjectPath, config.GetPath([]string{"runtime", "handler_path"}).(string))
+	activateCmd := fmt.Sprintf(". /runpod-volume/%s/prod/venv/bin/activate", projectId)
+	pythonCmd := fmt.Sprintf("python -u /runpod-volume/%s/prod/%s/%s", projectId, projectName, handlerPath)
+	dockerStartCmd := "bash -c \"" + activateCmd + " && " + pythonCmd + "\""
+	//deploy new template
+	//deploy / update endpoint
+	return "", nil
 }

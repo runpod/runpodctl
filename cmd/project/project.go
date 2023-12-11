@@ -134,13 +134,17 @@ var DeployProjectCmd = &cobra.Command{
 	Short: "deploy current project",
 	Long:  "deploy an endpoint for the Runpod project in the current folder",
 	Run: func(cmd *cobra.Command, args []string) {
-		//parse project toml
-		//check for existing pod or
-		//try to get pod with one of gpu types
-		//open ssh connection
-		//sync remote dev to remote prod
-		//deploy new template
-		//deploy / update endpoint
+		fmt.Println("Deploying project...")
+		endpointId, err := deployProject()
+		if err != nil {
+			fmt.Println("Failed to deploy project: ", err)
+			return
+		}
+		fmt.Printf("Project deployed successfully! Endpoint ID: %s\n", endpointId)
+		fmt.Println("The following urls are available:")
+		fmt.Printf("    - https://api.runpod.ai/v2/%s/runsync\n", endpointId)
+		fmt.Printf("    - https://api.runpod.ai/v2/%s/run\n", endpointId)
+		fmt.Printf("    - https://api.runpod.ai/v2/%s/health\n", endpointId)
 	},
 }
 
