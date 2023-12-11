@@ -6,10 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/fatih/color"
+	"github.com/fsnotify/fsnotify"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -43,18 +47,95 @@ func getPodSSHInfo(podId string) (podIp string, podPort int, err error) {
 }
 
 type SSHConnection struct {
-	podId  string
-	client *ssh.Client
+	podId      string
+	podIp      string
+	podPort    int
+	client     *ssh.Client
+	sshKeyPath string
 }
 
-// func (sshConn *SSHConnection) Rsync(localDir string, remoteDir string) error {
-// 	rsyncCmd := []string{"rsync", "-avz", "--no-owner", "--no-group"}
-// 	for _, pat := range getIgnoreList() {
-// 		rsyncCmd = append(rsyncCmd, "--exclude", pat)
-// 	}
-// 	return nil
-// }
+func (sshConn *SSHConnection) getSshOptions() []string {
+	return []string{
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "LogLevel=ERROR",
+		"-p", fmt.Sprint(sshConn.podPort),
+		"-i", sshConn.sshKeyPath,
+	}
+}
+func (sshConn *SSHConnection) Rsync(localDir string, remoteDir string, quiet bool) error {
+	rsyncCmd := []string{"rsync", "-avz", "--no-owner", "--no-group"}
+	patterns, err := GetIgnoreList()
+	if err != nil {
+		return err
+	}
+	for _, pat := range patterns {
+		rsyncCmd = append(rsyncCmd, "--exclude", pat)
+	}
+	if quiet {
+		rsyncCmd = append(rsyncCmd, "--quiet")
+	}
 
+	rsyncCmd = append(rsyncCmd, sshConn.getSshOptions()...)
+	rsyncStr := strings.Join(rsyncCmd, " ")
+	cmd := exec.Command(rsyncStr)
+	cmd.Stdout = os.Stdout
+	if err := cmd.Run(); err != nil {
+		fmt.Println("could not run rsync command: ", err)
+		return err
+	}
+	return nil
+}
+
+func (sshConn *SSHConnection) SyncDir(localDir string, remoteDir string) {
+	syncFiles := func() {
+		fmt.Println("Syncing files...")
+		sshConn.Rsync(localDir, remoteDir, true)
+	}
+	// Create new watcher.
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		fmt.Println(err)
+	}
+	defer watcher.Close()
+	var mu sync.Mutex
+	var timer *time.Timer
+
+	// Start listening for events.
+	go func() {
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				if event.Op&fsnotify.Write == fsnotify.Write {
+					fmt.Println("Modified file:", event.Name)
+
+					mu.Lock()
+					if timer != nil {
+						timer.Stop()
+					}
+					timer = time.AfterFunc(500*time.Millisecond, syncFiles)
+					mu.Unlock()
+				}
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				fmt.Println("error:", err)
+			}
+		}
+	}()
+
+	// Add a path.
+	err = watcher.Add(localDir)
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	// Block main goroutine forever.
+	<-make(chan struct{})
+}
 func (sshConn *SSHConnection) RunCommand(command string) error {
 	return sshConn.RunCommands([]string{command})
 }
@@ -98,8 +179,13 @@ func (sshConn *SSHConnection) RunCommands(commands []string) error {
 				fmt.Println(scanner.Text())
 			}
 		}()
-
-		err = session.Run(command)
+		fullCommand := strings.Join([]string{
+			"source /root/.bashrc",
+			"source /etc/rp_environment",
+			"while IFS= read -r -d '' line; do export \"$line\"; done < /proc/1/environ",
+			command,
+		}, " && ")
+		err = session.Run(fullCommand)
 		if err != nil {
 			session.Close()
 			return err
@@ -153,6 +239,6 @@ func PodSSHConnection(podId string) (*SSHConnection, error) {
 		return nil, err
 	}
 
-	return &SSHConnection{podId: podId, client: client}, nil
+	return &SSHConnection{podId: podId, client: client, podIp: podIp, podPort: podPort, sshKeyPath: sshFilePath}, nil
 
 }

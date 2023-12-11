@@ -205,6 +205,10 @@ func startProject() error {
 	}
 	//open ssh connection
 	sshConn, err := PodSSHConnection(projectPodId)
+	if err != nil {
+		fmt.Println("error establishing ssh connection to pod: ", err)
+		return err
+	}
 	fmt.Println(fmt.Sprintf("Project %s pod (%s) created.", projectName, projectPodId))
 	//create remote folder structure
 	projectConfig := config.Get("project").(*toml.Tree)
@@ -216,8 +220,116 @@ func startProject() error {
 	sshConn.RunCommands([]string{fmt.Sprintf("mkdir -p %s %s", remoteProjectPath, projectPathUuidProd)})
 	//rsync project files
 	fmt.Printf("Syncing files to pod %s\n", projectPodId)
+	cwd, _ := os.Getwd()
+	sshConn.Rsync(cwd, projectPathUuidDev, false)
 	//activate venv on remote
+	venvPath := filepath.Join(projectPathUuidDev, "venv")
+	sshConn.RunCommands([]string{
+		fmt.Sprintf("python%s -m venv %s", config.GetPath([]string{"runtime", "python_version"}).(string), venvPath),
+		fmt.Sprintf("source %s/bin/activate", venvPath),
+		fmt.Sprintf("cd %s", remoteProjectPath),
+		"python -m pip install --upgrade pip",
+		fmt.Sprintf("python -m pip install -v --requirement %s", config.GetPath([]string{"runtime", "requirements_path"}).(string)),
+	})
 	//create file watcher
+	go sshConn.SyncDir(cwd, projectPathUuidDev)
 	//run launch api server / hot reload loop
+	pipReqPath := filepath.Join(remoteProjectPath, config.GetPath([]string{"runtime", "requirements_path"}).(string))
+	handlerPath := filepath.Join(remoteProjectPath, config.GetPath([]string{"runtime", "handler_path"}).(string))
+	launchApiServer := fmt.Sprintf(`
+	pkill inotify
+
+	function force_kill {
+		kill $1 2>/dev/null
+		sleep 1
+
+		if ps -p $1 > /dev/null; then
+			echo "Graceful kill failed, attempting SIGKILL..."
+			kill -9 $1 2>/dev/null
+			sleep 1
+
+			if ps -p $1 > /dev/null; then
+				echo "Failed to kill process with PID: $1"
+				exit 1
+			else
+				echo "Killed process with PID: $1 using SIGKILL"
+			fi
+
+		else
+			echo "Killed process with PID: $1"
+		fi
+	}
+
+	function cleanup {
+		echo "Cleaning up..."
+		force_kill $last_pid
+	}
+
+	trap cleanup EXIT SIGINT
+
+	if source %s/venv/bin/activate; then
+		echo -e "- Activated virtual environment."
+	else
+		echo "Failed to activate virtual environment."
+		exit 1
+	fi
+
+	if cd %s/%s; then
+		echo -e "- Changed to project directory."
+	else
+		echo "Failed to change directory."
+		exit 1
+	fi
+
+	exclude_pattern='(__pycache__|\\.pyc$)'
+	function update_exclude_pattern {
+		exclude_pattern='(__pycache__|\\.pyc$)'
+		if [[ -f .runpodignore ]]; then
+			while IFS= read -r line; do
+				line=$(echo "$line" | tr -d '[:space:]')
+				[[ "$line" =~ ^#.*$ || -z "$line" ]] && continue # Skip comments and empty lines
+				exclude_pattern="${exclude_pattern}|(${line})"
+			done < .runpodignore
+			echo -e "- Ignoring files matching pattern: $exclude_pattern"
+		fi
+	}
+	update_exclude_pattern
+
+	# Start the API server in the background, and save the PID
+	python -m scalene --html --no-browser --profile-all --outfile %s/profile.html --- %s --rp_serve_api --rp_api_host="0.0.0.0" --rp_api_port=8080 --rp_api_concurrency=1 &
+	last_pid=$!
+
+	echo -e "- Started API server with PID: $last_pid" && echo ""
+	echo "Connect to the API server at:"
+	echo ">  https://$RUNPOD_POD_ID-8080.proxy.runpod.net/docs" && echo ""
+
+	while true; do
+		if changed_file=$(inotifywait -q -r -e modify,create,delete --exclude "$exclude_pattern" %s --format '%%w%%f'); then
+			echo "Detected changes in: $changed_file"
+		else
+			echo "Failed to detect changes."
+			exit 1
+		fi
+
+		force_kill $last_pid
+
+		if [[ $changed_file == *"requirements"* ]]; then
+			echo "Installing new requirements..."
+			python -m pip install --upgrade pip && python -m pip install -r %s
+		fi
+
+		if [[ $changed_file == *".runpodignore"* ]]; then
+			update_exclude_pattern
+		fi
+
+		python -m scalene --html --no-browser --profile-all --outfile %s/profile.html --- %s --rp_serve_api --rp_api_host="0.0.0.0" --rp_api_port=8080 --rp_api_concurrency=1 &
+		last_pid=$!
+
+		echo "Restarted API server with PID: $last_pid"
+	done
+	`, projectPathUuidDev, projectPathUuidDev, projectName, remoteProjectPath, handlerPath, remoteProjectPath, pipReqPath, remoteProjectPath, handlerPath)
+	fmt.Println()
+	fmt.Println("Starting project development endpoint...")
+	sshConn.RunCommand(launchApiServer)
 	return nil
 }
