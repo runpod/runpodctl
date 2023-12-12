@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/pelletier/go-toml"
@@ -345,54 +346,72 @@ func startProject() error {
 	return nil
 }
 
-func deployProject() (endpointId string, err error) {
+func deployProject(syncFiles bool) (endpointId string, err error) {
 	//parse project toml
 	config := loadProjectConfig()
 	projectId := config.GetPath([]string{"project", "uuid"}).(string)
-	//check for existing pod
-	projectPodId, err := getProjectPod(projectId)
-	if projectPodId == "" || err != nil {
-		//or try to get pod with one of gpu types
-		projectPodId, err = launchDevPod(config)
+	projectConfig := config.Get("project").(*toml.Tree)
+	projectName := projectConfig.Get("name").(string)
+	projectPathUuid := filepath.Join(projectConfig.Get("volume_mount_path").(string), projectConfig.Get("uuid").(string))
+	projectPathUuidProd := filepath.Join(projectPathUuid, "prod")
+	remoteProjectPath := filepath.Join(projectPathUuidProd, projectConfig.Get("name").(string))
+	if syncFiles {
+		//check for existing pod
+		projectPodId, err := getProjectPod(projectId)
+		if projectPodId == "" || err != nil {
+			//or try to get pod with one of gpu types
+			projectPodId, err = launchDevPod(config)
+			if err != nil {
+				return "", err
+			}
+		}
+		//open ssh connection
+		sshConn, err := PodSSHConnection(projectPodId)
 		if err != nil {
+			fmt.Println("error establishing ssh connection to pod: ", err)
 			return "", err
 		}
-	}
-	//open ssh connection
-	sshConn, err := PodSSHConnection(projectPodId)
-	if err != nil {
-		fmt.Println("error establishing ssh connection to pod: ", err)
-		return "", err
-	}
-	//sync remote dev to remote prod
-	projectConfig := config.Get("project").(*toml.Tree)
-	projectPathUuid := filepath.Join(projectConfig.Get("volume_mount_path").(string), projectConfig.Get("uuid").(string))
-	projectPathUuidDev := filepath.Join(projectPathUuid, "dev")
-	projectPathUuidProd := filepath.Join(projectPathUuid, "prod")
-	remoteProjectPath := filepath.Join(projectPathUuidDev, projectConfig.Get("name").(string))
-	sshConn.RunCommand(fmt.Sprintf("mkdir -p %s", remoteProjectPath))
-	fmt.Printf("Syncing files to pod %s prod\n", projectPodId)
-	cwd, _ := os.Getwd()
-	sshConn.Rsync(cwd, projectPathUuidProd, false)
-	//activate venv on remote
-	venvPath := filepath.Join(projectPathUuidProd, "venv")
-	fmt.Printf("Activating Python virtual environment: %s on pod %s\n", venvPath, projectPodId)
-	sshConn.RunCommands([]string{
-		fmt.Sprintf("python%s -m venv %s", config.GetPath([]string{"runtime", "python_version"}).(string), venvPath),
-		fmt.Sprintf(`source %s/bin/activate && 
+		//sync remote dev to remote prod
+		sshConn.RunCommand(fmt.Sprintf("mkdir -p %s", remoteProjectPath))
+		fmt.Printf("Syncing files to pod %s prod\n", projectPodId)
+		cwd, _ := os.Getwd()
+		sshConn.Rsync(cwd, projectPathUuidProd, false)
+		//activate venv on remote
+		venvPath := filepath.Join(projectPathUuidProd, "venv")
+		fmt.Printf("Activating Python virtual environment: %s on pod %s\n", venvPath, projectPodId)
+		sshConn.RunCommands([]string{
+			fmt.Sprintf("python%s -m venv %s", config.GetPath([]string{"runtime", "python_version"}).(string), venvPath),
+			fmt.Sprintf(`source %s/bin/activate && 
 		cd %s && 
 		python -m pip install --upgrade pip && 
 		python -m pip install -v --requirement %s`,
-			venvPath, remoteProjectPath, config.GetPath([]string{"runtime", "requirements_path"}).(string)),
-	})
+				venvPath, remoteProjectPath, config.GetPath([]string{"runtime", "requirements_path"}).(string)),
+		})
+	}
 	env := mapToApiEnv(createEnvVars(config))
 	// Construct the docker start command
 	handlerPath := filepath.Join(remoteProjectPath, config.GetPath([]string{"runtime", "handler_path"}).(string))
 	activateCmd := fmt.Sprintf(". /runpod-volume/%s/prod/venv/bin/activate", projectId)
-	pythonCmd := fmt.Sprintf("python -u /runpod-volume/%s/prod/%s/%s", projectId, projectName, handlerPath)
-	dockerStartCmd := "bash -c \"" + activateCmd + " && " + pythonCmd + "\""
+	pythonCmd := fmt.Sprintf("python -u %s", handlerPath)
+	dockerStartCmd := "bash -c \\\"" + activateCmd + " && " + pythonCmd + "\\\""
 	//deploy new template
-	// projectEndpointTemplate,err := api.CreateTemplate()
+	projectEndpointTemplateId, err := api.CreateTemplate(&api.CreateTemplateInput{
+		Name:              fmt.Sprintf("%s-endpoint | %s | %d", projectName, projectId, time.Now().UnixMilli()),
+		ImageName:         projectConfig.Get("base_image").(string),
+		Env:               env,
+		DockerStartCmd:    dockerStartCmd,
+		IsServerless:      true,
+		ContainerDiskInGb: 10,
+		VolumeMountPath:   projectConfig.Get("volume_mount_path").(string),
+		StartSSH:          true,
+		IsPublic:          false,
+		Readme:            "",
+	})
+	if err != nil {
+		fmt.Println("error making template")
+		return "", err
+	}
+	fmt.Printf("made template %s\n", projectEndpointTemplateId)
 	//deploy / update endpoint
 	// deployedEndpoint, err := getProjectEndpoint()
 	// if err != nil {
