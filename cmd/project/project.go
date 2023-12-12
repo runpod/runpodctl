@@ -168,6 +168,6 @@ var DeployProjectCmd = &cobra.Command{
 func init() {
 	NewProjectCmd.Flags().StringVarP(&projectName, "name", "n", "", "project name")
 	NewProjectCmd.Flags().StringVarP(&modelName, "model", "m", "", "model name")
-	NewProjectCmd.Flags().StringVarP(&modelType, "type", "t", "", "model typype")
+	NewProjectCmd.Flags().StringVarP(&modelType, "type", "t", "", "model type")
 	NewProjectCmd.Flags().BoolVarP(&initCurrentDir, "init", "i", false, "use the current directory as the project directory")
 }
