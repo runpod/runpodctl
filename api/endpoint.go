@@ -180,56 +180,51 @@ func CreateEndpoint(endpointInput *CreateEndpointInput) (endpointId string, err 
 	return
 }
 
-// func UpdateEndpointTemplate(endpointId string, templateId string) error {
-// 	input := Input{
-// 		Query: `
-// 		mutation Mutation($input: UpdateEndpointTemplateInput) {
-// 			updateEndpointTemplate(input: $input) {
-// 			  id
-// 			  templateId
-// 			}
-// 		  }
-// 		`,
-// 		Variables: map[string]interface{}{"input": UpdateEndpointTemplateInput{
-// 			EndpointId: endpointId,
-// 			TemplateId: templateId,
-// 		}},
-// 	}
-// 	res, err := Query(input)
-// 	if err != nil {
-// 		return
-// 	}
-// 	defer res.Body.Close()
-// 	rawData, err := io.ReadAll(res.Body)
-// 	if err != nil {
-// 		return
-// 	}
-// 	if res.StatusCode != 200 {
-// 		err = fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
-// 		return
-// 	}
-// 	data := make(map[string]interface{})
-// 	if err = json.Unmarshal(rawData, &data); err != nil {
-// 		return
-// 	}
-// 	gqlErrors, ok := data["errors"].([]interface{})
-// 	if ok && len(gqlErrors) > 0 {
-// 		firstErr, _ := gqlErrors[0].(map[string]interface{})
-// 		err = errors.New(firstErr["message"].(string))
-// 		return
-// 	}
-// 	gqldata, ok := data["data"].(map[string]interface{})
-// 	if !ok || gqldata == nil {
-// 		err = fmt.Errorf("data is nil: %s", string(rawData))
-// 		return
-// 	}
-// 	pod, ok = gqldata["podFindAndDeployOnDemand"].(map[string]interface{})
-// 	if !ok || pod == nil {
-// 		err = fmt.Errorf("pod is nil: %s", string(rawData))
-// 		return
-// 	}
-// 	return
-// }
+func UpdateEndpointTemplate(endpointId string, templateId string) (err error) {
+	input := Input{
+		Query: `
+		mutation Mutation($input: UpdateEndpointTemplateInput) {
+			updateEndpointTemplate(input: $input) {
+			  id
+			  templateId
+			}
+		  }
+		`,
+		Variables: map[string]interface{}{"input": UpdateEndpointTemplateInput{
+			EndpointId: endpointId,
+			TemplateId: templateId,
+		}},
+	}
+	res, err := Query(input)
+	if err != nil {
+		return
+	}
+	defer res.Body.Close()
+	rawData, err := io.ReadAll(res.Body)
+	if err != nil {
+		return
+	}
+	if res.StatusCode != 200 {
+		err = fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
+		return
+	}
+	data := make(map[string]interface{})
+	if err = json.Unmarshal(rawData, &data); err != nil {
+		return
+	}
+	gqlErrors, ok := data["errors"].([]interface{})
+	if ok && len(gqlErrors) > 0 {
+		firstErr, _ := gqlErrors[0].(map[string]interface{})
+		err = errors.New(firstErr["message"].(string))
+		return
+	}
+	gqldata, ok := data["data"].(map[string]interface{})
+	if !ok || gqldata == nil {
+		err = fmt.Errorf("data is nil: %s", string(rawData))
+		return
+	}
+	return
+}
 
 func GetEndpoints() (endpoints []*Endpoint, err error) {
 	input := Input{

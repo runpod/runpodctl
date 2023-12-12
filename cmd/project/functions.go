@@ -122,6 +122,7 @@ func getProjectEndpoint(projectId string) (string, error) {
 	}
 	for _, endpoint := range endpoints {
 		if strings.Contains(endpoint.Name, projectId) {
+			fmt.Println(endpoint.Id)
 			return endpoint.Id, nil
 		}
 	}
@@ -423,11 +424,9 @@ func deployProject(syncFiles bool) (endpointId string, err error) {
 		fmt.Println("error making template")
 		return "", err
 	}
-	fmt.Printf("made template %s\n", projectEndpointTemplateId)
 	//deploy / update endpoint
 	deployedEndpointId, err := getProjectEndpoint(projectId)
 	if err != nil {
-		fmt.Println("need to make an endpoint")
 		deployedEndpointId, err = api.CreateEndpoint(&api.CreateEndpointInput{
 			Name:            fmt.Sprintf("%s-endpoint-%s", projectName, projectId),
 			TemplateId:      projectEndpointTemplateId,
@@ -440,11 +439,15 @@ func deployProject(syncFiles bool) (endpointId string, err error) {
 			WorkersMax:      3,
 		})
 		if err != nil {
+			fmt.Println("error making endpoint")
 			return "", err
 		}
 	} else {
-		fmt.Println("need to modify existing endpoint")
-		// deployedEndpoint = api.UpdateEndpointTemplate()
+		err = api.UpdateEndpointTemplate(deployedEndpointId, projectEndpointTemplateId)
+		if err != nil {
+			fmt.Println("error updating endpoint template")
+			return "", err
+		}
 	}
 	return deployedEndpointId, nil
 }
