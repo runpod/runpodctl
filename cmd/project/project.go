@@ -135,7 +135,7 @@ var DeployProjectCmd = &cobra.Command{
 	Long:  "deploy an endpoint for the Runpod project in the current folder",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Deploying project...")
-		endpointId, err := deployProject(false)
+		endpointId, err := deployProject()
 		if err != nil {
 			fmt.Println("Failed to deploy project: ", err)
 			return

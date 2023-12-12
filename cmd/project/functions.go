@@ -359,7 +359,7 @@ func startProject() error {
 	return nil
 }
 
-func deployProject(syncFiles bool) (endpointId string, err error) {
+func deployProject() (endpointId string, err error) {
 	//parse project toml
 	config := loadProjectConfig()
 	projectId := config.GetPath([]string{"project", "uuid"}).(string)
@@ -368,39 +368,37 @@ func deployProject(syncFiles bool) (endpointId string, err error) {
 	projectPathUuid := filepath.Join(projectConfig.Get("volume_mount_path").(string), projectConfig.Get("uuid").(string))
 	projectPathUuidProd := filepath.Join(projectPathUuid, "prod")
 	remoteProjectPath := filepath.Join(projectPathUuidProd, projectConfig.Get("name").(string))
-	if syncFiles {
-		//check for existing pod
-		projectPodId, err := getProjectPod(projectId)
-		if projectPodId == "" || err != nil {
-			//or try to get pod with one of gpu types
-			projectPodId, err = launchDevPod(config)
-			if err != nil {
-				return "", err
-			}
-		}
-		//open ssh connection
-		sshConn, err := PodSSHConnection(projectPodId)
+	//check for existing pod
+	projectPodId, err := getProjectPod(projectId)
+	if projectPodId == "" || err != nil {
+		//or try to get pod with one of gpu types
+		projectPodId, err = launchDevPod(config)
 		if err != nil {
-			fmt.Println("error establishing ssh connection to pod: ", err)
 			return "", err
 		}
-		//sync remote dev to remote prod
-		sshConn.RunCommand(fmt.Sprintf("mkdir -p %s", remoteProjectPath))
-		fmt.Printf("Syncing files to pod %s prod\n", projectPodId)
-		cwd, _ := os.Getwd()
-		sshConn.Rsync(cwd, projectPathUuidProd, false)
-		//activate venv on remote
-		venvPath := filepath.Join(projectPathUuidProd, "venv")
-		fmt.Printf("Activating Python virtual environment: %s on pod %s\n", venvPath, projectPodId)
-		sshConn.RunCommands([]string{
-			fmt.Sprintf("python%s -m venv %s", config.GetPath([]string{"runtime", "python_version"}).(string), venvPath),
-			fmt.Sprintf(`source %s/bin/activate && 
+	}
+	//open ssh connection
+	sshConn, err := PodSSHConnection(projectPodId)
+	if err != nil {
+		fmt.Println("error establishing ssh connection to pod: ", err)
+		return "", err
+	}
+	//sync remote dev to remote prod
+	sshConn.RunCommand(fmt.Sprintf("mkdir -p %s", remoteProjectPath))
+	fmt.Printf("Syncing files to pod %s prod\n", projectPodId)
+	cwd, _ := os.Getwd()
+	sshConn.Rsync(cwd, projectPathUuidProd, false)
+	//activate venv on remote
+	venvPath := filepath.Join(projectPathUuidProd, "venv")
+	fmt.Printf("Activating Python virtual environment: %s on pod %s\n", venvPath, projectPodId)
+	sshConn.RunCommands([]string{
+		fmt.Sprintf("python%s -m venv %s", config.GetPath([]string{"runtime", "python_version"}).(string), venvPath),
+		fmt.Sprintf(`source %s/bin/activate && 
 		cd %s && 
 		python -m pip install --upgrade pip && 
 		python -m pip install -v --requirement %s`,
-				venvPath, remoteProjectPath, config.GetPath([]string{"runtime", "requirements_path"}).(string)),
-		})
-	}
+			venvPath, remoteProjectPath, config.GetPath([]string{"runtime", "requirements_path"}).(string)),
+	})
 	env := mapToApiEnv(createEnvVars(config))
 	// Construct the docker start command
 	handlerPath := filepath.Join(remoteProjectPath, config.GetPath([]string{"runtime", "handler_path"}).(string))
