@@ -113,7 +113,19 @@ func getProjectPod(projectId string) (string, error) {
 			return pod.Id, nil
 		}
 	}
-	return "", nil
+	return "", errors.New("pod does not exist for project")
+}
+func getProjectEndpoint(projectId string) (string, error) {
+	endpoints, err := api.GetEndpoints()
+	if err != nil {
+		return "", err
+	}
+	for _, endpoint := range endpoints {
+		if strings.Contains(endpoint.Name, projectId) {
+			return endpoint.Id, nil
+		}
+	}
+	return "", errors.New("endpoint does not exist for project")
 }
 
 func attemptPodLaunch(config *toml.Tree, environmentVariables map[string]string, selectedGpuTypes []string) (pod map[string]interface{}, err error) {
@@ -393,10 +405,10 @@ func deployProject(syncFiles bool) (endpointId string, err error) {
 	handlerPath := filepath.Join(remoteProjectPath, config.GetPath([]string{"runtime", "handler_path"}).(string))
 	activateCmd := fmt.Sprintf(". /runpod-volume/%s/prod/venv/bin/activate", projectId)
 	pythonCmd := fmt.Sprintf("python -u %s", handlerPath)
-	dockerStartCmd := "bash -c \\\"" + activateCmd + " && " + pythonCmd + "\\\""
+	dockerStartCmd := "bash -c \"" + activateCmd + " && " + pythonCmd + "\""
 	//deploy new template
 	projectEndpointTemplateId, err := api.CreateTemplate(&api.CreateTemplateInput{
-		Name:              fmt.Sprintf("%s-endpoint | %s | %d", projectName, projectId, time.Now().UnixMilli()),
+		Name:              fmt.Sprintf("%s-endpoint-%s-%d", projectName, projectId, time.Now().UnixMilli()),
 		ImageName:         projectConfig.Get("base_image").(string),
 		Env:               env,
 		DockerStartCmd:    dockerStartCmd,
@@ -413,12 +425,26 @@ func deployProject(syncFiles bool) (endpointId string, err error) {
 	}
 	fmt.Printf("made template %s\n", projectEndpointTemplateId)
 	//deploy / update endpoint
-	// deployedEndpoint, err := getProjectEndpoint()
-	// if err != nil {
-	// 	deployedEndpoint = api.CreateEndpoint()
-	// } else {
-	// 	deployedEndpoint = api.UpdateEndpointTemplate()
-	// }
-	// return deployedEndpoint["id"].(string), nil
-	return "", nil
+	deployedEndpointId, err := getProjectEndpoint(projectId)
+	if err != nil {
+		fmt.Println("need to make an endpoint")
+		deployedEndpointId, err = api.CreateEndpoint(&api.CreateEndpointInput{
+			Name:            fmt.Sprintf("%s-endpoint-%s", projectName, projectId),
+			TemplateId:      projectEndpointTemplateId,
+			NetworkVolumeId: projectConfig.Get("storage_id").(string),
+			GpuIds:          "AMPERE_16",
+			IdleTimeout:     5,
+			ScalerType:      "QUEUE_DELAY",
+			ScalerValue:     4,
+			WorkersMin:      0,
+			WorkersMax:      3,
+		})
+		if err != nil {
+			return "", err
+		}
+	} else {
+		fmt.Println("need to modify existing endpoint")
+		// deployedEndpoint = api.UpdateEndpointTemplate()
+	}
+	return deployedEndpointId, nil
 }

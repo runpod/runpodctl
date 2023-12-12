@@ -34,6 +34,22 @@ type CreateEndpointInput struct {
 	WorkersMax      int    `json:"workersMax"`
 }
 
+// there are many more fields in the result of the query but I just care about these for CLI port
+type Endpoint struct {
+	Name string `json:"name"`
+	Id   string
+}
+type EndpointOut struct {
+	Data   *EndpointData   `json:"data"`
+	Errors []*GraphQLError `json:"errors"`
+}
+type EndpointData struct {
+	Myself *MySelfDataEndpoint
+}
+type MySelfDataEndpoint struct {
+	Endpoints []*Endpoint
+}
+
 type UpdateEndpointTemplateInput struct {
 	TemplateId string `json:"templateId"`
 	EndpointId string `json:"endpointId"`
@@ -214,3 +230,69 @@ func CreateEndpoint(endpointInput *CreateEndpointInput) (endpointId string, err 
 // 	}
 // 	return
 // }
+
+func GetEndpoints() (endpoints []*Endpoint, err error) {
+	input := Input{
+		Query: `
+		query Query {
+			myself {
+			  endpoints {
+				aiKey
+				gpuIds
+				id
+				idleTimeout
+				name
+				networkVolumeId
+				locations
+				scalerType
+				scalerValue
+				templateId
+				type
+				userId
+				version
+				workersMax
+				workersMin
+				workersStandby
+				gpuCount
+				env {
+				  key
+				  value
+				}
+				createdAt
+				networkVolume {
+				  id
+				  dataCenterId
+				}
+			  }
+			}
+		  }
+		`,
+	}
+	res, err := Query(input)
+	if err != nil {
+		return
+	}
+	if res.StatusCode != 200 {
+		err = fmt.Errorf("statuscode %d", res.StatusCode)
+		return
+	}
+	defer res.Body.Close()
+	rawData, err := io.ReadAll(res.Body)
+	if err != nil {
+		return
+	}
+	data := &EndpointOut{}
+	if err = json.Unmarshal(rawData, data); err != nil {
+		return
+	}
+	if len(data.Errors) > 0 {
+		err = errors.New(data.Errors[0].Message)
+		return
+	}
+	if data == nil || data.Data == nil || data.Data.Myself == nil || data.Data.Myself.Endpoints == nil {
+		err = fmt.Errorf("data is nil: %s", string(rawData))
+		return
+	}
+	endpoints = data.Data.Myself.Endpoints
+	return
+}
