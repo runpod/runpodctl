@@ -56,8 +56,6 @@ type UpdateEndpointTemplateInput struct {
 }
 
 func CreateTemplate(templateInput *CreateTemplateInput) (templateId string, err error) {
-	inputJson, err := json.Marshal(templateInput)
-	fmt.Println(string(inputJson))
 	input := Input{
 		Query: `
 		mutation saveTemplate($input: SaveTemplateInput) {
