@@ -40,6 +40,7 @@ func init() {
 	RootCmd.AddCommand(startCmd)
 	RootCmd.AddCommand(stopCmd)
 	RootCmd.AddCommand(versionCmd)
+	RootCmd.AddCommand(projectCmd)
 
 	RootCmd.AddCommand(croc.ReceiveCmd)
 	RootCmd.AddCommand(croc.SendCmd)
@@ -47,13 +48,16 @@ func init() {
 
 // initConfig reads in config file and ENV variables if set.
 func initConfig() {
+	//if .runpod.yaml exists but .runpod/config.toml does not,
+	//print out something about migrating config location
+	//move .runpod.yaml to .runpod/config.toml
 	home, err := os.UserHomeDir()
 	cobra.CheckErr(err)
-
-	viper.AddConfigPath(home)
-	viper.SetConfigType("yaml")
-	viper.SetConfigName(".runpod")
-	config.ConfigFile = home + "/.runpod.yaml"
+	configPath := home + "/.runpod"
+	viper.AddConfigPath(configPath)
+	viper.SetConfigType("toml")
+	viper.SetConfigName("config.toml")
+	config.ConfigFile = configPath + "/config.toml"
 
 	viper.AutomaticEnv() // read in environment variables that match
 
