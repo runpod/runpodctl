@@ -326,7 +326,7 @@ func startProject() error {
 
 	echo -e "- Started API server with PID: $last_pid" && echo ""
 	echo "Connect to the API server at:"
-	echo ">  https://$RUNPOD_POD_ID-8080.proxy.runpod.net/docs" && echo ""
+	echo ">  https://$RUNPOD_POD_ID-8080.proxy.runpod.net" && echo ""
 
 	while true; do
 		if changed_file=$(inotifywait -q -r -e modify,create,delete --exclude "$exclude_pattern" %s --format '%%w%%f'); then
