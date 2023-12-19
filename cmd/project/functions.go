@@ -24,7 +24,7 @@ var tomlTemplate embed.FS
 const basePath string = "starter_templates"
 
 func baseDockerImage(cudaVersion string) string {
-	return fmt.Sprintf("runpod/base:0.4.0-cuda%s", cudaVersion)
+	return fmt.Sprintf("runpod/base:0.4.3-cuda%s", cudaVersion)
 }
 
 func copyFiles(files fs.FS, source string, dest string) error {
@@ -249,7 +249,7 @@ func startProject() error {
 	venvPath := filepath.Join(projectPathUuidDev, "venv")
 	fmt.Printf("Activating Python virtual environment: %s on pod %s\n", venvPath, projectPodId)
 	sshConn.RunCommands([]string{
-		fmt.Sprintf("python%s -m venv %s", config.GetPath([]string{"runtime", "python_version"}).(string), venvPath),
+		fmt.Sprintf("python%s -m virtualenv %s", config.GetPath([]string{"runtime", "python_version"}).(string), venvPath),
 		fmt.Sprintf(`source %s/bin/activate && 
 		cd %s && 
 		python -m pip install --upgrade pip && 
