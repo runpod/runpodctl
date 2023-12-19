@@ -235,7 +235,8 @@ func startProject() error {
 	fmt.Println(fmt.Sprintf("Project %s pod (%s) created.", projectName, projectPodId))
 	//create remote folder structure
 	projectConfig := config.Get("project").(*toml.Tree)
-	projectPathUuid := filepath.Join(projectConfig.Get("volume_mount_path").(string), projectConfig.Get("uuid").(string))
+	volumePath := projectConfig.Get("volume_mount_path").(string)
+	projectPathUuid := filepath.Join(volumePath, projectConfig.Get("uuid").(string))
 	projectPathUuidDev := filepath.Join(projectPathUuid, "dev")
 	projectPathUuidProd := filepath.Join(projectPathUuid, "prod")
 	remoteProjectPath := filepath.Join(projectPathUuidDev, projectConfig.Get("name").(string))
@@ -246,15 +247,33 @@ func startProject() error {
 	cwd, _ := os.Getwd()
 	sshConn.Rsync(cwd, projectPathUuidDev, false)
 	//activate venv on remote
-	venvPath := filepath.Join(projectPathUuidDev, "venv")
-	fmt.Printf("Activating Python virtual environment: %s on pod %s\n", venvPath, projectPodId)
+	venvPath := "/" + filepath.Join(projectId, "venv")
+	archivedVenvPath := filepath.Join(projectPathUuid, "dev-venv.tar")
+	fmt.Printf("Creating Python virtual environment %s on pod %s\n", venvPath, projectPodId)
 	sshConn.RunCommands([]string{
-		fmt.Sprintf("python%s -m virtualenv %s", config.GetPath([]string{"runtime", "python_version"}).(string), venvPath),
+		fmt.Sprintf(`
+		if [ -f %s ]
+		then
+			echo "Retrieving existing venv from network volume"
+		    mkdir -p %s && time cp %s /venv.tar && time tar -xf /venv.tar -C %s
+		else
+		    python%s -m virtualenv %s
+		fi`, archivedVenvPath, venvPath, archivedVenvPath, venvPath, config.GetPath([]string{"runtime", "python_version"}).(string), venvPath),
+	})
+	fmt.Printf("Activating Python virtual environment %s on pod %s\n", venvPath, projectPodId)
+	sshConn.RunCommands([]string{
 		fmt.Sprintf(`source %s/bin/activate && 
 		cd %s && 
 		python -m pip install --upgrade pip && 
-		python -m pip install -v --requirement %s`,
-			venvPath, remoteProjectPath, config.GetPath([]string{"runtime", "requirements_path"}).(string)),
+		python -m pip install -v --requirement %s --report /installreport.json
+		if ! [ $(cat /installreport.json | grep "install" | grep -c "\[\]") -eq 1 ]
+		then
+			{ echo "syncing venv to network volume...";
+			  tar -cf /venv.tar -C %s .; 
+			  mv /venv.tar %s;
+			  echo "synced venv to network volume"; } &
+		fi`,
+			venvPath, remoteProjectPath, config.GetPath([]string{"runtime", "requirements_path"}).(string), venvPath, archivedVenvPath),
 	})
 	//create file watcher
 	go sshConn.SyncDir(cwd, projectPathUuidDev)
@@ -292,7 +311,7 @@ func startProject() error {
 
 	trap cleanup EXIT SIGINT
 
-	if source %s/venv/bin/activate; then
+	if source %s/bin/activate; then
 		echo -e "- Activated virtual environment."
 	else
 		echo "Failed to activate virtual environment."
@@ -305,6 +324,16 @@ func startProject() error {
 		echo "Failed to change directory."
 		exit 1
 	fi
+
+	function tar_venv {
+		if ! [ $(cat /installreport.json | grep "install" | grep -c "\[\]") -eq 1 ]
+		then
+			echo "syncing venv to network volume..."
+			tar -cf /venv.tar -C %s .
+			mv /venv.tar %s
+			echo "synced venv to network volume"
+		fi
+	}
 
 	exclude_pattern='(__pycache__|\\.pyc$)'
 	function update_exclude_pattern {
@@ -340,7 +369,8 @@ func startProject() error {
 
 		if [[ $changed_file == *"requirements"* ]]; then
 			echo "Installing new requirements..."
-			python -m pip install --upgrade pip && python -m pip install -r %s
+			python -m pip install --upgrade pip && python -m pip install -r %s --report /installreport.json
+			tar_venv &
 		fi
 
 		if [[ $changed_file == *".runpodignore"* ]]; then
@@ -352,7 +382,7 @@ func startProject() error {
 
 		echo "Restarted API server with PID: $last_pid"
 	done
-	`, projectPathUuidDev, projectPathUuidDev, projectName, handlerPath, remoteProjectPath, pipReqPath, handlerPath)
+	`, venvPath, projectPathUuidDev, projectName, venvPath, archivedVenvPath, handlerPath, remoteProjectPath, pipReqPath, handlerPath)
 	fmt.Println()
 	fmt.Println("Starting project development endpoint...")
 	sshConn.RunCommand(launchApiServer)
