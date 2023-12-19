@@ -432,7 +432,7 @@ func deployProject() (endpointId string, err error) {
 	env := mapToApiEnv(createEnvVars(config))
 	// Construct the docker start command
 	handlerPath := filepath.Join(remoteProjectPath, config.GetPath([]string{"runtime", "handler_path"}).(string))
-	activateCmd := fmt.Sprintf(". /runpod-volume/%s/prod/venv/bin/activate", projectId)
+	activateCmd := fmt.Sprintf(". %s/bin/activate", venvPath)
 	pythonCmd := fmt.Sprintf("python -u %s", handlerPath)
 	dockerStartCmd := "bash -c \"" + activateCmd + " && " + pythonCmd + "\""
 	//deploy new template
