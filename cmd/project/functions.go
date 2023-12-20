@@ -248,14 +248,15 @@ func startProject() error {
 	sshConn.Rsync(cwd, projectPathUuidDev, false)
 	//activate venv on remote
 	venvPath := "/" + filepath.Join(projectId, "venv")
-	archivedVenvPath := filepath.Join(projectPathUuid, "dev-venv.tar")
+	archivedVenvPath := filepath.Join(projectPathUuid, "dev-venv.tar.zst")
 	fmt.Printf("Creating Python virtual environment %s on pod %s\n", venvPath, projectPodId)
 	sshConn.RunCommands([]string{
+		"sudo apt-get update && sudo apt-get install -y zstd",
 		fmt.Sprintf(`
 		if [ -f %s ]
 		then
 			echo "Retrieving existing venv from network volume"
-		    mkdir -p %s && time cp %s /venv.tar && time tar -xf /venv.tar -C %s
+		    mkdir -p %s && time tar -xf %s --directory=%s
 		else
 		    python%s -m virtualenv %s
 		fi`, archivedVenvPath, venvPath, archivedVenvPath, venvPath, config.GetPath([]string{"runtime", "python_version"}).(string), venvPath),
@@ -265,15 +266,15 @@ func startProject() error {
 		fmt.Sprintf(`source %s/bin/activate && 
 		cd %s && 
 		python -m pip install --upgrade pip && 
-		python -m pip install -v --requirement %s --report /installreport.json
-		if ! [ $(cat /installreport.json | grep "install" | grep -c "\[\]") -eq 1 ]
+		python -m pip install -v --requirement %s --report /installreport.json`,
+			venvPath, remoteProjectPath, config.GetPath([]string{"runtime", "requirements_path"}).(string)),
+		fmt.Sprintf(`if ! [ $(cat /installreport.json | grep "install" | grep -c "\[\]") -eq 1 ]
 		then
 			{ echo "syncing venv to network volume...";
-			  tar -cf /venv.tar -C %s .; 
-			  mv /venv.tar %s;
+			  tar -c -C %s . | zstd -T0 > /venv.tar.zst;
+			  mv /venv.tar.zst %s;
 			  echo "synced venv to network volume"; } &
-		fi`,
-			venvPath, remoteProjectPath, config.GetPath([]string{"runtime", "requirements_path"}).(string), venvPath, archivedVenvPath),
+		fi`, venvPath, archivedVenvPath),
 	})
 	//create file watcher
 	go sshConn.SyncDir(cwd, projectPathUuidDev)
@@ -329,8 +330,8 @@ func startProject() error {
 		if ! [ $(cat /installreport.json | grep "install" | grep -c "\[\]") -eq 1 ]
 		then
 			echo "syncing venv to network volume..."
-			tar -cf /venv.tar -C %s .
-			mv /venv.tar %s
+			tar -c -C %s . | zstd -T0 > /venv.tar.zst;
+			mv /venv.tar.zst %s;
 			echo "synced venv to network volume"
 		fi
 	}
