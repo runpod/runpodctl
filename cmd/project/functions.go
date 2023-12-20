@@ -256,7 +256,7 @@ func startProject() error {
 		if [ -f %s ]
 		then
 			echo "Retrieving existing venv from network volume"
-		    mkdir -p %s && time cp %s /venv.tar.zst && time tar -xf /venv.tar.zst --directory=%s
+		    mkdir -p %s && time cp %s /venv.tar.zst && time tar -xf /venv.tar.zst -C %s
 		else
 		    python%s -m virtualenv %s
 		fi`, archivedVenvPath, venvPath, archivedVenvPath, venvPath, config.GetPath([]string{"runtime", "python_version"}).(string), venvPath),
@@ -268,13 +268,6 @@ func startProject() error {
 		python -m pip install --upgrade pip && 
 		python -m pip install -v --requirement %s --report /installreport.json`,
 			venvPath, remoteProjectPath, config.GetPath([]string{"runtime", "requirements_path"}).(string)),
-		fmt.Sprintf(`if ! [ $(cat /installreport.json | grep "install" | grep -c "\[\]") -eq 1 ]
-		then
-			{ echo "syncing venv to network volume...";
-			  tar -c -C %s . | zstd -T0 > /venv.tar.zst;
-			  mv /venv.tar.zst %s;
-			  echo "synced venv to network volume"; } &
-		fi`, venvPath, archivedVenvPath),
 	})
 	//create file watcher
 	go sshConn.SyncDir(cwd, projectPathUuidDev)
@@ -351,6 +344,7 @@ func startProject() error {
 	update_exclude_pattern
 
 	# Start the API server in the background, and save the PID
+	tar_venv &
 	python %s --rp_serve_api --rp_api_host="0.0.0.0" --rp_api_port=8080 --rp_api_concurrency=1 &
 	last_pid=$!
 
