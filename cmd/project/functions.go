@@ -249,19 +249,20 @@ func startProject() error {
 	//activate venv on remote
 	venvPath := "/" + filepath.Join(projectId, "venv")
 	archivedVenvPath := filepath.Join(projectPathUuid, "dev-venv.tar.zst")
-	fmt.Printf("Creating Python virtual environment %s on pod %s\n", venvPath, projectPodId)
-	sshConn.RunCommands([]string{
-		fmt.Sprintf(`
-		if [ -f %s ]
-		then
-			echo "Retrieving existing venv from network volume"
-		    mkdir -p %s && time tar -xf %s -C %s
-		else
-		    python%s -m virtualenv %s
-		fi`, archivedVenvPath, venvPath, archivedVenvPath, venvPath, config.GetPath([]string{"runtime", "python_version"}).(string), venvPath),
-	})
 	fmt.Printf("Activating Python virtual environment %s on pod %s\n", venvPath, projectPodId)
 	sshConn.RunCommands([]string{
+		fmt.Sprintf(`
+		if ! [ -f %s/bin/activate ] 
+		then
+			if [ -f %s ]
+			then
+				echo "Retrieving existing venv from network volume..."
+				mkdir -p %s && tar -xf %s -C %s
+			else
+				echo "Creating new venv..."
+				python%s -m virtualenv %s
+			fi
+		fi`, venvPath, archivedVenvPath, venvPath, archivedVenvPath, venvPath, config.GetPath([]string{"runtime", "python_version"}).(string), venvPath),
 		fmt.Sprintf(`source %s/bin/activate && 
 		cd %s && 
 		python -m pip install --upgrade pip && 
