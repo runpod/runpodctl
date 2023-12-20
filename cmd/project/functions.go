@@ -322,7 +322,6 @@ func startProject() error {
 	function tar_venv {
 		if ! [ $(cat /installreport.json | grep "install" | grep -c "\[\]") -eq 1 ]
 		then
-			echo "syncing venv to network volume..."
 			tar -c -C %s . | zstd -T0 > /venv.tar.zst;
 			mv /venv.tar.zst %s;
 			echo "synced venv to network volume"
