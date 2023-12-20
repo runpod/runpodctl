@@ -5,7 +5,7 @@ title = "placeholder"
 [project]
 uuid = "placeholder"
 name = "placeholder"
-base_image = "runpod/base:0.4.3-cuda11.8.0"
+base_image = "runpod/base:0.4.4-cuda11.8.0"
 gpu_types = ["NVIDIA RTX A4000", "NVIDIA RTX A4500", "NVIDIA RTX A5000", "NVIDIA GeForce RTX 3090", "NVIDIA RTX A6000"]
 gpu_count = 1
 storage_id = "placeholder"
