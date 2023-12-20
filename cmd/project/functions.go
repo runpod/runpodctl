@@ -256,7 +256,7 @@ func startProject() error {
 		if [ -f %s ]
 		then
 			echo "Retrieving existing venv from network volume"
-		    mkdir -p %s && time cp %s /venv.tar.zst && time tar -xf /venv.tar.zst -C %s
+		    mkdir -p %s && time tar -xf %s -C %s
 		else
 		    python%s -m virtualenv %s
 		fi`, archivedVenvPath, venvPath, archivedVenvPath, venvPath, config.GetPath([]string{"runtime", "python_version"}).(string), venvPath),
