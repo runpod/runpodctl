@@ -141,6 +141,8 @@ var DeployProjectCmd = &cobra.Command{
 			return
 		}
 		fmt.Printf("Project deployed successfully! Endpoint ID: %s\n", endpointId)
+		fmt.Println("Monitor and edit your endpoint at:")
+		fmt.Printf("https://www.runpod.io/console/serverless/user/endpoint/%s\n", endpointId)
 		fmt.Println("The following urls are available:")
 		fmt.Printf("    - https://api.runpod.ai/v2/%s/runsync\n", endpointId)
 		fmt.Printf("    - https://api.runpod.ai/v2/%s/run\n", endpointId)

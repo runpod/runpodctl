@@ -188,6 +188,7 @@ func launchDevPod(config *toml.Tree) (string, error) {
 		fmt.Println(err)
 		return "", err
 	}
+	fmt.Printf("Check on pod status at https://www.runpod.io/console/pods/%s\n", new_pod["id"].(string))
 	return new_pod["id"].(string), nil
 }
 
