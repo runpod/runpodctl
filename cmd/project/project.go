@@ -46,8 +46,12 @@ func promptChoice(message string, choices []string, defaultChoice string) string
 	}
 	return s
 }
+func setDefaultNetVolume(projectId string, networkVolumeId string) {
+	viper.Set(fmt.Sprintf("project_volumes.%s", projectId), networkVolumeId)
+	viper.WriteConfig()
+}
 
-func selectNetworkVolume(projectId string) (networkVolumeId string, err error) {
+func selectNetworkVolume() (networkVolumeId string, err error) {
 	networkVolumes, err := api.GetNetworkVolumes()
 	if err != nil {
 		fmt.Println("Something went wrong trying to fetch network volumes")
@@ -80,8 +84,6 @@ func selectNetworkVolume(projectId string) (networkVolumeId string, err error) {
 		return "", err
 	}
 	networkVolumeId = options[i].Value
-	viper.Set(fmt.Sprintf("project_volumes.%s", projectId), networkVolumeId)
-	viper.WriteConfig()
 	return networkVolumeId, nil
 }
 
@@ -135,8 +137,10 @@ var StartProjectCmd = &cobra.Command{
 		projectId := config.GetPath([]string{"project", "uuid"}).(string)
 		networkVolumeId := viper.GetString(fmt.Sprintf("project_volumes.%s", projectId))
 		if setDefaultNetVolume || networkVolumeId == "" {
-			netVolId, err := selectNetworkVolume(projectId)
+			netVolId, err := selectNetworkVolume()
 			networkVolumeId = netVolId
+			viper.Set(fmt.Sprintf("project_volumes.%s", projectId), networkVolumeId)
+			viper.WriteConfig()
 			if err != nil {
 				return
 			}
@@ -152,15 +156,9 @@ var DeployProjectCmd = &cobra.Command{
 	Long:  "deploy an endpoint for the Runpod project in the current folder",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Deploying project...")
-		config := loadProjectConfig()
-		projectId := config.GetPath([]string{"project", "uuid"}).(string)
-		networkVolumeId := viper.GetString(fmt.Sprintf("project_volumes.%s", projectId))
-		if setDefaultNetVolume || networkVolumeId == "" {
-			netVolId, err := selectNetworkVolume(projectId)
-			networkVolumeId = netVolId
-			if err != nil {
-				return
-			}
+		networkVolumeId, err := selectNetworkVolume()
+		if err != nil {
+			return
 		}
 		endpointId, err := deployProject(networkVolumeId)
 		if err != nil {
