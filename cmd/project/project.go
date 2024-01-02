@@ -14,7 +14,7 @@ var projectName string
 var modelType string
 var modelName string
 var initCurrentDir bool
-var setDefaultNetVolume bool
+var setDefaultNetworkVolume bool
 
 const inputPromptPrefix string = "   > "
 
@@ -136,7 +136,7 @@ var StartProjectCmd = &cobra.Command{
 		config := loadProjectConfig()
 		projectId := config.GetPath([]string{"project", "uuid"}).(string)
 		networkVolumeId := viper.GetString(fmt.Sprintf("project_volumes.%s", projectId))
-		if setDefaultNetVolume || networkVolumeId == "" {
+		if setDefaultNetworkVolume || networkVolumeId == "" {
 			netVolId, err := selectNetworkVolume()
 			networkVolumeId = netVolId
 			viper.Set(fmt.Sprintf("project_volumes.%s", projectId), networkVolumeId)
@@ -198,6 +198,6 @@ func init() {
 	NewProjectCmd.Flags().StringVarP(&modelType, "type", "t", "", "model type")
 	NewProjectCmd.Flags().BoolVarP(&initCurrentDir, "init", "i", false, "use the current directory as the project directory")
 
-	StartProjectCmd.Flags().BoolVar(&setDefaultNetVolume, "select-volume", false, "select a new default network volume for current project")
-	DeployProjectCmd.Flags().BoolVar(&setDefaultNetVolume, "select-volume", false, "select a new default network volume for current project")
+	StartProjectCmd.Flags().BoolVar(&setDefaultNetworkVolume, "select-volume", false, "select a new default network volume for current project")
+	DeployProjectCmd.Flags().BoolVar(&setDefaultNetworkVolume, "select-volume", false, "select a new default network volume for current project")
 }

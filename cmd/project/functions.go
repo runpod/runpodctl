@@ -15,7 +15,9 @@ import (
 	"github.com/pelletier/go-toml"
 )
 
-//go:embed starter_templates/*
+// TODO: embed all hidden files even those not at top level
+//
+//go:embed starter_templates/* starter_templates/*/.*
 var starterTemplates embed.FS
 
 //go:embed example.toml
