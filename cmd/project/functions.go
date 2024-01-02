@@ -49,7 +49,7 @@ func copyFiles(files fs.FS, source string, dest string) error {
 		}
 	})
 }
-func createNewProject(projectName string, networkVolumeId string, cudaVersion string,
+func createNewProject(projectName string, cudaVersion string,
 	pythonVersion string, modelType string, modelName string, initCurrentDir bool) {
 	projectFolder, _ := os.Getwd()
 	if !initCurrentDir {
@@ -84,7 +84,6 @@ func createNewProject(projectName string, networkVolumeId string, cudaVersion st
 	projectToml.SetPath([]string{"project", "name"}, projectName)
 	projectToml.SetPath([]string{"project", "uuid"}, projectUuid)
 	projectToml.SetPath([]string{"project", "base_image"}, baseDockerImage(cudaVersion))
-	projectToml.SetPath([]string{"project", "storage_id"}, networkVolumeId)
 	projectToml.SetPath([]string{"template", "model_type"}, modelType)
 	projectToml.SetPath([]string{"template", "model_name"}, modelName)
 	projectToml.SetPath([]string{"runtime", "python_version"}, pythonVersion)
@@ -129,7 +128,7 @@ func getProjectEndpoint(projectId string) (string, error) {
 	return "", errors.New("endpoint does not exist for project")
 }
 
-func attemptPodLaunch(config *toml.Tree, environmentVariables map[string]string, selectedGpuTypes []string) (pod map[string]interface{}, err error) {
+func attemptPodLaunch(config *toml.Tree, networkVolumeId string, environmentVariables map[string]string, selectedGpuTypes []string) (pod map[string]interface{}, err error) {
 	projectConfig := config.Get("project").(*toml.Tree)
 	//attempt to launch a pod with the given configuration.
 	for _, gpuType := range selectedGpuTypes {
@@ -147,7 +146,7 @@ func attemptPodLaunch(config *toml.Tree, environmentVariables map[string]string,
 			MinMemoryInGb:   1,
 			MinVcpuCount:    1,
 			Name:            fmt.Sprintf("%s-dev (%s)", projectConfig.Get("name"), projectConfig.Get("uuid")),
-			NetworkVolumeId: projectConfig.Get("storage_id").(string),
+			NetworkVolumeId: networkVolumeId,
 			Ports:           strings.ReplaceAll(projectConfig.Get("ports").(string), " ", ""),
 			SupportPublicIp: true,
 			StartSSH:        true,
@@ -166,7 +165,7 @@ func attemptPodLaunch(config *toml.Tree, environmentVariables map[string]string,
 	return nil, errors.New("none of the selected GPU types were available")
 }
 
-func launchDevPod(config *toml.Tree) (string, error) {
+func launchDevPod(config *toml.Tree, networkVolumeId string) (string, error) {
 	fmt.Println("Deploying development pod on RunPod...")
 	//construct env vars
 	environmentVariables := createEnvVars(config)
@@ -183,7 +182,7 @@ func launchDevPod(config *toml.Tree) (string, error) {
 		selectedGpuTypes = append(selectedGpuTypes, tomlGpu.(string))
 	}
 	// attempt to launch a pod with the given configuration
-	new_pod, err := attemptPodLaunch(config, environmentVariables, selectedGpuTypes)
+	new_pod, err := attemptPodLaunch(config, networkVolumeId, environmentVariables, selectedGpuTypes)
 	if err != nil {
 		fmt.Println(err)
 		return "", err
@@ -212,7 +211,7 @@ func mapToApiEnv(env map[string]string) []*api.PodEnv {
 	return podEnv
 }
 
-func startProject() error {
+func startProject(networkVolumeId string) error {
 	//parse project toml
 	config := loadProjectConfig()
 	fmt.Println(config)
@@ -222,7 +221,7 @@ func startProject() error {
 	projectPodId, err := getProjectPod(projectId)
 	if projectPodId == "" || err != nil {
 		//or try to get pod with one of gpu types
-		projectPodId, err = launchDevPod(config)
+		projectPodId, err = launchDevPod(config, networkVolumeId)
 		if err != nil {
 			return err
 		}
@@ -384,7 +383,7 @@ func startProject() error {
 	return nil
 }
 
-func deployProject() (endpointId string, err error) {
+func deployProject(networkVolumeId string) (endpointId string, err error) {
 	//parse project toml
 	config := loadProjectConfig()
 	projectId := config.GetPath([]string{"project", "uuid"}).(string)
@@ -397,7 +396,7 @@ func deployProject() (endpointId string, err error) {
 	projectPodId, err := getProjectPod(projectId)
 	if projectPodId == "" || err != nil {
 		//or try to get pod with one of gpu types
-		projectPodId, err = launchDevPod(config)
+		projectPodId, err = launchDevPod(config, networkVolumeId)
 		if err != nil {
 			return "", err
 		}
@@ -453,7 +452,7 @@ func deployProject() (endpointId string, err error) {
 		deployedEndpointId, err = api.CreateEndpoint(&api.CreateEndpointInput{
 			Name:            fmt.Sprintf("%s-endpoint-%s", projectName, projectId),
 			TemplateId:      projectEndpointTemplateId,
-			NetworkVolumeId: projectConfig.Get("storage_id").(string),
+			NetworkVolumeId: networkVolumeId,
 			GpuIds:          "AMPERE_16",
 			IdleTimeout:     5,
 			ScalerType:      "QUEUE_DELAY",

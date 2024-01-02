@@ -63,14 +63,15 @@ func initConfig() {
 	if err := viper.ReadInConfig(); err == nil {
 		// fmt.Fprintln(os.Stderr, "Using config file:", viper.ConfigFileUsed())
 	} else {
+		//legacy: try to migrate old config to new location
 		viper.SetConfigType("yaml")
 		viper.AddConfigPath(home)
 		viper.SetConfigName(".runpod.yaml")
 		if yamlReadErr := viper.ReadInConfig(); yamlReadErr == nil {
 			fmt.Println("Runpod config location has moved from ~/.runpod.yaml to ~/.runpod/config.toml")
-			fmt.Println("migrating your config to ~/.runpod/config.toml")
+			fmt.Println("migrating your existing config to ~/.runpod/config.toml")
 		} else {
-			fmt.Println("Runpod config file not found, please run runpodctl config")
+			fmt.Println("Runpod config file not found, please run runpodctl config to create it")
 		}
 		viper.SetConfigType("toml")
 		//make .runpod folder if not exists

@@ -45,6 +45,41 @@ func promptChoice(message string, choices []string, defaultChoice string) string
 	return s
 }
 
+func selectNetworkVolume() (networkVolumeId string, err error) {
+	networkVolumes, err := api.GetNetworkVolumes()
+	if err != nil {
+		fmt.Println("Something went wrong trying to fetch network volumes")
+		fmt.Println(err)
+		return "", err
+	}
+	if len(networkVolumes) == 0 {
+		fmt.Println("You do not have any network volumes.")
+		fmt.Println("Please create a network volume (https://runpod.io/console/user/storage) and try again.")
+		return "", err
+	}
+	promptTemplates := &promptui.SelectTemplates{
+		Label:    inputPromptPrefix + "{{ . }}",
+		Active:   ` {{ "●" | cyan }} {{ .Name | cyan }}`,
+		Inactive: `   {{ .Name | white }}`,
+		Selected: `   {{ .Name | white }}`,
+	}
+	options := []NetVolOption{}
+	for _, networkVolume := range networkVolumes {
+		options = append(options, NetVolOption{Name: fmt.Sprintf("%s: %s (%d GB, %s)", networkVolume.Id, networkVolume.Name, networkVolume.Size, networkVolume.DataCenterId), Value: networkVolume.Id})
+	}
+	getNetworkVolume := promptui.Select{
+		Label:     "Select a Network Volume:",
+		Items:     options,
+		Templates: promptTemplates,
+	}
+	i, _, err := getNetworkVolume.Run()
+	if err != nil {
+		//ctrl c for example
+		return "", err
+	}
+	return options[i].Value, nil
+}
+
 // Define a struct that holds the display string and the corresponding value
 type NetVolOption struct {
 	Name  string // The string to display
@@ -57,44 +92,12 @@ var NewProjectCmd = &cobra.Command{
 	Short: "create a new project",
 	Long:  "create a new Runpod project folder",
 	Run: func(cmd *cobra.Command, args []string) {
-		networkVolumes, err := api.GetNetworkVolumes()
-		if err != nil {
-			fmt.Println("Something went wrong trying to fetch network volumes")
-			fmt.Println(err)
-			return
-		}
-		if len(networkVolumes) == 0 {
-			fmt.Println("You do not have any network volumes.")
-			fmt.Println("Please create a network volume (https://runpod.io/console/user/storage) and try again.")
-			return
-		}
 		fmt.Println("Creating a new project...")
 		if projectName == "" {
 			projectName = prompt("Enter the project name")
 		} else {
 			fmt.Println("Project name: " + projectName)
 		}
-		promptTemplates := &promptui.SelectTemplates{
-			Label:    inputPromptPrefix + "{{ . }}",
-			Active:   ` {{ "●" | cyan }} {{ .Name | cyan }}`,
-			Inactive: `   {{ .Name | white }}`,
-			Selected: `   {{ .Name | white }}`,
-		}
-		options := []NetVolOption{}
-		for _, networkVolume := range networkVolumes {
-			options = append(options, NetVolOption{Name: fmt.Sprintf("%s: %s (%d GB, %s)", networkVolume.Id, networkVolume.Name, networkVolume.Size, networkVolume.DataCenterId), Value: networkVolume.Id})
-		}
-		getNetworkVolume := promptui.Select{
-			Label:     "Select a Network Volume:",
-			Items:     options,
-			Templates: promptTemplates,
-		}
-		i, _, err := getNetworkVolume.Run()
-		if err != nil {
-			//ctrl c for example
-			return
-		}
-		networkVolumeId := options[i].Value
 		cudaVersion := promptChoice("Select a CUDA version, or press enter to use the default",
 			[]string{"11.1.1", "11.8.0", "12.1.0"}, "11.8.0")
 		pythonVersion := promptChoice("Select a Python version, or press enter to use the default",
@@ -103,14 +106,13 @@ var NewProjectCmd = &cobra.Command{
 		fmt.Printf(`
 Project Summary:
    - Project Name: %s
-   - RunPod Network Storage ID: %s
    - CUDA Version: %s
    - Python Version: %s
-		`, projectName, networkVolumeId, cudaVersion, pythonVersion)
+		`, projectName, cudaVersion, pythonVersion)
 		fmt.Println()
 		fmt.Println("The project will be created in the current directory.")
 		//TODO confirm y/n
-		createNewProject(projectName, networkVolumeId, cudaVersion,
+		createNewProject(projectName, cudaVersion,
 			pythonVersion, modelType, modelName, initCurrentDir)
 		fmt.Printf("Project %s created successfully!", projectName)
 		fmt.Println()
@@ -124,7 +126,11 @@ var StartProjectCmd = &cobra.Command{
 	Short: "start current project",
 	Long:  "start a development pod session for the Runpod project in the current folder",
 	Run: func(cmd *cobra.Command, args []string) {
-		startProject()
+		networkVolumeId, err := selectNetworkVolume()
+		if err != nil {
+			return
+		}
+		startProject(networkVolumeId)
 	},
 }
 
@@ -135,7 +141,11 @@ var DeployProjectCmd = &cobra.Command{
 	Long:  "deploy an endpoint for the Runpod project in the current folder",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Deploying project...")
-		endpointId, err := deployProject()
+		networkVolumeId, err := selectNetworkVolume()
+		if err != nil {
+			return
+		}
+		endpointId, err := deployProject(networkVolumeId)
 		if err != nil {
 			fmt.Println("Failed to deploy project: ", err)
 			return

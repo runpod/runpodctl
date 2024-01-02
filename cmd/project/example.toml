@@ -8,7 +8,6 @@ name = "placeholder"
 base_image = "runpod/base:0.4.4-cuda11.8.0"
 gpu_types = ["NVIDIA RTX A4000", "NVIDIA RTX A4500", "NVIDIA RTX A5000", "NVIDIA GeForce RTX 3090", "NVIDIA RTX A6000"]
 gpu_count = 1
-storage_id = "placeholder"
 volume_mount_path = "/runpod-volume"
 ports = "8080/http, 22/tcp, 4040/http"
 container_disk_size_gb = 10
