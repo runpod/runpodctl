@@ -7,12 +7,14 @@ import (
 
 	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 var projectName string
 var modelType string
 var modelName string
 var initCurrentDir bool
+var setDefaultNetVolume bool
 
 const inputPromptPrefix string = "   > "
 
@@ -45,7 +47,7 @@ func promptChoice(message string, choices []string, defaultChoice string) string
 	return s
 }
 
-func selectNetworkVolume() (networkVolumeId string, err error) {
+func selectNetworkVolume(projectId string) (networkVolumeId string, err error) {
 	networkVolumes, err := api.GetNetworkVolumes()
 	if err != nil {
 		fmt.Println("Something went wrong trying to fetch network volumes")
@@ -77,7 +79,10 @@ func selectNetworkVolume() (networkVolumeId string, err error) {
 		//ctrl c for example
 		return "", err
 	}
-	return options[i].Value, nil
+	networkVolumeId = options[i].Value
+	viper.Set(fmt.Sprintf("project_volumes.%s", projectId), networkVolumeId)
+	viper.WriteConfig()
+	return networkVolumeId, nil
 }
 
 // Define a struct that holds the display string and the corresponding value
@@ -126,9 +131,15 @@ var StartProjectCmd = &cobra.Command{
 	Short: "start current project",
 	Long:  "start a development pod session for the Runpod project in the current folder",
 	Run: func(cmd *cobra.Command, args []string) {
-		networkVolumeId, err := selectNetworkVolume()
-		if err != nil {
-			return
+		config := loadProjectConfig()
+		projectId := config.GetPath([]string{"project", "uuid"}).(string)
+		networkVolumeId := viper.GetString(fmt.Sprintf("project_volumes.%s", projectId))
+		if setDefaultNetVolume || networkVolumeId == "" {
+			netVolId, err := selectNetworkVolume(projectId)
+			networkVolumeId = netVolId
+			if err != nil {
+				return
+			}
 		}
 		startProject(networkVolumeId)
 	},
@@ -141,9 +152,15 @@ var DeployProjectCmd = &cobra.Command{
 	Long:  "deploy an endpoint for the Runpod project in the current folder",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Deploying project...")
-		networkVolumeId, err := selectNetworkVolume()
-		if err != nil {
-			return
+		config := loadProjectConfig()
+		projectId := config.GetPath([]string{"project", "uuid"}).(string)
+		networkVolumeId := viper.GetString(fmt.Sprintf("project_volumes.%s", projectId))
+		if setDefaultNetVolume || networkVolumeId == "" {
+			netVolId, err := selectNetworkVolume(projectId)
+			networkVolumeId = netVolId
+			if err != nil {
+				return
+			}
 		}
 		endpointId, err := deployProject(networkVolumeId)
 		if err != nil {
@@ -182,4 +199,7 @@ func init() {
 	NewProjectCmd.Flags().StringVarP(&modelName, "model", "m", "", "model name")
 	NewProjectCmd.Flags().StringVarP(&modelType, "type", "t", "", "model type")
 	NewProjectCmd.Flags().BoolVarP(&initCurrentDir, "init", "i", false, "use the current directory as the project directory")
+
+	StartProjectCmd.Flags().BoolVar(&setDefaultNetVolume, "select-volume", false, "select a new default network volume for current project")
+	DeployProjectCmd.Flags().BoolVar(&setDefaultNetVolume, "select-volume", false, "select a new default network volume for current project")
 }
