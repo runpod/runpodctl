@@ -42,6 +42,7 @@ func init() {
 	RootCmd.AddCommand(stopCmd)
 	RootCmd.AddCommand(versionCmd)
 	RootCmd.AddCommand(projectCmd)
+	RootCmd.AddCommand(updateCmd)
 
 	RootCmd.AddCommand(croc.ReceiveCmd)
 	RootCmd.AddCommand(croc.SendCmd)
