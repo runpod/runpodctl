@@ -88,8 +88,7 @@ var updateCmd = &cobra.Command{
 		latestVersion := apiResp.Version
 		if semver.Compare("v"+version, latestVersion) == -1 {
 			//version < latest
-			// newBinaryName := fmt.Sprintf("runpodctl-%s-%s", runtime.GOOS, runtime.GOARCH)
-			newBinaryName := "runpodctl-darwin-arm"
+			newBinaryName := fmt.Sprintf("runpodctl-%s-%s", runtime.GOOS, runtime.GOARCH)
 			foundNewBinary := false
 			var downloadLink string
 			for _, asset := range apiResp.Assets {
