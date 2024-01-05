@@ -88,7 +88,8 @@ var updateCmd = &cobra.Command{
 		latestVersion := apiResp.Version
 		if semver.Compare("v"+version, latestVersion) == -1 {
 			//version < latest
-			newBinaryName := fmt.Sprintf("runpodctl-%s-%s", runtime.GOOS, runtime.GOARCH)
+			// newBinaryName := fmt.Sprintf("runpodctl-%s-%s", runtime.GOOS, runtime.GOARCH)
+			newBinaryName := "runpodctl-win-amd"
 			foundNewBinary := false
 			var downloadLink string
 			for _, asset := range apiResp.Assets {
@@ -112,6 +113,10 @@ var updateCmd = &cobra.Command{
 				destFilename = "runpodctl.exe"
 			}
 			destPath := filepath.Join(exPath, destFilename)
+			if runtime.GOOS == "windows" {
+				fmt.Println("To get the newest version, run this command:")
+				fmt.Printf("wget https://github.com/runpod/runpodctl/releases/download/%s/%s -O runpodctl.exe\n", latestVersion, newBinaryName)
+			}
 			fmt.Printf("downloading runpodctl %s to %s\n", latestVersion, downloadPath)
 			file, err := DownloadFile(downloadLink, downloadPath)
 			defer file.Close()
@@ -124,8 +129,11 @@ var updateCmd = &cobra.Command{
 			if err != nil {
 				fmt.Println("error setting permissions on new binary", err)
 			}
-			if runtime.GOOS != "windows" {
-				fmt.Printf("moving %s to %s\n", downloadPath, destPath)
+			fmt.Printf("moving %s to %s\n", downloadPath, destPath)
+			if runtime.GOOS == "windows" {
+				//if I do this, windows antivirus considers the program to be a trojan
+				// exec.Command("cmd", "/C", "move", downloadPath, destPath, "-Force").Run()
+			} else {
 				exec.Command("mv", downloadPath, destPath).Run() //need to run externally to current process because we're updating the running executable
 			}
 		}
