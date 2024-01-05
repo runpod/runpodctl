@@ -88,8 +88,7 @@ var updateCmd = &cobra.Command{
 		latestVersion := apiResp.Version
 		if semver.Compare("v"+version, latestVersion) == -1 {
 			//version < latest
-			// newBinaryName := fmt.Sprintf("runpodctl-%s-%s", runtime.GOOS, runtime.GOARCH)
-			newBinaryName := "runpodctl-win-amd"
+			newBinaryName := fmt.Sprintf("runpodctl-%s-%s", runtime.GOOS, runtime.GOARCH)
 			foundNewBinary := false
 			var downloadLink string
 			for _, asset := range apiResp.Assets {
@@ -132,7 +131,7 @@ var updateCmd = &cobra.Command{
 			fmt.Printf("moving %s to %s\n", downloadPath, destPath)
 			if runtime.GOOS == "windows" {
 				//if I do this, windows antivirus considers the program to be a trojan
-				// exec.Command("cmd", "/C", "move", downloadPath, destPath, "-Force").Run()
+				// exec.Command("cmd", "/C", "rm", destPath, ";", "move", downloadPath, destPath).Run()
 			} else {
 				exec.Command("mv", downloadPath, destPath).Run() //need to run externally to current process because we're updating the running executable
 			}
