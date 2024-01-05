@@ -108,7 +108,11 @@ var updateCmd = &cobra.Command{
 			}
 			exPath := filepath.Dir(ex)
 			downloadPath := newBinaryName
-			destPath := filepath.Join(exPath, newBinaryName)
+			destFilename := "runpodctl"
+			if runtime.GOOS == "windows" {
+				destFilename = "runpodctl.exe"
+			}
+			destPath := filepath.Join(exPath, destFilename)
 			fmt.Printf("downloading runpodctl %s to %s\n", latestVersion, downloadPath)
 			file, err := DownloadFile(downloadLink, downloadPath)
 			defer file.Close()
