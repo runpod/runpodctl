@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 
-# Unified installer for RunPod CLI tool.
+# Unified installer for RunPOd CLI tool.
 
 # Verify the script is run with root privileges
 if [ "$EUID" -ne 0 ]; then
     echo "Please run as root with sudo."
+    exit 1
+fi
+
+# Fetch the latest version of RunPod CLI
+VERSION=$(wget -q -O- https://api.github.com/repos/runpod/runpodctl/releases/latest | jq -r '.name')
+if [ -z "$VERSION" ]; then
+    echo "Failed to fetch the latest version of RunPod CLI."
     exit 1
 fi
 
@@ -55,13 +62,6 @@ setup_environment() {
 }
 
 setup_environment
-
-# Fetch the latest version of RunPod CLI
-VERSION=$(wget -q -O- https://api.github.com/repos/runpod/runpodctl/releases/latest | jq -r '.name')
-if [ -z "$VERSION" ]; then
-    echo "Failed to fetch the latest version of RunPod CLI."
-    exit 1
-fi
 
 # Download the CLI tool
 CLI_FILE_NAME="runpodctl"
