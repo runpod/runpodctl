@@ -86,6 +86,40 @@ func selectNetworkVolume() (networkVolumeId string, err error) {
 	networkVolumeId = options[i].Value
 	return networkVolumeId, nil
 }
+func selectStarterTemplate() (template string, err error) {
+	type StarterTemplateOption struct {
+		Name  string // The string to display
+		Value string // The actual value to use
+	}
+	templates, err := starterTemplates.ReadDir("starter_templates")
+	if err != nil {
+		fmt.Println("Something went wrong trying to fetch starter templates")
+		fmt.Println(err)
+		return "", err
+	}
+	promptTemplates := &promptui.SelectTemplates{
+		Label:    inputPromptPrefix + "{{ . }}",
+		Active:   ` {{ "●" | cyan }} {{ .Name | cyan }}`,
+		Inactive: `   {{ .Name | white }}`,
+		Selected: `   {{ .Name | white }}`,
+	}
+	options := []StarterTemplateOption{}
+	for _, template := range templates {
+		options = append(options, StarterTemplateOption{Name: template.Name(), Value: template.Name()})
+	}
+	getStarterTemplate := promptui.Select{
+		Label:     "Select a Starter Template:",
+		Items:     options,
+		Templates: promptTemplates,
+	}
+	i, _, err := getStarterTemplate.Run()
+	if err != nil {
+		//ctrl c for example
+		return "", err
+	}
+	template = options[i].Value
+	return template, nil
+}
 
 // Define a struct that holds the display string and the corresponding value
 type NetVolOption struct {
@@ -105,17 +139,24 @@ var NewProjectCmd = &cobra.Command{
 		} else {
 			fmt.Println("Project name: " + projectName)
 		}
+		if modelType == "" {
+			template, err := selectStarterTemplate()
+			modelType = template
+			if err != nil {
+				modelType = ""
+			}
+		}
 		cudaVersion := promptChoice("Select a CUDA version, or press enter to use the default",
 			[]string{"11.1.1", "11.8.0", "12.1.0"}, "11.8.0")
 		pythonVersion := promptChoice("Select a Python version, or press enter to use the default",
 			[]string{"3.8", "3.9", "3.10", "3.11"}, "3.10")
-
 		fmt.Printf(`
 Project Summary:
    - Project Name: %s
+   - Starter Template: %s
    - CUDA Version: %s
    - Python Version: %s
-		`, projectName, cudaVersion, pythonVersion)
+		`, projectName, modelType, cudaVersion, pythonVersion)
 		fmt.Println()
 		fmt.Println("The project will be created in the current directory.")
 		//TODO confirm y/n
@@ -136,7 +177,16 @@ var StartProjectCmd = &cobra.Command{
 		config := loadProjectConfig()
 		projectId := config.GetPath([]string{"project", "uuid"}).(string)
 		networkVolumeId := viper.GetString(fmt.Sprintf("project_volumes.%s", projectId))
-		if setDefaultNetworkVolume || networkVolumeId == "" {
+		cachedNetVolExists := false
+		networkVolumes, err := api.GetNetworkVolumes()
+		if err == nil {
+			for _, networkVolume := range networkVolumes {
+				if networkVolume.Id == networkVolumeId {
+					cachedNetVolExists = true
+				}
+			}
+		}
+		if setDefaultNetworkVolume || networkVolumeId == "" || !cachedNetVolExists {
 			netVolId, err := selectNetworkVolume()
 			networkVolumeId = netVolId
 			viper.Set(fmt.Sprintf("project_volumes.%s", projectId), networkVolumeId)

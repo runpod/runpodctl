@@ -23,6 +23,9 @@ var starterTemplates embed.FS
 //go:embed example.toml
 var tomlTemplate embed.FS
 
+//go:embed exampleDockerfile
+var dockerfileTemplate embed.FS
+
 const basePath string = "starter_templates"
 
 func baseDockerImage(cudaVersion string) string {
@@ -30,7 +33,7 @@ func baseDockerImage(cudaVersion string) string {
 }
 
 func copyFiles(files fs.FS, source string, dest string) error {
-	return fs.WalkDir(starterTemplates, source, func(path string, d fs.DirEntry, err error) error {
+	return fs.WalkDir(files, source, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -43,7 +46,7 @@ func copyFiles(files fs.FS, source string, dest string) error {
 		if d.IsDir() {
 			return os.MkdirAll(newPath, os.ModePerm)
 		} else {
-			content, err := fs.ReadFile(starterTemplates, path)
+			content, err := fs.ReadFile(files, path)
 			if err != nil {
 				return err
 			}
