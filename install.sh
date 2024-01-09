@@ -9,7 +9,8 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # Fetch the latest version of RunPod CLI
-VERSION=$(wget -q -O- https://api.github.com/repos/runpod/runpodctl/releases/latest | jq -r '.name')
+VERSION=$(wget -q -O- https://api.github.com/repos/runpod/runpodctl/releases/latest | jq -r '.tag_name')
+echo "Fetched version: $VERSION"  # Debugging line
 if [ -z "$VERSION" ]; then
     echo "Failed to fetch the latest version of RunPod CLI."
     exit 1
