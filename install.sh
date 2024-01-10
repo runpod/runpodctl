@@ -1,13 +1,26 @@
 #!/usr/bin/env bash
 
 # Unified installer for RunPod CLI tool.
-# wget -qO- cli.runpod.io | sudo bash
+# wget -qO- cli.runpod.io | bash
 
 check_root() {
     if [ "$EUID" -ne 0 ]; then
         echo "Please run as root with sudo."
         exit 1
     fi
+}
+
+# Function to drop privileges for Homebrew operations
+run_as_original_user() {
+    local original_user=$(logname)
+    su - "$original_user" -c "$1"
+}
+
+# Function to install with Homebrew
+install_with_brew() {
+    local package=$1
+    echo "Installing $package with Homebrew..."
+    run_as_original_user "brew install $package"
 }
 
 REQUIRED_PKGS=("jq")  # Add all required packages to this list
@@ -31,7 +44,7 @@ install_package() {
             fi
             ;;
         darwin*)
-            brew install "$package"
+            install_with_brew "$package"
             ;;
         *)
             echo "Unsupported OS for automatic installation of $package."
