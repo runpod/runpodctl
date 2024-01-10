@@ -511,4 +511,6 @@ func buildProjectDockerfile() {
 	projectFolder, _ := os.Getwd()
 	dockerfilePath := filepath.Join(projectFolder, "Dockerfile")
 	os.WriteFile(dockerfilePath, []byte(dockerfile), 0644)
+	fmt.Printf("Dockerfile created at %s\n", dockerfilePath)
+
 }
