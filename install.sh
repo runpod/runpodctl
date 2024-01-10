@@ -1,8 +1,27 @@
 #!/usr/bin/env bash
 
-# Unified installer for RunPod CLI tool.
-# wget -qO- cli.runpod.io | bash
+# Unified Installer for RunPod CLI Tool
+#
+# This script provides a unified approach to installing the RunPod CLI tool.
+#
+# Usage:
+#   wget -qO- cli.runpod.io | bash
+#
+# Requirements:
+#   - Bash shell
+#   - Internet connection
+#   - Homebrew (for macOS users)
+#   - jq (for JSON processing, will be installed automatically)
+#
+# Supported Platforms:
+#   - Linux (amd64)
+#   - macOS (Intel and Apple Silicon)
 
+set -e
+REQUIRED_PKGS=("jq")  # Add all required packages to this list, separated by spaces.
+
+
+# -------------------------------- Check Root -------------------------------- #
 check_root() {
     if [ "$EUID" -ne 0 ]; then
         echo "Please run as root with sudo."
@@ -10,22 +29,15 @@ check_root() {
     fi
 }
 
-# Function to drop privileges for Homebrew operations
-run_as_original_user() {
-    local original_user=$(logname)
-    su - "$original_user" -c "$1"
-}
-
-# Function to install with Homebrew
+# ------------------------------ Brew Installer ------------------------------ #
 install_with_brew() {
     local package=$1
     echo "Installing $package with Homebrew..."
-    run_as_original_user "brew install $package"
+    local original_user=$(logname)
+    su - "$original_user" -c "brew install $package"
 }
 
-REQUIRED_PKGS=("jq")  # Add all required packages to this list
-
-# Function to install a package based on OS
+# ------------------------- Install Required Packages ------------------------ #
 install_package() {
     local package=$1
     echo "Installing $package..."
@@ -69,35 +81,42 @@ check_system_requirements() {
     fi
 }
 
+# ---------------------------- RunPod CLI Version ---------------------------- #
 fetch_latest_version() {
     local version_url="https://api.github.com/repos/runpod/runpodctl/releases/latest"
     VERSION=$(wget -q -O- "$version_url" | jq -r '.tag_name')
-    echo "Latest version of RunPod CLI: $VERSION"
     if [ -z "$VERSION" ]; then
         echo "Failed to fetch the latest version of RunPod CLI."
         exit 1
     fi
+    echo "Latest version of RunPod CLI: $VERSION"
 }
 
-set_download_url() {
-    case $OSTYPE in
-        linux-gnu*)
-            DOWNLOAD_URL="https://github.com/runpod/runpodctl/releases/download/${VERSION}/runpodctl-linux-amd"
-            ;;
-        darwin*)
-            DOWNLOAD_URL="https://github.com/runpod/runpodctl/releases/download/${VERSION}/runpodctl-darwin-arm"
-            ;;
-        cygwin*|msys*|win32*)
-            echo "Windows OS detected. Exiting as manual installation is required."
+# ------------------------------- Download URL ------------------------------- #
+download_url_constructor() {
+    local os_type=$(uname -s | tr '[:upper:]' '[:lower:]')
+    local arch_type=$(uname -m)
+
+    if [[ "$os_type" == "darwin" ]]; then
+        if [[ "$arch_type" == "x86_64" ]]; then
+            arch_type="amd64"  # For Intel-based Mac
+        elif [[ "$arch_type" == "arm64" ]]; then
+            arch_type="arm64"  # For ARM-based Mac (Apple Silicon)
+        else
+            echo "Unsupported macOS architecture: $arch_type"
             exit 1
-            ;;
-        *)
-            echo "Unknown OS detected, exiting..."
-            exit 1
-            ;;
-    esac
+        fi
+    elif [[ "$os_type" == "linux" ]]; then
+        arch_type="amd64"  # Assuming amd64 architecture for Linux
+    else
+        echo "Unsupported operating system: $os_type"
+        exit 1
+    fi
+
+    DOWNLOAD_URL="https://github.com/runpod/runpodctl/releases/download/${VERSION}/runpod-${os_type}-${arch_type}"
 }
 
+# ---------------------------- Download & Install ---------------------------- #
 download_and_install_cli() {
     local cli_file_name="runpodctl"
     if ! wget -q --show-progress "$DOWNLOAD_URL" -O "$cli_file_name"; then
@@ -112,12 +131,14 @@ download_and_install_cli() {
     echo "RunPod CLI installed successfully."
 }
 
-# Main execution flow
 
+# ---------------------------------------------------------------------------- #
+#                                     Main                                     #
+# ---------------------------------------------------------------------------- #
 echo "Installing RunPod CLI..."
 
 check_root
 check_system_requirements
 fetch_latest_version
-set_download_url
+download_url_constructor
 download_and_install_cli
