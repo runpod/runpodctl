@@ -15,6 +15,7 @@ var modelType string
 var modelName string
 var initCurrentDir bool
 var setDefaultNetworkVolume bool
+var includeEnvInDockerfile bool
 
 const inputPromptPrefix string = "   > "
 
@@ -45,10 +46,6 @@ func promptChoice(message string, choices []string, defaultChoice string) string
 		}
 	}
 	return s
-}
-func setDefaultNetVolume(projectId string, networkVolumeId string) {
-	viper.Set(fmt.Sprintf("project_volumes.%s", projectId), networkVolumeId)
-	viper.WriteConfig()
 }
 
 func selectNetworkVolume() (networkVolumeId string, err error) {
@@ -86,6 +83,40 @@ func selectNetworkVolume() (networkVolumeId string, err error) {
 	networkVolumeId = options[i].Value
 	return networkVolumeId, nil
 }
+func selectStarterTemplate() (template string, err error) {
+	type StarterTemplateOption struct {
+		Name  string // The string to display
+		Value string // The actual value to use
+	}
+	templates, err := starterTemplates.ReadDir("starter_templates")
+	if err != nil {
+		fmt.Println("Something went wrong trying to fetch starter templates")
+		fmt.Println(err)
+		return "", err
+	}
+	promptTemplates := &promptui.SelectTemplates{
+		Label:    inputPromptPrefix + "{{ . }}",
+		Active:   ` {{ "●" | cyan }} {{ .Name | cyan }}`,
+		Inactive: `   {{ .Name | white }}`,
+		Selected: `   {{ .Name | white }}`,
+	}
+	options := []StarterTemplateOption{}
+	for _, template := range templates {
+		options = append(options, StarterTemplateOption{Name: template.Name(), Value: template.Name()})
+	}
+	getStarterTemplate := promptui.Select{
+		Label:     "Select a Starter Template:",
+		Items:     options,
+		Templates: promptTemplates,
+	}
+	i, _, err := getStarterTemplate.Run()
+	if err != nil {
+		//ctrl c for example
+		return "", err
+	}
+	template = options[i].Value
+	return template, nil
+}
 
 // Define a struct that holds the display string and the corresponding value
 type NetVolOption struct {
@@ -105,17 +136,24 @@ var NewProjectCmd = &cobra.Command{
 		} else {
 			fmt.Println("Project name: " + projectName)
 		}
+		if modelType == "" {
+			template, err := selectStarterTemplate()
+			modelType = template
+			if err != nil {
+				modelType = ""
+			}
+		}
 		cudaVersion := promptChoice("Select a CUDA version, or press enter to use the default",
 			[]string{"11.1.1", "11.8.0", "12.1.0"}, "11.8.0")
 		pythonVersion := promptChoice("Select a Python version, or press enter to use the default",
 			[]string{"3.8", "3.9", "3.10", "3.11"}, "3.10")
-
 		fmt.Printf(`
 Project Summary:
    - Project Name: %s
+   - Starter Template: %s
    - CUDA Version: %s
    - Python Version: %s
-		`, projectName, cudaVersion, pythonVersion)
+		`, projectName, modelType, cudaVersion, pythonVersion)
 		fmt.Println()
 		fmt.Println("The project will be created in the current directory.")
 		//TODO confirm y/n
@@ -136,7 +174,16 @@ var StartProjectCmd = &cobra.Command{
 		config := loadProjectConfig()
 		projectId := config.GetPath([]string{"project", "uuid"}).(string)
 		networkVolumeId := viper.GetString(fmt.Sprintf("project_volumes.%s", projectId))
-		if setDefaultNetworkVolume || networkVolumeId == "" {
+		cachedNetVolExists := false
+		networkVolumes, err := api.GetNetworkVolumes()
+		if err == nil {
+			for _, networkVolume := range networkVolumes {
+				if networkVolume.Id == networkVolumeId {
+					cachedNetVolExists = true
+				}
+			}
+		}
+		if setDefaultNetworkVolume || networkVolumeId == "" || !cachedNetVolExists {
 			netVolId, err := selectNetworkVolume()
 			networkVolumeId = netVolId
 			viper.Set(fmt.Sprintf("project_volumes.%s", projectId), networkVolumeId)
@@ -175,22 +222,33 @@ var DeployProjectCmd = &cobra.Command{
 	},
 }
 
-// var BuildProjectCmd = &cobra.Command{
-// 	Use:   "build",
-// 	Args:  cobra.ExactArgs(0),
-// 	Short: "build Docker image for current project",
-// 	Long:  "build a Docker image for the Runpod project in the current folder",
-// 	Run: func(cmd *cobra.Command, args []string) {
-// 		//parse project toml
-// 		//build Dockerfile
-// 		//base image: from toml
-// 		//run setup.sh for system deps
-// 		//pip install requirements
-// 		//cmd: start handler
-// 		//docker build
-// 		//print next steps
-// 	},
-// }
+var BuildProjectCmd = &cobra.Command{
+	Use:   "build",
+	Args:  cobra.ExactArgs(0),
+	Short: "build Dockerfile for current project",
+	Long:  "build a Dockerfile for the Runpod project in the current folder",
+	Run: func(cmd *cobra.Command, args []string) {
+		buildProjectDockerfile()
+		// config := loadProjectConfig()
+		// projectConfig := config.Get("project").(*toml.Tree)
+		// projectId := projectConfig.Get("uuid").(string)
+		// projectName := projectConfig.Get("name").(string)
+		// //print next steps
+		// fmt.Println("Next steps:")
+		// fmt.Println()
+		// suggestedDockerTag := fmt.Sprintf("runpod-sls-worker-%s-%s:0.1", projectName, projectId)
+		// //docker build
+		// fmt.Println("# Build Docker image")
+		// fmt.Printf("docker build -t %s .\n", suggestedDockerTag)
+		// //dockerhub push
+		// fmt.Println("# Push Docker image to a container registry such as Dockerhub")
+		// fmt.Printf("docker push %s\n", suggestedDockerTag)
+		// //go to runpod url and deploy
+		// fmt.Println()
+		// fmt.Println("Deploy docker image as a serverless endpoint on Runpod")
+		// fmt.Println("https://www.runpod.io/console/serverless")
+	},
+}
 
 func init() {
 	NewProjectCmd.Flags().StringVarP(&projectName, "name", "n", "", "project name")
@@ -199,5 +257,6 @@ func init() {
 	NewProjectCmd.Flags().BoolVarP(&initCurrentDir, "init", "i", false, "use the current directory as the project directory")
 
 	StartProjectCmd.Flags().BoolVar(&setDefaultNetworkVolume, "select-volume", false, "select a new default network volume for current project")
-	DeployProjectCmd.Flags().BoolVar(&setDefaultNetworkVolume, "select-volume", false, "select a new default network volume for current project")
+	BuildProjectCmd.Flags().BoolVar(&includeEnvInDockerfile, "include-env", false, "include environment variables from runpod.toml in generated Dockerfile")
+
 }

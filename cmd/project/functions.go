@@ -23,6 +23,9 @@ var starterTemplates embed.FS
 //go:embed example.toml
 var tomlTemplate embed.FS
 
+//go:embed exampleDockerfile
+var dockerfileTemplate embed.FS
+
 const basePath string = "starter_templates"
 
 func baseDockerImage(cudaVersion string) string {
@@ -30,7 +33,7 @@ func baseDockerImage(cudaVersion string) string {
 }
 
 func copyFiles(files fs.FS, source string, dest string) error {
-	return fs.WalkDir(starterTemplates, source, func(path string, d fs.DirEntry, err error) error {
+	return fs.WalkDir(files, source, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -43,7 +46,7 @@ func copyFiles(files fs.FS, source string, dest string) error {
 		if d.IsDir() {
 			return os.MkdirAll(newPath, os.ModePerm)
 		} else {
-			content, err := fs.ReadFile(starterTemplates, path)
+			content, err := fs.ReadFile(files, path)
 			if err != nil {
 				return err
 			}
@@ -211,6 +214,13 @@ func mapToApiEnv(env map[string]string) []*api.PodEnv {
 		podEnv = append(podEnv, &api.PodEnv{Key: k, Value: v})
 	}
 	return podEnv
+}
+func formatAsDockerEnv(env map[string]string) string {
+	result := ""
+	for k, v := range env {
+		result += fmt.Sprintf("ENV %s=%s\n", k, v)
+	}
+	return result
 }
 
 func startProject(networkVolumeId string) error {
@@ -474,4 +484,33 @@ func deployProject(networkVolumeId string) (endpointId string, err error) {
 		}
 	}
 	return deployedEndpointId, nil
+}
+
+func buildProjectDockerfile() {
+	//parse project toml
+	config := loadProjectConfig()
+	projectConfig := config.Get("project").(*toml.Tree)
+	runtimeConfig := config.Get("runtime").(*toml.Tree)
+	//build Dockerfile
+	dockerfileBytes, _ := dockerfileTemplate.ReadFile("exampleDockerfile")
+	dockerfile := string(dockerfileBytes)
+	//base image: from toml
+	dockerfile = strings.ReplaceAll(dockerfile, "<<BASE_IMAGE>>", projectConfig.Get("base_image").(string))
+	//pip requirements
+	dockerfile = strings.ReplaceAll(dockerfile, "<<REQUIREMENTS_PATH>>", runtimeConfig.Get("requirements_path").(string))
+	dockerfile = strings.ReplaceAll(dockerfile, "<<PYTHON_VERSION>>", runtimeConfig.Get("python_version").(string))
+	//cmd: start handler
+	dockerfile = strings.ReplaceAll(dockerfile, "<<HANDLER_PATH>>", runtimeConfig.Get("handler_path").(string))
+	if includeEnvInDockerfile {
+		dockerEnv := formatAsDockerEnv(createEnvVars(config))
+		dockerfile = strings.ReplaceAll(dockerfile, "<<SET_ENV_VARS>>", "\n"+dockerEnv)
+	} else {
+		dockerfile = strings.ReplaceAll(dockerfile, "<<SET_ENV_VARS>>", "")
+	}
+	//save to Dockerfile in project directory
+	projectFolder, _ := os.Getwd()
+	dockerfilePath := filepath.Join(projectFolder, "Dockerfile")
+	os.WriteFile(dockerfilePath, []byte(dockerfile), 0644)
+	fmt.Printf("Dockerfile created at %s\n", dockerfilePath)
+
 }
