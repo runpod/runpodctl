@@ -215,6 +215,13 @@ func mapToApiEnv(env map[string]string) []*api.PodEnv {
 	}
 	return podEnv
 }
+func formatAsDockerEnv(env map[string]string) string {
+	result := ""
+	for k, v := range env {
+		result += fmt.Sprintf("ENV %s=%s\n", k, v)
+	}
+	return result
+}
 
 func startProject(networkVolumeId string) error {
 	//parse project toml
@@ -477,4 +484,35 @@ func deployProject(networkVolumeId string) (endpointId string, err error) {
 		}
 	}
 	return deployedEndpointId, nil
+}
+
+func buildProjectDockerfile() {
+	//parse project toml
+	config := loadProjectConfig()
+	projectConfig := config.Get("project").(*toml.Tree)
+	runtimeConfig := config.Get("runtime").(*toml.Tree)
+	//build Dockerfile
+	dockerfileBytes, _ := dockerfileTemplate.ReadFile("exampleDockerfile")
+	dockerfile := string(dockerfileBytes)
+	//base image: from toml
+	dockerfile = strings.ReplaceAll(dockerfile, "<<BASE_IMAGE>>", projectConfig.Get("base_image").(string))
+	//pip requirements
+	dockerfile = strings.ReplaceAll(dockerfile, "<<REQUIREMENTS_PATH>>", runtimeConfig.Get("requirements_path").(string))
+	dockerfile = strings.ReplaceAll(dockerfile, "<<PYTHON_VERSION>>", runtimeConfig.Get("python_version").(string))
+	//cmd: start handler
+	dockerfile = strings.ReplaceAll(dockerfile, "<<HANDLER_PATH>>", runtimeConfig.Get("handler_path").(string))
+	if includeEnvInDockerfile {
+		dockerEnv := formatAsDockerEnv(createEnvVars(config))
+		dockerfile = strings.ReplaceAll(dockerfile, "<<SET_ENV_VARS>>", "\n"+dockerEnv)
+	} else {
+		dockerfile = strings.ReplaceAll(dockerfile, "<<SET_ENV_VARS>>", "")
+	}
+	//save to Dockerfile in project directory
+	projectFolder, _ := os.Getwd()
+	dockerfilePath := filepath.Join(projectFolder, "Dockerfile")
+	os.WriteFile(dockerfilePath, []byte(dockerfile), 0644)
+	//print next steps
+	//docker build
+	//dockerhub push
+	//go to runpod url and deploy
 }

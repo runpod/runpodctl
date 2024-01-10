@@ -15,6 +15,7 @@ var modelType string
 var modelName string
 var initCurrentDir bool
 var setDefaultNetworkVolume bool
+var includeEnvInDockerfile bool
 
 const inputPromptPrefix string = "   > "
 
@@ -45,10 +46,6 @@ func promptChoice(message string, choices []string, defaultChoice string) string
 		}
 	}
 	return s
-}
-func setDefaultNetVolume(projectId string, networkVolumeId string) {
-	viper.Set(fmt.Sprintf("project_volumes.%s", projectId), networkVolumeId)
-	viper.WriteConfig()
 }
 
 func selectNetworkVolume() (networkVolumeId string, err error) {
@@ -225,22 +222,15 @@ var DeployProjectCmd = &cobra.Command{
 	},
 }
 
-// var BuildProjectCmd = &cobra.Command{
-// 	Use:   "build",
-// 	Args:  cobra.ExactArgs(0),
-// 	Short: "build Docker image for current project",
-// 	Long:  "build a Docker image for the Runpod project in the current folder",
-// 	Run: func(cmd *cobra.Command, args []string) {
-// 		//parse project toml
-// 		//build Dockerfile
-// 		//base image: from toml
-// 		//run setup.sh for system deps
-// 		//pip install requirements
-// 		//cmd: start handler
-// 		//docker build
-// 		//print next steps
-// 	},
-// }
+var BuildProjectCmd = &cobra.Command{
+	Use:   "build",
+	Args:  cobra.ExactArgs(0),
+	Short: "build Dockerfile for current project",
+	Long:  "build a Dockerfile for the Runpod project in the current folder",
+	Run: func(cmd *cobra.Command, args []string) {
+		buildProjectDockerfile()
+	},
+}
 
 func init() {
 	NewProjectCmd.Flags().StringVarP(&projectName, "name", "n", "", "project name")
@@ -249,5 +239,6 @@ func init() {
 	NewProjectCmd.Flags().BoolVarP(&initCurrentDir, "init", "i", false, "use the current directory as the project directory")
 
 	StartProjectCmd.Flags().BoolVar(&setDefaultNetworkVolume, "select-volume", false, "select a new default network volume for current project")
-	DeployProjectCmd.Flags().BoolVar(&setDefaultNetworkVolume, "select-volume", false, "select a new default network volume for current project")
+	BuildProjectCmd.Flags().BoolVar(&includeEnvInDockerfile, "include-env", false, "include environment variables from runpod.toml in generated Dockerfile")
+
 }
