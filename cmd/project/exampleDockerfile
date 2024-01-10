@@ -8,6 +8,11 @@ FROM <<BASE_IMAGE>>
 # Please refer to the base image's Dockerfile for more information before adding additional dependencies.
 # IMPORTANT: The base image overrides the default huggingface cache location.
 
+# System dependencies
+# if you need additional system dependencies beyond those included in the base image, feel free to add them here
+# but be aware those changes will not be reflected in the development pod
+# unless you override the base image in runpod.toml to an image that includes them.
+
 # Python dependencies
 COPY <<REQUIREMENTS_PATH>> /requirements.txt
 RUN python<<PYTHON_VERSION>> -m pip install --upgrade pip && \
@@ -15,8 +20,7 @@ RUN python<<PYTHON_VERSION>> -m pip install --upgrade pip && \
     rm /requirements.txt
 
 # NOTE: The base image comes with multiple Python versions pre-installed.
-#       It is reccommended to specify the version of Python when running your code.
-
+#       It is recommended to specify the version of Python when running your code.
 
 # Add src files (Worker Template)
 ADD src .

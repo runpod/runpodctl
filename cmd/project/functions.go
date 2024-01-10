@@ -511,8 +511,4 @@ func buildProjectDockerfile() {
 	projectFolder, _ := os.Getwd()
 	dockerfilePath := filepath.Join(projectFolder, "Dockerfile")
 	os.WriteFile(dockerfilePath, []byte(dockerfile), 0644)
-	//print next steps
-	//docker build
-	//dockerhub push
-	//go to runpod url and deploy
 }

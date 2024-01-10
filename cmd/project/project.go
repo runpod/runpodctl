@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/manifoldco/promptui"
+	"github.com/pelletier/go-toml"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -229,6 +230,25 @@ var BuildProjectCmd = &cobra.Command{
 	Long:  "build a Dockerfile for the Runpod project in the current folder",
 	Run: func(cmd *cobra.Command, args []string) {
 		buildProjectDockerfile()
+		fmt.Println("Dockerfile written to project folder!")
+		config := loadProjectConfig()
+		projectConfig := config.Get("project").(*toml.Tree)
+		projectId := projectConfig.Get("uuid").(string)
+		projectName := projectConfig.Get("name").(string)
+		//print next steps
+		fmt.Println("Next steps:")
+		fmt.Println()
+		suggestedDockerTag := fmt.Sprintf("runpod-sls-worker-%s-%s:0.1", projectName, projectId)
+		//docker build
+		fmt.Println("# Build Docker image")
+		fmt.Printf("docker build -t %s .\n", suggestedDockerTag)
+		//dockerhub push
+		fmt.Println("# Push Docker image to a container registry such as Dockerhub")
+		fmt.Printf("docker push %s\n", suggestedDockerTag)
+		//go to runpod url and deploy
+		fmt.Println()
+		fmt.Println("Deploy docker image as a serverless endpoint on Runpod")
+		fmt.Println("https://www.runpod.io/console/serverless")
 	},
 }
 
