@@ -21,7 +21,7 @@ brews:
   -
     name: runpodctl
     homepage: "https://github.com/rachfop/runpodctl"
-    tap:
+    repository:
       owner: rachfop
       name: homebrew-cli
     commit_author:
