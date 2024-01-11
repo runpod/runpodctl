@@ -340,20 +340,6 @@ func startProject(networkVolumeId string) error {
 		fi
 	}
 
-	exclude_pattern='(__pycache__|\\.pyc$)'
-	function update_exclude_pattern {
-		exclude_pattern='(__pycache__|\\.pyc$)'
-		if [[ -f .runpodignore ]]; then
-			while IFS= read -r line; do
-				line=$(echo "$line" | tr -d '[:space:]')
-				[[ "$line" =~ ^#.*$ || -z "$line" ]] && continue # Skip comments and empty lines
-				exclude_pattern="${exclude_pattern}|(${line})"
-			done < .runpodignore
-			echo -e "- Ignoring files matching pattern: $exclude_pattern"
-		fi
-	}
-	update_exclude_pattern
-
 	# Start the API server in the background, and save the PID
 	tar_venv &
 	python %s --rp_serve_api --rp_api_host="0.0.0.0" --rp_api_port=8080 --rp_api_concurrency=1 &
@@ -363,8 +349,20 @@ func startProject(networkVolumeId string) error {
 	echo "Connect to the API server at:"
 	echo ">  https://$RUNPOD_POD_ID-8080.proxy.runpod.net" && echo ""
 
+	function notify_nonignored_file {
+		cp .runpodignore /tmp/.gitignore
+		cd /tmp
+		git init -q
+		changed_file=$(inotifywait -q -r -e modify,create,delete %s --format '%%w%%f' | xargs -I _ sh -c 'realpath --relative-to="%s" "_" | git check-ignore -nv --stdin | grep :: | tr -d :[":blank:"]')
+		if [[ $changed_file ]]; then
+			echo $changed_file
+		else
+			echo ""
+		fi
+	}
+
 	while true; do
-		if changed_file=$(inotifywait -q -r -e modify,create,delete --exclude "$exclude_pattern" %s --format '%%w%%f'); then
+		if changed_file=$(notify_nonignored_file); then
 			echo "Detected changes in: $changed_file"
 		else
 			echo "Failed to detect changes."
@@ -379,16 +377,12 @@ func startProject(networkVolumeId string) error {
 			tar_venv &
 		fi
 
-		if [[ $changed_file == *".runpodignore"* ]]; then
-			update_exclude_pattern
-		fi
-
 		python %s --rp_serve_api --rp_api_host="0.0.0.0" --rp_api_port=8080 --rp_api_concurrency=1 &
 		last_pid=$!
 
 		echo "Restarted API server with PID: $last_pid"
 	done
-	`, venvPath, projectPathUuidDev, projectName, venvPath, archivedVenvPath, handlerPath, remoteProjectPath, pipReqPath, handlerPath)
+	`, venvPath, projectPathUuidDev, projectName, venvPath, archivedVenvPath, handlerPath, remoteProjectPath, remoteProjectPath, pipReqPath, handlerPath)
 	fmt.Println()
 	fmt.Println("Starting project development endpoint...")
 	sshConn.RunCommand(launchApiServer)
