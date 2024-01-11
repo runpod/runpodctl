@@ -1,0 +1,32 @@
+builds:
+  - binary: runpodctl
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -mod=vendor
+
+release:
+  prerelease: auto
+
+universal_binaries:
+  - replace: true
+
+brews:
+  -
+    name: runpodctl
+    homepage: "https://github.com/rachfop/runpodctl"
+    tap:
+      owner: rachfop
+      name: homebrew-cli
+    commit_author:
+      name: rachfop
+      email: prachford@icloud.com
+
+checksum:
+  name_template: 'checksums.txt'
