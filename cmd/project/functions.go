@@ -349,10 +349,10 @@ func startProject(networkVolumeId string) error {
 	echo "Connect to the API server at:"
 	echo ">  https://$RUNPOD_POD_ID-8080.proxy.runpod.net" && echo ""
 
+	git init -q /tmp
 	function notify_nonignored_file {
 		cp .runpodignore /tmp/.gitignore
 		cd /tmp
-		git init -q
 		changed_file=$(inotifywait -q -r -e modify,create,delete %s --format '%%w%%f' | xargs -I _ sh -c 'realpath --relative-to="%s" "_" | git check-ignore -nv --stdin | grep :: | tr -d :[":blank:"]')
 		if [[ $changed_file ]]; then
 			echo $changed_file
