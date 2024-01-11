@@ -353,13 +353,15 @@ func startProject(networkVolumeId string) error {
 	#uses git check-ignore to ensure same syntax as gitignore, but git check-ignore expects to be run in a repo
 	#so we must set up a git-repo-like file structure in some external directory, we chose /tmp
 	function notify_nonignored_file {
-		cp .runpodignore /tmp/.gitignore && cd /tmp && git init -q #setup fake git in /tmp
+		tmp_dir=$(mktemp -d)
+		cp .runpodignore $tmp_dir/.gitignore && cd $tmp_dir && git init -q #setup fake git in temp dir
 		changed_file=$(inotifywait -q -r -e modify,create,delete %s --format '%%w%%f' | xargs -I _ sh -c 'realpath --relative-to="%s" "_" | git check-ignore -nv --stdin | grep :: | tr -d :[":blank:"]')
 		if [[ $changed_file ]]; then
 			echo $changed_file
 		else
 			echo ""
 		fi
+		rm -rf $tmp_dir
 	}
 
 	while true; do
