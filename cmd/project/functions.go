@@ -355,12 +355,7 @@ func startProject(networkVolumeId string) error {
 	function notify_nonignored_file {
 		tmp_dir=$(mktemp -d)
 		cp .runpodignore $tmp_dir/.gitignore && cd $tmp_dir && git init -q #setup fake git in temp dir
-		changed_file=$(inotifywait -q -r -e modify,create,delete %s --format '%%w%%f' | xargs -I _ sh -c 'realpath --relative-to="%s" "_" | git check-ignore -nv --stdin | grep :: | tr -d :[":blank:"]')
-		if [[ $changed_file ]]; then
-			echo $changed_file
-		else
-			echo ""
-		fi
+		echo $(inotifywait -q -r -e modify,create,delete %s --format '%%w%%f' | xargs -I _ sh -c 'realpath --relative-to="%s" "_" | git check-ignore -nv --stdin | grep :: | tr -d :[":blank:"]')
 		rm -rf $tmp_dir
 	}
 
