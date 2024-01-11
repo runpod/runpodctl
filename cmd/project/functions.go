@@ -351,7 +351,7 @@ func startProject(networkVolumeId string) error {
 
 	#like inotifywait, but will only report the name of a file if it shouldn't be ignored according to .runpodignore
 	#uses git check-ignore to ensure same syntax as gitignore, but git check-ignore expects to be run in a repo
-	#so we must set up a git-repo-like file structure in some external directory, we chose /tmp
+	#so we must set up a git-repo-like file structure in some temp directory
 	function notify_nonignored_file {
 		tmp_dir=$(mktemp -d)
 		cp .runpodignore $tmp_dir/.gitignore && cd $tmp_dir && git init -q #setup fake git in temp dir
