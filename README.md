@@ -11,7 +11,7 @@ All pods automatically come with runpodctl installed with a pod-scoped API key!
 ## Tutorial
 A very detailed tutorial that shows how to utilize runpodctl in multiple situations: https://www.youtube.com/watch?v=QN1vdGhjcRc
 
-runpodctl chapters: 
+runpodctl chapters:
 
 [How to install runpodctl latest version to transfer files between Pods and PC](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=1384s)
 
@@ -43,7 +43,7 @@ osx (AMD) - For Intel Processors
 wget --quiet --show-progress https://github.com/runpod/runpodctl/releases/download/v1.10.0/runpodctl-darwin-amd -O runpodctl && chmod +x runpodctl && sudo mv runpodctl /usr/local/bin/runpodctl
 ```
 
-![](https://github.com/runpod/runpodctl/blob/main/runpodctllinux.gif)
+![](docs/media/runpodctllinux.gif)
 
 ## how to transfer data
 Using send or receive command does not require API keys due to built-in security of one-time codes.
@@ -83,7 +83,7 @@ data.txt 100% |████████████████████| ( 5
 wget https://github.com/runpod/runpodctl/releases/download/v1.9.0/runpodctl-win-amd -O runpodctl.exe
 ```
 
-![](https://github.com/runpod/runpodctl/blob/main/runpodctlwindows.gif)
+![](docs/media/runpodctlwindows.gif)
 
 <br />
 
