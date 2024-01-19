@@ -37,6 +37,7 @@ func init() {
 	// RootCmd.AddCommand(copyCmd)
 	RootCmd.AddCommand(createCmd)
 	RootCmd.AddCommand(getCmd)
+	RootCmd.AddCommand(loginCmd)
 	RootCmd.AddCommand(removeCmd)
 	RootCmd.AddCommand(startCmd)
 	RootCmd.AddCommand(stopCmd)
