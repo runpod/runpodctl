@@ -30,10 +30,10 @@ jobs:
       - name: build
         if: ${{ steps.release.outputs.release_created }}
         run: |
-          env GOOS=linux GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-linux-amd .
-          env GOOS=darwin GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-darwin-amd .
-          env GOOS=darwin GOARCH=arm64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-darwin-arm .
-          env GOOS=windows GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-win-amd .
+          env GOOS=linux GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-linux-amd64 .
+          env GOOS=darwin GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-darwin-amd64 .
+          env GOOS=darwin GOARCH=arm64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-darwin-arm64 .
+          env GOOS=windows GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-windows-amd64 .
 
       - name: upload linux amd64 release binary
         if: ${{ steps.release.outputs.release_created }}

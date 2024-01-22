@@ -33,8 +33,10 @@ var ConfigCmd = &cobra.Command{
 			fmt.Println("couldn't get user home dir path")
 			return
 		}
-		privateSshPath := filepath.Join(home, ".runpod", "ssh", "RunPod-Key-Go")
-		publicSshPath := filepath.Join(home, ".runpod", "ssh", "RunPod-Key-Go.pub")
+		sshFolderPath := filepath.Join(home, ".runpod", "ssh")
+		os.MkdirAll(sshFolderPath, os.ModePerm)
+		privateSshPath := filepath.Join(sshFolderPath, "RunPod-Key-Go")
+		publicSshPath := filepath.Join(sshFolderPath, "RunPod-Key-Go.pub")
 		publicKey, _ := os.ReadFile(publicSshPath)
 		if _, err := os.Stat(privateSshPath); errors.Is(err, os.ErrNotExist) {
 			publicKey = makeRSAKey(privateSshPath)

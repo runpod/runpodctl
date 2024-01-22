@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 
 	"cli/cmd/config"
@@ -41,6 +42,7 @@ func init() {
 	RootCmd.AddCommand(stopCmd)
 	RootCmd.AddCommand(versionCmd)
 	RootCmd.AddCommand(projectCmd)
+	RootCmd.AddCommand(updateCmd)
 
 	RootCmd.AddCommand(croc.ReceiveCmd)
 	RootCmd.AddCommand(croc.SendCmd)
@@ -48,9 +50,6 @@ func init() {
 
 // initConfig reads in config file and ENV variables if set.
 func initConfig() {
-	//if .runpod.yaml exists but .runpod/config.toml does not,
-	//print out something about migrating config location
-	//move .runpod.yaml to .runpod/config.toml
 	home, err := os.UserHomeDir()
 	cobra.CheckErr(err)
 	configPath := home + "/.runpod"
@@ -65,7 +64,21 @@ func initConfig() {
 	if err := viper.ReadInConfig(); err == nil {
 		// fmt.Fprintln(os.Stderr, "Using config file:", viper.ConfigFileUsed())
 	} else {
-		err := viper.WriteConfigAs(config.ConfigFile)
+		//legacy: try to migrate old config to new location
+		viper.SetConfigType("yaml")
+		viper.AddConfigPath(home)
+		viper.SetConfigName(".runpod.yaml")
+		if yamlReadErr := viper.ReadInConfig(); yamlReadErr == nil {
+			fmt.Println("Runpod config location has moved from ~/.runpod.yaml to ~/.runpod/config.toml")
+			fmt.Println("migrating your existing config to ~/.runpod/config.toml")
+		} else {
+			fmt.Println("Runpod config file not found, please run runpodctl config to create it")
+		}
+		viper.SetConfigType("toml")
+		//make .runpod folder if not exists
+		err := os.MkdirAll(configPath, os.ModePerm)
+		cobra.CheckErr(err)
+		err = viper.WriteConfigAs(config.ConfigFile)
 		cobra.CheckErr(err)
 	}
 }
