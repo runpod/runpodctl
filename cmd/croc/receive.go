@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 	"strconv"
+	"strings"
 
 	"github.com/schollz/croc/v9/src/croc"
 	"github.com/schollz/croc/v9/src/models"
@@ -81,9 +81,7 @@ var ReceiveCmd = &cobra.Command{
 		if err = cr.Receive(); err != nil {
 			fmt.Println(err)
 			return
-		} 
+		}
 
 	},
 }
-
-

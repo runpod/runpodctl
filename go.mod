@@ -1,6 +1,6 @@
 module cli
 
-go 1.17
+go 1.21
 
 require (
 	github.com/denisbrodbeck/machineid v1.0.1

@@ -5,13 +5,11 @@ import (
 	"os"
 
 	"cli/cmd/config"
-	"cli/cmd/croc"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
-var versionFlag bool
 var version string
 
 // rootCmd represents the base command when called without any subcommands
@@ -20,13 +18,6 @@ var rootCmd = &cobra.Command{
 	Aliases: []string{"runpodctl"},
 	Short:   "CLI for runpod.io",
 	Long:    "runpod is a CLI tool to manage your resources on https://runpod.io",
-	Run: func(cmd *cobra.Command, args []string) {
-		if versionFlag {
-			fmt.Printf("runpod version %s\n", version)
-			os.Exit(0)
-		}
-		// Rest of your command logic
-	},
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -45,8 +36,6 @@ func init() {
 	// rootCmd.AddCommand(connectCmd)
 	// rootCmd.AddCommand(copyCmd)
 
-	rootCmd.Flags().BoolVarP(&versionFlag, "version", "v", false, "display version information")
-
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(projectCmd)
 	rootCmd.AddCommand(updateCmd)
@@ -58,8 +47,8 @@ func init() {
 	rootCmd.AddCommand(startCmd)
 	rootCmd.AddCommand(stopCmd)
 
-	rootCmd.AddCommand(croc.ReceiveCmd)
-	rootCmd.AddCommand(croc.SendCmd)
+	rootCmd.AddCommand(receiveCmd)
+	rootCmd.AddCommand(sendCmd)
 }
 
 // initConfig reads in config file and ENV variables if set.

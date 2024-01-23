@@ -1,13 +1,13 @@
 package croc
 
 import (
-	"fmt"
-	"strings"
 	"encoding/json"
+	"fmt"
 	"math/rand"
 	"net/http"
-	"time"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/schollz/croc/v9/src/models"
 	"github.com/schollz/croc/v9/src/utils"
@@ -15,9 +15,9 @@ import (
 )
 
 type Relay struct {
-	Address    string   `json:"address"`
-	Password	string `json:"password"`
-	Ports  string    `json:"ports"`
+	Address  string `json:"address"`
+	Password string `json:"password"`
+	Ports    string `json:"ports"`
 }
 
 type Response struct {
@@ -53,7 +53,7 @@ var SendCmd = &cobra.Command{
 			fmt.Println("Could not get list of relays. Please contact support for help!")
 			return
 		}
-	
+
 		// Choose a random relay from the array
 		randomIndex := rand.Intn(len(response.Relays))
 		relay := response.Relays[randomIndex]
