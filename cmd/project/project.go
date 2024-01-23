@@ -166,10 +166,11 @@ Project Summary:
 }
 
 var StartProjectCmd = &cobra.Command{
-	Use:   "start",
-	Args:  cobra.ExactArgs(0),
-	Short: "start current project",
-	Long:  "start a development pod session for the Runpod project in the current folder",
+	Use:     "dev",
+	Aliases: []string{"start"},
+	Args:    cobra.ExactArgs(0),
+	Short:   "start dev session for current project",
+	Long:    "start a development pod session for the Runpod project in the current folder",
 	Run: func(cmd *cobra.Command, args []string) {
 		config := loadProjectConfig()
 		projectId := config.GetPath([]string{"project", "uuid"}).(string)
