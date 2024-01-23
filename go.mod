@@ -4,7 +4,13 @@ go 1.21
 
 require (
 	github.com/denisbrodbeck/machineid v1.0.1
+	github.com/dietsche/rfsnotify v0.0.0-20200716145600-b37be6e4177f
+	github.com/fatih/color v1.16.0
+	github.com/gobwas/glob v0.2.3
+	github.com/google/uuid v1.4.0
+	github.com/manifoldco/promptui v0.9.0
 	github.com/olekukonko/tablewriter v0.0.5
+	github.com/pelletier/go-toml v1.9.5
 	github.com/schollz/croc/v9 v9.6.6
 	github.com/schollz/logger v1.2.0
 	github.com/schollz/pake/v3 v3.0.5
@@ -12,9 +18,12 @@ require (
 	github.com/schollz/progressbar/v3 v3.14.1
 	github.com/sirupsen/logrus v1.8.1
 	github.com/slackhq/nebula v1.5.2
-	github.com/spf13/cobra v1.4.0
+	github.com/spf13/cobra v1.8.0
 	github.com/spf13/viper v1.10.1
+	golang.org/x/crypto v0.15.0
+	golang.org/x/mod v0.14.0
 	golang.org/x/time v0.4.0
+	gopkg.in/fsnotify.v1 v1.4.7
 )
 
 require (
@@ -28,22 +37,17 @@ require (
 	github.com/chzyer/readline v1.5.1 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.3 // indirect
 	github.com/cyberdelia/go-metrics-graphite v0.0.0-20161219230853-39f87cc3b432 // indirect
-	github.com/dietsche/rfsnotify v0.0.0-20200716145600-b37be6e4177f // indirect
-	github.com/fatih/color v1.16.0 // indirect
 	github.com/flynn/noise v1.0.0 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
-	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/google/gopacket v1.1.19 // indirect
-	github.com/google/uuid v1.4.0 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/imdario/mergo v0.3.8 // indirect
-	github.com/inconshreveable/mousetrap v1.0.0 // indirect
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/kalafut/imohash v1.0.2 // indirect
 	github.com/magiconair/properties v1.8.5 // indirect
 	github.com/magisterquis/connectproxy v0.0.0-20200725203833-3582e84f0c9b // indirect
-	github.com/manifoldco/promptui v0.9.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.13 // indirect
@@ -52,7 +56,6 @@ require (
 	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
 	github.com/mitchellh/mapstructure v1.4.3 // indirect
 	github.com/nbrownus/go-metrics-prometheus v0.0.0-20210712211119-974a6260965f // indirect
-	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/pelletier/go-toml/v2 v2.1.0 // indirect
 	github.com/prometheus/client_golang v1.11.0 // indirect
 	github.com/prometheus/client_model v0.2.0 // indirect
@@ -74,8 +77,6 @@ require (
 	github.com/twmb/murmur3 v1.1.8 // indirect
 	github.com/vishvananda/netlink v1.1.0 // indirect
 	github.com/vishvananda/netns v0.0.0-20211101163701-50045581ed74 // indirect
-	golang.org/x/crypto v0.15.0 // indirect
-	golang.org/x/mod v0.14.0 // indirect
 	golang.org/x/net v0.18.0 // indirect
 	golang.org/x/sys v0.14.0 // indirect
 	golang.org/x/term v0.14.0 // indirect
@@ -83,7 +84,6 @@ require (
 	golang.zx2c4.com/wintun v0.0.0-20211104114900-415007cec224 // indirect
 	golang.zx2c4.com/wireguard/windows v0.5.1 // indirect
 	google.golang.org/protobuf v1.27.1 // indirect
-	gopkg.in/fsnotify.v1 v1.4.7 // indirect
 	gopkg.in/ini.v1 v1.66.2 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )

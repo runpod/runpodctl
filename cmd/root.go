@@ -18,6 +18,7 @@ var rootCmd = &cobra.Command{
 	Aliases: []string{"runpodctl"},
 	Short:   "CLI for runpod.io",
 	Long:    "runpod is a CLI tool to manage your resources on https://runpod.io",
+	Version: version,
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
