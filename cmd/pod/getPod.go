@@ -14,10 +14,11 @@ import (
 var AllFields bool
 
 var GetPodCmd = &cobra.Command{
-	Use:   "pod [podId]",
-	Args:  cobra.MaximumNArgs(1),
-	Short: "get all pods",
-	Long:  "get all pods or specify pod id",
+	Use:     "get [podId]",
+	Aliases: []string{"pod"},
+	Args:    cobra.MaximumNArgs(1),
+	Short:   "get all pods",
+	Long:    "get all pods or specify pod id",
 	Run: func(cmd *cobra.Command, args []string) {
 		pods, err := api.GetPods()
 		cobra.CheckErr(err)

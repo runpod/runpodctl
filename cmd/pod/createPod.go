@@ -26,10 +26,11 @@ var volumeInGb int
 var volumeMountPath string
 
 var CreatePodCmd = &cobra.Command{
-	Use:   "pod",
-	Args:  cobra.ExactArgs(0),
-	Short: "start a pod",
-	Long:  "start a pod from runpod.io",
+	Use:     "create",
+	Aliases: []string{"pod"},
+	Args:    cobra.ExactArgs(0),
+	Short:   "Create a pod",
+	Long:    "Create a pod from runpod.io",
 	Run: func(cmd *cobra.Command, args []string) {
 		input := &api.CreatePodInput{
 			ContainerDiskInGb: containerDiskInGb,

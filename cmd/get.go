@@ -8,9 +8,10 @@ import (
 )
 
 var getCmd = &cobra.Command{
-	Use:   "get [command]",
-	Short: "get resource",
-	Long:  "get resources for pods",
+	Use:    "get [command]",
+	Short:  "get resource",
+	Long:   "get resources for pods",
+	Hidden: true,
 }
 
 func init() {

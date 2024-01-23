@@ -7,9 +7,10 @@ import (
 )
 
 var stopCmd = &cobra.Command{
-	Use:   "stop [command]",
-	Short: "stop a resource",
-	Long:  "stop a resource in runpod.io",
+	Use:    "stop [command]",
+	Short:  "stop a resource",
+	Long:   "stop a resource in runpod.io",
+	Hidden: true,
 }
 
 func init() {

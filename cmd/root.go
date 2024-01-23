@@ -11,41 +11,55 @@ import (
 	"github.com/spf13/viper"
 )
 
+var versionFlag bool
 var version string
 
 // rootCmd represents the base command when called without any subcommands
-var RootCmd = &cobra.Command{
-	Use:   "runpodctl",
-	Short: "runpodctl for runpod.io",
-	Long:  "runpodctl is a CLI tool to manage your pods for runpod.io",
+var rootCmd = &cobra.Command{
+	Use:     "runpod",
+	Aliases: []string{"runpodctl"},
+	Short:   "CLI for runpod.io",
+	Long:    "runpod is a CLI tool to manage your resources on https://runpod.io",
+	Run: func(cmd *cobra.Command, args []string) {
+		if versionFlag {
+			fmt.Printf("runpod version %s\n", version)
+			os.Exit(0)
+		}
+		// Rest of your command logic
+	},
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
-// This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute(ver string) {
 	version = ver
-	err := RootCmd.Execute()
-	if err != nil {
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Println(err)
 		os.Exit(1)
 	}
 }
 
+// init adds all child commands to the root command and sets flags appropriately.
 func init() {
 	cobra.OnInitialize(initConfig)
-	RootCmd.AddCommand(config.ConfigCmd)
-	// RootCmd.AddCommand(connectCmd)
-	// RootCmd.AddCommand(copyCmd)
-	RootCmd.AddCommand(createCmd)
-	RootCmd.AddCommand(getCmd)
-	RootCmd.AddCommand(removeCmd)
-	RootCmd.AddCommand(startCmd)
-	RootCmd.AddCommand(stopCmd)
-	RootCmd.AddCommand(versionCmd)
-	RootCmd.AddCommand(projectCmd)
-	RootCmd.AddCommand(updateCmd)
+	rootCmd.AddCommand(config.ConfigCmd)
+	// rootCmd.AddCommand(connectCmd)
+	// rootCmd.AddCommand(copyCmd)
 
-	RootCmd.AddCommand(croc.ReceiveCmd)
-	RootCmd.AddCommand(croc.SendCmd)
+	rootCmd.Flags().BoolVarP(&versionFlag, "version", "v", false, "display version information")
+
+	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(projectCmd)
+	rootCmd.AddCommand(updateCmd)
+
+	// Hidden commands
+	rootCmd.AddCommand(createCmd)
+	rootCmd.AddCommand(getCmd)
+	rootCmd.AddCommand(removeCmd)
+	rootCmd.AddCommand(startCmd)
+	rootCmd.AddCommand(stopCmd)
+
+	rootCmd.AddCommand(croc.ReceiveCmd)
+	rootCmd.AddCommand(croc.SendCmd)
 }
 
 // initConfig reads in config file and ENV variables if set.

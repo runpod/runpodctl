@@ -8,9 +8,10 @@ import (
 )
 
 var createCmd = &cobra.Command{
-	Use:   "create [command]",
-	Short: "create a resource",
-	Long:  "create a resource in runpod.io",
+	Use:    "create [command]",
+	Short:  "create a resource",
+	Long:   "create a resource in runpod.io",
+	Hidden: true,
 }
 
 func init() {

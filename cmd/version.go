@@ -13,4 +13,5 @@ var versionCmd = &cobra.Command{
 	Run: func(c *cobra.Command, args []string) {
 		fmt.Println("runpodctl " + version)
 	},
+	Hidden: true,
 }

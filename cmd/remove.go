@@ -8,9 +8,10 @@ import (
 )
 
 var removeCmd = &cobra.Command{
-	Use:   "remove [command]",
-	Short: "remove a resource",
-	Long:  "remove a resource in runpod.io",
+	Use:    "remove [command]",
+	Short:  "remove a resource",
+	Long:   "remove a resource in runpod.io",
+	Hidden: true,
 }
 
 func init() {

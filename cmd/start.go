@@ -7,9 +7,10 @@ import (
 )
 
 var startCmd = &cobra.Command{
-	Use:   "start [command]",
-	Short: "start a resource",
-	Long:  "start a resource in runpod.io",
+	Use:    "start [command]",
+	Short:  "start a resource",
+	Long:   "start a resource in runpod.io",
+	Hidden: true,
 }
 
 func init() {
