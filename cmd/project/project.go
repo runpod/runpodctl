@@ -232,7 +232,7 @@ var BuildProjectCmd = &cobra.Command{
 		// config := loadProjectConfig()
 		// projectConfig := config.Get("project").(*toml.Tree)
 		// projectId := projectConfig.Get("uuid").(string)
-		// projectName := projectConfig.Get("name").(string)
+		// projectName := config.Get("name").(string)
 		// //print next steps
 		// fmt.Println("Next steps:")
 		// fmt.Println()
