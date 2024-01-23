@@ -5,16 +5,16 @@ go 1.21
 require (
 	github.com/denisbrodbeck/machineid v1.0.1
 	github.com/olekukonko/tablewriter v0.0.5
-	github.com/schollz/croc/v9 v9.6.0
+	github.com/schollz/croc/v9 v9.6.6
 	github.com/schollz/logger v1.2.0
-	github.com/schollz/pake/v3 v3.0.4
-	github.com/schollz/peerdiscovery v1.6.12
-	github.com/schollz/progressbar/v3 v3.8.6
+	github.com/schollz/pake/v3 v3.0.5
+	github.com/schollz/peerdiscovery v1.7.2
+	github.com/schollz/progressbar/v3 v3.14.1
 	github.com/sirupsen/logrus v1.8.1
 	github.com/slackhq/nebula v1.5.2
 	github.com/spf13/cobra v1.4.0
 	github.com/spf13/viper v1.10.1
-	golang.org/x/time v0.0.0-20220609170525-579cf78fd858
+	golang.org/x/time v0.4.0
 )
 
 require (
@@ -25,8 +25,8 @@ require (
 	github.com/burl/termbox-go v0.0.0-20160628184006-0e2effceb9ce // indirect
 	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/cespare/xxhash/v2 v2.1.2 // indirect
-	github.com/chzyer/readline v0.0.0-20180603132655-2972be24d48e // indirect
-	github.com/cpuguy83/go-md2man/v2 v2.0.2 // indirect
+	github.com/chzyer/readline v1.5.1 // indirect
+	github.com/cpuguy83/go-md2man/v2 v2.0.3 // indirect
 	github.com/cyberdelia/go-metrics-graphite v0.0.0-20161219230853-39f87cc3b432 // indirect
 	github.com/dietsche/rfsnotify v0.0.0-20200716145600-b37be6e4177f // indirect
 	github.com/fatih/color v1.16.0 // indirect
@@ -42,6 +42,7 @@ require (
 	github.com/inconshreveable/mousetrap v1.0.0 // indirect
 	github.com/kalafut/imohash v1.0.2 // indirect
 	github.com/magiconair/properties v1.8.5 // indirect
+	github.com/magisterquis/connectproxy v0.0.0-20200725203833-3582e84f0c9b // indirect
 	github.com/manifoldco/promptui v0.9.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
@@ -58,9 +59,11 @@ require (
 	github.com/prometheus/common v0.32.1 // indirect
 	github.com/prometheus/procfs v0.7.3 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475 // indirect
-	github.com/rivo/uniseg v0.2.0 // indirect
+	github.com/rivo/uniseg v0.4.4 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
-	github.com/schollz/mnemonicode v1.0.1 // indirect
+	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06 // indirect
+	github.com/schollz/cli/v2 v2.2.1 // indirect
+	github.com/schollz/mnemonicode v1.0.2-0.20190421205639-63fa713ece0d // indirect
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8 // indirect
 	github.com/spf13/afero v1.6.0 // indirect
 	github.com/spf13/cast v1.4.1 // indirect
@@ -68,12 +71,12 @@ require (
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/subosito/gotenv v1.2.0 // indirect
 	github.com/tscholl2/siec v0.0.0-20210707234609-9bdfc483d499 // indirect
-	github.com/twmb/murmur3 v1.1.6 // indirect
+	github.com/twmb/murmur3 v1.1.8 // indirect
 	github.com/vishvananda/netlink v1.1.0 // indirect
 	github.com/vishvananda/netns v0.0.0-20211101163701-50045581ed74 // indirect
 	golang.org/x/crypto v0.15.0 // indirect
 	golang.org/x/mod v0.14.0 // indirect
-	golang.org/x/net v0.10.0 // indirect
+	golang.org/x/net v0.18.0 // indirect
 	golang.org/x/sys v0.14.0 // indirect
 	golang.org/x/term v0.14.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
