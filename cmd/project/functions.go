@@ -66,13 +66,13 @@ func createNewProject(projectName string, cudaVersion string,
 		if modelType == "" {
 			modelType = "default"
 		}
-		templatePath := filepath.Join(basePath, modelType)
+		templatePath := fmt.Sprintf("%s/%s", basePath, modelType)
 		//load selected starter template
 		err = copyFiles(starterTemplates, templatePath, projectFolder)
 		if err != nil {
 			panic(err)
 		}
-		requirementsPath := filepath.Join(projectFolder, "builder", "requirements.txt")
+		requirementsPath := fmt.Sprintf("%s/builder/requirements.txt", projectFolder)
 		requirementsContentBytes, _ := os.ReadFile(requirementsPath)
 		requirementsContent := string(requirementsContentBytes)
 		//in requirements, replace <<RUNPOD>> with runpod-python import
@@ -103,7 +103,6 @@ func loadProjectConfig() *toml.Tree {
 		panic("runpod.toml not found in the current directory.")
 	}
 	return toml
-
 }
 
 func getProjectPod(projectId string) (string, error) {
