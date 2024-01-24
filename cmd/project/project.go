@@ -16,6 +16,7 @@ var modelName string
 var initCurrentDir bool
 var setDefaultNetworkVolume bool
 var includeEnvInDockerfile bool
+var showPrefixInPodLogs bool
 
 const inputPromptPrefix string = "   > "
 
@@ -257,6 +258,7 @@ func init() {
 	NewProjectCmd.Flags().BoolVarP(&initCurrentDir, "init", "i", false, "use the current directory as the project directory")
 
 	StartProjectCmd.Flags().BoolVar(&setDefaultNetworkVolume, "select-volume", false, "select a new default network volume for current project")
+	StartProjectCmd.Flags().BoolVar(&showPrefixInPodLogs, "prefix-pod-logs", true, "prefix logs from development pod with pod id")
 	BuildProjectCmd.Flags().BoolVar(&includeEnvInDockerfile, "include-env", false, "include environment variables from runpod.toml in generated Dockerfile")
 
 }

@@ -1,4 +1,10 @@
 # Similar to .gitignore
-# Matches will not be synce to the development pod or cause the development pod to reload.
+# Matches will not be synced to the development pod or cause the development pod to reload.
 
 Dockerfile
+__pycache__/
+*.pyc
+.*.swp
+.git/
+*.tmp
+*.log

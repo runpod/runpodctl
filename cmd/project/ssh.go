@@ -173,7 +173,9 @@ func (sshConn *SSHConnection) RunCommands(commands []string) error {
 		go func() {
 			scanner := bufio.NewScanner(stdout)
 			for scanner.Scan() {
-				stdoutColor.Printf("[%s] ", sshConn.podId)
+				if showPrefixInPodLogs {
+					stdoutColor.Printf("[%s] ", sshConn.podId)
+				}
 				fmt.Println(scanner.Text())
 			}
 		}()
@@ -182,7 +184,9 @@ func (sshConn *SSHConnection) RunCommands(commands []string) error {
 		go func() {
 			scanner := bufio.NewScanner(stderr)
 			for scanner.Scan() {
-				stderrColor.Printf("[%s] ", sshConn.podId)
+				if showPrefixInPodLogs {
+					stderrColor.Printf("[%s] ", sshConn.podId)
+				}
 				fmt.Println(scanner.Text())
 			}
 		}()
