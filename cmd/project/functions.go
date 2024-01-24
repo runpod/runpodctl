@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -246,10 +247,10 @@ func startProject(networkVolumeId string) error {
 	//create remote folder structure
 	projectConfig := config.Get("project").(*toml.Tree)
 	volumePath := projectConfig.Get("volume_mount_path").(string)
-	projectPathUuid := filepath.Join(volumePath, projectConfig.Get("uuid").(string))
-	projectPathUuidDev := filepath.Join(projectPathUuid, "dev")
-	projectPathUuidProd := filepath.Join(projectPathUuid, "prod")
-	remoteProjectPath := filepath.Join(projectPathUuidDev, projectName)
+	projectPathUuid := path.Join(volumePath, projectConfig.Get("uuid").(string))
+	projectPathUuidDev := path.Join(projectPathUuid, "dev")
+	projectPathUuidProd := path.Join(projectPathUuid, "prod")
+	remoteProjectPath := path.Join(projectPathUuidDev, projectName)
 	fmt.Printf("Checking pod project folder: %s on pod %s\n", remoteProjectPath, projectPodId)
 	sshConn.RunCommands([]string{fmt.Sprintf("mkdir -p %s %s", remoteProjectPath, projectPathUuidProd)})
 	//rsync project files
@@ -257,8 +258,8 @@ func startProject(networkVolumeId string) error {
 	cwd, _ := os.Getwd()
 	sshConn.Rsync(cwd, projectPathUuidDev, false)
 	//activate venv on remote
-	venvPath := "/" + filepath.Join(projectId, "venv")
-	archivedVenvPath := filepath.Join(projectPathUuid, "dev-venv.tar.zst")
+	venvPath := "/" + path.Join(projectId, "venv")
+	archivedVenvPath := path.Join(projectPathUuid, "dev-venv.tar.zst")
 	fmt.Printf("Activating Python virtual environment %s on pod %s\n", venvPath, projectPodId)
 	sshConn.RunCommands([]string{
 		fmt.Sprintf(`
@@ -282,8 +283,8 @@ func startProject(networkVolumeId string) error {
 	//create file watcher
 	go sshConn.SyncDir(cwd, projectPathUuidDev)
 	//run launch api server / hot reload loop
-	pipReqPath := filepath.Join(remoteProjectPath, config.GetPath([]string{"runtime", "requirements_path"}).(string))
-	handlerPath := filepath.Join(remoteProjectPath, config.GetPath([]string{"runtime", "handler_path"}).(string))
+	pipReqPath := path.Join(remoteProjectPath, config.GetPath([]string{"runtime", "requirements_path"}).(string))
+	handlerPath := path.Join(remoteProjectPath, config.GetPath([]string{"runtime", "handler_path"}).(string))
 	launchApiServer := fmt.Sprintf(`
 	pkill inotify
 
@@ -399,9 +400,9 @@ func deployProject(networkVolumeId string) (endpointId string, err error) {
 	projectId := config.GetPath([]string{"project", "uuid"}).(string)
 	projectConfig := config.Get("project").(*toml.Tree)
 	projectName := config.Get("name").(string)
-	projectPathUuid := filepath.Join(projectConfig.Get("volume_mount_path").(string), projectConfig.Get("uuid").(string))
-	projectPathUuidProd := filepath.Join(projectPathUuid, "prod")
-	remoteProjectPath := filepath.Join(projectPathUuidProd, config.Get("name").(string))
+	projectPathUuid := path.Join(projectConfig.Get("volume_mount_path").(string), projectConfig.Get("uuid").(string))
+	projectPathUuidProd := path.Join(projectPathUuid, "prod")
+	remoteProjectPath := path.Join(projectPathUuidProd, config.Get("name").(string))
 	//check for existing pod
 	projectPodId, err := getProjectPod(projectId)
 	if projectPodId == "" || err != nil {
@@ -423,7 +424,7 @@ func deployProject(networkVolumeId string) (endpointId string, err error) {
 	cwd, _ := os.Getwd()
 	sshConn.Rsync(cwd, projectPathUuidProd, false)
 	//activate venv on remote
-	venvPath := filepath.Join(projectPathUuidProd, "venv")
+	venvPath := path.Join(projectPathUuidProd, "venv")
 	fmt.Printf("Activating Python virtual environment: %s on pod %s\n", venvPath, projectPodId)
 	sshConn.RunCommands([]string{
 		fmt.Sprintf("python%s -m venv %s", config.GetPath([]string{"runtime", "python_version"}).(string), venvPath),
@@ -435,7 +436,7 @@ func deployProject(networkVolumeId string) (endpointId string, err error) {
 	})
 	env := mapToApiEnv(createEnvVars(config))
 	// Construct the docker start command
-	handlerPath := filepath.Join(remoteProjectPath, config.GetPath([]string{"runtime", "handler_path"}).(string))
+	handlerPath := path.Join(remoteProjectPath, config.GetPath([]string{"runtime", "handler_path"}).(string))
 	activateCmd := fmt.Sprintf(". %s/bin/activate", venvPath)
 	pythonCmd := fmt.Sprintf("python -u %s", handlerPath)
 	dockerStartCmd := "bash -c \"" + activateCmd + " && " + pythonCmd + "\""
