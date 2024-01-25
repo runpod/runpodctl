@@ -1,0 +1,32 @@
+builds:
+  - binary: runpod
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -mod=mod
+
+release:
+  prerelease: auto
+
+universal_binaries:
+  - replace: true
+
+brews:
+  -
+    name: runpod
+    homepage: "https://github.com/runpod/runpodctl"
+    repository:
+      owner: runpod
+      name: homebrew-runpod
+    commit_author:
+      name: rachfop
+      email: prachford@icloud.com
+
+checksum:
+  name_template: 'checksums.txt'
