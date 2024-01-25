@@ -162,15 +162,16 @@ Project Summary:
 			pythonVersion, modelType, modelName, initCurrentDir)
 		fmt.Printf("Project %s created successfully!", projectName)
 		fmt.Println()
-		fmt.Println("From your project root run `runpodctl project start` to start a development pod.")
+		fmt.Println("From your project root run `runpod project dev` to start a development pod.")
 	},
 }
 
 var StartProjectCmd = &cobra.Command{
-	Use:   "start",
-	Args:  cobra.ExactArgs(0),
-	Short: "start current project",
-	Long:  "start a development pod session for the Runpod project in the current folder",
+	Use:     "dev",
+	Aliases: []string{"start"},
+	Args:    cobra.ExactArgs(0),
+	Short:   "start current project",
+	Long:    "start a development pod session for the Runpod project in the current folder",
 	Run: func(cmd *cobra.Command, args []string) {
 		config := loadProjectConfig()
 		projectId := config.GetPath([]string{"project", "uuid"}).(string)
@@ -233,7 +234,7 @@ var BuildProjectCmd = &cobra.Command{
 		// config := loadProjectConfig()
 		// projectConfig := config.Get("project").(*toml.Tree)
 		// projectId := projectConfig.Get("uuid").(string)
-		// projectName := projectConfig.Get("name").(string)
+		// projectName := config.Get("name").(string)
 		// //print next steps
 		// fmt.Println("Next steps:")
 		// fmt.Println()
@@ -253,8 +254,8 @@ var BuildProjectCmd = &cobra.Command{
 
 func init() {
 	NewProjectCmd.Flags().StringVarP(&projectName, "name", "n", "", "project name")
-	NewProjectCmd.Flags().StringVarP(&modelName, "model", "m", "", "model name")
-	NewProjectCmd.Flags().StringVarP(&modelType, "type", "t", "", "model type")
+	// NewProjectCmd.Flags().StringVarP(&modelName, "model", "m", "", "model name")
+	// NewProjectCmd.Flags().StringVarP(&modelType, "type", "t", "", "model type")
 	NewProjectCmd.Flags().BoolVarP(&initCurrentDir, "init", "i", false, "use the current directory as the project directory")
 
 	StartProjectCmd.Flags().BoolVar(&setDefaultNetworkVolume, "select-volume", false, "select a new default network volume for current project")
