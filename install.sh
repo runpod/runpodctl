@@ -118,7 +118,7 @@ download_url_constructor() {
 
 # ---------------------------- Download & Install ---------------------------- #
 download_and_install_cli() {
-    local cli_file_name="runpodctl"
+    local cli_file_name="runpod"
     if ! wget -q --show-progress "$DOWNLOAD_URL" -O "$cli_file_name"; then
         echo "Failed to download $cli_file_name."
         exit 1

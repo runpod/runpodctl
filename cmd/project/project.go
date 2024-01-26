@@ -187,12 +187,12 @@ var StartProjectCmd = &cobra.Command{
 		}
 		if setDefaultNetworkVolume || networkVolumeId == "" || !cachedNetVolExists {
 			netVolId, err := selectNetworkVolume()
-			networkVolumeId = netVolId
-			viper.Set(fmt.Sprintf("project_volumes.%s", projectId), networkVolumeId)
-			viper.WriteConfig()
 			if err != nil {
 				return
 			}
+			networkVolumeId = netVolId
+			viper.Set(fmt.Sprintf("project_volumes.%s", projectId), networkVolumeId)
+			viper.WriteConfig()
 		}
 		startProject(networkVolumeId)
 	},

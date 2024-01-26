@@ -284,6 +284,7 @@ func startProject(networkVolumeId string) error {
 			venvPath, remoteProjectPath, config.GetPath([]string{"runtime", "requirements_path"}).(string)),
 	})
 	//create file watcher
+	fmt.Println("Creating file watcher...")
 	go sshConn.SyncDir(cwd, projectPathUuidDev)
 	//run launch api server / hot reload loop
 	pipReqPath := path.Join(remoteProjectPath, config.GetPath([]string{"runtime", "requirements_path"}).(string))
@@ -397,7 +398,7 @@ func deployProject(networkVolumeId string) (endpointId string, err error) {
 	projectName := config.Get("name").(string)
 	projectPathUuid := path.Join(projectConfig.Get("volume_mount_path").(string), projectConfig.Get("uuid").(string))
 	projectPathUuidProd := path.Join(projectPathUuid, "prod")
-	remoteProjectPath := path.Join(projectPathUuidProd, projectConfig.Get("name").(string))
+	remoteProjectPath := path.Join(projectPathUuidProd, config.Get("name").(string))
 	//check for existing pod
 	projectPodId, err := getProjectPod(projectId)
 	if projectPodId == "" || err != nil {

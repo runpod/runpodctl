@@ -9,13 +9,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/dietsche/rfsnotify"
 	"github.com/fatih/color"
 	"golang.org/x/crypto/ssh"
-	"gopkg.in/fsnotify.v1"
 )
 
 func getPodSSHInfo(podId string) (podIp string, podPort int, err error) {
@@ -88,65 +85,68 @@ func (sshConn *SSHConnection) Rsync(localDir string, remoteDir string, quiet boo
 	return nil
 }
 
+// hasChanges checks if there are any modified files in localDir since lastSyncTime.
+func hasChanges(localDir string, lastSyncTime time.Time) (bool, string) {
+	var hasModifications bool
+	var firstModifiedFile string
+
+	err := filepath.Walk(localDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				// Handle the case where a file has been removed
+				fmt.Printf("Detected a removed file at: %s\n", path)
+				hasModifications = true
+				return errors.New("change detected") // Stop walking
+			}
+			return err
+		}
+
+		// Check if the file was modified after the last sync time
+		if info.ModTime().After(lastSyncTime) {
+			hasModifications = true
+			firstModifiedFile = path
+			return filepath.SkipDir // Skip the rest of the directory if a change is found
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		fmt.Printf("Error walking through directory: %v\n", err)
+		return false, ""
+	}
+
+	return hasModifications, firstModifiedFile
+}
+
 func (sshConn *SSHConnection) SyncDir(localDir string, remoteDir string) {
 	syncFiles := func() {
 		fmt.Println("Syncing files...")
 		sshConn.Rsync(localDir, remoteDir, true)
 	}
-	// Create new watcher.
-	watcher, err := rfsnotify.NewWatcher()
-	if err != nil {
-		fmt.Println(err)
-	}
-	defer watcher.Close()
-	var mu sync.Mutex
-	var timer *time.Timer
 
 	// Start listening for events.
 	go func() {
+		lastSyncTime := time.Now()
 		for {
-			select {
-			case event, ok := <-watcher.Events:
-				if !ok {
-					return
-				}
-				//if directory modified or created, ignore
-				if event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Create == fsnotify.Create {
-					if event.Op&fsnotify.Write == fsnotify.Write {
-						fmt.Println("Modified file:", event.Name)
-					}
-					if event.Op&fsnotify.Create == fsnotify.Create {
-						fmt.Println("Created file:", event.Name)
-					}
-
-					mu.Lock()
-					if timer != nil {
-						timer.Stop()
-					}
-					timer = time.AfterFunc(500*time.Millisecond, syncFiles)
-					mu.Unlock()
-				}
-			case err, ok := <-watcher.Errors:
-				if !ok {
-					return
-				}
-				fmt.Println("error:", err)
+			time.Sleep(100 * time.Millisecond)
+			hasChanged, firstModifiedFile := hasChanges(localDir, lastSyncTime)
+			if hasChanged {
+				fmt.Printf("Detected changes in %s\n", firstModifiedFile)
+				syncFiles()
+				lastSyncTime = time.Now()
 			}
 		}
 	}()
 
-	// Add a path.
-	err = watcher.AddRecursive(localDir)
-	if err != nil {
-		fmt.Println(err)
-	}
-
 	// Block main goroutine forever.
 	<-make(chan struct{})
 }
+
 func (sshConn *SSHConnection) RunCommand(command string) error {
 	return sshConn.RunCommands([]string{command})
 }
+
 func (sshConn *SSHConnection) RunCommands(commands []string) error {
 
 	stdoutColor := color.New(color.FgGreen)
