@@ -23,6 +23,6 @@ RUN python<<PYTHON_VERSION>> -m pip install --upgrade pip && \
 #       It is recommended to specify the version of Python when running your code.
 
 # Add src files (Worker Template)
-ADD src .
+ADD . /
 <<SET_ENV_VARS>>
-CMD python<<PYTHON_VERSION>> -u <<HANDLER_PATH>>
+CMD python<<PYTHON_VERSION>> -u /<<HANDLER_PATH>>
