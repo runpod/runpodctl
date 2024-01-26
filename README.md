@@ -1,102 +1,78 @@
-# runpodctl
-runpodctl is a CLI tool to automate / manage GPU pods for [runpod.io](https://runpod.io).
+<div align="center">
 
-**Please note that there is a breaking change in 1.8.0 that is incompatible with previous versions. You can check your version by typing**
-```
-runpodctl version
-```
+# RunPod CLI
 
-All pods automatically come with runpodctl installed with a pod-scoped API key!
+The CLI tool to automate / manage GPU pods for [runpod.io](https://runpod.io).
 
-## Tutorial
-A very detailed tutorial that shows how to utilize runpodctl in multiple situations: https://www.youtube.com/watch?v=QN1vdGhjcRc
+*Note: All pods automatically come with runpod cli installed with a pod-scoped API key.*
 
-runpodctl chapters: 
+</div>
 
-[How to install runpodctl latest version to transfer files between Pods and PC](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=1384s)
+## Table of Contents
 
-[How to upload thousands of images (big data) from your computer to RunPod via runpodctl](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2068s)
+- [RunPod CLI](#runpod-cli)
+  - [Table of Contents](#table-of-contents)
+  - [Get Started](#get-started)
+    - [Install (linux/osx)](#install-linuxosx)
+    - [Install (Windows PowerShell)](#install-windows-powershell)
+  - [Tutorial](#tutorial)
+  - [Transferring Data (file send/receive)](#transferring-data-file-sendreceive)
+    - [To send a file](#to-send-a-file)
+    - [To receive a file](#to-receive-a-file)
+    - [Using Google Drive](#using-google-drive)
+  - [Pod Commands](#pod-commands)
+  - [Dockerless](#dockerless)
+  - [Acknowledgements](#acknowledgements)
 
-[How to send files from your PC to RunPod via runpodctl](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2106s)
+## Get Started
 
-[How to download a folder from RunPod to your PC via runpodctl](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2549s)
+### Install (linux/osx)
 
-[How to add runpodctl to environment path to use from every folder](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2589s)
-
-[How to download your trained model files (ckpt) into your PC via runpodctl](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=4871s)
-
-
-## install linux/osx command line
-get the latest binary from [releases](https://github.com/Run-Pod/runpodctl/releases)
-
-linux
-```
-wget --quiet --show-progress https://github.com/Run-Pod/runpodctl/releases/download/v1.10.0/runpodctl-linux-amd -O runpodctl && chmod +x runpodctl && sudo cp runpodctl /usr/bin/runpodctl
-```
-
-osx (ARM)
-```
-wget --quiet --show-progress https://github.com/runpod/runpodctl/releases/download/v1.10.0/runpodctl-darwin-arm -O runpodctl && chmod +x runpodctl && sudo mv runpodctl /usr/local/bin/runpodctl
-```
-osx (AMD) - For Intel Processors
-```
-wget --quiet --show-progress https://github.com/runpod/runpodctl/releases/download/v1.10.0/runpodctl-darwin-amd -O runpodctl && chmod +x runpodctl && sudo mv runpodctl /usr/local/bin/runpodctl
+```bash
+# Download and install via wget
+wget cli.runpod.io | sudo bash
 ```
 
-![](https://github.com/runpod/runpodctl/blob/main/runpodctllinux.gif)
-
-## how to transfer data
-Using send or receive command does not require API keys due to built-in security of one-time codes.
-
-Run the following on the computer that has the file you want to send
-```
-runpodctl send data.txt
+```bash
+# Using homebrew
+brew tap runpod/runpod
+brew install runpod
 ```
 
-The command should output something like
-```
-Sending 'data.txt' (5 B)
-Code is: 8338-galileo-collect-fidel
-On the other computer run
+### Install (Windows PowerShell)
 
-runpodctl receive 8338-galileo-collect-fidel
-```
-
-Run the following on the computer that you want to send the file to
-```
-runpodctl receive 8338-galileo-collect-fidel
-```
-
-It should start transferring with output that looks like
-```
-Receiving 'data.txt' (5 B)
-
-Receiving (<-149.36.0.243:8692)
-data.txt 100% |████████████████████| ( 5/ 5B, 0.040 kB/s)
-```
-
-<br />
-
-## download with windows powershell
-
-```
+```powershell
 wget https://github.com/runpod/runpodctl/releases/download/v1.9.0/runpodctl-win-amd -O runpodctl.exe
 ```
 
-![](https://github.com/runpod/runpodctl/blob/main/runpodctlwindows.gif)
+## Tutorial
 
-<br />
+Please checkout this [video tutorial](https://www.youtube.com/watch?v=QN1vdGhjcRc) for a detailed walkthrough of runpod cli.
 
-## how to transfer data
-Using send or receive command does not require API keys due to built-in security of one-time codes.
+**Video Chapters:**
+
+- [Installing the latest version of RunPod CLI](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=1384s)
+- [Uploading large datasets](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2068s)
+- [File transfers from PC to RunPod](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2106s)
+- [Downloading folders from RunPod](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2549s)
+- [Adding RunPod CLI to your environment path](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2589s)
+- [Downloading model files](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=4871s)
+
+## Transferring Data (file send/receive)
+
+**Note:** The `send` and `receive` commands do not require API keys due to the built-in security of one-time codes.
 
 Run the following on the computer that has the file you want to send
-```
-./runpodctl.exe send data.txt
+
+### To send a file
+
+```bash
+runpodctl send data.txt
 ```
 
-The command should output something like
-```
+*Example output:*
+
+ ```bash
 Sending 'data.txt' (5 B)
 Code is: 8338-galileo-collect-fidel
 On the other computer run
@@ -104,22 +80,22 @@ On the other computer run
 runpodctl receive 8338-galileo-collect-fidel
 ```
 
-Run the following on the computer that you want to send the file to
-```
+### To receive a file
+
+```bash
 runpodctl receive 8338-galileo-collect-fidel
 ```
 
-It should start transferring with output that looks like
-```
+*Example output:*
+
+```bash
 Receiving 'data.txt' (5 B)
 
 Receiving (<-149.36.0.243:8692)
 data.txt 100% |████████████████████| ( 5/ 5B, 0.040 kB/s)
 ```
 
-<br />
-
-# Using google drive
+### Using Google Drive
 
 You can use the following links for google colab
 
@@ -127,38 +103,39 @@ You can use the following links for google colab
 
 [Receive](https://colab.research.google.com/drive/1ot8pODgystx1D6_zvsALDSvjACBF1cj6#scrollTo=RF1bMqhBOpSZ)
 
-# how to manage pods
-Visit [docs](doc/runpodctl.md) for details of all commands.
+## Pod Commands
 
-First configure the API key. You can get API key from [runpod](https://runpod.io/console/user/settings).
-```
+Before using pod commands, configure the API key obtained from your [RunPod account](https://runpod.io/console/user/settings).
+
+```bash
+# configure API key
 runpodctl config --apiKey={key}
-```
-Get all pods:
-```
+
+# Get all pods
 runpodctl get pod
-```
-Get a pod:
-```
+
+# Get a pod
 runpodctl get pod {podId}
-```
-Start an ondemand pod.
-```
+
+# Start an ondemand pod.
 runpodctl start pod {podId}
-```
-Start a spot pod with bid. The bid price you set is the price you will pay if not outbid:
-```
+
+# Start a spot pod with bid.
+# The bid price you set is the price you will pay if not outbid:
 runpodctl start pod {podId} --bid=0.3
-```
-Stop a pod:
-```
+
+# Stop a pod
 runpodctl stop pod {podId}
 ```
 
-<br />
-<br />
+For a comprehensive list of commands, visit [RunPod CLI documentation](doc/runpodctl.md).
 
-# thanks to
+## Dockerless
+
+We have introduced the ability for users to develop locally and run remotely though our CLI development tool.
+
+## Acknowledgements
+
 - [cobra](https://github.com/spf13/cobra)
 - [croc](https://github.com/schollz/croc)
 - [golang](https://go.dev/)
