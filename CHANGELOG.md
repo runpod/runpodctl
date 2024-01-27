@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.11.0](https://github.com/runpod/runpodctl/compare/v1.10.0...v1.11.0) (2024-01-27)
+
+
+### Features
+
+* add installer script ([b2a75a7](https://github.com/runpod/runpodctl/commit/b2a75a7f5d16271d898e0d4457500e68fe380b8a))
+* cache venvs in tar format ([a0fec98](https://github.com/runpod/runpodctl/commit/a0fec9823d068d063e3f1f5ff77bc4c1815a7b7e))
+* flag to print pod logs without prefix ([0f93a1a](https://github.com/runpod/runpodctl/commit/0f93a1a70fcf7742c4e0351c5822c90d177c8014))
+* handle deleted network volume, dropdown for starter templates, template Dockerfile ([d042edb](https://github.com/runpod/runpodctl/commit/d042edba17b47a565ea38b17f88bcfe90a98c47f))
+* runpodctl project build to emit dockerfile ([7844b5d](https://github.com/runpod/runpodctl/commit/7844b5d2d06aa538c4af0f809fd76ac89554fe76))
+* updated readme and requirements ([b800f1f](https://github.com/runpod/runpodctl/commit/b800f1f2a82532577819e83ecaca3ed1994700b4))
+
+
+### Bug Fixes
+
+* adapt deploy to venv path ([3e9d115](https://github.com/runpod/runpodctl/commit/3e9d115ba027a1b9007759160cdbb333c970b3a9))
+* brew install ([01f0c89](https://github.com/runpod/runpodctl/commit/01f0c89d824ffea179fdc1a0f924b09f6edc897b))
+* cleanup install script ([c8a76d7](https://github.com/runpod/runpodctl/commit/c8a76d78cdb193c267ce443158ab9d608857230c))
+* detect OS earlier ([d9fc83b](https://github.com/runpod/runpodctl/commit/d9fc83bce91dec8d26e9e6eca319921df6acdb3d))
+* hack to make runpodignore use gitignore syntax on the server ([9e1dd71](https://github.com/runpod/runpodctl/commit/9e1dd71aba05a6ffddd43d74c6a582d5fa760448))
+* improve install script ([eeed522](https://github.com/runpod/runpodctl/commit/eeed522c066998ab510460bef9f8cd8161d91de7))
+* persistent typo ([02f38db](https://github.com/runpod/runpodctl/commit/02f38dbc9e11d2f22028538f73f67c938738be61))
+* rename runpodctl to runpod ([223dd40](https://github.com/runpod/runpodctl/commit/223dd40102dcf8a460049d04e90ff334471ca3c6))
+* update dockerfile ([138bd15](https://github.com/runpod/runpodctl/commit/138bd15551bd3d3ecb0ace33900f926b74f89603))
+* update root name ([270172d](https://github.com/runpod/runpodctl/commit/270172d24f1083c88ccbedf3cd22c8bef4d4c32d))
+* version check ([0536a8a](https://github.com/runpod/runpodctl/commit/0536a8a4adb687ab927be64e695e1557985a6116))
+* version check order ([066a07c](https://github.com/runpod/runpodctl/commit/066a07c55c013a134d19c2b7f3d0962fbb37bb5d))
+* windows antivirus doesn't let us do the right update logic ([85e7bbb](https://github.com/runpod/runpodctl/commit/85e7bbb83b77b78b70d408444c42f8901036ba6d))
+* windows compatibility and toml fix ([004a306](https://github.com/runpod/runpodctl/commit/004a30610726f67641b412f1f209848bbb3e0f45))
+
 ## [1.10.0](https://github.com/runpod/runpodctl/compare/v1.9.0...v1.10.0) (2023-04-08)
 
 
