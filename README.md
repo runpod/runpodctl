@@ -72,7 +72,7 @@ Run the following on the computer that has the file you want to send
 ### To send a file
 
 ```bash
-runpodctl send data.txt
+runpod send data.txt
 ```
 
 *Example output:*
@@ -82,13 +82,13 @@ Sending 'data.txt' (5 B)
 Code is: 8338-galileo-collect-fidel
 On the other computer run
 
-runpodctl receive 8338-galileo-collect-fidel
+runpod receive 8338-galileo-collect-fidel
 ```
 
 ### To receive a file
 
 ```bash
-runpodctl receive 8338-galileo-collect-fidel
+runpod receive 8338-galileo-collect-fidel
 ```
 
 *Example output:*
@@ -114,26 +114,26 @@ Before using pod commands, configure the API key obtained from your [RunPod acco
 
 ```bash
 # configure API key
-runpodctl config --apiKey={key}
+runpod config --apiKey={key}
 
 # Get all pods
-runpodctl get pod
+runpod get pod
 
 # Get a pod
-runpodctl get pod {podId}
+runpod get pod {podId}
 
 # Start an ondemand pod.
-runpodctl start pod {podId}
+runpod start pod {podId}
 
 # Start a spot pod with bid.
 # The bid price you set is the price you will pay if not outbid:
-runpodctl start pod {podId} --bid=0.3
+runpod start pod {podId} --bid=0.3
 
 # Stop a pod
-runpodctl stop pod {podId}
+runpod stop pod {podId}
 ```
 
-For a comprehensive list of commands, visit [RunPod CLI documentation](doc/runpodctl.md).
+For a comprehensive list of commands, visit [RunPod CLI documentation](doc/runpod.md).
 
 ## Acknowledgements
 
