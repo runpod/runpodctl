@@ -8,9 +8,9 @@ import (
 
 var versionCmd = &cobra.Command{
 	Use:   "version",
-	Short: "runpodctl version",
-	Long:  "runpodctl version",
+	Short: "runpod cli version",
+	Long:  "runpod cli version",
 	Run: func(c *cobra.Command, args []string) {
-		fmt.Println("runpodctl " + version)
+		fmt.Println("runpod " + version)
 	},
 }

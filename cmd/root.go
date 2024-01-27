@@ -15,9 +15,10 @@ var version string
 
 // rootCmd represents the base command when called without any subcommands
 var RootCmd = &cobra.Command{
-	Use:   "runpodctl",
-	Short: "runpodctl for runpod.io",
-	Long:  "runpodctl is a CLI tool to manage your pods for runpod.io",
+	Use:     "runpod",
+	Aliases: []string{"runpodctl"},
+	Short:   "CLI for runpod.io",
+	Long:    "CLI tool to manage your pods for runpod.io",
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -72,7 +73,7 @@ func initConfig() {
 			fmt.Println("Runpod config location has moved from ~/.runpod.yaml to ~/.runpod/config.toml")
 			fmt.Println("migrating your existing config to ~/.runpod/config.toml")
 		} else {
-			fmt.Println("Runpod config file not found, please run runpodctl config to create it")
+			fmt.Println("Runpod config file not found, please run `runpod config` to create it")
 		}
 		viper.SetConfigType("toml")
 		//make .runpod folder if not exists

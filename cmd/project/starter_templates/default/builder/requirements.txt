@@ -6,3 +6,4 @@
 # To learn more, see https://pip.pypa.io/en/stable/reference/requirements-file-format/
 
 <<RUNPOD>>
+hf_transfer
