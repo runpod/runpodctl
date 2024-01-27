@@ -21,7 +21,6 @@ The CLI tool to automate / manage GPU pods for [runpod.io](https://runpod.io).
     - [To receive a file](#to-receive-a-file)
     - [Using Google Drive](#using-google-drive)
   - [Pod Commands](#pod-commands)
-  - [Dockerless](#dockerless)
   - [Acknowledgements](#acknowledgements)
 
 ## Get Started
@@ -129,10 +128,6 @@ runpodctl stop pod {podId}
 ```
 
 For a comprehensive list of commands, visit [RunPod CLI documentation](doc/runpodctl.md).
-
-## Dockerless
-
-We have introduced the ability for users to develop locally and run remotely though our CLI development tool.
 
 ## Acknowledgements
 
