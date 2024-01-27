@@ -13,8 +13,10 @@ The CLI tool to automate / manage GPU pods for [runpod.io](https://runpod.io).
 - [RunPod CLI](#runpod-cli)
   - [Table of Contents](#table-of-contents)
   - [Get Started](#get-started)
-    - [Install (linux/osx)](#install-linuxosx)
-    - [Install (Windows PowerShell)](#install-windows-powershell)
+    - [Install](#install)
+      - [Linux/MacOS (WSL)](#linuxmacos-wsl)
+      - [MacOS](#macos)
+      - [Windows PowerShell](#windows-powershell)
   - [Tutorial](#tutorial)
   - [Transferring Data (file send/receive)](#transferring-data-file-sendreceive)
     - [To send a file](#to-send-a-file)
@@ -25,12 +27,16 @@ The CLI tool to automate / manage GPU pods for [runpod.io](https://runpod.io).
 
 ## Get Started
 
-### Install (linux/osx)
+### Install
+
+#### Linux/MacOS (WSL)
 
 ```bash
 # Download and install via wget
-wget cli.runpod.io | sudo bash
+wget cli.runpod.net | sudo bash
 ```
+
+#### MacOS
 
 ```bash
 # Using homebrew
@@ -38,10 +44,10 @@ brew tap runpod/runpod
 brew install runpod
 ```
 
-### Install (Windows PowerShell)
+#### Windows PowerShell
 
 ```powershell
-wget https://github.com/runpod/runpodctl/releases/download/v1.9.0/runpodctl-win-amd -O runpodctl.exe
+wget https://github.com/runpod/runpodctl/releases/download/v1.9.0/runpod-windows-amd64.exe -O runpod.exe
 ```
 
 ## Tutorial
