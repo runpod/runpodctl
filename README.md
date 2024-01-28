@@ -33,7 +33,7 @@ runpodctl is the CLI tool to automate / manage GPU pods for [runpod.io](https://
 
 ```bash
 # Download and install via wget
-wget cli.runpod.net | sudo bash
+wget -qO- cli.runpod.net | sudo bash
 ```
 
 #### MacOS
