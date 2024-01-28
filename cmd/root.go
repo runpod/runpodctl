@@ -15,8 +15,8 @@ var version string
 
 // rootCmd represents the base command when called without any subcommands
 var RootCmd = &cobra.Command{
-	Use:     "runpod",
-	Aliases: []string{"runpodctl"},
+	Use:     "runpodctl",
+	Aliases: []string{"runpod"},
 	Short:   "CLI for runpod.io",
 	Long:    "CLI tool to manage your pods for runpod.io",
 }
