@@ -74,21 +74,21 @@ func GetJson(url string) (*GithubApiResponse, error) {
 
 var updateCmd = &cobra.Command{
 	Use:   "update",
-	Short: "update runpod cli",
-	Long:  "update runpod cli to the latest version",
+	Short: "update runpodctl",
+	Long:  "update runpodctl to the latest version",
 	Run: func(c *cobra.Command, args []string) {
 		//fetch newest github release
 		githubApiUrl := "https://api.github.com/repos/runpod/runpodctl/releases/latest"
 		apiResp, err := GetJson(githubApiUrl)
 		if err != nil {
-			fmt.Println("error fetching latest version info for runpod cli", err)
+			fmt.Println("error fetching latest version info for runpodctl", err)
 			return
 		}
 		//find download link for current platform
 		latestVersion := apiResp.Version
 		if semver.Compare("v"+version, latestVersion) == -1 {
 			//version < latest
-			newBinaryName := fmt.Sprintf("runpod-%s-%s", runtime.GOOS, runtime.GOARCH)
+			newBinaryName := fmt.Sprintf("runpodctl-%s-%s", runtime.GOOS, runtime.GOARCH)
 			foundNewBinary := false
 			var downloadLink string
 			for _, asset := range apiResp.Assets {
@@ -107,20 +107,20 @@ var updateCmd = &cobra.Command{
 			}
 			exPath := filepath.Dir(ex)
 			downloadPath := newBinaryName
-			destFilename := "runpod"
+			destFilename := "runpodctl"
 			if runtime.GOOS == "windows" {
-				destFilename = "runpod.exe"
+				destFilename = "runpodctl.exe"
 			}
 			destPath := filepath.Join(exPath, destFilename)
 			if runtime.GOOS == "windows" {
 				fmt.Println("To get the newest version, run this command:")
-				fmt.Printf("wget https://github.com/runpod/runpodctl/releases/download/%s/%s -O runpod.exe\n", latestVersion, newBinaryName)
+				fmt.Printf("wget https://github.com/runpod/runpodctl/releases/download/%s/%s -O runpodctl.exe\n", latestVersion, newBinaryName)
 			}
 			fmt.Printf("downloading runpod %s to %s\n", latestVersion, downloadPath)
 			file, err := DownloadFile(downloadLink, downloadPath)
 			defer file.Close()
 			if err != nil {
-				fmt.Println("error fetching the latest version of runpod cli", err)
+				fmt.Println("error fetching the latest version of runpodctl", err)
 				return
 			}
 			//chmod +x

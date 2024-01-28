@@ -162,7 +162,7 @@ Project Summary:
 			pythonVersion, modelType, modelName, initCurrentDir)
 		fmt.Printf("Project %s created successfully!", projectName)
 		fmt.Println()
-		fmt.Println("From your project root run `runpod project dev` to start a development pod.")
+		fmt.Println("From your project root run `runpodctl project dev` to start a development pod.")
 	},
 }
 
@@ -228,7 +228,7 @@ var BuildProjectCmd = &cobra.Command{
 	Use:   "build",
 	Args:  cobra.ExactArgs(0),
 	Short: "build Dockerfile for current project",
-	Long:  "build a Dockerfile for the Runpod project in the current folder",
+	Long:  "build a Dockerfile for the RunPod project in the current folder",
 	Run: func(cmd *cobra.Command, args []string) {
 		buildProjectDockerfile()
 		// config := loadProjectConfig()

@@ -520,7 +520,7 @@ func (c *Client) Send(filesInfo []FileInfo, emptyFoldersToTransfer []FileInfo, t
 		return
 	}
 	flags := &strings.Builder{}
-	fmt.Fprintf(os.Stderr, "Code is: %[1]s\nOn the other computer run\n\nrunpod receive %[2]s%[1]s\n", c.Options.SharedSecret, flags.String())
+	fmt.Fprintf(os.Stderr, "Code is: %[1]s\nOn the other computer run\n\nrunpodctl receive %[2]s%[1]s\n", c.Options.SharedSecret, flags.String())
 	if c.Options.Ask {
 		machid, _ := machineid.ID()
 		fmt.Fprintf(os.Stderr, "\rYour machine ID is '%s'\n", machid)
