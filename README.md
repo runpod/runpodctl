@@ -2,7 +2,7 @@
 
 # RunPod CLI
 
-The CLI tool to automate / manage GPU pods for [runpod.io](https://runpod.io).
+runpodctl is the CLI tool to automate / manage GPU pods for [runpod.io](https://runpod.io).
 
 *Note: All pods automatically come with runpod cli installed with a pod-scoped API key.*
 
@@ -40,27 +40,27 @@ wget cli.runpod.net | sudo bash
 
 ```bash
 # Using homebrew
-brew tap runpod/runpod
-brew install runpod
+brew tap runpod/runpodctl
+brew install runpodctl
 ```
 
 #### Windows PowerShell
 
 ```powershell
-wget https://github.com/runpod/runpodctl/releases/download/v1.9.0/runpod-windows-amd64.exe -O runpod.exe
+wget https://github.com/runpod/runpodctl/releases/download/v1.9.0/runpodctl-windows-amd64.exe -O runpodctl.exe
 ```
 
 ## Tutorial
 
-Please checkout this [video tutorial](https://www.youtube.com/watch?v=QN1vdGhjcRc) for a detailed walkthrough of runpod cli.
+Please checkout this [video tutorial](https://www.youtube.com/watch?v=QN1vdGhjcRc) for a detailed walkthrough of runpodctl.
 
 **Video Chapters:**
 
-- [Installing the latest version of RunPod CLI](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=1384s)
+- [Installing the latest version of runpodctl](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=1384s)
 - [Uploading large datasets](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2068s)
 - [File transfers from PC to RunPod](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2106s)
 - [Downloading folders from RunPod](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2549s)
-- [Adding RunPod CLI to your environment path](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2589s)
+- [Adding runpodctl to your environment path](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2589s)
 - [Downloading model files](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=4871s)
 
 ## Transferring Data (file send/receive)

@@ -73,7 +73,7 @@ func initConfig() {
 			fmt.Println("Runpod config location has moved from ~/.runpod.yaml to ~/.runpod/config.toml")
 			fmt.Println("migrating your existing config to ~/.runpod/config.toml")
 		} else {
-			fmt.Println("Runpod config file not found, please run `runpod config` to create it")
+			fmt.Println("Runpod config file not found, please run `runpodctl config` to create it")
 		}
 		viper.SetConfigType("toml")
 		//make .runpod folder if not exists

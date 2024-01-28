@@ -81,15 +81,15 @@ check_system_requirements() {
     fi
 }
 
-# ---------------------------- RunPod CLI Version ---------------------------- #
+# ----------------------------- runpodctl Version ---------------------------- #
 fetch_latest_version() {
     local version_url="https://api.github.com/repos/runpod/runpodctl/releases/latest"
     VERSION=$(wget -q -O- "$version_url" | jq -r '.tag_name')
     if [ -z "$VERSION" ]; then
-        echo "Failed to fetch the latest version of RunPod CLI."
+        echo "Failed to fetch the latest version of runpodctl."
         exit 1
     fi
-    echo "Latest version of RunPod CLI: $VERSION"
+    echo "Latest version of runpodctl: $VERSION"
 }
 
 # ------------------------------- Download URL ------------------------------- #
@@ -113,12 +113,12 @@ download_url_constructor() {
         exit 1
     fi
 
-    DOWNLOAD_URL="https://github.com/runpod/runpodctl/releases/download/${VERSION}/runpod-${os_type}-${arch_type}"
+    DOWNLOAD_URL="https://github.com/runpod/runpodctl/releases/download/${VERSION}/runpodctl-${os_type}-${arch_type}"
 }
 
 # ---------------------------- Download & Install ---------------------------- #
 download_and_install_cli() {
-    local cli_file_name="runpod"
+    local cli_file_name="runpodctl"
     if ! wget -q --show-progress "$DOWNLOAD_URL" -O "$cli_file_name"; then
         echo "Failed to download $cli_file_name."
         exit 1
@@ -128,14 +128,14 @@ download_and_install_cli() {
         echo "Failed to move $cli_file_name to /usr/local/bin/."
         exit 1
     fi
-    echo "RunPod CLI installed successfully."
+    echo "runpodctl installed successfully."
 }
 
 
 # ---------------------------------------------------------------------------- #
 #                                     Main                                     #
 # ---------------------------------------------------------------------------- #
-echo "Installing RunPod CLI..."
+echo "Installing runpodctl..."
 
 check_root
 check_system_requirements

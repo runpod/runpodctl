@@ -17,7 +17,7 @@ jobs:
         id: release
         with:
           release-type: go
-          package-name: runpod
+          package-name: runpodctl
           pull-request-title-pattern: release${component} ${version}
 
       - uses: actions/checkout@v2
@@ -30,10 +30,10 @@ jobs:
       - name: build
         if: ${{ steps.release.outputs.release_created }}
         run: |
-          env GOOS=linux GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpod-linux-amd64 .
-          env GOOS=darwin GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpod-darwin-amd64 .
-          env GOOS=darwin GOARCH=arm64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpod-darwin-arm64 .
-          env GOOS=windows GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpod-windows-amd64.exe .
+          env GOOS=linux GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-linux-amd64 .
+          env GOOS=darwin GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-darwin-amd64 .
+          env GOOS=darwin GOARCH=arm64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-darwin-arm64 .
+          env GOOS=windows GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-windows-amd64.exe .
 
       - name: upload linux amd64 release binary
         if: ${{ steps.release.outputs.release_created }}
@@ -42,8 +42,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         with:
           upload_url: ${{ steps.release.outputs.upload_url }}
-          asset_path: bin/runpod-linux-amd64
-          asset_name: runpod-linux-amd64
+          asset_path: bin/runpodctl-linux-amd64
+          asset_name: runpodctl-linux-amd64
           asset_content_type: application/octet-stream
 
       - name: upload darwin amd64 release binary
@@ -53,8 +53,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         with:
           upload_url: ${{ steps.release.outputs.upload_url }}
-          asset_path: bin/runpod-darwin-amd64
-          asset_name: runpod-darwin-amd64
+          asset_path: bin/runpodctl-darwin-amd64
+          asset_name: runpodctl-darwin-amd64
           asset_content_type: application/octet-stream
 
       - name: upload darwin arm64 release binary
@@ -64,8 +64,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         with:
           upload_url: ${{ steps.release.outputs.upload_url }}
-          asset_path: bin/runpod-darwin-arm64
-          asset_name: runpod-darwin-arm64
+          asset_path: bin/runpodctl-darwin-arm64
+          asset_name: runpodctl-darwin-arm64
           asset_content_type: application/octet-stream
 
       - name: upload windows amd64 release binary
@@ -75,6 +75,6 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         with:
           upload_url: ${{ steps.release.outputs.upload_url }}
-          asset_path: bin/runpod-windows-amd64.exe
-          asset_name: runpod-windows-amd64.exe
+          asset_path: bin/runpodctl-windows-amd64.exe
+          asset_name: runpodctl-windows-amd64.exe
           asset_content_type: application/octet-stream
