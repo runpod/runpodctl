@@ -95,7 +95,7 @@ func selectStarterTemplate() (template string, err error) {
 	}
 	templates, err := starterTemplates.ReadDir("starter_examples")
 	if err != nil {
-		fmt.Println("Something went wrong trying to fetch starter templates")
+		fmt.Println("Something went wrong trying to fetch the example")
 		fmt.Println(err)
 		return "", err
 	}
@@ -110,7 +110,7 @@ func selectStarterTemplate() (template string, err error) {
 		options = append(options, StarterTemplateOption{Name: template.Name(), Value: template.Name()})
 	}
 	getStarterTemplate := promptui.Select{
-		Label:     "Select a Starter Template:",
+		Label:     "Select a Starter Example:",
 		Items:     options,
 		Templates: promptTemplates,
 	}
