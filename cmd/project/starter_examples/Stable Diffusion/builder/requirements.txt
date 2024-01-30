@@ -7,3 +7,7 @@
 
 <<RUNPOD>>
 hf_transfer
+
+accelerate
+diffusers
+transformers
