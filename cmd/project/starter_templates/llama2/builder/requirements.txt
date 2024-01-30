@@ -1,4 +1,0 @@
-# List your python dependencies here. See https://pip.pypa.io/en/stable/user_guide/#requirements-files
-
-runpod==1.2.0
-transformers>=4.33.0
