@@ -4,7 +4,6 @@ name = "placeholder"
 
 [project]
 uuid = "placeholder"
-name = "placeholder"
 base_image = "runpod/base:0.4.4-cuda11.8.0"
 gpu_types = [
     "NVIDIA RTX A4000",
