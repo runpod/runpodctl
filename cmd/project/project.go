@@ -3,6 +3,7 @@ package project
 import (
 	"cli/api"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/manifoldco/promptui"
@@ -28,6 +29,7 @@ func prompt(message string) string {
 	}
 	return s
 }
+
 func contains(input string, choices []string) bool {
 	for _, choice := range choices {
 		if input == choice {
@@ -36,6 +38,7 @@ func contains(input string, choices []string) bool {
 	}
 	return false
 }
+
 func promptChoice(message string, choices []string, defaultChoice string) string {
 	var s string = ""
 	for !contains(s, choices) {
@@ -84,14 +87,15 @@ func selectNetworkVolume() (networkVolumeId string, err error) {
 	networkVolumeId = options[i].Value
 	return networkVolumeId, nil
 }
+
 func selectStarterTemplate() (template string, err error) {
 	type StarterTemplateOption struct {
 		Name  string // The string to display
 		Value string // The actual value to use
 	}
-	templates, err := starterTemplates.ReadDir("starter_templates")
+	templates, err := starterTemplates.ReadDir("starter_examples")
 	if err != nil {
-		fmt.Println("Something went wrong trying to fetch starter templates")
+		fmt.Println("Something went wrong trying to fetch the example")
 		fmt.Println(err)
 		return "", err
 	}
@@ -106,7 +110,7 @@ func selectStarterTemplate() (template string, err error) {
 		options = append(options, StarterTemplateOption{Name: template.Name(), Value: template.Name()})
 	}
 	getStarterTemplate := promptui.Select{
-		Label:     "Select a Starter Template:",
+		Label:     "Select a Starter Example:",
 		Items:     options,
 		Templates: promptTemplates,
 	}
@@ -129,39 +133,59 @@ var NewProjectCmd = &cobra.Command{
 	Use:   "new",
 	Args:  cobra.ExactArgs(0),
 	Short: "create a new project",
-	Long:  "create a new Runpod project folder",
+	Long:  "create a new RunPod project folder",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Creating a new project...")
+
+		// Project Name
 		if projectName == "" {
 			projectName = prompt("Enter the project name")
-		} else {
-			fmt.Println("Project name: " + projectName)
 		}
+		fmt.Println("Project name: " + projectName)
+
+		// Starter Example
 		if modelType == "" {
-			template, err := selectStarterTemplate()
-			modelType = template
+			starterExample, err := selectStarterTemplate()
+			modelType = starterExample
 			if err != nil {
 				modelType = ""
 			}
 		}
-		cudaVersion := promptChoice("Select a CUDA version, or press enter to use the default",
+
+		// CUDA Version
+		cudaVersion := promptChoice("Select CUDA Version [default: 11.8.0]: ",
 			[]string{"11.1.1", "11.8.0", "12.1.0"}, "11.8.0")
-		pythonVersion := promptChoice("Select a Python version, or press enter to use the default",
+
+		// Python Version
+		pythonVersion := promptChoice("Select Python Version [default: 3.10]: ",
 			[]string{"3.8", "3.9", "3.10", "3.11"}, "3.10")
-		fmt.Printf(`
-Project Summary:
-   - Project Name: %s
-   - Starter Template: %s
-   - CUDA Version: %s
-   - Python Version: %s
-		`, projectName, modelType, cudaVersion, pythonVersion)
-		fmt.Println()
-		fmt.Println("The project will be created in the current directory.")
-		//TODO confirm y/n
-		createNewProject(projectName, cudaVersion,
-			pythonVersion, modelType, modelName, initCurrentDir)
-		fmt.Printf("Project %s created successfully!", projectName)
-		fmt.Println()
+
+		// Project Summary
+		fmt.Println("\nProject Summary:")
+		fmt.Println("------------------------------------------------")
+		fmt.Printf("Project Name    : %s\n", projectName)
+		fmt.Printf("Starter Example : %s\n", modelType)
+		fmt.Printf("CUDA Version    : %s\n", cudaVersion)
+		fmt.Printf("Python Version  : %s\n", pythonVersion)
+		fmt.Println("------------------------------------------------")
+
+		// Confirm
+		currentDir, err := os.Getwd()
+		if err != nil {
+			fmt.Println("Error getting current directory:", err)
+			return
+		}
+
+		fmt.Printf("\nThe project will be created in the current directory: %s\n", currentDir)
+		confirm := promptChoice("Proceed with creation? [yes/no, default: yes]: ", []string{"yes", "no"}, "yes")
+		if confirm != "yes" {
+			fmt.Println("Project creation cancelled.")
+			return
+		}
+
+		// Create Project
+		createNewProject(projectName, cudaVersion, pythonVersion, modelType, modelName, initCurrentDir)
+		fmt.Printf("\nProject %s created successfully!\n", projectName)
 		fmt.Println("From your project root run `runpodctl project dev` to start a development pod.")
 	},
 }

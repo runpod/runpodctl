@@ -18,7 +18,7 @@ import (
 
 // TODO: embed all hidden files even those not at top level
 //
-//go:embed starter_templates/* starter_templates/*/.*
+//go:embed starter_examples/* starter_examples/*/.*
 var starterTemplates embed.FS
 
 //go:embed example.toml
@@ -27,7 +27,7 @@ var tomlTemplate embed.FS
 //go:embed exampleDockerfile
 var dockerfileTemplate embed.FS
 
-const basePath string = "starter_templates"
+const basePath string = "starter_examples"
 
 func baseDockerImage(cudaVersion string) string {
 	return fmt.Sprintf("runpod/base:0.4.4-cuda%s", cudaVersion)
