@@ -110,7 +110,7 @@ func selectStarterTemplate() (template string, err error) {
 		options = append(options, StarterTemplateOption{Name: template.Name(), Value: template.Name()})
 	}
 	getStarterTemplate := promptui.Select{
-		Label:     "Select a Starter Example:",
+		Label:     "Select a Starter Project:",
 		Items:     options,
 		Templates: promptTemplates,
 	}
@@ -185,7 +185,7 @@ var NewProjectCmd = &cobra.Command{
 
 		// Create Project
 		createNewProject(projectName, cudaVersion, pythonVersion, modelType, modelName, initCurrentDir)
-		fmt.Printf("\nProject %s created successfully!\n", projectName)
+		fmt.Printf("\nProject %s created successfully! Run `cd %s` to change directory to your project.\n", projectName, projectName)
 		fmt.Println("From your project root run `runpodctl project dev` to start a development pod.")
 	},
 }

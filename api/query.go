@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/spf13/viper"
@@ -33,7 +34,11 @@ func Query(input Input) (res *http.Response, err error) {
 	if err != nil {
 		return
 	}
+
+	userAgent := "RunPod-CLI/" + Version + " (" + runtime.GOOS + "; " + runtime.GOARCH + ")"
+
 	req.Header.Add("Content-Type", "application/json")
+	req.Header.Set("User-Agent", userAgent)
 
 	client := &http.Client{Timeout: time.Second * 10}
 	return client.Do(req)
