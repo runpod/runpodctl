@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+var Version string
+
 type UserOut struct {
 	Data   *PodData        `json:"data"`
 	Errors []*GraphQLError `json:"errors"`

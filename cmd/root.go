@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"cli/api"
 	"cli/cmd/config"
 	"cli/cmd/croc"
 
@@ -25,6 +26,7 @@ var RootCmd = &cobra.Command{
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute(ver string) {
 	version = ver
+	api.Version = ver
 	err := RootCmd.Execute()
 	if err != nil {
 		os.Exit(1)
