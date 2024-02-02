@@ -130,7 +130,7 @@ type NetVolOption struct {
 }
 
 var NewProjectCmd = &cobra.Command{
-	Use:   "new",
+	Use:   "create",
 	Args:  cobra.ExactArgs(0),
 	Short: "create a new project",
 	Long:  "create a new RunPod project folder",
