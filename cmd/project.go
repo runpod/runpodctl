@@ -8,8 +8,8 @@ import (
 
 var projectCmd = &cobra.Command{
 	Use:   "project [command]",
-	Short: "Rapidly develop and deploy a project entirely on RunPod's infrastructure without touching Docker.",
-	Long:  "",
+	Short: "Manage RunPod projects",
+	Long:  "Rapidly develop and deploy a project entirely on RunPod's infrastructure without touching Docker",
 }
 
 func init() {
