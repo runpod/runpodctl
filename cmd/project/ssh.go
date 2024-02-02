@@ -41,7 +41,7 @@ func getPodSSHInfo(podId string) (podIp string, podPort int, err error) {
 			return port.Ip, port.PublicPort, nil
 		}
 	}
-	return "", 0, errors.New("no ssh port exposed on pod")
+	return "", 0, errors.New("no SSH port exposed on Pod")
 }
 
 type SSHConnection struct {
