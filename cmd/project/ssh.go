@@ -41,7 +41,7 @@ func getPodSSHInfo(podId string) (podIp string, podPort int, err error) {
 			return port.Ip, port.PublicPort, nil
 		}
 	}
-	return "", 0, errors.New("no SSH port exposed on pod")
+	return "", 0, errors.New("no ssh port exposed on pod")
 }
 
 type SSHConnection struct {
@@ -132,7 +132,7 @@ func (sshConn *SSHConnection) SyncDir(localDir string, remoteDir string) {
 			time.Sleep(100 * time.Millisecond)
 			hasChanged, firstModifiedFile := hasChanges(localDir, lastSyncTime)
 			if hasChanged {
-				fmt.Printf("Detected changes in %s\n", firstModifiedFile)
+				fmt.Printf("Found changes in %s\n", firstModifiedFile)
 				syncFiles()
 				lastSyncTime = time.Now()
 			}
@@ -224,7 +224,7 @@ func PodSSHConnection(podId string) (*SSHConnection, error) {
 	pollIntervalSeconds := 1
 	maxPollTimeSeconds := 300
 	startTime := time.Now()
-	fmt.Print("Waiting for pod to come online... ")
+	fmt.Print("Waiting for Pod to come online... ")
 	//look up ip and ssh port for pod id
 	var podIp string
 	var podPort int
@@ -246,7 +246,7 @@ func PodSSHConnection(podId string) (*SSHConnection, error) {
 	host := fmt.Sprintf("%s:%d", podIp, podPort)
 	client, err := ssh.Dial("tcp", host, config)
 	if err != nil {
-		fmt.Println("Failed to dial for ssh conn: %s", err)
+		fmt.Println("Failed to dial for SSH conn: %s", err)
 		return nil, err
 	}
 

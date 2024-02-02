@@ -137,7 +137,7 @@ func attemptPodLaunch(config *toml.Tree, networkVolumeId string, environmentVari
 	projectConfig := config.Get("project").(*toml.Tree)
 	//attempt to launch a pod with the given configuration.
 	for _, gpuType := range selectedGpuTypes {
-		fmt.Printf("Trying to get a pod with %s... ", gpuType)
+		fmt.Printf("Trying to get a Pod with %s... ", gpuType)
 		podEnv := mapToApiEnv(environmentVariables)
 		input := api.CreatePodInput{
 			CloudType:         "ALL",
@@ -171,7 +171,7 @@ func attemptPodLaunch(config *toml.Tree, networkVolumeId string, environmentVari
 }
 
 func launchDevPod(config *toml.Tree, networkVolumeId string) (string, error) {
-	fmt.Println("Deploying development pod on RunPod...")
+	fmt.Println("Deploying project Pod on RunPod...")
 	//construct env vars
 	environmentVariables := createEnvVars(config)
 	// prepare gpu types
@@ -192,7 +192,7 @@ func launchDevPod(config *toml.Tree, networkVolumeId string) (string, error) {
 		fmt.Println(err)
 		return "", err
 	}
-	fmt.Printf("Check on pod status at https://www.runpod.io/console/pods/%s\n", new_pod["id"].(string))
+	fmt.Printf("Check on Pod status at https://www.runpod.io/console/pods/%s\n", new_pod["id"].(string))
 	return new_pod["id"].(string), nil
 }
 
@@ -243,10 +243,10 @@ func startProject(networkVolumeId string) error {
 	//open ssh connection
 	sshConn, err := PodSSHConnection(projectPodId)
 	if err != nil {
-		fmt.Println("error establishing ssh connection to pod: ", err)
+		fmt.Println("error establishing SSH connection to Pod: ", err)
 		return err
 	}
-	fmt.Println(fmt.Sprintf("Project %s pod (%s) created.", projectName, projectPodId))
+	fmt.Println(fmt.Sprintf("Project %s Pod (%s) created.", projectName, projectPodId))
 	//create remote folder structure
 	projectConfig := config.Get("project").(*toml.Tree)
 	volumePath := projectConfig.Get("volume_mount_path").(string)
@@ -254,16 +254,16 @@ func startProject(networkVolumeId string) error {
 	projectPathUuidDev := path.Join(projectPathUuid, "dev")
 	projectPathUuidProd := path.Join(projectPathUuid, "prod")
 	remoteProjectPath := path.Join(projectPathUuidDev, projectName)
-	fmt.Printf("Checking pod project folder: %s on pod %s\n", remoteProjectPath, projectPodId)
+	fmt.Printf("Checking remote project folder: %s on Pod %s\n", remoteProjectPath, projectPodId)
 	sshConn.RunCommands([]string{fmt.Sprintf("mkdir -p %s %s", remoteProjectPath, projectPathUuidProd)})
 	//rsync project files
-	fmt.Printf("Syncing files to pod %s\n", projectPodId)
+	fmt.Printf("Syncing files to Pod %s\n", projectPodId)
 	cwd, _ := os.Getwd()
 	sshConn.Rsync(cwd, projectPathUuidDev, false)
 	//activate venv on remote
 	venvPath := "/" + path.Join(projectId, "venv")
 	archivedVenvPath := path.Join(projectPathUuid, "dev-venv.tar.zst")
-	fmt.Printf("Activating Python virtual environment %s on pod %s\n", venvPath, projectPodId)
+	fmt.Printf("Activating Python virtual environment %s on Pod %s\n", venvPath, projectPodId)
 	sshConn.RunCommands([]string{
 		fmt.Sprintf(`
 		if ! [ -f %s/bin/activate ]
@@ -284,7 +284,7 @@ func startProject(networkVolumeId string) error {
 			venvPath, remoteProjectPath, config.GetPath([]string{"runtime", "requirements_path"}).(string)),
 	})
 	//create file watcher
-	fmt.Println("Creating file watcher...")
+	fmt.Println("Creating Project watcher...")
 	go sshConn.SyncDir(cwd, projectPathUuidDev)
 	//run launch api server / hot reload loop
 	pipReqPath := path.Join(remoteProjectPath, config.GetPath([]string{"runtime", "requirements_path"}).(string))
@@ -321,9 +321,9 @@ func startProject(networkVolumeId string) error {
 	trap cleanup EXIT SIGINT
 
 	if source %s/bin/activate; then
-		echo -e "- Activated virtual environment."
+		echo -e "- Activated project environment."
 	else
-		echo "Failed to activate virtual environment."
+		echo "Failed to activate project environment."
 		exit 1
 	fi
 
@@ -364,9 +364,9 @@ func startProject(networkVolumeId string) error {
 
 	while true; do
 		if changed_file=$(notify_nonignored_file); then
-			echo "Detected changes in: $changed_file"
+			echo "Found changes in: $changed_file"
 		else
-			echo "Failed to detect changes."
+			echo "No changes found."
 			exit 1
 		fi
 
@@ -385,7 +385,7 @@ func startProject(networkVolumeId string) error {
 	done
 	`, venvPath, projectPathUuidDev, projectName, venvPath, archivedVenvPath, handlerPath, remoteProjectPath, remoteProjectPath, pipReqPath, handlerPath)
 	fmt.Println()
-	fmt.Println("Starting project development endpoint...")
+	fmt.Println("Starting project endpoint...")
 	sshConn.RunCommand(launchApiServer)
 	return nil
 }
@@ -411,17 +411,17 @@ func deployProject(networkVolumeId string) (endpointId string, err error) {
 	//open ssh connection
 	sshConn, err := PodSSHConnection(projectPodId)
 	if err != nil {
-		fmt.Println("error establishing ssh connection to pod: ", err)
+		fmt.Println("error establishing SSH connection to Pod: ", err)
 		return "", err
 	}
 	//sync remote dev to remote prod
 	sshConn.RunCommand(fmt.Sprintf("mkdir -p %s", remoteProjectPath))
-	fmt.Printf("Syncing files to pod %s prod\n", projectPodId)
+	fmt.Printf("Syncing files to Pod %s prod\n", projectPodId)
 	cwd, _ := os.Getwd()
 	sshConn.Rsync(cwd, projectPathUuidProd, false)
 	//activate venv on remote
 	venvPath := path.Join(projectPathUuidProd, "venv")
-	fmt.Printf("Activating Python virtual environment: %s on pod %s\n", venvPath, projectPodId)
+	fmt.Printf("Activating Python virtual environment: %s on Pod %s\n", venvPath, projectPodId)
 	sshConn.RunCommands([]string{
 		fmt.Sprintf("python%s -m venv %s", config.GetPath([]string{"runtime", "python_version"}).(string), venvPath),
 		fmt.Sprintf(`source %s/bin/activate &&

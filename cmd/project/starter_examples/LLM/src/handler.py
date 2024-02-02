@@ -1,4 +1,4 @@
-''' A starter example for a handler file using RunPod and a large language model for text generation. '''
+''' A starter handler file using RunPod and a large language model for text generation. '''
 
 import io
 import base64

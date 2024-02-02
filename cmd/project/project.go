@@ -95,7 +95,7 @@ func selectStarterTemplate() (template string, err error) {
 	}
 	templates, err := starterTemplates.ReadDir("starter_examples")
 	if err != nil {
-		fmt.Println("Something went wrong trying to fetch the example")
+		fmt.Println("Something went wrong trying to fetch the starter project.")
 		fmt.Println(err)
 		return "", err
 	}
@@ -132,8 +132,8 @@ type NetVolOption struct {
 var NewProjectCmd = &cobra.Command{
 	Use:   "new",
 	Args:  cobra.ExactArgs(0),
-	Short: "create a new project",
-	Long:  "create a new RunPod project folder",
+	Short: "creates a new project",
+	Long:  "creates a new RunPod project folder on your local machine",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Creating a new project...")
 
@@ -153,20 +153,20 @@ var NewProjectCmd = &cobra.Command{
 		}
 
 		// CUDA Version
-		cudaVersion := promptChoice("Select CUDA Version [default: 11.8.0]: ",
+		cudaVersion := promptChoice("Select CUDA version [default: 11.8.0]: ",
 			[]string{"11.1.1", "11.8.0", "12.1.0"}, "11.8.0")
 
 		// Python Version
-		pythonVersion := promptChoice("Select Python Version [default: 3.10]: ",
+		pythonVersion := promptChoice("Select Python version [default: 3.10]: ",
 			[]string{"3.8", "3.9", "3.10", "3.11"}, "3.10")
 
 		// Project Summary
 		fmt.Println("\nProject Summary:")
 		fmt.Println("------------------------------------------------")
-		fmt.Printf("Project Name    : %s\n", projectName)
-		fmt.Printf("Starter Example : %s\n", modelType)
-		fmt.Printf("CUDA Version    : %s\n", cudaVersion)
-		fmt.Printf("Python Version  : %s\n", pythonVersion)
+		fmt.Printf("Project name    : %s\n", projectName)
+		fmt.Printf("Starter project : %s\n", modelType)
+		fmt.Printf("CUDA version    : %s\n", cudaVersion)
+		fmt.Printf("Python version  : %s\n", pythonVersion)
 		fmt.Println("------------------------------------------------")
 
 		// Confirm
@@ -186,7 +186,7 @@ var NewProjectCmd = &cobra.Command{
 		// Create Project
 		createNewProject(projectName, cudaVersion, pythonVersion, modelType, modelName, initCurrentDir)
 		fmt.Printf("\nProject %s created successfully! Run `cd %s` to change directory to your project.\n", projectName, projectName)
-		fmt.Println("From your project root run `runpodctl project dev` to start a development pod.")
+		fmt.Println("From your project root run `runpodctl project dev` to start a development session.")
 	},
 }
 
@@ -194,8 +194,8 @@ var StartProjectCmd = &cobra.Command{
 	Use:     "dev",
 	Aliases: []string{"start"},
 	Args:    cobra.ExactArgs(0),
-	Short:   "start current project",
-	Long:    "start a development pod session for the Runpod project in the current folder",
+	Short:   "starts a development session for the current project",
+	Long:    "connects your local environment and the project environment on your Pod.\nChanges propagate to the project environment in real time.",
 	Run: func(cmd *cobra.Command, args []string) {
 		config := loadProjectConfig()
 		projectId := config.GetPath([]string{"project", "uuid"}).(string)
@@ -225,8 +225,8 @@ var StartProjectCmd = &cobra.Command{
 var DeployProjectCmd = &cobra.Command{
 	Use:   "deploy",
 	Args:  cobra.ExactArgs(0),
-	Short: "deploy current project",
-	Long:  "deploy an endpoint for the Runpod project in the current folder",
+	Short: "deploys your project as an endpoint",
+	Long:  "deploys a serverless endpoint for the RunPod project in the current folder",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Deploying project...")
 		networkVolumeId, err := selectNetworkVolume()
@@ -241,7 +241,7 @@ var DeployProjectCmd = &cobra.Command{
 		fmt.Printf("Project deployed successfully! Endpoint ID: %s\n", endpointId)
 		fmt.Println("Monitor and edit your endpoint at:")
 		fmt.Printf("https://www.runpod.io/console/serverless/user/endpoint/%s\n", endpointId)
-		fmt.Println("The following urls are available:")
+		fmt.Println("The following URLs are available:")
 		fmt.Printf("    - https://api.runpod.ai/v2/%s/runsync\n", endpointId)
 		fmt.Printf("    - https://api.runpod.ai/v2/%s/run\n", endpointId)
 		fmt.Printf("    - https://api.runpod.ai/v2/%s/health\n", endpointId)
@@ -251,8 +251,8 @@ var DeployProjectCmd = &cobra.Command{
 var BuildProjectCmd = &cobra.Command{
 	Use:   "build",
 	Args:  cobra.ExactArgs(0),
-	Short: "build Dockerfile for current project",
-	Long:  "build a Dockerfile for the RunPod project in the current folder",
+	Short: "builds Dockerfile for current project",
+	Long:  "builds a local Dockerfile for the project in the current folder.\nYou can use this Dockerfile to build an image and deploy it to any API server.",
 	Run: func(cmd *cobra.Command, args []string) {
 		buildProjectDockerfile()
 		// config := loadProjectConfig()
@@ -283,7 +283,7 @@ func init() {
 	NewProjectCmd.Flags().BoolVarP(&initCurrentDir, "init", "i", false, "use the current directory as the project directory")
 
 	StartProjectCmd.Flags().BoolVar(&setDefaultNetworkVolume, "select-volume", false, "select a new default network volume for current project")
-	StartProjectCmd.Flags().BoolVar(&showPrefixInPodLogs, "prefix-pod-logs", true, "prefix logs from development pod with pod id")
+	StartProjectCmd.Flags().BoolVar(&showPrefixInPodLogs, "prefix-pod-logs", true, "prefix logs from project Pod with Pod ID")
 	BuildProjectCmd.Flags().BoolVar(&includeEnvInDockerfile, "include-env", false, "include environment variables from runpod.toml in generated Dockerfile")
 
 }

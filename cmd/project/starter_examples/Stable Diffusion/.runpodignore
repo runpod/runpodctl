@@ -1,5 +1,5 @@
 # Similar to .gitignore
-# Matches will not be synced to the development pod or cause the development pod to reload.
+# Matches do not sync to the Project Pod or cause the Pod to reload.
 
 Dockerfile
 __pycache__/
