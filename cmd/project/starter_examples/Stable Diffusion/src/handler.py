@@ -1,4 +1,4 @@
-''' A starter example for a handler file using RunPod and diffusers for image generation. '''
+''' A starter handler file using RunPod and diffusers for image generation. '''
 
 import io
 import base64

@@ -4,14 +4,14 @@
 # DockerHub -> https://hub.docker.com/r/runpod/base/tags
 FROM <<BASE_IMAGE>>
 
-# The base image comes with many system dependencies pre-installed to help you get started quickly.
-# Please refer to the base image's Dockerfile for more information before adding additional dependencies.
-# IMPORTANT: The base image overrides the default huggingface cache location.
+# The RunPod base image pre-installs many system dependencies to help you get started quickly.
+# Check the base image's Dockerfile before adding more dependencies.
+# IMPORTANT: The base image overrides the default Hugging Face cache location.
 
 # System dependencies
-# if you need additional system dependencies beyond those included in the base image, feel free to add them here
-# but be aware those changes will not be reflected in the development pod
-# unless you override the base image in runpod.toml to an image that includes them.
+# If you need system dependencies that are not included in the base image, add them here.
+# You must override the base image in runpod.toml with an image that includes your dependencies
+# for changes to propagate to your Project pod.
 
 # Python dependencies
 COPY <<REQUIREMENTS_PATH>> /requirements.txt
