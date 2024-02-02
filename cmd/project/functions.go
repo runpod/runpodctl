@@ -254,7 +254,7 @@ func startProject(networkVolumeId string) error {
 	projectPathUuidDev := path.Join(projectPathUuid, "dev")
 	projectPathUuidProd := path.Join(projectPathUuid, "prod")
 	remoteProjectPath := path.Join(projectPathUuidDev, projectName)
-	fmt.Printf("Checking pod project folder: %s on pod %s\n", remoteProjectPath, projectPodId)
+	fmt.Printf("Checking remote project folder: %s on Pod %s\n", remoteProjectPath, projectPodId)
 	sshConn.RunCommands([]string{fmt.Sprintf("mkdir -p %s %s", remoteProjectPath, projectPathUuidProd)})
 	//rsync project files
 	fmt.Printf("Syncing files to pod %s\n", projectPodId)
