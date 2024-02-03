@@ -195,7 +195,7 @@ var StartProjectCmd = &cobra.Command{
 	Aliases: []string{"start"},
 	Args:    cobra.ExactArgs(0),
 	Short:   "starts a development session for the current project",
-	Long:    "connects your local environment and the project environment on your Pod.\nChanges propagate to the project environment in real time.",
+	Long:    "connects your local environment and the project environment on your Pod. Changes propagate to the project environment in real time.",
 	Run: func(cmd *cobra.Command, args []string) {
 		config := loadProjectConfig()
 		projectId := config.GetPath([]string{"project", "uuid"}).(string)
@@ -252,7 +252,7 @@ var BuildProjectCmd = &cobra.Command{
 	Use:   "build",
 	Args:  cobra.ExactArgs(0),
 	Short: "builds Dockerfile for current project",
-	Long:  "builds a local Dockerfile for the project in the current folder.\nYou can use this Dockerfile to build an image and deploy it to any API server.",
+	Long:  "builds a local Dockerfile for the project in the current folder. You can use this Dockerfile to build an image and deploy it to any API server.",
 	Run: func(cmd *cobra.Command, args []string) {
 		buildProjectDockerfile()
 		// config := loadProjectConfig()
