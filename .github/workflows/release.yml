@@ -31,11 +31,11 @@ jobs:
         if: ${{ steps.release.outputs.release_created }}
         run: |
           env GOOS=linux GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-linux-amd64 .
-          env GOOS=linux GOARCH=arm64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-linux-arm64 .
           env GOOS=darwin GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-darwin-amd64 .
           env GOOS=darwin GOARCH=arm64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-darwin-arm64 .
           env GOOS=windows GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-windows-amd64.exe .
-          env GOOS=android GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-android-amd64.exe .
+          # env GOOS=linux GOARCH=arm64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-linux-arm64 .
+          # env GOOS=android GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-android-amd64.exe .
 
       - name: upload linux amd64 release binary
         if: ${{ steps.release.outputs.release_created }}
@@ -46,26 +46,6 @@ jobs:
           upload_url: ${{ steps.release.outputs.upload_url }}
           asset_path: bin/runpodctl-linux-amd64
           asset_name: runpodctl-linux-amd64
-          asset_content_type: application/octet-stream
-      - name: upload linux arm64 release binary
-        if: ${{ steps.release.outputs.release_created }}
-        uses: actions/upload-release-asset@v1.0.2
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          upload_url: ${{ steps.release.outputs.upload_url }}
-          asset_path: bin/runpodctl-linux-arm64
-          asset_name: runpodctl-linux-arm64
-          asset_content_type: application/octet-stream
-      - name: upload android amd64 release binary
-        if: ${{ steps.release.outputs.release_created }}
-        uses: actions/upload-release-asset@v1.0.2
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          upload_url: ${{ steps.release.outputs.upload_url }}
-          asset_path: bin/runpodctl-android-amd64
-          asset_name: runpodctl-android-amd64
           asset_content_type: application/octet-stream
       - name: upload darwin amd64 release binary
         if: ${{ steps.release.outputs.release_created }}
@@ -99,3 +79,23 @@ jobs:
           asset_path: bin/runpodctl-windows-amd64.exe
           asset_name: runpodctl-windows-amd64.exe
           asset_content_type: application/octet-stream
+      # - name: upload linux arm64 release binary
+      #   if: ${{ steps.release.outputs.release_created }}
+      #   uses: actions/upload-release-asset@v1.0.2
+      #   env:
+      #     GITHUB_TOKEN: ${{ github.token }}
+      #   with:
+      #     upload_url: ${{ steps.release.outputs.upload_url }}
+      #     asset_path: bin/runpodctl-linux-arm64
+      #     asset_name: runpodctl-linux-arm64
+      #     asset_content_type: application/octet-stream
+      # - name: upload android amd64 release binary
+      #   if: ${{ steps.release.outputs.release_created }}
+      #   uses: actions/upload-release-asset@v1.0.2
+      #   env:
+      #     GITHUB_TOKEN: ${{ github.token }}
+      #   with:
+      #     upload_url: ${{ steps.release.outputs.upload_url }}
+      #     asset_path: bin/runpodctl-android-amd64
+      #     asset_name: runpodctl-android-amd64
+      #     asset_content_type: application/octet-stream
