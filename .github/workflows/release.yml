@@ -64,8 +64,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         with:
           upload_url: ${{ steps.release.outputs.upload_url }}
-          asset_path: bin/runpodctl-android-arm64
-          asset_name: runpodctl-android-arm64
+          asset_path: bin/runpodctl-android-amd64
+          asset_name: runpodctl-android-amd64
           asset_content_type: application/octet-stream
       - name: upload darwin amd64 release binary
         if: ${{ steps.release.outputs.release_created }}
