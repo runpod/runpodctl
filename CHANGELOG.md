@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.12.1](https://github.com/runpod/runpodctl/compare/v1.12.0...v1.12.1) (2024-02-06)
+
+
+### Bug Fixes
+
+* fix: the feat: and feat: the fix: ([8f418f3](https://github.com/runpod/runpodctl/commit/8f418f330f07a3ec42490fcf2275734a02d76065))
+
 ## [1.12.0](https://github.com/runpod/runpodctl/compare/v1.11.0...v1.12.0) (2024-02-03)
 
 
