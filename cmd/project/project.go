@@ -2,6 +2,7 @@ package project
 
 import (
 	"cli/api"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -62,7 +63,7 @@ func selectNetworkVolume() (networkVolumeId string, err error) {
 	if len(networkVolumes) == 0 {
 		fmt.Println("You do not have any network volumes.")
 		fmt.Println("Please create a network volume (https://runpod.io/console/user/storage) and try again.")
-		return "", err
+		return "", errors.New("account has no network volumes")
 	}
 	promptTemplates := &promptui.SelectTemplates{
 		Label:    inputPromptPrefix + "{{ . }}",
