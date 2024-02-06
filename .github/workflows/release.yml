@@ -35,7 +35,7 @@ jobs:
           env GOOS=darwin GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-darwin-amd64 .
           env GOOS=darwin GOARCH=arm64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-darwin-arm64 .
           env GOOS=windows GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-windows-amd64.exe .
-          env GOOS=android GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-android-amd64.exe .
+          env GOOS=android GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-android-amd64 .
 
       - name: upload linux amd64 release binary
         if: ${{ steps.release.outputs.release_created }}
