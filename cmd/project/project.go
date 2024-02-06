@@ -4,6 +4,7 @@ import (
 	"cli/api"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/manifoldco/promptui"
@@ -29,6 +30,7 @@ func prompt(message string) string {
 	}
 	return s
 }
+
 func contains(input string, choices []string) bool {
 	for _, choice := range choices {
 		if input == choice {
@@ -37,6 +39,7 @@ func contains(input string, choices []string) bool {
 	}
 	return false
 }
+
 func promptChoice(message string, choices []string, defaultChoice string) string {
 	var s string = ""
 	for !contains(s, choices) {
@@ -85,14 +88,15 @@ func selectNetworkVolume() (networkVolumeId string, err error) {
 	networkVolumeId = options[i].Value
 	return networkVolumeId, nil
 }
+
 func selectStarterTemplate() (template string, err error) {
 	type StarterTemplateOption struct {
 		Name  string // The string to display
 		Value string // The actual value to use
 	}
-	templates, err := starterTemplates.ReadDir("starter_templates")
+	templates, err := starterTemplates.ReadDir("starter_examples")
 	if err != nil {
-		fmt.Println("Something went wrong trying to fetch starter templates")
+		fmt.Println("Something went wrong trying to fetch the starter project.")
 		fmt.Println(err)
 		return "", err
 	}
@@ -107,7 +111,7 @@ func selectStarterTemplate() (template string, err error) {
 		options = append(options, StarterTemplateOption{Name: template.Name(), Value: template.Name()})
 	}
 	getStarterTemplate := promptui.Select{
-		Label:     "Select a Starter Template:",
+		Label:     "Select a Starter Project:",
 		Items:     options,
 		Templates: promptTemplates,
 	}
@@ -127,43 +131,63 @@ type NetVolOption struct {
 }
 
 var NewProjectCmd = &cobra.Command{
-	Use:   "new",
+	Use:   "create",
 	Args:  cobra.ExactArgs(0),
-	Short: "create a new project",
-	Long:  "create a new Runpod project folder",
+	Short: "creates a new project",
+	Long:  "creates a new RunPod project folder on your local machine",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Creating a new project...")
+
+		// Project Name
 		if projectName == "" {
 			projectName = prompt("Enter the project name")
-		} else {
-			fmt.Println("Project name: " + projectName)
 		}
+		fmt.Println("Project name: " + projectName)
+
+		// Starter Example
 		if modelType == "" {
-			template, err := selectStarterTemplate()
-			modelType = template
+			starterExample, err := selectStarterTemplate()
+			modelType = starterExample
 			if err != nil {
 				modelType = ""
 			}
 		}
-		cudaVersion := promptChoice("Select a CUDA version, or press enter to use the default",
+
+		// CUDA Version
+		cudaVersion := promptChoice("Select CUDA version [default: 11.8.0]: ",
 			[]string{"11.1.1", "11.8.0", "12.1.0"}, "11.8.0")
-		pythonVersion := promptChoice("Select a Python version, or press enter to use the default",
+
+		// Python Version
+		pythonVersion := promptChoice("Select Python version [default: 3.10]: ",
 			[]string{"3.8", "3.9", "3.10", "3.11"}, "3.10")
-		fmt.Printf(`
-Project Summary:
-   - Project Name: %s
-   - Starter Template: %s
-   - CUDA Version: %s
-   - Python Version: %s
-		`, projectName, modelType, cudaVersion, pythonVersion)
-		fmt.Println()
-		fmt.Println("The project will be created in the current directory.")
-		//TODO confirm y/n
-		createNewProject(projectName, cudaVersion,
-			pythonVersion, modelType, modelName, initCurrentDir)
-		fmt.Printf("Project %s created successfully!", projectName)
-		fmt.Println()
-		fmt.Println("From your project root run `runpodctl project dev` to start a development pod.")
+
+		// Project Summary
+		fmt.Println("\nProject Summary:")
+		fmt.Println("------------------------------------------------")
+		fmt.Printf("Project name    : %s\n", projectName)
+		fmt.Printf("Starter project : %s\n", modelType)
+		fmt.Printf("CUDA version    : %s\n", cudaVersion)
+		fmt.Printf("Python version  : %s\n", pythonVersion)
+		fmt.Println("------------------------------------------------")
+
+		// Confirm
+		currentDir, err := os.Getwd()
+		if err != nil {
+			fmt.Println("Error getting current directory:", err)
+			return
+		}
+
+		fmt.Printf("\nThe project will be created in the current directory: %s\n", currentDir)
+		confirm := promptChoice("Proceed with creation? [yes/no, default: yes]: ", []string{"yes", "no"}, "yes")
+		if confirm != "yes" {
+			fmt.Println("Project creation cancelled.")
+			return
+		}
+
+		// Create Project
+		createNewProject(projectName, cudaVersion, pythonVersion, modelType, modelName, initCurrentDir)
+		fmt.Printf("\nProject %s created successfully! Run `cd %s` to change directory to your project.\n", projectName, projectName)
+		fmt.Println("From your project root run `runpodctl project dev` to start a development session.")
 	},
 }
 
@@ -171,8 +195,8 @@ var StartProjectCmd = &cobra.Command{
 	Use:     "dev",
 	Aliases: []string{"start"},
 	Args:    cobra.ExactArgs(0),
-	Short:   "start current project",
-	Long:    "start a development pod session for the Runpod project in the current folder",
+	Short:   "starts a development session for the current project",
+	Long:    "connects your local environment and the project environment on your Pod. Changes propagate to the project environment in real time.",
 	Run: func(cmd *cobra.Command, args []string) {
 		config := loadProjectConfig()
 		projectId := config.GetPath([]string{"project", "uuid"}).(string)
@@ -202,8 +226,8 @@ var StartProjectCmd = &cobra.Command{
 var DeployProjectCmd = &cobra.Command{
 	Use:   "deploy",
 	Args:  cobra.ExactArgs(0),
-	Short: "deploy current project",
-	Long:  "deploy an endpoint for the Runpod project in the current folder",
+	Short: "deploys your project as an endpoint",
+	Long:  "deploys a serverless endpoint for the RunPod project in the current folder",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Deploying project...")
 		networkVolumeId, err := selectNetworkVolume()
@@ -218,7 +242,7 @@ var DeployProjectCmd = &cobra.Command{
 		fmt.Printf("Project deployed successfully! Endpoint ID: %s\n", endpointId)
 		fmt.Println("Monitor and edit your endpoint at:")
 		fmt.Printf("https://www.runpod.io/console/serverless/user/endpoint/%s\n", endpointId)
-		fmt.Println("The following urls are available:")
+		fmt.Println("The following URLs are available:")
 		fmt.Printf("    - https://api.runpod.ai/v2/%s/runsync\n", endpointId)
 		fmt.Printf("    - https://api.runpod.ai/v2/%s/run\n", endpointId)
 		fmt.Printf("    - https://api.runpod.ai/v2/%s/health\n", endpointId)
@@ -228,8 +252,8 @@ var DeployProjectCmd = &cobra.Command{
 var BuildProjectCmd = &cobra.Command{
 	Use:   "build",
 	Args:  cobra.ExactArgs(0),
-	Short: "build Dockerfile for current project",
-	Long:  "build a Dockerfile for the RunPod project in the current folder",
+	Short: "builds Dockerfile for current project",
+	Long:  "builds a local Dockerfile for the project in the current folder. You can use this Dockerfile to build an image and deploy it to any API server.",
 	Run: func(cmd *cobra.Command, args []string) {
 		buildProjectDockerfile()
 		// config := loadProjectConfig()
@@ -260,7 +284,7 @@ func init() {
 	NewProjectCmd.Flags().BoolVarP(&initCurrentDir, "init", "i", false, "use the current directory as the project directory")
 
 	StartProjectCmd.Flags().BoolVar(&setDefaultNetworkVolume, "select-volume", false, "select a new default network volume for current project")
-	StartProjectCmd.Flags().BoolVar(&showPrefixInPodLogs, "prefix-pod-logs", true, "prefix logs from development pod with pod id")
+	StartProjectCmd.Flags().BoolVar(&showPrefixInPodLogs, "prefix-pod-logs", true, "prefix logs from project Pod with Pod ID")
 	BuildProjectCmd.Flags().BoolVar(&includeEnvInDockerfile, "include-env", false, "include environment variables from runpod.toml in generated Dockerfile")
 
 }

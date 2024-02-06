@@ -1,5 +1,5 @@
 # Required Python packages get listed here, one per line.
-# Recommended to lock the version number to avoid unexpected changes.
+# Lock the version number to avoid unexpected changes.
 
 # You can also install packages from a git repository, e.g.:
 # git+https://github.com/runpod/runpod-python.git
@@ -7,3 +7,8 @@
 
 <<RUNPOD>>
 hf_transfer
+
+torch
+accelerate
+transformers
+sentencepiece

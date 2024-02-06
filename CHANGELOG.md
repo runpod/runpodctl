@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.12.0](https://github.com/runpod/runpodctl/compare/v1.11.0...v1.12.0) (2024-02-03)
+
+
+### Features
+
+* add user agent and fix project example ([ef38812](https://github.com/runpod/runpodctl/commit/ef388126577c5983d73c9b67837d9a72df353ea1))
+* prompt cleanup and new starter examples ([896a022](https://github.com/runpod/runpodctl/commit/896a02297a68d350ce815d39a399a9e1fe7b8650))
+
+
+### Bug Fixes
+
+* add -qO- ([15892c2](https://github.com/runpod/runpodctl/commit/15892c2f92299595216797b3d9b8c857ead1fdcc))
+* enhance user clarity ([5ac4059](https://github.com/runpod/runpodctl/commit/5ac4059d0f3560d80572defa9ab09e139b8977c9))
+* forgot to make a change ([0335586](https://github.com/runpod/runpodctl/commit/0335586b9c44818d58bcba00c1d2653d90649dca))
+* rename new to create ([7a7aba0](https://github.com/runpod/runpodctl/commit/7a7aba0df85fba0b40028e4c8b39f43be25ae9da))
+
 ## [1.11.0](https://github.com/runpod/runpodctl/compare/v1.10.0...v1.11.0) (2024-01-28)
 
 
