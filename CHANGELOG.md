@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.12.2](https://github.com/runpod/runpodctl/compare/v1.12.1...v1.12.2) (2024-02-06)
+
+
+### Bug Fixes
+
+* mislabeled in release ([9c850cb](https://github.com/runpod/runpodctl/commit/9c850cbe508cf988dcfde277e8f279dbf246ad25))
+
 ## [1.12.1](https://github.com/runpod/runpodctl/compare/v1.12.0...v1.12.1) (2024-02-06)
 
 
