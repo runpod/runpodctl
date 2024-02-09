@@ -35,8 +35,11 @@ func getPodSSHInfo(podID string) (string, int, error) {
 		if pod.DesiredStatus != "RUNNING" {
 			return "", 0, fmt.Errorf("pod desired status not RUNNING")
 		}
-		if pod.Runtime == nil || pod.Runtime.Ports == nil {
-			return "", 0, fmt.Errorf("pod runtime information is missing")
+		if pod.Runtime == nil {
+			return "", 0, fmt.Errorf("pod runtime is missing")
+		}
+		if pod.Runtime.Ports == nil {
+			return "", 0, fmt.Errorf("pod runtime ports are missing")
 		}
 		for _, port := range pod.Runtime.Ports {
 			if port.PrivatePort == 22 {
