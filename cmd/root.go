@@ -45,6 +45,9 @@ func registerCommands() {
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(sshCmd)
 
+	// Remote File Execution
+	rootCmd.AddCommand(execCmd)
+
 	// file transfer via croc
 	rootCmd.AddCommand(croc.ReceiveCmd)
 	rootCmd.AddCommand(croc.SendCmd)
