@@ -3,6 +3,8 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"runtime"
@@ -19,17 +21,25 @@ type Input struct {
 func Query(input Input) (res *http.Response, err error) {
 	jsonValue, err := json.Marshal(input)
 	if err != nil {
-		return
+		return nil, err
 	}
 
 	apiUrl := os.Getenv("RUNPOD_API_URL")
 	if apiUrl == "" {
 		apiUrl = viper.GetString("apiUrl")
 	}
+
 	apiKey := os.Getenv("RUNPOD_API_KEY")
 	if apiKey == "" {
 		apiKey = viper.GetString("apiKey")
 	}
+
+	// Check if the API key is present
+	if apiKey == "" {
+		fmt.Println("API key not found")
+		return nil, errors.New("API key not found")
+	}
+
 	req, err := http.NewRequest("POST", apiUrl+"?api_key="+apiKey, bytes.NewBuffer(jsonValue))
 	if err != nil {
 		return

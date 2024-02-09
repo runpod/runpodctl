@@ -42,19 +42,31 @@ func copyFiles(files fs.FS, source string, dest string) error {
 		if path == source {
 			return nil
 		}
+
+		relPath, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+
 		// Generate the corresponding path in the new project folder
-		newPath := filepath.Join(dest, path[len(source):])
+		newPath := filepath.Join(dest, relPath)
 		if d.IsDir() {
-			return os.MkdirAll(newPath, os.ModePerm)
+			if err := os.MkdirAll(newPath, os.ModePerm); err != nil {
+				return err
+			}
 		} else {
 			content, err := fs.ReadFile(files, path)
 			if err != nil {
 				return err
 			}
-			return os.WriteFile(newPath, content, 0644)
+			if err := os.WriteFile(newPath, content, 0644); err != nil {
+				return err
+			}
 		}
+		return nil
 	})
 }
+
 func createNewProject(projectName string, cudaVersion string,
 	pythonVersion string, modelType string, modelName string, initCurrentDir bool) {
 	projectFolder, _ := os.Getwd()
