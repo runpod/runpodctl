@@ -171,13 +171,13 @@ func (sshConn *SSHConnection) RunCommands(commands []string) error {
 		if err != nil {
 			return fmt.Errorf("failed to get stdout pipe: %w", err)
 		}
-		go scanAndPrint(stdout, stdoutColor, sshConn.podId)
+		go scanAndPrint(stdout, stdoutColor, sshConn.podId, showPrefixInPodLogs)
 
 		stderr, err := session.StderrPipe()
 		if err != nil {
 			return fmt.Errorf("failed to get stderr pipe: %w", err)
 		}
-		go scanAndPrint(stderr, stderrColor, sshConn.podId)
+		go scanAndPrint(stderr, stderrColor, sshConn.podId, showPrefixInPodLogs)
 
 		// Run the command
 		fullCommand := strings.Join([]string{
@@ -195,10 +195,13 @@ func (sshConn *SSHConnection) RunCommands(commands []string) error {
 }
 
 // Utility function to scan and print output from SSH sessions.
-func scanAndPrint(pipe io.Reader, color *color.Color, podID string) {
+func scanAndPrint(pipe io.Reader, color *color.Color, podID string, showPodIdPrefix bool) {
 	scanner := bufio.NewScanner(pipe)
 	for scanner.Scan() {
-		color.Printf("[%s] %s\n", podID, scanner.Text())
+		if showPodIdPrefix {
+			color.Printf("[%s] ", podID)
+		}
+		fmt.Println(scanner.Text())
 	}
 }
 
