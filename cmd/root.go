@@ -14,12 +14,43 @@ import (
 
 var version string
 
-// rootCmd represents the base command when called without any subcommands
-var RootCmd = &cobra.Command{
+// Entrypoint for the CLI
+var rootCmd = &cobra.Command{
 	Use:     "runpodctl",
 	Aliases: []string{"runpod"},
 	Short:   "CLI for runpod.io",
 	Long:    "CLI tool to manage your pods for runpod.io",
+}
+
+func GetRootCmd() *cobra.Command {
+	return rootCmd
+}
+
+func init() {
+	cobra.OnInitialize(initConfig)
+	registerCommands()
+}
+
+func registerCommands() {
+	rootCmd.AddCommand(config.ConfigCmd)
+	// RootCmd.AddCommand(connectCmd)
+	// RootCmd.AddCommand(copyCmd)
+	rootCmd.AddCommand(createCmd)
+	rootCmd.AddCommand(getCmd)
+	rootCmd.AddCommand(removeCmd)
+	rootCmd.AddCommand(startCmd)
+	rootCmd.AddCommand(stopCmd)
+	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(projectCmd)
+	rootCmd.AddCommand(updateCmd)
+	rootCmd.AddCommand(sshCmd)
+
+	// Remote File Execution
+	rootCmd.AddCommand(execCmd)
+
+	// file transfer via croc
+	rootCmd.AddCommand(croc.ReceiveCmd)
+	rootCmd.AddCommand(croc.SendCmd)
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -27,28 +58,10 @@ var RootCmd = &cobra.Command{
 func Execute(ver string) {
 	version = ver
 	api.Version = ver
-	err := RootCmd.Execute()
-	if err != nil {
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-}
-
-func init() {
-	cobra.OnInitialize(initConfig)
-	RootCmd.AddCommand(config.ConfigCmd)
-	// RootCmd.AddCommand(connectCmd)
-	// RootCmd.AddCommand(copyCmd)
-	RootCmd.AddCommand(createCmd)
-	RootCmd.AddCommand(getCmd)
-	RootCmd.AddCommand(removeCmd)
-	RootCmd.AddCommand(startCmd)
-	RootCmd.AddCommand(stopCmd)
-	RootCmd.AddCommand(versionCmd)
-	RootCmd.AddCommand(projectCmd)
-	RootCmd.AddCommand(updateCmd)
-
-	RootCmd.AddCommand(croc.ReceiveCmd)
-	RootCmd.AddCommand(croc.SendCmd)
 }
 
 // initConfig reads in config file and ENV variables if set.
