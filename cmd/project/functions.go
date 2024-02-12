@@ -6,13 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/pelletier/go-toml"
 )
 
@@ -20,9 +20,6 @@ import (
 //
 //go:embed starter_examples/* starter_examples/*/.*
 var starterTemplates embed.FS
-
-//go:embed example.toml
-var tomlTemplate embed.FS
 
 //go:embed exampleDockerfile
 var dockerfileTemplate embed.FS
@@ -67,24 +64,42 @@ func copyFiles(files fs.FS, source string, dest string) error {
 	})
 }
 
-func createNewProject(projectName string, cudaVersion string,
-	pythonVersion string, modelType string, modelName string, initCurrentDir bool) {
-	projectFolder, _ := os.Getwd()
+func createNewProject(projectName string, cudaVersion string, pythonVersion string, modelType string, modelName string, initCurrentDir bool) {
+	projectFolder, err := os.Getwd()
+	if err != nil {
+		log.Fatalf("Failed to get current working directory: %v", err)
+	}
+
 	if !initCurrentDir {
 		projectFolder = filepath.Join(projectFolder, projectName)
-		_, err := os.Stat(projectFolder)
-		if os.IsNotExist(err) {
-			os.Mkdir(projectFolder, 0755)
+
+		if _, err := os.Stat(projectFolder); os.IsNotExist(err) {
+			if err := os.Mkdir(projectFolder, 0755); err != nil {
+				log.Fatalf("Failed to create project directory: %v", err)
+			}
 		}
+
 		if modelType == "" {
 			modelType = "default"
 		}
-		templatePath := fmt.Sprintf("%s/%s", basePath, modelType)
-		//load selected starter template
-		err = copyFiles(starterTemplates, templatePath, projectFolder)
-		if err != nil {
-			panic(err)
+
+		if modelName == "" {
+			modelName = getDefaultModelName(modelType)
 		}
+
+		examplePath := fmt.Sprintf("%s/%s", basePath, modelType)
+		err = copyFiles(starterTemplates, examplePath, projectFolder)
+		if err := copyFiles(starterTemplates, examplePath, projectFolder); err != nil {
+			log.Fatalf("Failed to copy starter example: %v", err)
+		}
+
+		// Swap out the model name in handler.py
+		handlerPath := fmt.Sprintf("%s/src/handler.py", projectFolder)
+		handlerContentBytes, _ := os.ReadFile(handlerPath)
+		handlerContent := string(handlerContentBytes)
+		handlerContent = strings.ReplaceAll(handlerContent, "<<MODEL_NAME>>", modelName)
+		os.WriteFile(handlerPath, []byte(handlerContent), 0644)
+
 		requirementsPath := fmt.Sprintf("%s/builder/requirements.txt", projectFolder)
 		requirementsContentBytes, _ := os.ReadFile(requirementsPath)
 		requirementsContent := string(requirementsContentBytes)
@@ -93,19 +108,8 @@ func createNewProject(projectName string, cudaVersion string,
 		requirementsContent = strings.ReplaceAll(requirementsContent, "<<RUNPOD>>", "runpod")
 		os.WriteFile(requirementsPath, []byte(requirementsContent), 0644)
 	}
-	//generate project toml
-	tomlBytes, _ := tomlTemplate.ReadFile("example.toml")
-	projectToml, _ := toml.LoadBytes(tomlBytes)
-	projectUuid := uuid.New().String()[0:8]
-	projectToml.SetComment("RunPod Project Configuration") //TODO why does this not appear
-	projectToml.SetPath([]string{"name"}, projectName)
-	projectToml.SetPath([]string{"project", "uuid"}, projectUuid)
-	projectToml.SetPath([]string{"project", "base_image"}, baseDockerImage(cudaVersion))
-	// projectToml.SetPath([]string{"template", "model_type"}, modelType)
-	// projectToml.SetPath([]string{"template", "model_name"}, modelName)
-	projectToml.SetPath([]string{"runtime", "python_version"}, pythonVersion)
-	tomlPath := filepath.Join(projectFolder, "runpod.toml")
-	os.WriteFile(tomlPath, []byte(projectToml.String()), 0644)
+
+	generateProjectToml(projectFolder, "runpod.toml", projectName, cudaVersion, pythonVersion)
 }
 
 func loadProjectConfig() *toml.Tree {
@@ -241,8 +245,19 @@ func startProject(networkVolumeId string) error {
 	//parse project toml
 	config := loadProjectConfig()
 	fmt.Println(config)
-	projectId := config.GetPath([]string{"project", "uuid"}).(string)
-	projectName := config.GetPath([]string{"name"}).(string)
+
+	// Project ID
+	projectId, ok := config.GetPath([]string{"project", "uuid"}).(string)
+	if !ok {
+		return fmt.Errorf("project ID not found in config")
+	}
+
+	// Project Name
+	projectName, ok := config.GetPath([]string{"name"}).(string)
+	if !ok {
+		return fmt.Errorf("project name not found in config")
+	}
+
 	//check for existing pod
 	projectPodId, err := getProjectPod(projectId)
 	if projectPodId == "" || err != nil {
@@ -252,12 +267,14 @@ func startProject(networkVolumeId string) error {
 			return err
 		}
 	}
+
 	//open ssh connection
 	sshConn, err := PodSSHConnection(projectPodId)
 	if err != nil {
 		fmt.Println("error establishing SSH connection to Pod: ", err)
 		return err
 	}
+
 	fmt.Println(fmt.Sprintf("Project %s Pod (%s) created.", projectName, projectPodId))
 	//create remote folder structure
 	projectConfig := config.Get("project").(*toml.Tree)
@@ -295,107 +312,152 @@ func startProject(networkVolumeId string) error {
 		python -m pip install -v --requirement %s --report /installreport.json`,
 			venvPath, remoteProjectPath, config.GetPath([]string{"runtime", "requirements_path"}).(string)),
 	})
+
 	//create file watcher
 	fmt.Println("Creating Project watcher...")
 	go sshConn.SyncDir(cwd, projectPathUuidDev)
+
 	//run launch api server / hot reload loop
 	pipReqPath := path.Join(remoteProjectPath, config.GetPath([]string{"runtime", "requirements_path"}).(string))
 	handlerPath := path.Join(remoteProjectPath, config.GetPath([]string{"runtime", "handler_path"}).(string))
 	launchApiServer := fmt.Sprintf(`
-	pkill inotify
+		#!/bin/bash
+		API_PORT=8080
+		API_HOST="0.0.0.0"
+		PYTHON_VENV_PATH="%s" # Path to the Python virutal environment used during development located on the Pod at /<project_id>/venv
+		PROJECT_DIRECTORY="%s/%s"
+		VENV_ARCHIVE_PATH="%s"
+		HANDLER_PATH="%s"
+		REQUIRED_FILES="%s"
 
-	function force_kill {
-		kill $1 2>/dev/null
-		sleep 1
+		pkill inotify # Kill any existing inotify processes
 
-		if ps -p $1 > /dev/null; then
-			echo "Graceful kill failed, attempting SIGKILL..."
-			kill -9 $1 2>/dev/null
-			sleep 1
+		function start_api_server {
+			lsof -ti:$API_PORT | xargs kill -9 2>/dev/null # Kill the old API server if it's still running
+			python $1 --rp_serve_api --rp_api_host="$API_HOST" --rp_api_port=$API_PORT --rp_api_concurrency=1 &
+			SERVER_PID=$!
+		}
 
-			if ps -p $1 > /dev/null; then
-				echo "Failed to kill process with PID: $1"
-				exit 1
-			else
-				echo "Killed process with PID: $1 using SIGKILL"
+		function force_kill {
+			if [[ -z "$1" ]]; then
+				echo "No PID provided for force_kill."
+				return
 			fi
 
+			kill $1 2>/dev/null
+
+			for i in {1..5}; do  # Wait up to 5 seconds, checking every second.
+				if ! ps -p $1 > /dev/null 2>&1; then
+					echo "Process $1 has been gracefully terminated."
+					return
+				fi
+				sleep 1
+			done
+
+			echo "Graceful kill failed, attempting SIGKILL..."
+			kill -9 $1 2>/dev/null
+
+			for i in {1..5}; do  # Wait up to 5 seconds, checking every second.
+				if ! ps -p $1 >/dev/null 2>&1; then
+					echo "Process $1 has been killed with SIGKILL."
+					return
+				fi
+				sleep 1
+			done
+
+			echo "Failed to kill process with PID: $1 after SIGKILL attempt."
+    		exit 1
+		}
+
+		function cleanup {
+			echo "Cleaning up..."
+			force_kill $SERVER_PID
+		}
+		trap cleanup EXIT SIGINT
+
+		if source $PYTHON_VENV_PATH/bin/activate; then
+			echo -e "- Activated project environment."
 		else
-			echo "Killed process with PID: $1"
-		fi
-	}
-
-	function cleanup {
-		echo "Cleaning up..."
-		force_kill $last_pid
-	}
-
-	trap cleanup EXIT SIGINT
-
-	if source %s/bin/activate; then
-		echo -e "- Activated project environment."
-	else
-		echo "Failed to activate project environment."
-		exit 1
-	fi
-
-	if cd %s/%s; then
-		echo -e "- Changed to project directory."
-	else
-		echo "Failed to change directory."
-		exit 1
-	fi
-
-	function tar_venv {
-		if ! [ $(cat /installreport.json | grep "install" | grep -c "\[\]") -eq 1 ]
-		then
-			tar -c -C %s . | zstd -T0 > /venv.tar.zst;
-			mv /venv.tar.zst %s;
-			echo "synced venv to network volume"
-		fi
-	}
-
-	# Start the API server in the background, and save the PID
-	tar_venv &
-	python %s --rp_serve_api --rp_api_host="0.0.0.0" --rp_api_port=8080 --rp_api_concurrency=1 &
-	last_pid=$!
-
-	echo -e "- Started API server with PID: $last_pid" && echo ""
-	echo "Connect to the API server at:"
-	echo ">  https://$RUNPOD_POD_ID-8080.proxy.runpod.net" && echo ""
-
-	#like inotifywait, but will only report the name of a file if it shouldn't be ignored according to .runpodignore
-	#uses git check-ignore to ensure same syntax as gitignore, but git check-ignore expects to be run in a repo
-	#so we must set up a git-repo-like file structure in some temp directory
-	function notify_nonignored_file {
-		tmp_dir=$(mktemp -d)
-		cp .runpodignore $tmp_dir/.gitignore && cd $tmp_dir && git init -q #setup fake git in temp dir
-		echo $(inotifywait -q -r -e modify,create,delete %s --format '%%w%%f' | xargs -I _ sh -c 'realpath --relative-to="%s" "_" | git check-ignore -nv --stdin | grep :: | tr -d :[":blank:"]')
-		rm -rf $tmp_dir
-	}
-
-	while true; do
-		if changed_file=$(notify_nonignored_file); then
-			echo "Found changes in: $changed_file"
-		else
-			echo "No changes found."
+			echo "Failed to activate project environment."
 			exit 1
 		fi
 
-		force_kill $last_pid
-
-		if [[ $changed_file == *"requirements"* ]]; then
-			echo "Installing new requirements..."
-			python -m pip install --upgrade pip && python -m pip install -r %s --report /installreport.json
-			tar_venv &
+		if cd $PROJECT_DIRECTORY; then
+			echo -e "- Changed to project directory."
+		else
+			echo "Failed to change directory."
+			exit 1
 		fi
 
-		python %s --rp_serve_api --rp_api_host="0.0.0.0" --rp_api_port=8080 --rp_api_concurrency=1 &
-		last_pid=$!
+		function tar_venv {
+			if ! [ $(cat /installreport.json | grep "install" | grep -c "\[\]") -eq 1 ]
+			then
+				tar -c -C $PYTHON_VENV_PATH . | zstd -T0 > /venv.tar.zst;
+				mv /venv.tar.zst $VENV_ARCHIVE_PATH ;
+				echo "Synced venv to network volume"
+			fi
+		}
 
-		echo "Restarted API server with PID: $last_pid"
-	done
-	`, venvPath, projectPathUuidDev, projectName, venvPath, archivedVenvPath, handlerPath, remoteProjectPath, remoteProjectPath, pipReqPath, handlerPath)
+		tar_venv &
+
+		# Start the API server in the background, and save the PID
+		start_api_server $HANDLER_PATH
+
+		echo -e "- Started API server with PID: $SERVER_PID" && echo ""
+		echo "Connect to the API server at:"
+		echo ">  https://$RUNPOD_POD_ID-8080.proxy.runpod.net" && echo ""
+
+		#like inotifywait, but will only report the name of a file if it shouldn't be ignored according to .runpodignore
+		#uses git check-ignore to ensure same syntax as gitignore, but git check-ignore expects to be run in a repo
+		#so we must set up a git-repo-like file structure in some temp directory
+		function notify_nonignored_file {
+			local tmp_dir=$(mktemp -d)
+			cp .runpodignore "$tmp_dir/.gitignore"
+			cd "$tmp_dir" && git init -q  # Setup a temporary git repo to leverage .gitignore
+
+			local project_directory="$PROJECT_DIRECTORY"
+
+			# Listen for file changes.
+			inotifywait -q -r -e modify,create,delete --format '%%w%%f' "$project_directory" | while read -r file; do
+				# Convert each file path to a relative path and check if it's ignored by git
+				local rel_path=$(realpath --relative-to="$project_directory" "$file")
+				if ! git check-ignore -q "$rel_path"; then
+					echo "$rel_path"
+				fi
+			done
+
+			cd -  > /dev/null  # Return to the original directory
+			rm -rf "$tmp_dir"
+		}
+		trap '[[ -n $tmp_dir && -d $tmp_dir ]] && rm -rf "$tmp_dir"' EXIT
+
+		monitor_and_restart() {
+			while true; do
+				if changed_file=$(notify_nonignored_file); then
+					echo "Found changes in: $changed_file"
+				else
+					echo "No changes found."
+					exit 1
+				fi
+
+				force_kill $SERVER_PID
+
+				# Install new requirements if requirements.txt was changed
+				if [[ $changed_file == *"requirements"* ]]; then
+					echo "Installing new requirements..."
+					python -m pip install --upgrade pip && python -m pip install -r $REQUIRED_FILES --report /installreport.json
+					tar_venv &
+				fi
+
+				# Restart the API server in the background, and save the PID
+				start_api_server $HANDLER_PATH
+
+				echo "Restarted API server with PID: $SERVER_PID"
+			done
+		}
+
+		monitor_and_restart
+	`, venvPath, projectPathUuidDev, projectName, archivedVenvPath, handlerPath, pipReqPath)
 	fmt.Println()
 	fmt.Println("Starting project endpoint...")
 	sshConn.RunCommand(launchApiServer)

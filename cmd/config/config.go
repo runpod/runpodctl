@@ -18,7 +18,7 @@ var (
 
 var ConfigCmd = &cobra.Command{
 	Use:   "config",
-	Short: "CLI Config",
+	Short: "Manage CLI configuration",
 	Long:  "RunPod CLI Config Settings",
 	Run: func(c *cobra.Command, args []string) {
 		if err := viper.WriteConfig(); err != nil {

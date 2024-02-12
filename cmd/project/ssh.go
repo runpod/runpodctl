@@ -70,28 +70,33 @@ func (sshConn *SSHConnection) getSshOptions() []string {
 
 func (sshConn *SSHConnection) Rsync(localDir string, remoteDir string, quiet bool) error {
 	rsyncCmdArgs := []string{"-avz", "--no-owner", "--no-group"}
+
+	// Retrieve and apply ignore patterns
 	patterns, err := GetIgnoreList()
 	if err != nil {
-		return err
+		return fmt.Errorf("getting ignore list: %w", err)
 	}
-
 	for _, pat := range patterns {
 		rsyncCmdArgs = append(rsyncCmdArgs, "--exclude", pat)
 	}
+
+	// Add quiet flag if requested
 	if quiet {
 		rsyncCmdArgs = append(rsyncCmdArgs, "--quiet")
 	}
 
-	sshOptions := strings.Join(sshConn.getSshOptions(), " ")
-	rsyncCmdArgs = append(rsyncCmdArgs, "-e", fmt.Sprintf("ssh %s", sshOptions))
-	rsyncCmdArgs = append(rsyncCmdArgs, localDir, fmt.Sprintf("root@%s:%s", sshConn.podIp, remoteDir))
+	// Prepare SSH options for rsync
+	sshOptions := fmt.Sprintf("ssh %s", strings.Join(sshConn.getSshOptions(), " "))
+	rsyncCmdArgs = append(rsyncCmdArgs, "-e", sshOptions, localDir, fmt.Sprintf("root@%s:%s", sshConn.podIp, remoteDir))
 
 	cmd := exec.Command("rsync", rsyncCmdArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("executing rsync command: %w", err)
 	}
+
 	return nil
 }
 
@@ -129,10 +134,14 @@ func hasChanges(localDir string, lastSyncTime time.Time) (bool, string) {
 func (sshConn *SSHConnection) SyncDir(localDir string, remoteDir string) {
 	syncFiles := func() {
 		fmt.Println("Syncing files...")
-		sshConn.Rsync(localDir, remoteDir, true)
+		err := sshConn.Rsync(localDir, remoteDir, true)
+		if err != nil {
+			fmt.Printf(" error: %v\n", err)
+			return
+		}
 	}
 
-	// Start listening for events.
+	// Start listening for events in a separate goroutine.
 	go func() {
 		lastSyncTime := time.Now()
 		for {
@@ -146,7 +155,6 @@ func (sshConn *SSHConnection) SyncDir(localDir string, remoteDir string) {
 		}
 	}()
 
-	// Block main goroutine forever.
 	<-make(chan struct{})
 }
 

@@ -1,0 +1,10 @@
+# Similar to .gitignore
+# Matches do not sync to the Project Pod or cause the Pod to reload.
+
+Dockerfile
+__pycache__/
+*.pyc
+.*.swp
+.git/
+*.tmp
+*.log
