@@ -8,7 +8,7 @@ import (
 
 var projectCmd = &cobra.Command{
 	Use:   "project [command]",
-	Short: "(NEW) Manage RunPod projects",
+	Short: "Manage RunPod projects",
 	Long:  "Develop and deploy projects entirely on RunPod's infrastructure.",
 }
 

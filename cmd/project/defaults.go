@@ -5,9 +5,9 @@ func getDefaultModelName(modelType string) string {
 	switch modelType {
 	case "LLM":
 		return "google/flan-t5-base"
-	case "Stable Diffusion":
+	case "Stable_Diffusion":
 		return "stabilityai/sdxl-turbo"
-	case "Text to Audio":
+	case "Text_to_Audio":
 		return "facebook/musicgen-small"
 	}
 

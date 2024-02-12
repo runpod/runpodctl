@@ -1,10 +1,13 @@
 package project
 
 import (
+	"bufio"
 	"cli/api"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
@@ -24,10 +27,18 @@ var (
 const inputPromptPrefix string = "   > "
 
 func prompt(message string) string {
-	var selection string = ""
-	for selection == "" {
-		fmt.Print(inputPromptPrefix + message)
-		fmt.Scanln(&selection)
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Print(inputPromptPrefix + message)
+
+	selection, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Println("An error occurred while reading input. Please try again.", err)
+		return prompt(message)
+	}
+
+	selection = strings.TrimSpace(selection)
+	if selection == "" {
+		return prompt(message)
 	}
 	return selection
 }
@@ -124,10 +135,13 @@ func selectStarterTemplate() (template string, err error) {
 	}
 	options := []StarterTemplateOption{}
 	for _, template := range templates {
-		options = append(options, StarterTemplateOption{Name: template.Name(), Value: template.Name()})
+		// For the printed name, replace _ with spaces
+		var name = template.Name()
+		name = strings.Replace(name, "_", " ", -1)
+		options = append(options, StarterTemplateOption{Name: name, Value: template.Name()})
 	}
 	getStarterTemplate := promptui.Select{
-		Label:     "Select a Starter Example:",
+		Label:     "Select a Starter Project:",
 		Items:     options,
 		Templates: promptTemplates,
 	}
@@ -157,15 +171,13 @@ var NewProjectCmd = &cobra.Command{
 
 		// Project Name
 		if projectName == "" {
-			fmt.Print("1. Project Name:\n")
-			fmt.Print("   Please enter the name of your project.\n")
+			fmt.Print("Provide a name for your project:\n")
 			projectName = prompt("")
 		}
 		fmt.Print("\n   Project name set to '" + projectName + "'.\n\n")
 
 		// Project Examples
-		fmt.Print("2. Starter Example:\n")
-		fmt.Print("   Choose a starter example to begin with.\n")
+		fmt.Print("Select a starter project to begin with:\n")
 
 		if modelType == "" {
 			starterExample, err := selectStarterTemplate()
@@ -178,28 +190,21 @@ var NewProjectCmd = &cobra.Command{
 		fmt.Println("")
 
 		// Model Name
-		if modelType != "Hello World" {
-			fmt.Print("   Model Name:\n")
-			fmt.Print("   Please enter the name of the Hugging Face model you would like to use.\n")
-			fmt.Print("   Leave blank to use the default model for the selected example.\n   > ")
+		if modelType != "Hello_World" {
+			fmt.Print("   Enter the name of the Hugging Face model you would like to use:\n")
+			fmt.Print("   Leave blank to use the default model for the selected project.\n   > ")
 			fmt.Scanln(&modelName)
 			fmt.Println("")
 		}
 
-		// Project Configuration
-		fmt.Print("3. Configuration:\n")
-		fmt.Print("   Let's configure the project environment.\n\n")
-
 		// CUDA Version
-		fmt.Println("   CUDA Version:")
-		cudaVersion := promptChoice("   Choose a CUDA version for your project.",
+		cudaVersion := promptChoice("Select a CUDA version for your project:",
 			[]string{"11.8.0", "12.1.0", "12.2.0"}, "11.8.0")
 
-		fmt.Println("\n   Using CUDA version: " + cudaVersion)
+		fmt.Println("\n   Using CUDA version: " + cudaVersion + "\n")
 
 		// Python Version
-		fmt.Println("\n   Python Version:")
-		pythonVersion := promptChoice("   Choose a Python version for your project.",
+		pythonVersion := promptChoice("Select a Python version for your project:",
 			[]string{"3.8", "3.9", "3.10", "3.11"}, "3.10")
 
 		fmt.Println("\n   Using Python version: " + pythonVersion)
@@ -208,7 +213,7 @@ var NewProjectCmd = &cobra.Command{
 		fmt.Println("\nProject Summary:")
 		fmt.Println("----------------")
 		fmt.Printf("- Project Name    : %s\n", projectName)
-		fmt.Printf("- Starter Example : %s\n", modelType)
+		fmt.Printf("- Starter Project : %s\n", modelType)
 		fmt.Printf("- CUDA version    : %s\n", cudaVersion)
 		fmt.Printf("- Python version  : %s\n", pythonVersion)
 
@@ -219,14 +224,17 @@ var NewProjectCmd = &cobra.Command{
 			return
 		}
 
-		fmt.Printf("\nThe project will be created in the current directory: \n%s\n\n", currentDir)
-		confirm := promptChoice("Proceed with creation?", []string{"yes", "no"}, "yes")
-		if confirm != "yes" {
-			fmt.Println("Project creation cancelled.")
-			return
+		projectDir := filepath.Join(currentDir, projectName)
+		if _, err := os.Stat(projectDir); !os.IsNotExist(err) {
+			fmt.Printf("\nA directory with the name '%s' already exists in the current path.\n", projectName)
+			confirm := promptChoice("Continue with overwrite?", []string{"yes", "no"}, "no")
+			if confirm != "yes" {
+				fmt.Println("Project creation cancelled.")
+				return
+			}
+		} else {
+			fmt.Printf("\nCreating project '%s' in directory '%s'\n", projectName, projectDir)
 		}
-
-		fmt.Println("\nCreating project...")
 
 		// Create Project
 		createNewProject(projectName, cudaVersion, pythonVersion, modelType, modelName, initCurrentDir)
