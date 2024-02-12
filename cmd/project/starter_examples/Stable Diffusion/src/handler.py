@@ -10,7 +10,7 @@ import torch
 
 # Initialize the pipeline
 pipe = AutoPipelineForText2Image.from_pretrained(
-            "stabilityai/sdxl-turbo", # model name
+            "<<MODEL_NAME>>", # model name
             torch_dtype=torch.float16, variant="fp16"
         ).to("cuda")
 

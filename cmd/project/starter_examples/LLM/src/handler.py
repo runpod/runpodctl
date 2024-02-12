@@ -8,8 +8,8 @@ import runpod
 from transformers import T5Tokenizer, T5ForConditionalGeneration
 
 # Initialize the tokenizer and model
-tokenizer = T5Tokenizer.from_pretrained("google/flan-t5-base")
-model = T5ForConditionalGeneration.from_pretrained("google/flan-t5-base", device_map="auto").to("cuda")
+tokenizer = T5Tokenizer.from_pretrained("<<MODEL_NAME>>")
+model = T5ForConditionalGeneration.from_pretrained("<<MODEL_NAME>>", device_map="auto").to("cuda")
 
 
 def handler(job: Dict[str, any]) -> str:
