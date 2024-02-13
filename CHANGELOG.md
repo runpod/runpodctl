@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.12.3](https://github.com/runpod/runpodctl/compare/v1.12.2...v1.12.3) (2024-02-06)
+
+
+### Bug Fixes
+
+* seems the new architectures aren't building in github action ([0cefd3c](https://github.com/runpod/runpodctl/commit/0cefd3c380bbef42cb471f43b37dc224051b9140))
+
+## [1.12.2](https://github.com/runpod/runpodctl/compare/v1.12.1...v1.12.2) (2024-02-06)
+
+
+### Bug Fixes
+
+* mislabeled in release ([9c850cb](https://github.com/runpod/runpodctl/commit/9c850cbe508cf988dcfde277e8f279dbf246ad25))
+
 ## [1.12.1](https://github.com/runpod/runpodctl/compare/v1.12.0...v1.12.1) (2024-02-06)
 
 

@@ -5,6 +5,7 @@ import (
 	"cli/api"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,33 +16,39 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-func getPodSSHInfo(podId string) (podIp string, podPort int, err error) {
+const (
+	pollInterval = 1 * time.Second
+	maxPollTime  = 5 * time.Minute // Adjusted for clarity
+)
+
+func getPodSSHInfo(podID string) (string, int, error) {
 	pods, err := api.GetPods()
 	if err != nil {
-		return "", 0, err
+		return "", 0, fmt.Errorf("getting pods: %w", err)
 	}
-	var pod api.Pod
-	for _, p := range pods {
-		if p.Id == podId {
-			pod = *p
+
+	for _, pod := range pods {
+		if pod.Id != podID {
+			continue
 		}
-	}
-	//is pod ready for ssh yet?
-	if pod.DesiredStatus != "RUNNING" {
-		return "", 0, errors.New("pod desired status not RUNNING")
-	}
-	if pod.Runtime == nil {
-		return "", 0, errors.New("pod runtime is nil")
-	}
-	if pod.Runtime.Ports == nil {
-		return "", 0, errors.New("pod runtime ports is nil")
-	}
-	for _, port := range pod.Runtime.Ports {
-		if port.PrivatePort == 22 {
-			return port.Ip, port.PublicPort, nil
+
+		if pod.DesiredStatus != "RUNNING" {
+			return "", 0, fmt.Errorf("pod desired status not RUNNING")
 		}
+		if pod.Runtime == nil {
+			return "", 0, fmt.Errorf("pod runtime is missing")
+		}
+		if pod.Runtime.Ports == nil {
+			return "", 0, fmt.Errorf("pod runtime ports are missing")
+		}
+		for _, port := range pod.Runtime.Ports {
+			if port.PrivatePort == 22 {
+				return port.Ip, port.PublicPort, nil
+			}
+		}
+
 	}
-	return "", 0, errors.New("no SSH port exposed on Pod")
+	return "", 0, fmt.Errorf("no SSH port exposed on pod %s", podID)
 }
 
 type SSHConnection struct {
@@ -60,42 +67,48 @@ func (sshConn *SSHConnection) getSshOptions() []string {
 		"-i", sshConn.sshKeyPath,
 	}
 }
+
 func (sshConn *SSHConnection) Rsync(localDir string, remoteDir string, quiet bool) error {
 	rsyncCmdArgs := []string{"-avz", "--no-owner", "--no-group"}
+
+	// Retrieve and apply ignore patterns
 	patterns, err := GetIgnoreList()
 	if err != nil {
-		return err
+		return fmt.Errorf("getting ignore list: %w", err)
 	}
 	for _, pat := range patterns {
 		rsyncCmdArgs = append(rsyncCmdArgs, "--exclude", pat)
 	}
+
+	// Add quiet flag if requested
 	if quiet {
 		rsyncCmdArgs = append(rsyncCmdArgs, "--quiet")
 	}
 
-	sshOptions := strings.Join(sshConn.getSshOptions(), " ")
-	rsyncCmdArgs = append(rsyncCmdArgs, "-e", fmt.Sprintf("ssh %s", sshOptions))
-	rsyncCmdArgs = append(rsyncCmdArgs, localDir, fmt.Sprintf("root@%s:%s", sshConn.podIp, remoteDir))
+	// Prepare SSH options for rsync
+	sshOptions := fmt.Sprintf("ssh %s", strings.Join(sshConn.getSshOptions(), " "))
+	rsyncCmdArgs = append(rsyncCmdArgs, "-e", sshOptions, localDir, fmt.Sprintf("root@%s:%s", sshConn.podIp, remoteDir))
+
 	cmd := exec.Command("rsync", rsyncCmdArgs...)
 	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
 	if err := cmd.Run(); err != nil {
-		fmt.Println("could not run rsync command: ", err)
-		return err
+		return fmt.Errorf("executing rsync command: %w", err)
 	}
+
 	return nil
 }
 
 // hasChanges checks if there are any modified files in localDir since lastSyncTime.
 func hasChanges(localDir string, lastSyncTime time.Time) (bool, string) {
-	var hasModifications bool
-	var firstModifiedFile string
+	var firstModifiedFile string = ""
 
 	err := filepath.Walk(localDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			if os.IsNotExist(err) {
 				// Handle the case where a file has been removed
 				fmt.Printf("Detected a removed file at: %s\n", path)
-				hasModifications = true
 				return errors.New("change detected") // Stop walking
 			}
 			return err
@@ -103,7 +116,6 @@ func hasChanges(localDir string, lastSyncTime time.Time) (bool, string) {
 
 		// Check if the file was modified after the last sync time
 		if info.ModTime().After(lastSyncTime) {
-			hasModifications = true
 			firstModifiedFile = path
 			return filepath.SkipDir // Skip the rest of the directory if a change is found
 		}
@@ -116,16 +128,20 @@ func hasChanges(localDir string, lastSyncTime time.Time) (bool, string) {
 		return false, ""
 	}
 
-	return hasModifications, firstModifiedFile
+	return firstModifiedFile != "", firstModifiedFile
 }
 
 func (sshConn *SSHConnection) SyncDir(localDir string, remoteDir string) {
 	syncFiles := func() {
 		fmt.Println("Syncing files...")
-		sshConn.Rsync(localDir, remoteDir, true)
+		err := sshConn.Rsync(localDir, remoteDir, true)
+		if err != nil {
+			fmt.Printf(" error: %v\n", err)
+			return
+		}
 	}
 
-	// Start listening for events.
+	// Start listening for events in a separate goroutine.
 	go func() {
 		lastSyncTime := time.Now()
 		for {
@@ -139,98 +155,98 @@ func (sshConn *SSHConnection) SyncDir(localDir string, remoteDir string) {
 		}
 	}()
 
-	// Block main goroutine forever.
 	<-make(chan struct{})
 }
 
-func (sshConn *SSHConnection) RunCommand(command string) error {
-	return sshConn.RunCommands([]string{command})
+// RunCommand runs a command on the remote pod.
+func (conn *SSHConnection) RunCommand(command string) error {
+	return conn.RunCommands([]string{command})
 }
 
+// RunCommands runs a list of commands on the remote pod.
 func (sshConn *SSHConnection) RunCommands(commands []string) error {
-
-	stdoutColor := color.New(color.FgGreen)
-	stderrColor := color.New(color.FgRed)
+	stdoutColor, stderrColor := color.New(color.FgGreen), color.New(color.FgRed)
 
 	for _, command := range commands {
-		// Create a session
 		session, err := sshConn.client.NewSession()
 		if err != nil {
-			fmt.Println("Failed to create session: %s", err)
-			return err
+			return fmt.Errorf("failed to create SSH session: %w", err)
 		}
+		defer session.Close()
 
+		// Set up pipes for stdout and stderr
 		stdout, err := session.StdoutPipe()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to get stdout pipe: %w", err)
 		}
+		go scanAndPrint(stdout, stdoutColor, sshConn.podId, showPrefixInPodLogs)
+
 		stderr, err := session.StderrPipe()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to get stderr pipe: %w", err)
 		}
+		go scanAndPrint(stderr, stderrColor, sshConn.podId, showPrefixInPodLogs)
 
-		//listen to stdout
-		go func() {
-			scanner := bufio.NewScanner(stdout)
-			for scanner.Scan() {
-				if showPrefixInPodLogs {
-					stdoutColor.Printf("[%s] ", sshConn.podId)
-				}
-				fmt.Println(scanner.Text())
-			}
-		}()
-
-		//listen to stderr
-		go func() {
-			scanner := bufio.NewScanner(stderr)
-			for scanner.Scan() {
-				if showPrefixInPodLogs {
-					stderrColor.Printf("[%s] ", sshConn.podId)
-				}
-				fmt.Println(scanner.Text())
-			}
-		}()
+		// Run the command
 		fullCommand := strings.Join([]string{
 			"source /root/.bashrc",
 			"source /etc/rp_environment",
 			"while IFS= read -r -d '' line; do export \"$line\"; done < /proc/1/environ",
 			command,
 		}, " && ")
-		err = session.Run(fullCommand)
-		if err != nil {
-			session.Close()
-			return err
+
+		if err := session.Run(fullCommand); err != nil {
+			return fmt.Errorf("failed to run command %q: %w", command, err)
 		}
-		session.Close()
 	}
 	return nil
 }
 
-func PodSSHConnection(podId string) (*SSHConnection, error) {
-	//check ssh key exists
-	home, _ := os.UserHomeDir()
-	sshFilePath := filepath.Join(home, ".runpod", "ssh", "RunPod-Key-Go")
-	privateKeyBytes, err := os.ReadFile(sshFilePath)
-	if err != nil {
-		fmt.Println("failed to get private key")
-		return nil, err
+// Utility function to scan and print output from SSH sessions.
+func scanAndPrint(pipe io.Reader, color *color.Color, podID string, showPodIdPrefix bool) {
+	scanner := bufio.NewScanner(pipe)
+	for scanner.Scan() {
+		if showPodIdPrefix {
+			color.Printf("[%s] ", podID)
+		}
+		fmt.Println(scanner.Text())
 	}
+}
+
+func PodSSHConnection(podId string) (*SSHConnection, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("getting user home directory: %w", err)
+	}
+
+	sshKeyPath := filepath.Join(homeDir, ".runpod", "ssh", "RunPod-Key-Go")
+	privateKeyBytes, err := os.ReadFile(sshKeyPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading private SSH key from %s: %w", sshKeyPath, err)
+	}
+
 	privateKey, err := ssh.ParsePrivateKey(privateKeyBytes)
 	if err != nil {
-		fmt.Println("failed to parse private key")
-		return nil, err
+		return nil, fmt.Errorf("parsing private SSH key: %w", err)
 	}
+
 	//loop until pod ready
-	pollIntervalSeconds := 1
-	maxPollTimeSeconds := 300
-	startTime := time.Now()
+
 	fmt.Print("Waiting for Pod to come online... ")
 	//look up ip and ssh port for pod id
 	var podIp string
 	var podPort int
-	for podIp, podPort, err = getPodSSHInfo(podId); err != nil && time.Since(startTime) < time.Duration(maxPollTimeSeconds*int(time.Second)); {
-		time.Sleep(time.Duration(pollIntervalSeconds * int(time.Second)))
+
+	startTime := time.Now()
+	for podIp, podPort, err = getPodSSHInfo(podId); err != nil && time.Since(startTime) < maxPollTime; {
+		time.Sleep(pollInterval)
 		podIp, podPort, err = getPodSSHInfo(podId)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get SSH info for pod %s: %w", podId, err)
+	} else if time.Since(startTime) >= time.Duration(maxPollTime) {
+		return nil, fmt.Errorf("timeout waiting for pod %s to come online", podId)
 	}
 
 	// Configure the SSH client
@@ -246,10 +262,9 @@ func PodSSHConnection(podId string) (*SSHConnection, error) {
 	host := fmt.Sprintf("%s:%d", podIp, podPort)
 	client, err := ssh.Dial("tcp", host, config)
 	if err != nil {
-		fmt.Println("Failed to dial for SSH conn: %s", err)
-		return nil, err
+		return nil, fmt.Errorf("establishing SSH connection to %s: %w", host, err)
 	}
 
-	return &SSHConnection{podId: podId, client: client, podIp: podIp, podPort: podPort, sshKeyPath: sshFilePath}, nil
+	return &SSHConnection{podId: podId, client: client, podIp: podIp, podPort: podPort, sshKeyPath: sshKeyPath}, nil
 
 }
