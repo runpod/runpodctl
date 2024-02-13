@@ -54,6 +54,18 @@ POD_INACTIVITY_TIMEOUT = "120"
 RUNPOD_DEBUG_LEVEL = "debug"
 UVICORN_LOG_LEVEL = "warning"
 
+[endpoint]
+# Configuration for the deployed endpoint. 
+# For full list of endpoint configurations, visit: https://docs.runpod.io/serverless/references/endpoint-configurations
+# active_workers - The minimum number of workers your endpoint will have running at any given point.
+#                  Setting this amount to 1 will result in "always on" workers. 
+#                  This will allow you to have a worker ready to respond to job requests without incurring any cold start delay.
+# max_workers    - The maximum number of workers your endpoint will have running at any given point.
+
+active_workers = 0
+max_workers = 3
+flashboot = true
+
 [runtime]
 # python_version 	- Python version to use for the project.
 # handler_path 		- Path to the handler file for the project.

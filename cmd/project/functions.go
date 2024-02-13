@@ -473,6 +473,7 @@ func deployProject(networkVolumeId string) (endpointId string, err error) {
 	projectPathUuid := path.Join(projectConfig.Get("volume_mount_path").(string), projectConfig.Get("uuid").(string))
 	projectPathUuidProd := path.Join(projectPathUuid, "prod")
 	remoteProjectPath := path.Join(projectPathUuidProd, config.Get("name").(string))
+	venvPath := path.Join(projectPathUuidProd, "venv")
 	//check for existing pod
 	projectPodId, err := getProjectPod(projectId)
 	if projectPodId == "" || err != nil {
@@ -494,7 +495,6 @@ func deployProject(networkVolumeId string) (endpointId string, err error) {
 	cwd, _ := os.Getwd()
 	sshConn.Rsync(cwd, projectPathUuidProd, false)
 	//activate venv on remote
-	venvPath := path.Join(projectPathUuidProd, "venv")
 	fmt.Printf("Activating Python virtual environment: %s on Pod %s\n", venvPath, projectPodId)
 	sshConn.RunCommands([]string{
 		fmt.Sprintf("python%s -m venv %s", config.GetPath([]string{"runtime", "python_version"}).(string), venvPath),
@@ -517,7 +517,7 @@ func deployProject(networkVolumeId string) (endpointId string, err error) {
 		Env:               env,
 		DockerStartCmd:    dockerStartCmd,
 		IsServerless:      true,
-		ContainerDiskInGb: 10,
+		ContainerDiskInGb: int(projectConfig.Get("container_disk_size_gb").(int64)),
 		VolumeMountPath:   projectConfig.Get("volume_mount_path").(string),
 		StartSSH:          true,
 		IsPublic:          false,
@@ -529,17 +529,41 @@ func deployProject(networkVolumeId string) (endpointId string, err error) {
 	}
 	//deploy / update endpoint
 	deployedEndpointId, err := getProjectEndpoint(projectId)
+	//default endpoint settings
+	minWorkers := 0
+	maxWorkers := 3
+	flashboot := true
+	flashbootSuffix := " -fb"
+	idleTimeout := 5
+	endpointConfig, ok := config.Get("endpoint").(*toml.Tree)
+	if ok {
+		if min, ok := endpointConfig.Get("active_workers").(int64); ok {
+			minWorkers = int(min)
+		}
+		if max, ok := endpointConfig.Get("max_workers").(int64); ok {
+			maxWorkers = int(max)
+		}
+		if fb, ok := endpointConfig.Get("flashboot").(bool); ok {
+			flashboot = fb
+		}
+		if !flashboot {
+			flashbootSuffix = ""
+		}
+		if idle, ok := endpointConfig.Get("idle_timeout").(int64); ok {
+			idleTimeout = int(idle)
+		}
+	}
 	if err != nil {
 		deployedEndpointId, err = api.CreateEndpoint(&api.CreateEndpointInput{
-			Name:            fmt.Sprintf("%s-endpoint-%s", projectName, projectId),
+			Name:            fmt.Sprintf("%s-endpoint-%s%s", projectName, projectId, flashbootSuffix),
 			TemplateId:      projectEndpointTemplateId,
 			NetworkVolumeId: networkVolumeId,
 			GpuIds:          "AMPERE_16",
-			IdleTimeout:     5,
+			IdleTimeout:     idleTimeout,
 			ScalerType:      "QUEUE_DELAY",
 			ScalerValue:     4,
-			WorkersMin:      0,
-			WorkersMax:      3,
+			WorkersMin:      minWorkers,
+			WorkersMax:      maxWorkers,
 		})
 		if err != nil {
 			fmt.Println("error making endpoint")
