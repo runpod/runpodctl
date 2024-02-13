@@ -51,6 +51,11 @@ func registerCommands() {
 	// file transfer via croc
 	rootCmd.AddCommand(croc.ReceiveCmd)
 	rootCmd.AddCommand(croc.SendCmd)
+
+	// Version
+	rootCmd.Version = version
+	rootCmd.Flags().BoolP("version", "v", false, "Print the version of runpodctl")
+	rootCmd.SetVersionTemplate(`{{printf "runpodctl %s\n" .Version}}`)
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -58,6 +63,8 @@ func registerCommands() {
 func Execute(ver string) {
 	version = ver
 	api.Version = ver
+	rootCmd.Version = ver
+
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
