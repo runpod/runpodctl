@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.13.0](https://github.com/runpod/runpodctl/compare/v1.12.3...v1.13.0) (2024-02-13)
+
+
+### Features
+
+* added comments to toml ([d0f1bfa](https://github.com/runpod/runpodctl/commit/d0f1bfa65ac8ac477f429b18b6d19467b3dc3a6a))
+* added more starter examples ([57474e5](https://github.com/runpod/runpodctl/commit/57474e592d23b1e1efcf07355081916f480b1574))
+* port ssh cmd from python, refactored ssh key gen ([4c90f4b](https://github.com/runpod/runpodctl/commit/4c90f4b740b447b1702193b08efc04ba4decbf26))
+* remote exec ([53ce856](https://github.com/runpod/runpodctl/commit/53ce8566be506b4970b7c791bf6cca9e0fd98676))
+
+
+### Bug Fixes
+
+* added detail errors back ([0de3690](https://github.com/runpod/runpodctl/commit/0de3690ca269f26d4a18ac43b4ee40409ea4f27b))
+* expose better printing ([4767fe2](https://github.com/runpod/runpodctl/commit/4767fe2ed1dfd3a2643c4fda4f5d0af92097dc23))
+* improved bash resiliency ([3e0eadb](https://github.com/runpod/runpodctl/commit/3e0eadbf0d7594d3a4d18008297f76583b289dde))
+* moved doc to docs ([73b6290](https://github.com/runpod/runpodctl/commit/73b629087553180e3a3fb9d02200c2ed8f66df48))
+* naming and prompting ([232f373](https://github.com/runpod/runpodctl/commit/232f373d1d56e98f5c8cff6bedbcc8f42ff0b1e1))
+* removed unused relay list ([f5cde85](https://github.com/runpod/runpodctl/commit/f5cde856269d71c7c0f14cc02e722a4c451a8503))
+* stable diffusion name ([ea2a35a](https://github.com/runpod/runpodctl/commit/ea2a35af5254f5630d948cdfc07da8779a83bf11))
+* support --version flag ([4e7ae63](https://github.com/runpod/runpodctl/commit/4e7ae630de784439003f8e45ea846f76431afc30))
+* trigger release-please ([b82fd9c](https://github.com/runpod/runpodctl/commit/b82fd9cc2dfa4821946a397d27db0c5f8c9c97fe))
+
 ## [1.12.3](https://github.com/runpod/runpodctl/compare/v1.12.2...v1.12.3) (2024-02-06)
 
 
