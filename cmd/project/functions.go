@@ -294,6 +294,26 @@ func startProject(networkVolumeId string) error {
 	archivedVenvPath := path.Join(projectPathUuid, "dev-venv.tar.zst")
 	fmt.Printf("Activating Python virtual environment %s on Pod %s\n", venvPath, projectPodId)
 	sshConn.RunCommands([]string{
+		fmt.Sprint(`
+		DEPENDENCIES=("wget" "sudo" "lsof" "git" "rsync" "zstd" "jq" "inotify-tools")
+
+		function check_and_install_dependencies() {
+			for dep in "${DEPENDENCIES[@]}"; do
+				if ! command -v $dep &> /dev/null; then
+					echo "$dep could not be found, attempting to install..."
+					apt-get update && apt-get install -y $dep
+					if [ $? -eq 0 ]; then
+						echo "$dep installed successfully."
+					else
+						echo "Failed to install $dep."
+						exit 1
+					fi
+				fi
+			done
+
+			wget -qO- cli.runpod.net | sudo bash &> /dev/null
+		}
+		check_and_install_dependencies`),
 		fmt.Sprintf(`
 		if ! [ -f %s/bin/activate ]
 		then
