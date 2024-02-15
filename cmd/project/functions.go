@@ -320,8 +320,6 @@ func startProject(networkVolumeId string) error {
 					echo "Failed to install inotify-tools."
 					exit 1
 				fi
-			else
-				echo "inotify-tools is already installed."
 			fi
 
 			wget -qO- cli.runpod.net | sudo bash &> /dev/null
