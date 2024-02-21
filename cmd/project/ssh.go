@@ -105,7 +105,7 @@ func (sshConn *SSHConnection) Rsync(localDir string, remoteDir string, quiet boo
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		if line == "" || strings.Contains(line, "sending incremental file list") || strings.Contains(line, "total size is") || strings.Contains(line, "bytes/sec") {
+		if line == "" || strings.Contains(line, "sending incremental file list") || strings.Contains(line, "total size is") || strings.Contains(line, "bytes/sec") || strings.Contains(line, "building file list") {
 			continue
 		}
 

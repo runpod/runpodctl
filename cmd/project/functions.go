@@ -295,7 +295,7 @@ func startProject(networkVolumeId string) error {
 	fmt.Printf("Activating Python virtual environment %s on Pod %s\n", venvPath, projectPodId)
 	sshConn.RunCommands([]string{
 		fmt.Sprint(`
-		DEPENDENCIES=("wget" "sudo" "lsof" "git" "rsync" "zstd" "jq")
+		DEPENDENCIES=("wget" "sudo" "lsof" "git" "rsync" "zstd")
 
 		function check_and_install_dependencies() {
 			for dep in "${DEPENDENCIES[@]}"; do
