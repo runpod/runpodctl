@@ -295,7 +295,7 @@ func startProject(networkVolumeId string) error {
 	fmt.Printf("Activating Python virtual environment %s on Pod %s\n", venvPath, projectPodId)
 	sshConn.RunCommands([]string{
 		fmt.Sprint(`
-		DEPENDENCIES=("wget" "sudo" "lsof" "git" "rsync" "zstd" "jq" "inotify-tools")
+		DEPENDENCIES=("wget" "sudo" "lsof" "git" "rsync" "zstd")
 
 		function check_and_install_dependencies() {
 			for dep in "${DEPENDENCIES[@]}"; do
@@ -310,6 +310,17 @@ func startProject(networkVolumeId string) error {
 					fi
 				fi
 			done
+
+			# Specifically check for inotifywait command from inotify-tools package
+			if ! command -v inotifywait &> /dev/null; then
+				echo "inotifywait could not be found, attempting to install inotify-tools..."
+				if apt-get install -y inotify-tools; then
+					echo "inotify-tools installed successfully."
+				else
+					echo "Failed to install inotify-tools."
+					exit 1
+				fi
+			fi
 
 			wget -qO- cli.runpod.net | sudo bash &> /dev/null
 		}
