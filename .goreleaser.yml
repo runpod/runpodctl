@@ -1,5 +1,5 @@
 builds:
-  - binary: runpod
+  - binary: runpodctl
     goos:
       - darwin
       - linux
