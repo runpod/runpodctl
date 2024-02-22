@@ -2,6 +2,7 @@ package project
 
 import (
 	"bufio"
+	"bytes"
 	"cli/api"
 	"errors"
 	"fmt"
@@ -69,7 +70,7 @@ func (sshConn *SSHConnection) getSshOptions() []string {
 }
 
 func (sshConn *SSHConnection) Rsync(localDir string, remoteDir string, quiet bool) error {
-	rsyncCmdArgs := []string{"-avz", "--no-owner", "--no-group"}
+	rsyncCmdArgs := []string{"--compress", "--archive", "--verbose", "--no-owner", "--no-group"}
 
 	// Retrieve and apply ignore patterns
 	patterns, err := GetIgnoreList()
@@ -80,21 +81,60 @@ func (sshConn *SSHConnection) Rsync(localDir string, remoteDir string, quiet boo
 		rsyncCmdArgs = append(rsyncCmdArgs, "--exclude", pat)
 	}
 
-	// Add quiet flag if requested
-	if quiet {
-		rsyncCmdArgs = append(rsyncCmdArgs, "--quiet")
-	}
+	//Filter from .runpodignore
+	rsyncCmdArgs = append(rsyncCmdArgs, "--filter=:- .runpodignore")
 
 	// Prepare SSH options for rsync
 	sshOptions := fmt.Sprintf("ssh %s", strings.Join(sshConn.getSshOptions(), " "))
 	rsyncCmdArgs = append(rsyncCmdArgs, "-e", sshOptions, localDir, fmt.Sprintf("root@%s:%s", sshConn.podIp, remoteDir))
 
-	cmd := exec.Command("rsync", rsyncCmdArgs...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// Perform a dry run to check if files need syncing
+	dryRunArgs := append(rsyncCmdArgs, "--dry-run")
+	dryRunCmd := exec.Command("rsync", dryRunArgs...)
+	var dryRunBuf bytes.Buffer
+	dryRunCmd.Stdout = &dryRunBuf
+	dryRunCmd.Stderr = &dryRunBuf
+	if err := dryRunCmd.Run(); err != nil {
+		return fmt.Errorf("running rsync dry run: %w", err)
+	}
+	dryRunOutput := dryRunBuf.String()
 
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("executing rsync command: %w", err)
+	// Parse the dry run output to determine if files need syncing
+	filesNeedSyncing := false
+	scanner := bufio.NewScanner(strings.NewReader(dryRunOutput))
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		if line == "" || strings.Contains(line, "sending incremental file list") || strings.Contains(line, "total size is") || strings.Contains(line, "bytes/sec") || strings.Contains(line, "building file list") {
+			continue
+		}
+
+		filename := filepath.Base(line)
+		if filename == "" || filename == "." || strings.HasSuffix(line, "/") {
+			continue
+		}
+
+		filesNeedSyncing = true
+		break
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("scanning dry run output: %w", err)
+	}
+
+	// Add quiet flag if requested
+	if quiet {
+		rsyncCmdArgs = append(rsyncCmdArgs, "--quiet")
+	}
+
+	if filesNeedSyncing {
+		fmt.Println("Syncing files...")
+
+		cmd := exec.Command("rsync", rsyncCmdArgs...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("executing rsync command: %w", err)
+		}
 	}
 
 	return nil
@@ -133,7 +173,7 @@ func hasChanges(localDir string, lastSyncTime time.Time) (bool, string) {
 
 func (sshConn *SSHConnection) SyncDir(localDir string, remoteDir string) {
 	syncFiles := func() {
-		fmt.Println("Syncing files...")
+		// fmt.Println("Syncing files...")
 		err := sshConn.Rsync(localDir, remoteDir, true)
 		if err != nil {
 			fmt.Printf(" error: %v\n", err)
@@ -148,7 +188,7 @@ func (sshConn *SSHConnection) SyncDir(localDir string, remoteDir string) {
 			time.Sleep(100 * time.Millisecond)
 			hasChanged, firstModifiedFile := hasChanges(localDir, lastSyncTime)
 			if hasChanged {
-				fmt.Printf("Found changes in %s\n", firstModifiedFile)
+				fmt.Printf("Local changes detected in %s\n", firstModifiedFile)
 				syncFiles()
 				lastSyncTime = time.Now()
 			}
