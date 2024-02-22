@@ -1,9 +1,7 @@
-name: goreleaser
+name: brew release
 
 on:
-  push:
-    tags:
-      - '*'
+  workflow_dispatch:
 
 permissions:
   contents: write
