@@ -342,7 +342,7 @@ func startProject(networkVolumeId string) error {
 	handlerPath := path.Join(remoteProjectPath, config.GetPath([]string{"runtime", "handler_path"}).(string))
 	launchApiServer := fmt.Sprintf(`
 		#!/bin/bash
-		API_PORT=8080
+		API_PORT=7271
 		API_HOST="0.0.0.0"
 		PYTHON_VENV_PATH="%s" # Path to the Python virutal environment used during development located on the Pod at /<project_id>/venv
 		PROJECT_DIRECTORY="%s/%s"
@@ -425,7 +425,7 @@ func startProject(networkVolumeId string) error {
 
 		echo -e "- Started API server with PID: $SERVER_PID" && echo ""
 		echo "Connect to the API server at:"
-		echo ">  https://$RUNPOD_POD_ID-8080.proxy.runpod.net" && echo ""
+		echo ">  https://$RUNPOD_POD_ID-7270.proxy.runpod.net" && echo ""
 
 		#like inotifywait, but will only report the name of a file if it shouldn't be ignored according to .runpodignore
 		#uses git check-ignore to ensure same syntax as gitignore, but git check-ignore expects to be run in a repo
