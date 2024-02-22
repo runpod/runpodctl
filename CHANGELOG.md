@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.14.1](https://github.com/runpod/runpodctl/compare/v1.14.0...v1.14.1) (2024-02-22)
+
+
+### Bug Fixes
+
+* quotes ([7c260aa](https://github.com/runpod/runpodctl/commit/7c260aa178006cf51bc18d4d8ce0dbabd4f5138f))
+
 ## [1.14.0](https://github.com/runpod/runpodctl/compare/v1.13.0...v1.14.0) (2024-02-22)
 
 
