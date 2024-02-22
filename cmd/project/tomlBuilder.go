@@ -52,7 +52,7 @@ container_disk_size_gb = 100
 # Set environment variables for the pod.
 # For a full list of base environment variables, visit: https://github.com/runpod/containers/blob/main/official-templates/base/Dockerfile
 #
-# POD_INACTIVITY_TIMEOUT - Number of seconds before terminating the pod after a session ends. End a session with `CTRL+C`.
+# POD_INACTIVITY_TIMEOUT - Number of seconds before terminating the pod after a session ends. End a session with 'CTRL+C'.
 #                        - You only pay for the pod until it terminates.
 #
 # RUNPOD_DEBUG_LEVEL     - Log level for RunPod. Set to 'debug' for detailed logs.
