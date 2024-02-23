@@ -353,7 +353,11 @@ func startProject(networkVolumeId string) error {
 	handlerPath := path.Join(remoteProjectPath, config.GetPath([]string{"runtime", "handler_path"}).(string))
 	launchApiServer := fmt.Sprintf(`
 		#!/bin/bash
-		API_PORT=7271
+		if [ -z "${BASE_RELEASE_VERSION}" ]; then
+			API_PORT=7270
+		else
+			API_PORT=7271
+		fi
 		API_HOST="0.0.0.0"
 		PYTHON_VENV_PATH="%s" # Path to the Python virutal environment used during development located on the Pod at /<project_id>/venv
 		PROJECT_DIRECTORY="%s/%s"

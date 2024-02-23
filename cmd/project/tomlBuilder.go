@@ -32,7 +32,7 @@ name = "%s"
 # container_disk_size_gb - Disk space allocated to the container. Adjust according to your needs.
 
 uuid = "%s"
-base_image = "runpod/base:0.5.2-cuda%s"
+base_image = "runpod/base:0.6.1-cuda%s"
 gpu_types = [
     "NVIDIA GeForce RTX 4080",  # 16GB
     "NVIDIA RTX A4000",         # 16GB
