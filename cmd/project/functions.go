@@ -283,6 +283,13 @@ func startProject(networkVolumeId string) error {
 	projectPathUuidDev := path.Join(projectPathUuid, "dev")
 	projectPathUuidProd := path.Join(projectPathUuid, "prod")
 	remoteProjectPath := path.Join(projectPathUuidDev, projectName)
+	var fastAPIPort int
+	if strings.Contains(projectConfig.Get("ports").(string), "8080/http") && !strings.Contains(projectConfig.Get("ports").(string), "7270/http") {
+		fastAPIPort = 8080
+	} else {
+		fastAPIPort = 7270
+	}
+
 	fmt.Printf("Checking remote project folder: %s on Pod %s\n", remoteProjectPath, projectPodId)
 	sshConn.RunCommands([]string{fmt.Sprintf("mkdir -p %s %s", remoteProjectPath, projectPathUuidProd)})
 	//rsync project files
@@ -354,7 +361,7 @@ func startProject(networkVolumeId string) error {
 	launchApiServer := fmt.Sprintf(`
 		#!/bin/bash
 		if [ -z "${BASE_RELEASE_VERSION}" ]; then
-			API_PORT=7270
+			API_PORT=%d
 		else
 			API_PORT=7271
 		fi
@@ -492,7 +499,7 @@ func startProject(networkVolumeId string) error {
 		}
 
 		monitor_and_restart
-	`, venvPath, projectPathUuidDev, projectName, archivedVenvPath, handlerPath, pipReqPath)
+	`, fastAPIPort, venvPath, projectPathUuidDev, projectName, archivedVenvPath, handlerPath, pipReqPath)
 	fmt.Println()
 	fmt.Println("Starting project endpoint...")
 	sshConn.RunCommand(launchApiServer)
