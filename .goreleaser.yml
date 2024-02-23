@@ -1,5 +1,5 @@
 builds:
-  - binary: runpod
+  - binary: runpodctl
     goos:
       - darwin
       - linux
@@ -23,7 +23,7 @@ brews:
     homepage: "https://github.com/runpod/runpodctl"
     repository:
       owner: runpod
-      name: homebrew-runpod
+      name: homebrew-runpodctl
     commit_author:
       name: rachfop
       email: prachford@icloud.com

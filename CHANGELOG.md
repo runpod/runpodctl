@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.14.1](https://github.com/runpod/runpodctl/compare/v1.14.0...v1.14.1) (2024-02-22)
+
+
+### Bug Fixes
+
+* quotes ([7c260aa](https://github.com/runpod/runpodctl/commit/7c260aa178006cf51bc18d4d8ce0dbabd4f5138f))
+
+## [1.14.0](https://github.com/runpod/runpodctl/compare/v1.13.0...v1.14.0) (2024-02-22)
+
+
+### Features
+
+* add installer of deps ([97699f9](https://github.com/runpod/runpodctl/commit/97699f917744daac87a91f6c3ad81fe0cf44183b))
+
+
+### Bug Fixes
+
+* correct verbose for rsync, and dep fix ([8e4d10b](https://github.com/runpod/runpodctl/commit/8e4d10bacf15f0bd069cc44890485024f9d65aa0))
+* ignore more rysnc and remove jq ([3309865](https://github.com/runpod/runpodctl/commit/3309865d9176827157e270ea7f12bbf8e6fe1dbf))
+* tab to spaces ([cdce259](https://github.com/runpod/runpodctl/commit/cdce259e1baf8a9f57037ef18565de278bbd9694))
+* trigger release-please ([5061c14](https://github.com/runpod/runpodctl/commit/5061c1465b4675077a09cf0fe490b4178721ab6f))
+
 ## [1.13.0](https://github.com/runpod/runpodctl/compare/v1.12.3...v1.13.0) (2024-02-13)
 
 
