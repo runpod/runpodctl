@@ -283,6 +283,12 @@ func startProject(networkVolumeId string) error {
 	projectPathUuidDev := path.Join(projectPathUuid, "dev")
 	projectPathUuidProd := path.Join(projectPathUuid, "prod")
 	remoteProjectPath := path.Join(projectPathUuidDev, projectName)
+	var fastAPIPort int
+	if strings.Contains(projectConfig.Get("ports").(string), "8080/http") && !strings.Contains(projectConfig.Get("ports").(string), "7270/http") {
+		fastAPIPort = 8080
+	} else {
+		fastAPIPort = 7270
+	}
 	fmt.Printf("Checking remote project folder: %s on Pod %s\n", remoteProjectPath, projectPodId)
 	sshConn.RunCommands([]string{fmt.Sprintf("mkdir -p %s %s", remoteProjectPath, projectPathUuidProd)})
 	//rsync project files
@@ -353,7 +359,13 @@ func startProject(networkVolumeId string) error {
 	handlerPath := path.Join(remoteProjectPath, config.GetPath([]string{"runtime", "handler_path"}).(string))
 	launchApiServer := fmt.Sprintf(`
 		#!/bin/bash
-		API_PORT=8080
+		if [ -z "${BASE_RELEASE_VERSION}" ]; then
+			API_PORT=%d
+			PRINTED_API_PORT=$API_PORT
+		else
+			API_PORT=7271
+			PRINTED_API_PORT=7270
+		fi
 		API_HOST="0.0.0.0"
 		PYTHON_VENV_PATH="%s" # Path to the Python virutal environment used during development located on the Pod at /<project_id>/venv
 		PROJECT_DIRECTORY="%s/%s"
@@ -436,7 +448,7 @@ func startProject(networkVolumeId string) error {
 
 		echo -e "- Started API server with PID: $SERVER_PID" && echo ""
 		echo "Connect to the API server at:"
-		echo ">  https://$RUNPOD_POD_ID-8080.proxy.runpod.net" && echo ""
+		echo ">  https://$RUNPOD_POD_ID-$PRINTED_API_PORT.proxy.runpod.net" && echo ""
 
 		#like inotifywait, but will only report the name of a file if it shouldn't be ignored according to .runpodignore
 		#uses git check-ignore to ensure same syntax as gitignore, but git check-ignore expects to be run in a repo
@@ -488,7 +500,7 @@ func startProject(networkVolumeId string) error {
 		}
 
 		monitor_and_restart
-	`, venvPath, projectPathUuidDev, projectName, archivedVenvPath, handlerPath, pipReqPath)
+	`, fastAPIPort, venvPath, projectPathUuidDev, projectName, archivedVenvPath, handlerPath, pipReqPath)
 	fmt.Println()
 	fmt.Println("Starting project endpoint...")
 	sshConn.RunCommand(launchApiServer)
@@ -506,6 +518,7 @@ func deployProject(networkVolumeId string) (endpointId string, err error) {
 	remoteProjectPath := path.Join(projectPathUuidProd, config.Get("name").(string))
 	venvPath := path.Join(projectPathUuidProd, "venv")
 	//check for existing pod
+	fmt.Println("Finding a pod for initial file sync")
 	projectPodId, err := getProjectPod(projectId)
 	if projectPodId == "" || err != nil {
 		//or try to get pod with one of gpu types

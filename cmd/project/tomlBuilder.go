@@ -32,7 +32,7 @@ name = "%s"
 # container_disk_size_gb - Disk space allocated to the container. Adjust according to your needs.
 
 uuid = "%s"
-base_image = "runpod/base:0.5.0-cuda%s"
+base_image = "runpod/base:0.6.1-cuda%s"
 gpu_types = [
     "NVIDIA GeForce RTX 4080",  # 16GB
     "NVIDIA RTX A4000",         # 16GB
@@ -45,7 +45,7 @@ gpu_types = [
 ]
 gpu_count = 1
 volume_mount_path = "/runpod-volume"
-ports = "4040/http, 8080/http, 22/tcp" # FileBrowser, FastAPI, SSH
+ports = "4040/http, 7270/http, 22/tcp" # FileBrowser, FastAPI, SSH
 container_disk_size_gb = 100
 
 [project.env_vars]
