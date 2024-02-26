@@ -289,7 +289,6 @@ func startProject(networkVolumeId string) error {
 	} else {
 		fastAPIPort = 7270
 	}
-
 	fmt.Printf("Checking remote project folder: %s on Pod %s\n", remoteProjectPath, projectPodId)
 	sshConn.RunCommands([]string{fmt.Sprintf("mkdir -p %s %s", remoteProjectPath, projectPathUuidProd)})
 	//rsync project files
@@ -447,7 +446,7 @@ func startProject(networkVolumeId string) error {
 
 		echo -e "- Started API server with PID: $SERVER_PID" && echo ""
 		echo "Connect to the API server at:"
-		echo ">  https://$RUNPOD_POD_ID-7270.proxy.runpod.net" && echo ""
+		echo ">  https://$RUNPOD_POD_ID-$API_PORT.proxy.runpod.net" && echo ""
 
 		#like inotifywait, but will only report the name of a file if it shouldn't be ignored according to .runpodignore
 		#uses git check-ignore to ensure same syntax as gitignore, but git check-ignore expects to be run in a repo
