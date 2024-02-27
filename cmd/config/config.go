@@ -1,10 +1,11 @@
 package config
 
 import (
-	"cli/api"
-	"cli/cmd/ssh"
 	"fmt"
 	"os"
+
+	"github.com/runpod/runpodctl/api"
+	"github.com/runpod/runpodctl/cmd/ssh"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
