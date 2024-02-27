@@ -74,8 +74,7 @@ jobs:
           distribution: goreleaser
           version: latest
           args: release --clean
-          ldflags:
-            - -X 'main.Version=${{ steps.release.outputs.tag_name }}'
+          ldflags: "-X 'main.Version=${{ steps.release.outputs.tag_name }}'"
         env:
           GITHUB_TOKEN: ${{ secrets.PUBLISHER_TOKEN }}
       # - name: upload linux arm64 release binary
