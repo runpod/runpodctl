@@ -6,6 +6,10 @@ on:
     branches:
       - main
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   release:
     concurrency: main
@@ -103,8 +107,6 @@ jobs:
   brew:
     runs-on: ubuntu-latest
     needs: release
-    permissions:
-      contents: write
     steps:
       - name: Checkout
         if: ${{ needs.release.outputs.release_created }}
