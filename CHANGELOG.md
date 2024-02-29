@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.15.0](https://github.com/runpod/runpodctl/compare/v1.14.1...v1.15.0) (2024-02-29)
+
+
+### Features
+
+* no longer release-please, just combine brew and existing build actions ([199b022](https://github.com/runpod/runpodctl/commit/199b022dddb32abcc5beea2b6f5a09053435ef12))
+
+
+### Bug Fixes
+
+* backwards compatibility ([239d8fd](https://github.com/runpod/runpodctl/commit/239d8fdf6b820494bfcf3a58739a5208beaeec11))
+* brew action needs permissions ([70f4dce](https://github.com/runpod/runpodctl/commit/70f4dce78851719ce89a0a7221e99d0dccb285bf))
+* reinstate release-please and do brew action after ([062e881](https://github.com/runpod/runpodctl/commit/062e881c83e1c52b2e1498043c890bed715bef8d))
+* support non base images ([88a0776](https://github.com/runpod/runpodctl/commit/88a0776e9b44ca5939f61aa62606469a11ac5e69))
+
 ## [1.14.1](https://github.com/runpod/runpodctl/compare/v1.14.0...v1.14.1) (2024-02-22)
 
 
