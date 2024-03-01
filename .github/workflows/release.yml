@@ -80,9 +80,9 @@ jobs:
           distribution: goreleaser
           version: latest
           args: release --clean
-          ldflags: "-X 'main.Version=${{ steps.release.outputs.tag_name }}'"
         env:
           GITHUB_TOKEN: ${{ secrets.PUBLISHER_TOKEN }}
+          VERSION: ${{ steps.release.outputs.tag_name }}
       # - name: upload linux arm64 release binary
       #   uses: actions/upload-release-asset@v1.0.2
       #   env:
