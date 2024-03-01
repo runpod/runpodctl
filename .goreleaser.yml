@@ -20,7 +20,7 @@ universal_binaries:
   - replace: true
 
 brews:
-  - name: runpod
+  - name: runpodctl
     homepage: "https://github.com/runpod/runpodctl"
     repository:
       owner: runpod
