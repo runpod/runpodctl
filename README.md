@@ -133,7 +133,7 @@ runpodctl start pod {podId} --bid=0.3
 runpodctl stop pod {podId}
 ```
 
-For a comprehensive list of commands, visit [RunPod CLI documentation](doc/runpod.md).
+For a comprehensive list of commands, visit [RunPod CLI documentation](docs/runpodctl.md).
 
 ## Acknowledgements
 
