@@ -8,11 +8,10 @@ builds:
       - arm64
     env:
       - CGO_ENABLED=0
-      - VERSION={{ .Env.VERSION }}
     flags:
       - -mod=mod
     ldflags:
-      - -X 'main.Version=$VERSION'
+      - -X 'main.Version={{ .Env.VERSION }}'
 
 release:
   prerelease: auto
