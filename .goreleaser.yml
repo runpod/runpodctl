@@ -8,8 +8,11 @@ builds:
       - arm64
     env:
       - CGO_ENABLED=0
+      - VERSION={{ .Env.VERSION }}
     flags:
       - -mod=mod
+    ldflags:
+      - -X 'main.Version=$VERSION'
 
 release:
   prerelease: auto
@@ -18,8 +21,7 @@ universal_binaries:
   - replace: true
 
 brews:
-  -
-    name: runpod
+  - name: runpod
     homepage: "https://github.com/runpod/runpodctl"
     repository:
       owner: runpod
@@ -29,4 +31,4 @@ brews:
       email: prachford@icloud.com
 
 checksum:
-  name_template: 'checksums.txt'
+  name_template: "checksums.txt"
