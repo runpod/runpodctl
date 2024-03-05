@@ -22,6 +22,7 @@ var name string
 var podCount int
 var ports []string
 var secureCloud bool
+var templateId string
 var volumeInGb int
 var volumeMountPath string
 
@@ -42,6 +43,7 @@ var CreatePodsCmd = &cobra.Command{
 			MinMemoryInGb:     minMemoryInGb,
 			MinVcpuCount:      minVcpuCount,
 			Name:              name,
+			TemplateId:        templateId,
 			VolumeInGb:        volumeInGb,
 			VolumeMountPath:   volumeMountPath,
 		}
@@ -98,6 +100,7 @@ func init() {
 	CreatePodsCmd.Flags().StringVar(&gpuTypeId, "gpuType", "", "gpu type id, e.g. 'NVIDIA GeForce RTX 3090'")
 	CreatePodsCmd.Flags().StringVar(&imageName, "imageName", "", "container image name")
 	CreatePodsCmd.Flags().StringVar(&name, "name", "", "any pod name for easy reference")
+	CreatePodsCmd.Flags().StringVar(&templateId, "templateId", "", "templateId to use with the pods")
 	CreatePodsCmd.Flags().StringVar(&volumeMountPath, "volumePath", "/runpod", "container volume path")
 
 	CreatePodsCmd.MarkFlagRequired("gpuType")   //nolint
