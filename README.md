@@ -47,7 +47,7 @@ brew install runpodctl
 #### Windows PowerShell
 
 ```powershell
-wget https://github.com/runpod/runpodctl/releases/download/v1.14.2/runpodctl-windows-amd64.exe -O runpodctl.exe
+wget https://github.com/runpod/runpodctl/releases/latest/download/runpodctl-windows-amd64.exe -O runpodctl.exe
 ```
 
 ## Tutorial
