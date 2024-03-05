@@ -4,7 +4,7 @@
 
 runpodctl is the CLI tool to automate / manage GPU pods for [runpod.io](https://runpod.io).
 
-*Note: All pods automatically come with runpodctl installed with a pod-scoped API key.*
+_Note: All pods automatically come with runpodctl installed with a pod-scoped API key._
 
 </div>
 
@@ -47,7 +47,7 @@ brew install runpodctl
 #### Windows PowerShell
 
 ```powershell
-wget https://github.com/runpod/runpodctl/releases/download/v1.9.0/runpodctl-windows-amd64.exe -O runpodctl.exe
+wget https://github.com/runpod/runpodctl/releases/download/v1.14.2/runpodctl-windows-amd64.exe -O runpodctl.exe
 ```
 
 ## Tutorial
@@ -75,9 +75,9 @@ Run the following on the computer that has the file you want to send
 runpodctl send data.txt
 ```
 
-*Example output:*
+_Example output:_
 
- ```bash
+```bash
 Sending 'data.txt' (5 B)
 Code is: 8338-galileo-collect-fidel
 On the other computer run
@@ -91,7 +91,7 @@ runpodctl receive 8338-galileo-collect-fidel
 runpodctl receive 8338-galileo-collect-fidel
 ```
 
-*Example output:*
+_Example output:_
 
 ```bash
 Receiving 'data.txt' (5 B)
