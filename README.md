@@ -40,8 +40,7 @@ wget -qO- cli.runpod.net | sudo bash
 
 ```bash
 # Using homebrew
-brew tap runpod/runpodctl
-brew install runpodctl
+brew install runpod/runpodctl/runpodctl
 ```
 
 #### Windows PowerShell
