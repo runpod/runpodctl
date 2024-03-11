@@ -159,8 +159,8 @@ func saveInfoToFile(info map[string]interface{}, filename string) {
 
 // Cobra command
 var GpuDiagnosticsCmd = &cobra.Command{
-	Use:   "gpu-diagnostics",
-	Short: "Run GPU diagnostics for RunPod",
+	Use:   "PyTorch",
+	Short: "Run PyTorch CUDA test",
 	Long:  `This command performs a series of diagnostics tests on the GPUs available in your system for RunPod.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("RunPod GPU Diagnostics Tool")
