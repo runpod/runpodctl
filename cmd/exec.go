@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"cli/cmd/exec"
+	"github.com/runpod/runpodctl/cmd/exec"
 
 	"github.com/spf13/cobra"
 )

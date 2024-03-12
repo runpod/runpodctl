@@ -1,8 +1,9 @@
 package exec
 
 import (
-	"cli/cmd/project"
 	"fmt"
+
+	"github.com/runpod/runpodctl/cmd/project"
 )
 
 func PythonOverSSH(podID string, file string) error {

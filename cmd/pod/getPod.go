@@ -1,11 +1,12 @@
 package pod
 
 import (
-	"cli/api"
-	"cli/format"
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/runpod/runpodctl/api"
+	"github.com/runpod/runpodctl/format"
 
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"

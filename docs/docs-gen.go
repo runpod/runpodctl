@@ -1,8 +1,9 @@
 package main
 
 import (
-	"cli/cmd"
 	"log"
+
+	"github.com/runpod/runpodctl/cmd"
 
 	"github.com/spf13/cobra/doc"
 )

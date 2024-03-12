@@ -1,7 +1,6 @@
 package project
 
 import (
-	"cli/api"
 	"embed"
 	"errors"
 	"fmt"
@@ -12,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/runpod/runpodctl/api"
 
 	"github.com/pelletier/go-toml"
 )
@@ -56,7 +57,7 @@ func copyFiles(files fs.FS, source string, dest string) error {
 			if err != nil {
 				return err
 			}
-			if err := os.WriteFile(newPath, content, 0644); err != nil {
+			if err := os.WriteFile(newPath, content, 0o644); err != nil {
 				return err
 			}
 		}
@@ -74,7 +75,7 @@ func createNewProject(projectName string, cudaVersion string, pythonVersion stri
 		projectFolder = filepath.Join(projectFolder, projectName)
 
 		if _, err := os.Stat(projectFolder); os.IsNotExist(err) {
-			if err := os.Mkdir(projectFolder, 0755); err != nil {
+			if err := os.Mkdir(projectFolder, 0o755); err != nil {
 				log.Fatalf("Failed to create project directory: %v", err)
 			}
 		}
@@ -98,15 +99,15 @@ func createNewProject(projectName string, cudaVersion string, pythonVersion stri
 		handlerContentBytes, _ := os.ReadFile(handlerPath)
 		handlerContent := string(handlerContentBytes)
 		handlerContent = strings.ReplaceAll(handlerContent, "<<MODEL_NAME>>", modelName)
-		os.WriteFile(handlerPath, []byte(handlerContent), 0644)
+		os.WriteFile(handlerPath, []byte(handlerContent), 0o644)
 
 		requirementsPath := fmt.Sprintf("%s/builder/requirements.txt", projectFolder)
 		requirementsContentBytes, _ := os.ReadFile(requirementsPath)
 		requirementsContent := string(requirementsContentBytes)
-		//in requirements, replace <<RUNPOD>> with runpod-python import
-		//TODO determine version to lock runpod-python at
+		// in requirements, replace <<RUNPOD>> with runpod-python import
+		// TODO determine version to lock runpod-python at
 		requirementsContent = strings.ReplaceAll(requirementsContent, "<<RUNPOD>>", "runpod")
-		os.WriteFile(requirementsPath, []byte(requirementsContent), 0644)
+		os.WriteFile(requirementsPath, []byte(requirementsContent), 0o644)
 	}
 
 	generateProjectToml(projectFolder, "runpod.toml", projectName, cudaVersion, pythonVersion)
@@ -120,7 +121,6 @@ func loadProjectConfig() *toml.Tree {
 		panic("runpod.toml not found in the current directory.")
 	}
 	return toml
-
 }
 
 func getProjectPod(projectId string) (string, error) {
@@ -135,6 +135,7 @@ func getProjectPod(projectId string) (string, error) {
 	}
 	return "", errors.New("pod does not exist for project")
 }
+
 func getProjectEndpoint(projectId string) (string, error) {
 	endpoints, err := api.GetEndpoints()
 	if err != nil {
@@ -151,7 +152,7 @@ func getProjectEndpoint(projectId string) (string, error) {
 
 func attemptPodLaunch(config *toml.Tree, networkVolumeId string, environmentVariables map[string]string, selectedGpuTypes []string) (pod map[string]interface{}, err error) {
 	projectConfig := config.Get("project").(*toml.Tree)
-	//attempt to launch a pod with the given configuration.
+	// attempt to launch a pod with the given configuration.
 	for _, gpuType := range selectedGpuTypes {
 		fmt.Printf("Trying to get a Pod with %s... ", gpuType)
 		podEnv := mapToApiEnv(environmentVariables)
@@ -188,7 +189,7 @@ func attemptPodLaunch(config *toml.Tree, networkVolumeId string, environmentVari
 
 func launchDevPod(config *toml.Tree, networkVolumeId string) (string, error) {
 	fmt.Println("Deploying project Pod on RunPod...")
-	//construct env vars
+	// construct env vars
 	environmentVariables := createEnvVars(config)
 	// prepare gpu types
 	selectedGpuTypes := []string{}
@@ -198,7 +199,7 @@ func launchDevPod(config *toml.Tree, networkVolumeId string) (string, error) {
 			selectedGpuTypes = append(selectedGpuTypes, v.(string))
 		}
 	}
-	tomlGpu := config.GetPath([]string{"project", "gpu"}) //legacy
+	tomlGpu := config.GetPath([]string{"project", "gpu"}) // legacy
 	if tomlGpu != nil {
 		selectedGpuTypes = append(selectedGpuTypes, tomlGpu.(string))
 	}
@@ -242,7 +243,7 @@ func formatAsDockerEnv(env map[string]string) string {
 }
 
 func startProject(networkVolumeId string) error {
-	//parse project toml
+	// parse project toml
 	config := loadProjectConfig()
 	fmt.Println(config)
 
@@ -258,17 +259,17 @@ func startProject(networkVolumeId string) error {
 		return fmt.Errorf("project name not found in config")
 	}
 
-	//check for existing pod
+	// check for existing pod
 	projectPodId, err := getProjectPod(projectId)
 	if projectPodId == "" || err != nil {
-		//or try to get pod with one of gpu types
+		// or try to get pod with one of gpu types
 		projectPodId, err = launchDevPod(config, networkVolumeId)
 		if err != nil {
 			return err
 		}
 	}
 
-	//open ssh connection
+	// open ssh connection
 	sshConn, err := PodSSHConnection(projectPodId)
 	if err != nil {
 		fmt.Println("error establishing SSH connection to Pod: ", err)
@@ -276,7 +277,7 @@ func startProject(networkVolumeId string) error {
 	}
 
 	fmt.Println(fmt.Sprintf("Project %s Pod (%s) created.", projectName, projectPodId))
-	//create remote folder structure
+	// create remote folder structure
 	projectConfig := config.Get("project").(*toml.Tree)
 	volumePath := projectConfig.Get("volume_mount_path").(string)
 	projectPathUuid := path.Join(volumePath, projectConfig.Get("uuid").(string))
@@ -291,11 +292,11 @@ func startProject(networkVolumeId string) error {
 	}
 	fmt.Printf("Checking remote project folder: %s on Pod %s\n", remoteProjectPath, projectPodId)
 	sshConn.RunCommands([]string{fmt.Sprintf("mkdir -p %s %s", remoteProjectPath, projectPathUuidProd)})
-	//rsync project files
+	// rsync project files
 	fmt.Printf("Syncing files to Pod %s\n", projectPodId)
 	cwd, _ := os.Getwd()
 	sshConn.Rsync(cwd, projectPathUuidDev, false)
-	//activate venv on remote
+	// activate venv on remote
 	venvPath := "/" + path.Join(projectId, "venv")
 	archivedVenvPath := path.Join(projectPathUuid, "dev-venv.tar.zst")
 	fmt.Printf("Activating Python virtual environment %s on Pod %s\n", venvPath, projectPodId)
@@ -350,11 +351,11 @@ func startProject(networkVolumeId string) error {
 			venvPath, remoteProjectPath, config.GetPath([]string{"runtime", "requirements_path"}).(string)),
 	})
 
-	//create file watcher
+	// create file watcher
 	fmt.Println("Creating Project watcher...")
 	go sshConn.SyncDir(cwd, projectPathUuidDev)
 
-	//run launch api server / hot reload loop
+	// run launch api server / hot reload loop
 	pipReqPath := path.Join(remoteProjectPath, config.GetPath([]string{"runtime", "requirements_path"}).(string))
 	handlerPath := path.Join(remoteProjectPath, config.GetPath([]string{"runtime", "handler_path"}).(string))
 	launchApiServer := fmt.Sprintf(`
@@ -508,7 +509,7 @@ func startProject(networkVolumeId string) error {
 }
 
 func deployProject(networkVolumeId string) (endpointId string, err error) {
-	//parse project toml
+	// parse project toml
 	config := loadProjectConfig()
 	projectId := config.GetPath([]string{"project", "uuid"}).(string)
 	projectConfig := config.Get("project").(*toml.Tree)
@@ -517,28 +518,28 @@ func deployProject(networkVolumeId string) (endpointId string, err error) {
 	projectPathUuidProd := path.Join(projectPathUuid, "prod")
 	remoteProjectPath := path.Join(projectPathUuidProd, config.Get("name").(string))
 	venvPath := path.Join(projectPathUuidProd, "venv")
-	//check for existing pod
+	// check for existing pod
 	fmt.Println("Finding a pod for initial file sync")
 	projectPodId, err := getProjectPod(projectId)
 	if projectPodId == "" || err != nil {
-		//or try to get pod with one of gpu types
+		// or try to get pod with one of gpu types
 		projectPodId, err = launchDevPod(config, networkVolumeId)
 		if err != nil {
 			return "", err
 		}
 	}
-	//open ssh connection
+	// open ssh connection
 	sshConn, err := PodSSHConnection(projectPodId)
 	if err != nil {
 		fmt.Println("error establishing SSH connection to Pod: ", err)
 		return "", err
 	}
-	//sync remote dev to remote prod
+	// sync remote dev to remote prod
 	sshConn.RunCommand(fmt.Sprintf("mkdir -p %s", remoteProjectPath))
 	fmt.Printf("Syncing files to Pod %s prod\n", projectPodId)
 	cwd, _ := os.Getwd()
 	sshConn.Rsync(cwd, projectPathUuidProd, false)
-	//activate venv on remote
+	// activate venv on remote
 	fmt.Printf("Activating Python virtual environment: %s on Pod %s\n", venvPath, projectPodId)
 	sshConn.RunCommands([]string{
 		fmt.Sprintf("python%s -m venv %s", config.GetPath([]string{"runtime", "python_version"}).(string), venvPath),
@@ -554,7 +555,7 @@ func deployProject(networkVolumeId string) (endpointId string, err error) {
 	activateCmd := fmt.Sprintf(". %s/bin/activate", venvPath)
 	pythonCmd := fmt.Sprintf("python -u %s", handlerPath)
 	dockerStartCmd := "bash -c \"" + activateCmd + " && " + pythonCmd + "\""
-	//deploy new template
+	// deploy new template
 	projectEndpointTemplateId, err := api.CreateTemplate(&api.CreateTemplateInput{
 		Name:              fmt.Sprintf("%s-endpoint-%s-%d", projectName, projectId, time.Now().UnixMilli()),
 		ImageName:         projectConfig.Get("base_image").(string),
@@ -571,9 +572,9 @@ func deployProject(networkVolumeId string) (endpointId string, err error) {
 		fmt.Println("error making template")
 		return "", err
 	}
-	//deploy / update endpoint
+	// deploy / update endpoint
 	deployedEndpointId, err := getProjectEndpoint(projectId)
-	//default endpoint settings
+	// default endpoint settings
 	minWorkers := 0
 	maxWorkers := 3
 	flashboot := true
@@ -624,19 +625,19 @@ func deployProject(networkVolumeId string) (endpointId string, err error) {
 }
 
 func buildProjectDockerfile() {
-	//parse project toml
+	// parse project toml
 	config := loadProjectConfig()
 	projectConfig := config.Get("project").(*toml.Tree)
 	runtimeConfig := config.Get("runtime").(*toml.Tree)
-	//build Dockerfile
+	// build Dockerfile
 	dockerfileBytes, _ := dockerfileTemplate.ReadFile("exampleDockerfile")
 	dockerfile := string(dockerfileBytes)
-	//base image: from toml
+	// base image: from toml
 	dockerfile = strings.ReplaceAll(dockerfile, "<<BASE_IMAGE>>", projectConfig.Get("base_image").(string))
-	//pip requirements
+	// pip requirements
 	dockerfile = strings.ReplaceAll(dockerfile, "<<REQUIREMENTS_PATH>>", runtimeConfig.Get("requirements_path").(string))
 	dockerfile = strings.ReplaceAll(dockerfile, "<<PYTHON_VERSION>>", runtimeConfig.Get("python_version").(string))
-	//cmd: start handler
+	// cmd: start handler
 	dockerfile = strings.ReplaceAll(dockerfile, "<<HANDLER_PATH>>", runtimeConfig.Get("handler_path").(string))
 	if includeEnvInDockerfile {
 		dockerEnv := formatAsDockerEnv(createEnvVars(config))
@@ -644,10 +645,9 @@ func buildProjectDockerfile() {
 	} else {
 		dockerfile = strings.ReplaceAll(dockerfile, "<<SET_ENV_VARS>>", "")
 	}
-	//save to Dockerfile in project directory
+	// save to Dockerfile in project directory
 	projectFolder, _ := os.Getwd()
 	dockerfilePath := filepath.Join(projectFolder, "Dockerfile")
-	os.WriteFile(dockerfilePath, []byte(dockerfile), 0644)
+	os.WriteFile(dockerfilePath, []byte(dockerfile), 0o644)
 	fmt.Printf("Dockerfile created at %s\n", dockerfilePath)
-
 }
