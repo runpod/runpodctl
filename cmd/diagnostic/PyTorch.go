@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
-	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -14,6 +13,19 @@ import (
 
 	"github.com/spf13/cobra"
 )
+
+type PodQueryData struct {
+	Query     string            `json:"query"`
+	Variables map[string]string `json:"variables"`
+}
+
+type PodQueryResponse struct {
+	Data struct {
+		Pod struct {
+			MachineID string `json:"machineId"`
+		} `json:"pod"`
+	} `json:"data"`
+}
 
 func getPodMachineID(podID, apiKey string) string {
 	url := fmt.Sprintf("https://api.runpod.io/graphql?api_key=%s", apiKey)
@@ -27,13 +39,21 @@ func getPodMachineID(podID, apiKey string) string {
           }
         }
     `
-	data := map[string]interface{}{
-		"query":     query,
-		"variables": map[string]string{"podId": podID},
+	data := PodQueryData{
+		Query:     query,
+		Variables: map[string]string{"podId": podID},
 	}
-	jsonData, _ := json.Marshal(data)
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		fmt.Printf("Error marshalling JSON: %v\n", err)
+		return ""
+	}
 
-	req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		fmt.Printf("Error creating request: %v\n", err)
+		return ""
+	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -46,12 +66,12 @@ func getPodMachineID(podID, apiKey string) string {
 	}
 	defer resp.Body.Close()
 
-	var result map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
-	if pod, ok := result["data"].(map[string]interface{})["pod"].(map[string]interface{}); ok {
-		return pod["machineId"].(string)
+	var result PodQueryResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		fmt.Printf("Error decoding response: %v\n", err)
+		return ""
 	}
-	return ""
+	return result.Data.Pod.MachineID
 }
 
 func collectEnvInfo() map[string]string {
