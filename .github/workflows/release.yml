@@ -2,9 +2,9 @@
 name: release
 
 on:
-  push:
-    tags:
-      - "*"
+  release:
+    types: [published]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -20,6 +20,12 @@ jobs:
       - uses: actions/setup-go@v2
         with:
           go-version: 1.22
+
+      - name: Gets latest created release info
+        id: release
+        uses: jossef/action-latest-release-info@v1.2.1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: build
         run: |
@@ -74,9 +80,9 @@ jobs:
           distribution: goreleaser
           version: latest
           args: release --clean
-          ldflags: "-X 'main.Version=${{ steps.release.outputs.tag_name }}'"
         env:
           GITHUB_TOKEN: ${{ secrets.PUBLISHER_TOKEN }}
+          VERSION: ${{ steps.release.outputs.tag_name }}
       # - name: upload linux arm64 release binary
       #   uses: actions/upload-release-asset@v1.0.2
       #   env:
