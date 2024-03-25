@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"cli/api"
-	"cli/cmd/config"
-	"cli/cmd/croc"
+	"github.com/runpod/runpodctl/api"
+	"github.com/runpod/runpodctl/cmd/config"
+	"github.com/runpod/runpodctl/cmd/croc"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -86,7 +86,7 @@ func initConfig() {
 	if err := viper.ReadInConfig(); err == nil {
 		// fmt.Fprintln(os.Stderr, "Using config file:", viper.ConfigFileUsed())
 	} else {
-		//legacy: try to migrate old config to new location
+		// legacy: try to migrate old config to new location
 		viper.SetConfigType("yaml")
 		viper.AddConfigPath(home)
 		viper.SetConfigName(".runpod.yaml")
@@ -97,7 +97,7 @@ func initConfig() {
 			fmt.Println("Runpod config file not found, please run `runpodctl config` to create it")
 		}
 		viper.SetConfigType("toml")
-		//make .runpod folder if not exists
+		// make .runpod folder if not exists
 		err := os.MkdirAll(configPath, os.ModePerm)
 		cobra.CheckErr(err)
 		err = viper.WriteConfigAs(config.ConfigFile)

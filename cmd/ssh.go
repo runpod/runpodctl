@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"cli/cmd/ssh"
+	"github.com/runpod/runpodctl/cmd/ssh"
 
 	"github.com/spf13/cobra"
 )

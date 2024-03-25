@@ -1,21 +1,24 @@
 package cloud
 
 import (
-	"cli/api"
-	"cli/format"
 	"fmt"
 	"os"
 	"strconv"
+
+	"github.com/runpod/runpodctl/api"
+	"github.com/runpod/runpodctl/format"
 
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
 )
 
-var community bool
-var disk int
-var memory int
-var vcpu int
-var secure bool
+var (
+	community bool
+	disk      int
+	memory    int
+	vcpu      int
+	secure    bool
+)
 
 var GetCloudCmd = &cobra.Command{
 	Use:   "cloud [gpuCount]",

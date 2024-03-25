@@ -3,7 +3,6 @@ package project
 import (
 	"bufio"
 	"bytes"
-	"cli/api"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/runpod/runpodctl/api"
 
 	"github.com/fatih/color"
 	"golang.org/x/crypto/ssh"
@@ -81,7 +82,7 @@ func (sshConn *SSHConnection) Rsync(localDir string, remoteDir string, quiet boo
 		rsyncCmdArgs = append(rsyncCmdArgs, "--exclude", pat)
 	}
 
-	//Filter from .runpodignore
+	// Filter from .runpodignore
 	rsyncCmdArgs = append(rsyncCmdArgs, "--filter=:- .runpodignore")
 
 	// Prepare SSH options for rsync
@@ -162,7 +163,6 @@ func hasChanges(localDir string, lastSyncTime time.Time) (bool, string) {
 
 		return nil
 	})
-
 	if err != nil {
 		fmt.Printf("Error walking through directory: %v\n", err)
 		return false, ""
@@ -270,10 +270,10 @@ func PodSSHConnection(podId string) (*SSHConnection, error) {
 		return nil, fmt.Errorf("parsing private SSH key: %w", err)
 	}
 
-	//loop until pod ready
+	// loop until pod ready
 
 	fmt.Print("Waiting for Pod to come online... ")
-	//look up ip and ssh port for pod id
+	// look up ip and ssh port for pod id
 	var podIp string
 	var podPort int
 
@@ -306,5 +306,4 @@ func PodSSHConnection(podId string) (*SSHConnection, error) {
 	}
 
 	return &SSHConnection{podId: podId, client: client, podIp: podIp, podPort: podPort, sshKeyPath: sshKeyPath}, nil
-
 }
