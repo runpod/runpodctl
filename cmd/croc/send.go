@@ -2,12 +2,10 @@ package croc
 
 import (
 	"fmt"
-	"strings"
-	"encoding/json"
 	"math/rand"
-	"net/http"
-	"time"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/schollz/croc/v9/src/models"
 	"github.com/schollz/croc/v9/src/utils"
@@ -15,9 +13,9 @@ import (
 )
 
 type Relay struct {
-	Address    string   `json:"address"`
-	Password	string `json:"password"`
-	Ports  string    `json:"ports"`
+	Address  string `json:"address"`
+	Password string `json:"password"`
+	Ports    string `json:"ports"`
 }
 
 type Response struct {
@@ -38,25 +36,16 @@ var SendCmd = &cobra.Command{
 		rand.Seed(time.Now().UnixNano())
 
 		// Make a GET request to the URL
-		res, err := http.Get(relayUrl)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-		defer res.Body.Close()
-
-		// Decode the JSON response
-		var response Response
-		err = json.NewDecoder(res.Body).Decode(&response)
+		relays, err := GetRelays()
 		if err != nil {
 			fmt.Println(err)
 			fmt.Println("Could not get list of relays. Please contact support for help!")
 			return
 		}
-	
+
 		// Choose a random relay from the array
-		randomIndex := rand.Intn(len(response.Relays))
-		relay := response.Relays[randomIndex]
+		randomIndex := rand.Intn(len(relays))
+		relay := relays[randomIndex]
 
 		crocOptions := Options{
 			Curve:         "p256",
