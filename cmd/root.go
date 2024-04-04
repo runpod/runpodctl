@@ -16,10 +16,9 @@ var version string
 
 // Entrypoint for the CLI
 var rootCmd = &cobra.Command{
-	Use:     "runpodctl",
-	Aliases: []string{"runpod"},
-	Short:   "CLI for runpod.io",
-	Long:    "The RunPod CLI tool to manage resources on runpod.io and develop serverless applications.",
+	Use:   "runpodctl",
+	Short: "CLI for runpod.io",
+	Long:  "The RunPod CLI tool to manage resources on runpod.io and develop serverless applications.",
 }
 
 func GetRootCmd() *cobra.Command {
