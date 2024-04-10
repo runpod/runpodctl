@@ -30,6 +30,7 @@ runpodctl create pod [flags]
       --vcpu int                minimum vCPUs needed (default 1)
       --volumePath string       container volume path (default "/runpod")
       --volumeSize int          persistent volume disk size in GB (default 1)
+      --networkVolumeId string  network volume id
 ```
 
 ### SEE ALSO
