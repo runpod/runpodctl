@@ -52,26 +52,15 @@ type Machine struct {
 	GpuDisplayName string
 }
 type Runtime struct {
-	Ports []*PodRuntimePorts
-}
-type PodRuntimePorts struct {
-	Ip          string
-	IsIpPublic  bool
-	PrivatePort int
-	PublicPort  int
-	Type        string
-}
-
-type Runtime struct {
 	Ports []*Ports
 }
 
 type Ports struct {
-	Ip string
-	IsIpPublic bool
+	Ip          string
+	IsIpPublic  bool
 	PrivatePort int
-	PublicPort int
-	PortType string
+	PublicPort  int
+	PortType    string
 }
 
 func GetPods() (pods []*Pod, err error) {
