@@ -32,16 +32,16 @@ var GetPodCmd = &cobra.Command{
 			if AllFields {
 
 				var portEntries int = 0
-				if  p.Runtime != nil && p.Runtime.Ports != nil {
+				if p.Runtime != nil && p.Runtime.Ports != nil {
 					portEntries = len(p.Runtime.Ports)
 				}
 				ports := make([]string, portEntries)
-				for j:=0; j<portEntries; j++ {
+				for j := range ports {
 					var privpub string = "prv"
 					if p.Runtime.Ports[j].IsIpPublic {
 						privpub = "pub"
 					}
-					ports[j] = fmt.Sprintf("%s:%d->%d\u00A0(%s,%s)",  p.Runtime.Ports[j].Ip,  p.Runtime.Ports[j].PublicPort,  p.Runtime.Ports[j].PrivatePort,  privpub,  p.Runtime.Ports[j].PortType)
+					ports[j] = fmt.Sprintf("%s:%d->%d\u00A0(%s,%s)", p.Runtime.Ports[j].Ip, p.Runtime.Ports[j].PublicPort, p.Runtime.Ports[j].PrivatePort, privpub, p.Runtime.Ports[j].PortType)
 				}
 
 				row = append(
@@ -52,7 +52,7 @@ var GetPodCmd = &cobra.Command{
 					fmt.Sprintf("%d", p.ContainerDiskInGb),
 					fmt.Sprintf("%d", p.VolumeInGb),
 					fmt.Sprintf("%.3f", p.CostPerHr),
-					fmt.Sprintf("%s", strings.Join(ports[:], "\n") ),
+					fmt.Sprintf("%s", strings.Join(ports[:], ",")),
 				)
 			}
 			data[i] = row
