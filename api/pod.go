@@ -8,6 +8,12 @@ import (
 	"strings"
 )
 
+var Version string
+
+type UserOut struct {
+	Data   *PodData        `json:"data"`
+	Errors []*GraphQLError `json:"errors"`
+}
 type PodOut struct {
 	Data   *PodData        `json:"data"`
 	Errors []*GraphQLError `json:"errors"`
@@ -19,7 +25,9 @@ type PodData struct {
 	Myself *MySelfData
 }
 type MySelfData struct {
-	Pods []*Pod
+	PubKey         string
+	Pods           []*Pod
+	NetworkVolumes []*NetworkVolume
 }
 type Pod struct {
 	Id                string
@@ -42,6 +50,16 @@ type Pod struct {
 }
 type Machine struct {
 	GpuDisplayName string
+}
+type Runtime struct {
+	Ports []*PodRuntimePorts
+}
+type PodRuntimePorts struct {
+	Ip          string
+	IsIpPublic  bool
+	PrivatePort int
+	PublicPort  int
+	Type        string
 }
 
 type Runtime struct {
@@ -140,7 +158,10 @@ type CreatePodInput struct {
 	MinMemoryInGb     int       `json:"minMemoryInGb"`
 	MinVcpuCount      int       `json:"minVcpuCount"`
 	Name              string    `json:"name"`
+	NetworkVolumeId   string    `json:"networkVolumeId"`
 	Ports             string    `json:"ports"`
+	SupportPublicIp   bool      `json:"supportPublicIp"`
+	StartSSH          bool      `json:"startSsh"`
 	TemplateId        string    `json:"templateId"`
 	VolumeInGb        int       `json:"volumeInGb"`
 	VolumeMountPath   string    `json:"volumeMountPath"`

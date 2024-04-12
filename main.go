@@ -1,6 +1,6 @@
 package main
 
-import "cli/cmd"
+import "github.com/runpod/runpodctl/cmd"
 
 var Version string
 

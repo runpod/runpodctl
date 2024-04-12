@@ -1,29 +1,33 @@
 package pod
 
 import (
-	"cli/api"
 	"fmt"
 	"strings"
+
+	"github.com/runpod/runpodctl/api"
 
 	"github.com/spf13/cobra"
 )
 
-var communityCloud bool
-var secureCloud bool
-var containerDiskInGb int
-var deployCost float32
-var dockerArgs string
-var env []string
-var gpuCount int
-var gpuTypeId string
-var imageName string
-var minMemoryInGb int
-var minVcpuCount int
-var name string
-var ports []string
-var templateId string
-var volumeInGb int
-var volumeMountPath string
+var (
+	communityCloud    bool
+	secureCloud       bool
+	containerDiskInGb int
+	deployCost        float32
+	dockerArgs        string
+	env               []string
+	gpuCount          int
+	gpuTypeId         string
+	imageName         string
+	minMemoryInGb     int
+	minVcpuCount      int
+	name              string
+	ports             []string
+	templateId        string
+	volumeInGb        int
+	volumeMountPath   string
+	networkVolumeId   string
+)
 
 var CreatePodCmd = &cobra.Command{
 	Use:   "pod",
@@ -44,6 +48,7 @@ var CreatePodCmd = &cobra.Command{
 			TemplateId:        templateId,
 			VolumeInGb:        volumeInGb,
 			VolumeMountPath:   volumeMountPath,
+			NetworkVolumeId:   networkVolumeId,
 		}
 		if len(ports) > 0 {
 			input.Ports = strings.Join(ports, ",")
@@ -90,6 +95,7 @@ func init() {
 	CreatePodCmd.Flags().StringVar(&templateId, "templateId", "", "templateId to use with the pod")
 	CreatePodCmd.Flags().IntVar(&volumeInGb, "volumeSize", 1, "persistent volume disk size in GB")
 	CreatePodCmd.Flags().StringVar(&volumeMountPath, "volumePath", "/runpod", "container volume path")
+	CreatePodCmd.Flags().StringVar(&networkVolumeId, "networkVolumeId", "", "network volume id")
 
 	CreatePodCmd.MarkFlagRequired("gpuType")   //nolint
 	CreatePodCmd.MarkFlagRequired("imageName") //nolint

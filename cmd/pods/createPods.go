@@ -1,29 +1,33 @@
 package pods
 
 import (
-	"cli/api"
 	"fmt"
 	"strings"
+
+	"github.com/runpod/runpodctl/api"
 
 	"github.com/spf13/cobra"
 )
 
-var communityCloud bool
-var containerDiskInGb int
-var deployCost float32
-var dockerArgs string
-var env []string
-var gpuCount int
-var gpuTypeId string
-var imageName string
-var minMemoryInGb int
-var minVcpuCount int
-var name string
-var podCount int
-var ports []string
-var secureCloud bool
-var volumeInGb int
-var volumeMountPath string
+var (
+ communityCloud bool
+ containerDiskInGb int
+ deployCost float32
+ dockerArgs string
+ env []string
+ gpuCount int
+ gpuTypeId string
+ imageName string
+ minMemoryInGb int
+ minVcpuCount int
+ name string
+ podCount int
+ ports []string
+ secureCloud bool
+ templateId string
+ volumeInGb int
+ volumeMountPath string
+)
 
 var CreatePodsCmd = &cobra.Command{
 	Use:   "pods",
@@ -42,6 +46,7 @@ var CreatePodsCmd = &cobra.Command{
 			MinMemoryInGb:     minMemoryInGb,
 			MinVcpuCount:      minVcpuCount,
 			Name:              name,
+			TemplateId:        templateId,
 			VolumeInGb:        volumeInGb,
 			VolumeMountPath:   volumeMountPath,
 		}
@@ -98,6 +103,7 @@ func init() {
 	CreatePodsCmd.Flags().StringVar(&gpuTypeId, "gpuType", "", "gpu type id, e.g. 'NVIDIA GeForce RTX 3090'")
 	CreatePodsCmd.Flags().StringVar(&imageName, "imageName", "", "container image name")
 	CreatePodsCmd.Flags().StringVar(&name, "name", "", "any pod name for easy reference")
+	CreatePodsCmd.Flags().StringVar(&templateId, "templateId", "", "templateId to use with the pods")
 	CreatePodsCmd.Flags().StringVar(&volumeMountPath, "volumePath", "/runpod", "container volume path")
 
 	CreatePodsCmd.MarkFlagRequired("gpuType")   //nolint

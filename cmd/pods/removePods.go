@@ -1,8 +1,9 @@
 package pods
 
 import (
-	"cli/api"
 	"fmt"
+
+	"github.com/runpod/runpodctl/api"
 
 	"github.com/spf13/cobra"
 )

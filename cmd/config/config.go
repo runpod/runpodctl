@@ -2,33 +2,53 @@ package config
 
 import (
 	"fmt"
+	"os"
+
+	"github.com/runpod/runpodctl/api"
+	"github.com/runpod/runpodctl/cmd/ssh"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
-var ConfigFile string
-var apiKey string
-var apiUrl string
+var (
+	ConfigFile string
+	apiKey     string
+	apiUrl     string
+)
 
 var ConfigCmd = &cobra.Command{
 	Use:   "config",
-	Short: "CLI Config",
+	Short: "Manage CLI configuration",
 	Long:  "RunPod CLI Config Settings",
 	Run: func(c *cobra.Command, args []string) {
-		err := viper.WriteConfig()
-		cobra.CheckErr(err)
+		if err := viper.WriteConfig(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
+			return
+		}
+		fmt.Println("Configuration saved to file:", viper.ConfigFileUsed())
 
-		fmt.Println("saved apiKey into config file: " + ConfigFile)
+		publicKey, err := ssh.GenerateSSHKeyPair("RunPod-Key-Go")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to generate SSH key: %v\n", err)
+			return
+		}
+
+		if err := api.AddPublicSSHKey(publicKey); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to add the SSH key: %v\n", err)
+			return
+		}
+		fmt.Println("SSH key added successfully.")
 	},
 }
 
 func init() {
-	ConfigCmd.Flags().StringVar(&apiKey, "apiKey", "", "runpod api key")
+	ConfigCmd.Flags().StringVar(&apiKey, "apiKey", "", "RunPod API key")
 	viper.BindPFlag("apiKey", ConfigCmd.Flags().Lookup("apiKey")) //nolint
 	viper.SetDefault("apiKey", "")
 
-	ConfigCmd.Flags().StringVar(&apiUrl, "apiUrl", "", "runpod api url")
+	ConfigCmd.Flags().StringVar(&apiUrl, "apiUrl", "https://api.runpod.io/graphql", "RunPod API URL")
 	viper.BindPFlag("apiUrl", ConfigCmd.Flags().Lookup("apiUrl")) //nolint
-	viper.SetDefault("apiUrl", "https://api.runpod.io/graphql")
+
+	ConfigCmd.MarkFlagRequired("apiKey")
 }

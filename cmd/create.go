@@ -1,8 +1,8 @@
 package cmd
 
 import (
-	"cli/cmd/pod"
-	"cli/cmd/pods"
+	"github.com/runpod/runpodctl/cmd/pod"
+	"github.com/runpod/runpodctl/cmd/pods"
 
 	"github.com/spf13/cobra"
 )
