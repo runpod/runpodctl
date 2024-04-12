@@ -2,7 +2,7 @@
 
 
 local: version
-	go build -ldflags -o bin/runpodctl .
+	go build -o bin/runpodctl .
 
 release: buildall strip compress
 
