@@ -16,3 +16,6 @@ bin/
 main
 .vscode/
 vendor/
+
+## auto generated file during make and release
+version

@@ -20,7 +20,6 @@ jobs:
       - uses: actions/setup-go@v2
         with:
           go-version: 1.22
-
       - name: Gets latest created release info
         id: release
         uses: jossef/action-latest-release-info@v1.2.1
@@ -29,12 +28,16 @@ jobs:
 
       - name: build
         run: |
-          env GOOS=linux GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-linux-amd64 .
-          env GOOS=darwin GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-darwin-amd64 .
-          env GOOS=darwin GOARCH=arm64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-darwin-arm64 .
-          env GOOS=windows GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-windows-amd64.exe .
-          # env GOOS=linux GOARCH=arm64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-linux-arm64 .
-          # env GOOS=android GOARCH=amd64 go build -ldflags "-X 'main.Version=${{ steps.release.outputs.tag_name }}'" -o bin/runpodctl-android-amd64 .
+
+          echo '${{ steps.release.outputs.tag_name }}' > VERSION 
+          env GOOS=android GOARCH=amd64 go build -o bin/runpodctl-android-amd64 .
+          env GOOS=darwin GOARCH=amd64 go build -o bin/runpodctl-darwin-amd64 .
+          env GOOS=darwin GOARCH=arm64 go build -o bin/runpodctl-darwin-arm64 .
+          env GOOS=linux GOARCH=amd64 go build -o bin/runpodctl-linux-amd64 .
+          env GOOS=linux GOARCH=arm64 go build -o bin/runpodctl-linux-arm64 .
+          env GOOS=windows GOARCH=amd64 go build -o bin/runpodctl-windows-amd64.exe .
+          strip bin/* || true # strip the binary's DWARF debug info, where applicable
+          ./tools/upx --best bin/* || true # compress the binaries
 
       - name: upload linux amd64 release binary
         uses: actions/upload-release-asset@v1.0.2
@@ -83,21 +86,21 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.PUBLISHER_TOKEN }}
           VERSION: ${{ steps.release.outputs.tag_name }}
-      # - name: upload linux arm64 release binary
-      #   uses: actions/upload-release-asset@v1.0.2
-      #   env:
-      #     GITHUB_TOKEN: ${{ github.token }}
-      #   with:
-      #     upload_url: ${{ steps.release.outputs.upload_url }}
-      #     asset_path: bin/runpodctl-linux-arm64
-      #     asset_name: runpodctl-linux-arm64
-      #     asset_content_type: application/octet-stream
-      # - name: upload android amd64 release binary
-      #   uses: actions/upload-release-asset@v1.0.2
-      #   env:
-      #     GITHUB_TOKEN: ${{ github.token }}
-      #   with:
-      #     upload_url: ${{ steps.release.outputs.upload_url }}
-      #     asset_path: bin/runpodctl-android-amd64
-      #     asset_name: runpodctl-android-amd64
-      #     asset_content_type: application/octet-stream
+      - name: upload linux arm64 release binary
+        uses: actions/upload-release-asset@v1.0.2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          upload_url: ${{ steps.release.outputs.upload_url }}
+          asset_path: bin/runpodctl-linux-arm64
+          asset_name: runpodctl-linux-arm64
+          asset_content_type: application/octet-stream
+      - name: upload android amd64 release binary
+        uses: actions/upload-release-asset@v1.0.2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          upload_url: ${{ steps.release.outputs.upload_url }}
+          asset_path: bin/runpodctl-android-amd64
+          asset_name: runpodctl-android-amd64
+          asset_content_type: application/octet-stream

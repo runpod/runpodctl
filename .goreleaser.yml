@@ -3,6 +3,8 @@ builds:
     goos:
       - darwin
       - linux
+      - android
+      - windows
     goarch:
       - amd64
       - arm64
@@ -10,8 +12,6 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -mod=mod
-    ldflags:
-      - -X 'main.Version={{ .Env.VERSION }}'
 
 release:
   prerelease: auto
