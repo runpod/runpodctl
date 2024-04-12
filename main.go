@@ -1,7 +1,12 @@
 package main
 
-import "github.com/runpod/runpodctl/cmd"
+import (
+	_ "embed"
 
+	"github.com/runpod/runpodctl/cmd"
+)
+
+//go:embed version
 var Version string
 
 func main() {
