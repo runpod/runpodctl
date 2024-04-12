@@ -28,9 +28,9 @@ jobs:
 
       - name: build
         run: |
-
+          export CGO_ENABLED=0
           echo "${{ steps.release.outputs.tag_name }}" > version 
-          env GOOS=android GOARCH=amd64 go build -o bin/runpodctl-android-amd64 .
+          env GOOS=android GOARCH=arm64 go build -o bin/runpodctl-android-arm64 .
           env GOOS=darwin GOARCH=amd64 go build -o bin/runpodctl-darwin-amd64 .
           env GOOS=darwin GOARCH=arm64 go build -o bin/runpodctl-darwin-arm64 .
           env GOOS=linux GOARCH=amd64 go build -o bin/runpodctl-linux-amd64 .
@@ -95,12 +95,12 @@ jobs:
           asset_path: bin/runpodctl-linux-arm64
           asset_name: runpodctl-linux-arm64
           asset_content_type: application/octet-stream
-      - name: upload android amd64 release binary
+      - name: upload android arm64 release binary
         uses: actions/upload-release-asset@v1.0.2
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
           upload_url: ${{ steps.release.outputs.upload_url }}
-          asset_path: bin/runpodctl-android-amd64
-          asset_name: runpodctl-android-amd64
+          asset_path: bin/runpodctl-android-arm64
+          asset_name: runpodctl-android-arm64
           asset_content_type: application/octet-stream
