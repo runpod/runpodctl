@@ -1,3 +1,7 @@
+before:
+  hooks:
+    - echo "{{ .Env.VERSION }}" > version
+
 builds:
   - binary: runpodctl
     goos:
@@ -11,8 +15,6 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -mod=mod
-    ldflags:
-      - -X 'main.Version={{ .Env.VERSION }}'
 
 release:
   prerelease: auto
