@@ -1,7 +1,3 @@
-before:
-  hooks:
-    - echo "{{ .Env.VERSION }}" > version
-
 builds:
   - binary: runpodctl
     goos:
