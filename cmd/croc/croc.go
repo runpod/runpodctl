@@ -449,7 +449,7 @@ func (c *Client) setupLocalRelay() {
 
 func (c *Client) broadcastOnLocalNetwork(useipv6 bool) {
 	var timeLimit time.Duration
-	//if we don't use an external relay, the broadcast messages need to be sent continuously
+	// if we don't use an external relay, the broadcast messages need to be sent continuously
 	if c.Options.OnlyLocal {
 		timeLimit = -1 * time.Second
 	} else {
@@ -515,7 +515,6 @@ func (c *Client) Send(filesInfo []FileInfo, emptyFoldersToTransfer []FileInfo, t
 	c.TotalNumberFolders = totalNumberFolders
 	c.TotalNumberOfContents = len(filesInfo)
 	err = c.sendCollectFiles(filesInfo)
-
 	if err != nil {
 		return
 	}
@@ -1120,7 +1119,7 @@ func (c *Client) processMessagePake(m message.Message) (err error) {
 			Type:   message.TypePAKE,
 			Bytes:  c.Pake.Bytes(),
 			Bytes2: salt,
-		})
+		}) // TODO: check me
 	} else {
 		err = c.Pake.Update(m.Bytes)
 		if err != nil {
@@ -1350,7 +1349,7 @@ func (c *Client) recipientInitializeFile() (err error) {
 	var errOpen error
 	c.CurrentFile, errOpen = os.OpenFile(
 		pathToFile,
-		os.O_WRONLY, 0666)
+		os.O_WRONLY, 0o666)
 	var truncate bool // default false
 	c.CurrentFileChunks = []int64{}
 	c.CurrentFileChunkRanges = []int64{}
