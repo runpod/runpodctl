@@ -1,7 +1,5 @@
 name: test
-
 on: [push]
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -18,5 +16,7 @@ jobs:
         run: go vet ./...
       - name: build all packages
         run: go build ./...
+      - name: check for vulnerabilities
+        run: ./tools/govulncheck ./...
       - name: Run tests
         run: go test -vet=off --cover ./...
