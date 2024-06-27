@@ -2,10 +2,9 @@ package croc
 
 import (
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/schollz/croc/v9/src/models"
 	"github.com/schollz/croc/v9/src/utils"
@@ -32,9 +31,6 @@ var SendCmd = &cobra.Command{
 	Short: "send file(s), or folder",
 	Long:  "send file(s), or folder to pod or any computer",
 	Run: func(cmd *cobra.Command, args []string) {
-
-		rand.Seed(time.Now().UnixNano())
-
 		// Make a GET request to the URL
 		relays, err := GetRelays()
 		if err != nil {
@@ -43,9 +39,9 @@ var SendCmd = &cobra.Command{
 			return
 		}
 
+		randIndex := rand.IntN(len(relays))
 		// Choose a random relay from the array
-		randomIndex := rand.Intn(len(relays))
-		relay := relays[randomIndex]
+		relay := relays[randIndex]
 
 		crocOptions := Options{
 			Curve:         "p256",
@@ -78,7 +74,7 @@ var SendCmd = &cobra.Command{
 			crocOptions.SharedSecret = utils.GetRandomName()
 		}
 
-		crocOptions.SharedSecret = crocOptions.SharedSecret + "-" + strconv.Itoa(randomIndex)
+		crocOptions.SharedSecret = crocOptions.SharedSecret + "-" + strconv.Itoa(randIndex)
 
 		minimalFileInfos, emptyFoldersToTransfer, totalNumberFolders, err := GetFilesInfo(fnames, crocOptions.ZipFolder)
 		if err != nil {
