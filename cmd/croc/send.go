@@ -1,8 +1,12 @@
 package croc
 
 import (
+	"errors"
 	"fmt"
 	"math/rand/v2"
+	"log"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -26,17 +30,27 @@ var code string
 var relayUrl = "https://raw.githubusercontent.com/runpod/runpodctl/main/cmd/croc/relays.json"
 
 var SendCmd = &cobra.Command{
-	Use:   "send [filename(s) or folder]",
-	Args:  cobra.ExactArgs(1),
+	Use:   "send [file0] [file1] ...",
+	Args:  cobra.MinimumNArgs(1),
 	Short: "send file(s), or folder",
 	Long:  "send file(s), or folder to pod or any computer",
-	Run: func(cmd *cobra.Command, args []string) {
-		// Make a GET request to the URL
-		relays, err := GetRelays()
+	Run: func(_ *cobra.Command, args []string) {
+		log := log.New(os.Stderr, "runpodctl-send: ", 0)
+		src, err := filepath.Abs(args[0])
 		if err != nil {
-			fmt.Println(err)
-			fmt.Println("Could not get list of relays. Please contact support for help!")
-			return
+			log.Fatalf("error getting absolute path of %s: %v", args[0], err)
+		}
+		switch _, err := os.Stat(src); {
+		case errors.Is(err, os.ErrNotExist):
+			log.Fatalf("file or folder %q does not exist", src)
+		case err != nil:
+			log.Fatalf("error reading file or folder %q: %v", src, err)
+		}
+		// Make a GET request to the URL
+		relays, err := getRelays()
+		if err != nil {
+			log.Print(err)
+			log.Fatal("Could not get list of relays. Please contact support for help!")
 		}
 
 		randIndex := rand.IntN(len(relays))
@@ -63,20 +77,15 @@ var SendCmd = &cobra.Command{
 			crocOptions.RelayAddress = ""
 		}
 
-		fnames := args
-		if len(fnames) == 0 {
-			fmt.Println("must specify file: croc send [filename(s) or folder]")
-			return
-		}
-
 		if len(crocOptions.SharedSecret) == 0 {
 			// generate code phrase
 			crocOptions.SharedSecret = utils.GetRandomName()
 		}
 
 		crocOptions.SharedSecret = crocOptions.SharedSecret + "-" + strconv.Itoa(randIndex)
+		fmt.Println(crocOptions.SharedSecret) // output to stdout so user or send-ssh can see it
 
-		minimalFileInfos, emptyFoldersToTransfer, totalNumberFolders, err := GetFilesInfo(fnames, crocOptions.ZipFolder)
+		minimalFileInfos, emptyFoldersToTransfer, totalNumberFolders, err := GetFilesInfo(args, crocOptions.ZipFolder)
 		if err != nil {
 			return
 		}

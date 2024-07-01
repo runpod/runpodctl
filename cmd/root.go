@@ -50,6 +50,7 @@ func registerCommands() {
 	// file transfer via croc
 	rootCmd.AddCommand(croc.ReceiveCmd)
 	rootCmd.AddCommand(croc.SendCmd)
+	rootCmd.AddCommand(croc.SCPHelp)
 
 	// Version
 	rootCmd.Version = version
