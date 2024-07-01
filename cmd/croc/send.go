@@ -3,8 +3,8 @@ package croc
 import (
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"log"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -53,9 +53,9 @@ var SendCmd = &cobra.Command{
 			log.Fatal("Could not get list of relays. Please contact support for help!")
 		}
 
+		randIndex := rand.IntN(len(relays))
 		// Choose a random relay from the array
-		randomIndex := rand.Intn(len(relays))
-		relay := relays[randomIndex]
+		relay := relays[randIndex]
 
 		crocOptions := Options{
 			Curve:         "p256",
@@ -82,7 +82,7 @@ var SendCmd = &cobra.Command{
 			crocOptions.SharedSecret = utils.GetRandomName()
 		}
 
-		crocOptions.SharedSecret = crocOptions.SharedSecret + "-" + strconv.Itoa(randomIndex)
+		crocOptions.SharedSecret = crocOptions.SharedSecret + "-" + strconv.Itoa(randIndex)
 		fmt.Println(crocOptions.SharedSecret) // output to stdout so user or send-ssh can see it
 
 		minimalFileInfos, emptyFoldersToTransfer, totalNumberFolders, err := GetFilesInfo(args, crocOptions.ZipFolder)
