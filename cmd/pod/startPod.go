@@ -9,6 +9,7 @@ import (
 )
 
 var bidPerGpu float32
+var gpuCount int
 
 var StartPodCmd = &cobra.Command{
 	Use:   "pod [podId]",
@@ -19,7 +20,7 @@ var StartPodCmd = &cobra.Command{
 		var err error
 		var pod map[string]interface{}
 		if bidPerGpu > 0 {
-			pod, err = api.StartSpotPod(args[0], bidPerGpu)
+			pod, err = api.StartSpotPod(args[0], bidPerGpu, gpuCount)
 		} else {
 			pod, err = api.StartOnDemandPod(args[0])
 		}
@@ -36,4 +37,5 @@ var StartPodCmd = &cobra.Command{
 
 func init() {
 	StartPodCmd.Flags().Float32Var(&bidPerGpu, "bid", 0, "bid per gpu for spot price")
+	StartPodCmd.Flags().IntVar(&gpuCount, "gpuCount", 1, "number of GPUs to request")
 }
