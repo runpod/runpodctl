@@ -2,19 +2,24 @@ package croc
 
 import (
 	"encoding/json"
-	"fmt"
+	"log"
 	"net/http"
-	"strings"
+	"os"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/schollz/croc/v9/src/croc"
 	"github.com/schollz/croc/v9/src/models"
 	"github.com/spf13/cobra"
 )
 
-func GetRelays() ([]Relay, error) {
+func getRelays() ([]Relay, error) {
 	// Make a GET request to the URL
-	res, err := http.Get(relayUrl)
+	client := &http.Client{
+		Timeout: 2 * time.Minute,
+	}
+	res, err := client.Get(relayUrl)
 	if err != nil {
 		return nil, err
 	}
@@ -36,20 +41,20 @@ var ReceiveCmd = &cobra.Command{
 	Short: "receive file(s), or folder",
 	Long:  "receive file(s), or folder from pod or any computer",
 	Run: func(cmd *cobra.Command, args []string) {
-		relays, err := GetRelays()
+		log := log.New(os.Stderr, "runpodctl-receive: ", 0)
+		relays, err := getRelays()
 		if err != nil {
-			fmt.Println("There was an issue getting the relay list. Please try again.")
-			return
+			log.Fatal("There was an issue getting the relay list. Please try again.")
+		}
+		sharedSecretCode := args[0]
+		split := strings.Split(sharedSecretCode, "-")
+		if len(split) < 5 {
+			log.Fatalf("Malformed code %q: expected 5 parts separated by dashes, but got %v", sharedSecretCode, len(split))
 		}
 
-		SharedSecret := args[0]
-		split := strings.Split(SharedSecret, "-")
-		relayIndexString := split[4]
-		relayIndex, err := strconv.Atoi(relayIndexString)
-
+		relayIndex, err := strconv.Atoi(split[4]) // relay index
 		if err != nil {
-			fmt.Println("Malformed relay, please try again.")
-			return
+			log.Fatalf("Malformed relay, please try again.")
 		}
 
 		relay := relays[relayIndex]
@@ -62,7 +67,7 @@ var ReceiveCmd = &cobra.Command{
 			Overwrite:     true,
 			RelayAddress:  relay.Address,
 			RelayPassword: relay.Password,
-			SharedSecret:  SharedSecret,
+			SharedSecret:  sharedSecretCode,
 		}
 
 		if crocOptions.RelayAddress != models.DEFAULT_RELAY {
@@ -72,18 +77,12 @@ var ReceiveCmd = &cobra.Command{
 		}
 
 		cr, err := croc.New(crocOptions)
-
 		if err != nil {
-			fmt.Println(err)
-			return
+			log.Fatalf("croc: %v", err)
 		}
 
 		if err = cr.Receive(); err != nil {
-			fmt.Println(err)
-			return
-		} 
-
+			log.Fatalf("croc: receive: %v", err)
+		}
 	},
 }
-
-

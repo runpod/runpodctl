@@ -1,11 +1,14 @@
 package croc
 
 import (
+	"errors"
 	"fmt"
+	"log"
 	"math/rand"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/schollz/croc/v9/src/models"
 	"github.com/schollz/croc/v9/src/utils"
@@ -27,20 +30,27 @@ var code string
 var relayUrl = "https://raw.githubusercontent.com/runpod/runpodctl/main/cmd/croc/relays.json"
 
 var SendCmd = &cobra.Command{
-	Use:   "send [filename(s) or folder]",
-	Args:  cobra.ExactArgs(1),
+	Use:   "send [file0] [file1] ...",
+	Args:  cobra.MinimumNArgs(1),
 	Short: "send file(s), or folder",
 	Long:  "send file(s), or folder to pod or any computer",
-	Run: func(cmd *cobra.Command, args []string) {
-
-		rand.Seed(time.Now().UnixNano())
-
-		// Make a GET request to the URL
-		relays, err := GetRelays()
+	Run: func(_ *cobra.Command, args []string) {
+		log := log.New(os.Stderr, "runpodctl-send: ", 0)
+		src, err := filepath.Abs(args[0])
 		if err != nil {
-			fmt.Println(err)
-			fmt.Println("Could not get list of relays. Please contact support for help!")
-			return
+			log.Fatalf("error getting absolute path of %s: %v", args[0], err)
+		}
+		switch _, err := os.Stat(src); {
+		case errors.Is(err, os.ErrNotExist):
+			log.Fatalf("file or folder %q does not exist", src)
+		case err != nil:
+			log.Fatalf("error reading file or folder %q: %v", src, err)
+		}
+		// Make a GET request to the URL
+		relays, err := getRelays()
+		if err != nil {
+			log.Print(err)
+			log.Fatal("Could not get list of relays. Please contact support for help!")
 		}
 
 		// Choose a random relay from the array
@@ -67,20 +77,15 @@ var SendCmd = &cobra.Command{
 			crocOptions.RelayAddress = ""
 		}
 
-		fnames := args
-		if len(fnames) == 0 {
-			fmt.Println("must specify file: croc send [filename(s) or folder]")
-			return
-		}
-
 		if len(crocOptions.SharedSecret) == 0 {
 			// generate code phrase
 			crocOptions.SharedSecret = utils.GetRandomName()
 		}
 
 		crocOptions.SharedSecret = crocOptions.SharedSecret + "-" + strconv.Itoa(randomIndex)
+		fmt.Println(crocOptions.SharedSecret) // output to stdout so user or send-ssh can see it
 
-		minimalFileInfos, emptyFoldersToTransfer, totalNumberFolders, err := GetFilesInfo(fnames, crocOptions.ZipFolder)
+		minimalFileInfos, emptyFoldersToTransfer, totalNumberFolders, err := GetFilesInfo(args, crocOptions.ZipFolder)
 		if err != nil {
 			return
 		}
