@@ -643,21 +643,18 @@ func buildEndpointConfig(projectFolder string, projectId string) (err error) {
 	remoteProjectPath := path.Join(projectPathUuidProd, config.Get("name").(string))
 	handlerPath := path.Join(remoteProjectPath, config.GetPath([]string{"runtime", "handler_path"}).(string))
 	pythonCmd := fmt.Sprintf("python -u %s", handlerPath)
-	treeMap := map[string]any{
+	projectName := mustGetPathAs[string](config, "name")
+	templateConfig := map[string]any{
 		"name":                 fmt.Sprintf("%s-endpoint-%s-%d", projectName, projectId, time.Now().UnixMilli()),
 		"image_name":           mustGetPathAs[string](config, "project", "base_image"), //TODO: make it a parameter
-		"env":                  mustGetPathAs[*toml.Tree](config, "project", "env_vars"),
+		"env":                  mustGetPathAs[*toml.Tree](config, "project", "env_vars").ToMap(),
 		"container_disk_in_gb": mustGetPathAs[int64](config, "project", "container_disk_size_gb"),
 		"volume_mount_path":    mustGetPathAs[string](config, "project", "volume_mount_path"),
 		"docker_start_cmd":     pythonCmd,
 	}
-	templateConfig, err := toml.TreeFromMap(treeMap)
-	if err != nil {
-		return err
-	}
 	// dump these into their own toml
 	resultMap := map[string]any{
-		"endpoint": endpointConfig,
+		"endpoint": endpointConfig.ToMap(),
 		"template": templateConfig,
 	}
 	resultTree, err := toml.TreeFromMap(resultMap)
@@ -671,7 +668,10 @@ func buildEndpointConfig(projectFolder string, projectId string) (err error) {
 		return err
 	}
 	defer f.Close()
-	resultTree.WriteTo(f)
+	_, err = resultTree.WriteTo(f)
+	if err != nil {
+		return err
+	}
 	fmt.Printf("endpoint.toml created at %s\n", endpointConfigPath)
 	return nil
 }
