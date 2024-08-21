@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -317,12 +318,16 @@ var GenerateEndpointConfigCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		projectDir, err := os.Getwd()
 		if err != nil {
-			fmt.Println("Error getting current directory:", err)
+			log.Fatalf("Error getting current directory: %v", err)
 			return
 		}
 		projectConfig := loadProjectConfig()
 		projectId := mustGetPathAs[string](projectConfig, "project", "uuid")
-		buildEndpointConfig(projectDir, projectId)
+		err = buildEndpointConfig(projectDir, projectId)
+		if err != nil {
+			log.Fatalf("Error generating endpoint configuration: %v", err)
+			return
+		}
 	},
 }
 var BuildProjectCmd = &cobra.Command{

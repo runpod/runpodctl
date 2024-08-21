@@ -638,24 +638,39 @@ func buildEndpointConfig(projectFolder string, projectId string) (err error) {
 	// parse project toml
 	config := loadProjectConfig()
 	endpointConfig := mustGetPathAs[*toml.Tree](config, "endpoint")
-
-	templateConfig := toml.Tree{}
-	templateConfig.Set("name", fmt.Sprintf("%s-endpoint-%s-%d", projectName, projectId, time.Now().UnixMilli()))
-	templateConfig.Set("image_name", mustGetPathAs[string](config, "project", "base_image")) //TODO: make it a parameter
-	templateConfig.Set("env", mustGetPathAs[*toml.Tree](config, "project", "env_vars"))
-	templateConfig.Set("docker_start_cmd", mustGetPathAs[string](config, "project", "docker_start_cmd"))
-	templateConfig.Set("container_disk_in_gb", mustGetPathAs[int64](config, "project", "container_disk_size_gb"))
-	templateConfig.Set("volume_mount_path", mustGetPathAs[string](config, "project", "volume_mount_path"))
+	projectPathUuid := path.Join(mustGetPathAs[string](config, "project", "volume_mount_path"), mustGetPathAs[string](config, "project", "uuid"))
+	projectPathUuidProd := path.Join(projectPathUuid, "prod")
+	remoteProjectPath := path.Join(projectPathUuidProd, config.Get("name").(string))
+	handlerPath := path.Join(remoteProjectPath, config.GetPath([]string{"runtime", "handler_path"}).(string))
+	pythonCmd := fmt.Sprintf("python -u %s", handlerPath)
+	treeMap := map[string]any{
+		"name":                 fmt.Sprintf("%s-endpoint-%s-%d", projectName, projectId, time.Now().UnixMilli()),
+		"image_name":           mustGetPathAs[string](config, "project", "base_image"), //TODO: make it a parameter
+		"env":                  mustGetPathAs[*toml.Tree](config, "project", "env_vars"),
+		"container_disk_in_gb": mustGetPathAs[int64](config, "project", "container_disk_size_gb"),
+		"volume_mount_path":    mustGetPathAs[string](config, "project", "volume_mount_path"),
+		"docker_start_cmd":     pythonCmd,
+	}
+	templateConfig, err := toml.TreeFromMap(treeMap)
+	if err != nil {
+		return err
+	}
 	// dump these into their own toml
-	resultTree := toml.Tree{}
-	resultTree.Set("endpoint", endpointConfig)
-	resultTree.Set("template", templateConfig)
+	resultMap := map[string]any{
+		"endpoint": endpointConfig,
+		"template": templateConfig,
+	}
+	resultTree, err := toml.TreeFromMap(resultMap)
+	if err != nil {
+		return err
+	}
 	// save to endpoint.toml in project directory
 	endpointConfigPath := filepath.Join(projectFolder, "endpoint.toml")
 	f, err := os.Create(endpointConfigPath)
 	if err != nil {
 		return err
 	}
+	defer f.Close()
 	resultTree.WriteTo(f)
 	fmt.Printf("endpoint.toml created at %s\n", endpointConfigPath)
 	return nil
