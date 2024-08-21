@@ -624,21 +624,79 @@ func deployProject(networkVolumeId string) (endpointId string, err error) {
 	return deployedEndpointId, nil
 }
 
-func buildProjectDockerfile() {
+// func deployProjectDocker() (endpointId string, err error) {
+
+// }
+
+func buildEndpointConfig(projectFolder string) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
+
 	// parse project toml
 	config := loadProjectConfig()
-	projectConfig := config.Get("project").(*toml.Tree)
-	runtimeConfig := config.Get("runtime").(*toml.Tree)
+	endpointConfig := mustGetPathAs[*toml.Tree](config, "endpoint")
+	templateConfig := mustGetPathAs[*toml.Tree](config, "template")
+	// dump these into their own toml
+	resultTree := toml.Tree{}
+	resultTree.Set("endpoint", endpointConfig)
+	resultTree.Set("template", templateConfig)
+	// save to endpoint.toml in project directory
+	endpointConfigPath := filepath.Join(projectFolder, "endpoint.toml")
+	f, err := os.Create(endpointConfigPath)
+	if err != nil {
+		return err
+	}
+	resultTree.WriteTo(f)
+	fmt.Printf("endpoint.toml created at %s\n", endpointConfigPath)
+	return nil
+}
+
+// get the key at this level of the TOML file, panicking with a useful error message if it doesn't exist
+func getPathAs[T any](tree *toml.Tree, keys ...string) (t T, err error) {
+	if tree == nil {
+		panic("tree is nil")
+	}
+	got := tree.GetPath(keys)
+	if got == nil {
+		return t, fmt.Errorf("expected key %q in TOML file to be a %T, but it was missing", strings.Join(keys, "."), t)
+	}
+	t, ok := got.(T)
+	if !ok {
+		return t, fmt.Errorf("expected key %q in TOML file to be a %T, but it was a %T", strings.Join(keys, "."), t, got)
+	}
+	return t, nil
+}
+
+func mustGetPathAs[T any](tree *toml.Tree, keys ...string) (t T) {
+	t, err := getPathAs[T](tree, keys...)
+	if err != nil {
+		panic(err)
+	}
+	return t
+}
+
+func buildProjectDockerfile() (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
+
+	// parse project toml
+	config := loadProjectConfig()
 	// build Dockerfile
 	dockerfileBytes, _ := dockerfileTemplate.ReadFile("exampleDockerfile")
 	dockerfile := string(dockerfileBytes)
 	// base image: from toml
-	dockerfile = strings.ReplaceAll(dockerfile, "<<BASE_IMAGE>>", projectConfig.Get("base_image").(string))
+	dockerfile = strings.ReplaceAll(dockerfile, "<<BASE_IMAGE>>", mustGetPathAs[string](config, "project", "base_image"))
 	// pip requirements
-	dockerfile = strings.ReplaceAll(dockerfile, "<<REQUIREMENTS_PATH>>", runtimeConfig.Get("requirements_path").(string))
-	dockerfile = strings.ReplaceAll(dockerfile, "<<PYTHON_VERSION>>", runtimeConfig.Get("python_version").(string))
+	dockerfile = strings.ReplaceAll(dockerfile, "<<REQUIREMENTS_PATH>>", mustGetPathAs[string](config, "project", "requirements_path"))
+	dockerfile = strings.ReplaceAll(dockerfile, "<<PYTHON_VERSION>>", mustGetPathAs[string](config, "project", "python_version"))
 	// cmd: start handler
-	dockerfile = strings.ReplaceAll(dockerfile, "<<HANDLER_PATH>>", runtimeConfig.Get("handler_path").(string))
+	dockerfile = strings.ReplaceAll(dockerfile, "<<HANDLER_PATH>>", mustGetPathAs[string](config, "project", "handler_path"))
 	if includeEnvInDockerfile {
 		dockerEnv := formatAsDockerEnv(createEnvVars(config))
 		dockerfile = strings.ReplaceAll(dockerfile, "<<SET_ENV_VARS>>", "\n"+dockerEnv)
@@ -650,4 +708,5 @@ func buildProjectDockerfile() {
 	dockerfilePath := filepath.Join(projectFolder, "Dockerfile")
 	os.WriteFile(dockerfilePath, []byte(dockerfile), 0o644)
 	fmt.Printf("Dockerfile created at %s\n", dockerfilePath)
+	return nil
 }
