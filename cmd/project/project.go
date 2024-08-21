@@ -309,6 +309,22 @@ var DeployProjectCmd = &cobra.Command{
 	},
 }
 
+var GenerateEndpointConfigCmd = &cobra.Command{
+	Use:   "generate-endpoint-config",
+	Args:  cobra.ExactArgs(0),
+	Short: "generates an endpoint configuration file for the current project",
+	Long:  "generates an endpoint configuration file for the current project",
+	Run: func(cmd *cobra.Command, args []string) {
+		projectDir, err := os.Getwd()
+		if err != nil {
+			fmt.Println("Error getting current directory:", err)
+			return
+		}
+		projectConfig := loadProjectConfig()
+		projectId := mustGetPathAs[string](projectConfig, "project", "uuid")
+		buildEndpointConfig(projectDir, projectId)
+	},
+}
 var BuildProjectCmd = &cobra.Command{
 	Use:   "build",
 	Args:  cobra.ExactArgs(0),

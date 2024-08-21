@@ -628,7 +628,7 @@ func deployProject(networkVolumeId string) (endpointId string, err error) {
 
 // }
 
-func buildEndpointConfig(projectFolder string) (err error) {
+func buildEndpointConfig(projectFolder string, projectId string) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("panic: %v", r)
@@ -638,7 +638,14 @@ func buildEndpointConfig(projectFolder string) (err error) {
 	// parse project toml
 	config := loadProjectConfig()
 	endpointConfig := mustGetPathAs[*toml.Tree](config, "endpoint")
-	templateConfig := mustGetPathAs[*toml.Tree](config, "template")
+
+	templateConfig := toml.Tree{}
+	templateConfig.Set("name", fmt.Sprintf("%s-endpoint-%s-%d", projectName, projectId, time.Now().UnixMilli()))
+	templateConfig.Set("image_name", mustGetPathAs[string](config, "project", "base_image")) //TODO: make it a parameter
+	templateConfig.Set("env", mustGetPathAs[*toml.Tree](config, "project", "env_vars"))
+	templateConfig.Set("docker_start_cmd", mustGetPathAs[string](config, "project", "docker_start_cmd"))
+	templateConfig.Set("container_disk_in_gb", mustGetPathAs[int64](config, "project", "container_disk_size_gb"))
+	templateConfig.Set("volume_mount_path", mustGetPathAs[string](config, "project", "volume_mount_path"))
 	// dump these into their own toml
 	resultTree := toml.Tree{}
 	resultTree.Set("endpoint", endpointConfig)
