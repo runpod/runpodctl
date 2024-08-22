@@ -259,7 +259,7 @@ var StartProjectCmd = &cobra.Command{
 			return
 		}
 
-		config := loadProjectConfig()
+		config := loadTomlConfig("runpod.toml")
 		projectId := config.GetPath([]string{"project", "uuid"}).(string)
 		networkVolumeId := viper.GetString(fmt.Sprintf("project_volumes.%s", projectId))
 		cachedNetVolExists := false
@@ -321,7 +321,7 @@ var GenerateEndpointConfigCmd = &cobra.Command{
 			log.Fatalf("Error getting current directory: %v", err)
 			return
 		}
-		projectConfig := loadProjectConfig()
+		projectConfig := loadTomlConfig("runpod.toml")
 		projectId := mustGetPathAs[string](projectConfig, "project", "uuid")
 		err = buildEndpointConfig(projectDir, projectId)
 		if err != nil {

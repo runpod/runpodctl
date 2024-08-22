@@ -113,12 +113,12 @@ func createNewProject(projectName string, cudaVersion string, pythonVersion stri
 	generateProjectToml(projectFolder, "runpod.toml", projectName, cudaVersion, pythonVersion)
 }
 
-func loadProjectConfig() *toml.Tree {
+func loadTomlConfig(filename string) *toml.Tree {
 	projectFolder, _ := os.Getwd()
-	tomlPath := filepath.Join(projectFolder, "runpod.toml")
+	tomlPath := filepath.Join(projectFolder, filename)
 	toml, err := toml.LoadFile(tomlPath)
 	if err != nil {
-		panic("runpod.toml not found in the current directory.")
+		panic(fmt.Sprintf("%s not found in the current directory.", filename))
 	}
 	return toml
 }
@@ -190,7 +190,7 @@ func attemptPodLaunch(config *toml.Tree, networkVolumeId string, environmentVari
 func launchDevPod(config *toml.Tree, networkVolumeId string) (string, error) {
 	fmt.Println("Deploying project Pod on RunPod...")
 	// construct env vars
-	environmentVariables := createEnvVars(config)
+	environmentVariables := createEnvVars(mustGetPathAs[*toml.Tree](config, "project", "env_vars"), mustGetPathAs[string](config, "project", "uuid"))
 	// prepare gpu types
 	selectedGpuTypes := []string{}
 	tomlGpuTypes := config.GetPath([]string{"project", "gpu_types"})
@@ -213,16 +213,15 @@ func launchDevPod(config *toml.Tree, networkVolumeId string) (string, error) {
 	return new_pod["id"].(string), nil
 }
 
-func createEnvVars(config *toml.Tree) map[string]string {
+func createEnvVars(tomlEnvVars *toml.Tree, uuid string) map[string]string {
 	environmentVariables := map[string]string{}
-	tomlEnvVars := config.GetPath([]string{"project", "env_vars"})
 	if tomlEnvVars != nil {
-		tomlEnvVarsMap := tomlEnvVars.(*toml.Tree).ToMap()
+		tomlEnvVarsMap := tomlEnvVars.ToMap()
 		for k, v := range tomlEnvVarsMap {
 			environmentVariables[k] = v.(string)
 		}
 	}
-	environmentVariables["RUNPOD_PROJECT_ID"] = config.GetPath([]string{"project", "uuid"}).(string)
+	environmentVariables["RUNPOD_PROJECT_ID"] = uuid
 	return environmentVariables
 }
 
@@ -244,7 +243,7 @@ func formatAsDockerEnv(env map[string]string) string {
 
 func startProject(networkVolumeId string) error {
 	// parse project toml
-	config := loadProjectConfig()
+	config := loadTomlConfig("runpod.toml")
 	fmt.Println(config)
 
 	// Project ID
@@ -510,7 +509,7 @@ func startProject(networkVolumeId string) error {
 
 func deployProject(networkVolumeId string) (endpointId string, err error) {
 	// parse project toml
-	config := loadProjectConfig()
+	config := loadTomlConfig("runpod.toml")
 	projectId := config.GetPath([]string{"project", "uuid"}).(string)
 	projectConfig := config.Get("project").(*toml.Tree)
 	projectName := config.Get("name").(string)
@@ -549,7 +548,7 @@ func deployProject(networkVolumeId string) (endpointId string, err error) {
 		python -m pip install -v --requirement %s`,
 			venvPath, remoteProjectPath, config.GetPath([]string{"runtime", "requirements_path"}).(string)),
 	})
-	env := mapToApiEnv(createEnvVars(config))
+	env := mapToApiEnv(createEnvVars(mustGetPathAs[*toml.Tree](config, "project", "env_vars"), mustGetPathAs[string](config, "project", "uuid")))
 	// Construct the docker start command
 	handlerPath := path.Join(remoteProjectPath, config.GetPath([]string{"runtime", "handler_path"}).(string))
 	activateCmd := fmt.Sprintf(". %s/bin/activate", venvPath)
@@ -624,9 +623,55 @@ func deployProject(networkVolumeId string) (endpointId string, err error) {
 	return deployedEndpointId, nil
 }
 
-// func deployProjectDocker() (endpointId string, err error) {
-
-// }
+func upsertProjectEndpointFromImage(imageName string) (endpointId string, err error) {
+	// check for presence of endpoint config, error otherwise
+	config := loadTomlConfig("endpoint.toml")
+	//create template based on image / config
+	uuid := mustGetPathAs[string](config, "uuid")
+	env := mapToApiEnv(createEnvVars(mustGetPathAs[*toml.Tree](config, "template", "env_vars"), uuid))
+	projectEndpointTemplateId, err := api.CreateTemplate(&api.CreateTemplateInput{
+		Name:              mustGetPathAs[string](config, "template", "name"),
+		ImageName:         mustGetPathAs[string](config, "template", "image_name"),
+		Env:               env,
+		DockerStartCmd:    mustGetPathAs[string](config, "template", "docker_start_cmd"),
+		IsServerless:      true,
+		ContainerDiskInGb: int(mustGetPathAs[int64](config, "template", "container_disk_size_gb")),
+		VolumeMountPath:   mustGetPathAs[string](config, "template", "volume_mount_path"),
+		StartSSH:          true,
+		IsPublic:          false,
+		Readme:            "",
+	})
+	if err != nil {
+		fmt.Println("error making template")
+		return "", err
+	}
+	// see if endpoint already exists
+	deployedEndpointId, err := getProjectEndpoint(uuid)
+	endpointExists := err == nil
+	// if so, update template for existing
+	// otherwise, create new endpoint based on config
+	if endpointExists {
+		err = api.UpdateEndpointTemplate(deployedEndpointId, projectEndpointTemplateId)
+		return deployedEndpointId, err
+	}
+	//pull values from endpoint config or default
+	useFlashboot := mustGetPathOr[bool](config, true, "endpoint", "flashboot")
+	flashbootSuffix := ""
+	if useFlashboot {
+		flashbootSuffix = " -fb"
+	}
+	return api.CreateEndpoint(&api.CreateEndpointInput{
+		Name:            fmt.Sprintf("%s-endpoint-%s%s", projectName, uuid, flashbootSuffix),
+		TemplateId:      projectEndpointTemplateId,
+		NetworkVolumeId: mustGetPathOr[string](config, "", "endpoint", "network_volume_id"),
+		GpuIds:          "AMPERE_16", //TODO: allow sending in priority list of gpu categories same as UI
+		IdleTimeout:     int(mustGetPathOr[int64](config, 5, "endpoint", "idle_timeout")),
+		ScalerType:      "QUEUE_DELAY", //TODO: allow sending in scaler type
+		ScalerValue:     4,             //TODO: allow sending in scaler value
+		WorkersMin:      int(mustGetPathOr[int64](config, 0, "endpoint", "active_workers")),
+		WorkersMax:      int(mustGetPathOr[int64](config, 0, "endpoint", "max_workers")),
+	})
+}
 
 func buildEndpointConfig(projectFolder string, projectId string) (err error) {
 	defer func() {
@@ -636,7 +681,7 @@ func buildEndpointConfig(projectFolder string, projectId string) (err error) {
 	}()
 
 	// parse project toml
-	config := loadProjectConfig()
+	config := loadTomlConfig("runpod.toml")
 	endpointConfig := mustGetPathAs[*toml.Tree](config, "endpoint")
 	projectPathUuid := path.Join(mustGetPathAs[string](config, "project", "volume_mount_path"), mustGetPathAs[string](config, "project", "uuid"))
 	projectPathUuidProd := path.Join(projectPathUuid, "prod")
@@ -645,17 +690,18 @@ func buildEndpointConfig(projectFolder string, projectId string) (err error) {
 	pythonCmd := fmt.Sprintf("python -u %s", handlerPath)
 	projectName := mustGetPathAs[string](config, "name")
 	templateConfig := map[string]any{
-		"name":                 fmt.Sprintf("%s-endpoint-%s-%d", projectName, projectId, time.Now().UnixMilli()),
-		"image_name":           mustGetPathAs[string](config, "project", "base_image"), //TODO: make it a parameter
-		"env":                  mustGetPathAs[*toml.Tree](config, "project", "env_vars").ToMap(),
-		"container_disk_in_gb": mustGetPathAs[int64](config, "project", "container_disk_size_gb"),
-		"volume_mount_path":    mustGetPathAs[string](config, "project", "volume_mount_path"),
-		"docker_start_cmd":     pythonCmd,
+		"name":                   fmt.Sprintf("%s-endpoint-%s-%d", projectName, projectId, time.Now().UnixMilli()),
+		"image_name":             mustGetPathAs[string](config, "project", "base_image"), //TODO: make it a parameter
+		"env_vars":               mustGetPathAs[*toml.Tree](config, "project", "env_vars").ToMap(),
+		"container_disk_size_gb": mustGetPathAs[int64](config, "project", "container_disk_size_gb"),
+		"volume_mount_path":      mustGetPathAs[string](config, "project", "volume_mount_path"),
+		"docker_start_cmd":       pythonCmd,
 	}
 	// dump these into their own toml
 	resultMap := map[string]any{
 		"endpoint": endpointConfig.ToMap(),
 		"template": templateConfig,
+		"uuid":     projectId,
 	}
 	resultTree, err := toml.TreeFromMap(resultMap)
 	if err != nil {
@@ -700,6 +746,42 @@ func mustGetPathAs[T any](tree *toml.Tree, keys ...string) (t T) {
 	return t
 }
 
+// get the value in the toml file at key0.key1.key2, or return the default value if it doesn't exist.
+// if it DID exist, but was the wrong type, return an error.
+// see also: [mustGetPathOr], [getPathAs]
+func getPathOr[T any](tree *toml.Tree, defaultValue T, keys ...string) (t T, err error) {
+	if tree == nil {
+		panic("tree is nil")
+	}
+	got := tree.GetPath(keys)
+	if got == nil {
+		return defaultValue, nil
+	}
+	t, ok := got.(T)
+	if !ok {
+		return t, fmt.Errorf("expected key %q in TOML file to be a %T, but it was a %T", strings.Join(keys, "."), t, got)
+	}
+	return t, nil
+}
+
+// get the value in the toml file at key0.key1.key2, or use a default value.
+// if the value exists but is the wrong type, panic with a useful error message.
+// see also: [getPathOr], [mustGetPathAs]
+func mustGetPathOr[T any](tree *toml.Tree, defaultValue T, keys ...string) (t T) {
+	if tree == nil {
+		panic("tree is nil")
+	}
+	got := tree.GetPath(keys)
+	if got == nil {
+		return defaultValue
+	}
+	t, ok := got.(T)
+	if !ok {
+		panic(fmt.Errorf("expected key %q in TOML file to be empty or a %T, but it was a %T", strings.Join(keys, "."), t, got))
+	}
+	return t
+}
+
 func buildProjectDockerfile() (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -708,7 +790,7 @@ func buildProjectDockerfile() (err error) {
 	}()
 
 	// parse project toml
-	config := loadProjectConfig()
+	config := loadTomlConfig("runpod.toml")
 	// build Dockerfile
 	dockerfileBytes, _ := dockerfileTemplate.ReadFile("exampleDockerfile")
 	dockerfile := string(dockerfileBytes)
@@ -720,7 +802,7 @@ func buildProjectDockerfile() (err error) {
 	// cmd: start handler
 	dockerfile = strings.ReplaceAll(dockerfile, "<<HANDLER_PATH>>", mustGetPathAs[string](config, "project", "handler_path"))
 	if includeEnvInDockerfile {
-		dockerEnv := formatAsDockerEnv(createEnvVars(config))
+		dockerEnv := formatAsDockerEnv(createEnvVars(mustGetPathAs[*toml.Tree](config, "project", "env_vars"), mustGetPathAs[string](config, "project", "uuid")))
 		dockerfile = strings.ReplaceAll(dockerfile, "<<SET_ENV_VARS>>", "\n"+dockerEnv)
 	} else {
 		dockerfile = strings.ReplaceAll(dockerfile, "<<SET_ENV_VARS>>", "")
