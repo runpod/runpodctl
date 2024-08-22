@@ -623,14 +623,15 @@ func deployProject(networkVolumeId string) (endpointId string, err error) {
 	return deployedEndpointId, nil
 }
 
-func upsertProjectEndpointFromImage(imageName string) (endpointId string, err error) {
+func upsertProjectFromEndpointConfig() (endpointId string, err error) {
 	// check for presence of endpoint config, error otherwise
 	config := loadTomlConfig("endpoint.toml")
 	//create template based on image / config
 	uuid := mustGetPathAs[string](config, "uuid")
 	env := mapToApiEnv(createEnvVars(mustGetPathAs[*toml.Tree](config, "template", "env_vars"), uuid))
+	endpointName := mustGetPathAs[string](config, "template", "name")
 	projectEndpointTemplateId, err := api.CreateTemplate(&api.CreateTemplateInput{
-		Name:              mustGetPathAs[string](config, "template", "name"),
+		Name:              fmt.Sprintf("%s-%d", endpointName, time.Now().UTC().UnixMilli()),
 		ImageName:         mustGetPathAs[string](config, "template", "image_name"),
 		Env:               env,
 		DockerStartCmd:    mustGetPathAs[string](config, "template", "docker_start_cmd"),
@@ -661,7 +662,7 @@ func upsertProjectEndpointFromImage(imageName string) (endpointId string, err er
 		flashbootSuffix = " -fb"
 	}
 	return api.CreateEndpoint(&api.CreateEndpointInput{
-		Name:            fmt.Sprintf("%s-endpoint-%s%s", projectName, uuid, flashbootSuffix),
+		Name:            fmt.Sprintf("%s%s", endpointName, flashbootSuffix),
 		TemplateId:      projectEndpointTemplateId,
 		NetworkVolumeId: mustGetPathOr[string](config, "", "endpoint", "network_volume_id"),
 		GpuIds:          "AMPERE_16", //TODO: allow sending in priority list of gpu categories same as UI
@@ -690,7 +691,7 @@ func buildEndpointConfig(projectFolder string, projectId string) (err error) {
 	pythonCmd := fmt.Sprintf("python -u %s", handlerPath)
 	projectName := mustGetPathAs[string](config, "name")
 	templateConfig := map[string]any{
-		"name":                   fmt.Sprintf("%s-endpoint-%s-%d", projectName, projectId, time.Now().UnixMilli()),
+		"name":                   fmt.Sprintf("%s-endpoint-%s", projectName, projectId),
 		"image_name":             mustGetPathAs[string](config, "project", "base_image"), //TODO: make it a parameter
 		"env_vars":               mustGetPathAs[*toml.Tree](config, "project", "env_vars").ToMap(),
 		"container_disk_size_gb": mustGetPathAs[int64](config, "project", "container_disk_size_gb"),

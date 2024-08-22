@@ -284,6 +284,32 @@ var StartProjectCmd = &cobra.Command{
 	},
 }
 
+func printEndpointSuccess(endpointId string) {
+	fmt.Printf("Project deployed successfully! Endpoint ID: %s\n", endpointId)
+	fmt.Println("Monitor and edit your endpoint at:")
+	fmt.Printf("https://www.runpod.io/console/serverless/user/endpoint/%s\n", endpointId)
+	fmt.Println("The following URLs are available:")
+	fmt.Printf("    - https://api.runpod.ai/v2/%s/runsync\n", endpointId)
+	fmt.Printf("    - https://api.runpod.ai/v2/%s/run\n", endpointId)
+	fmt.Printf("    - https://api.runpod.ai/v2/%s/health\n", endpointId)
+}
+
+var DeployProjectFromEndpointConfigCmd = &cobra.Command{
+	Use:   "deploy-from-config",
+	Args:  cobra.ExactArgs(0),
+	Short: "deploys your project as an endpoint",
+	Long:  "deploys a serverless endpoint from the provided endpoint config",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println("Deploying project...")
+		endpointId, err := upsertProjectFromEndpointConfig()
+		if err != nil {
+			fmt.Println("Failed to deploy project: ", err)
+			return
+		}
+		printEndpointSuccess(endpointId)
+	},
+}
+
 var DeployProjectCmd = &cobra.Command{
 	Use:   "deploy",
 	Args:  cobra.ExactArgs(0),
@@ -300,13 +326,7 @@ var DeployProjectCmd = &cobra.Command{
 			fmt.Println("Failed to deploy project: ", err)
 			return
 		}
-		fmt.Printf("Project deployed successfully! Endpoint ID: %s\n", endpointId)
-		fmt.Println("Monitor and edit your endpoint at:")
-		fmt.Printf("https://www.runpod.io/console/serverless/user/endpoint/%s\n", endpointId)
-		fmt.Println("The following URLs are available:")
-		fmt.Printf("    - https://api.runpod.ai/v2/%s/runsync\n", endpointId)
-		fmt.Printf("    - https://api.runpod.ai/v2/%s/run\n", endpointId)
-		fmt.Printf("    - https://api.runpod.ai/v2/%s/health\n", endpointId)
+		printEndpointSuccess(endpointId)
 	},
 }
 
