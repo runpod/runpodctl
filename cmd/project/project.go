@@ -350,8 +350,9 @@ var GenerateEndpointConfigCmd = &cobra.Command{
 		}
 	},
 }
-var BuildProjectCmd = &cobra.Command{
-	Use:   "build",
+
+var BuildProjectDockerfileCmd = &cobra.Command{
+	Use:   "build-dockerfile",
 	Args:  cobra.ExactArgs(0),
 	Short: "builds Dockerfile for current project",
 	Long:  "builds a local Dockerfile for the project in the current folder. You can use this Dockerfile to build an image and deploy it to any API server.",
@@ -388,5 +389,5 @@ func init() {
 	NewProjectCmd.Flags().StringVarP(&modelType, "type", "t", "", "Specify the model type for the project.")
 
 	StartProjectCmd.Flags().BoolVar(&showPrefixInPodLogs, "prefix-pod-logs", true, "Include the Pod ID as a prefix in log messages from the project Pod.")
-	BuildProjectCmd.Flags().BoolVar(&includeEnvInDockerfile, "include-env", false, "Incorporate environment variables defined in runpod.toml into the generated Dockerfile.")
+	BuildProjectDockerfileCmd.Flags().BoolVar(&includeEnvInDockerfile, "include-env", false, "Incorporate environment variables defined in runpod.toml into the generated Dockerfile.")
 }

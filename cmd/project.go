@@ -17,6 +17,6 @@ func init() {
 	projectCmd.AddCommand(project.StartProjectCmd)
 	projectCmd.AddCommand(project.DeployProjectCmd)
 	projectCmd.AddCommand(project.DeployProjectFromEndpointConfigCmd)
-	projectCmd.AddCommand(project.BuildProjectCmd)
+	projectCmd.AddCommand(project.BuildProjectDockerfileCmd)
 	projectCmd.AddCommand(project.GenerateEndpointConfigCmd)
 }
