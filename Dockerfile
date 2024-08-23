@@ -13,5 +13,6 @@ RUN --mount=type=cache,target=/root/.cache/go-build GOOS=linux GOARCH=amd64 go b
 RUN --mount=type=cache,target=/root/.cache/go-build GOOS=linux GOARCH=amd64 go build -o configure-github-action ./cmd/configure-github-action
 
 FROM ubuntu:latest AS runner
-COPY --from=builder /app/runpodctl /app/runpodctl
-COPY --from=builder /app/configure-github-action /app/configure-github-action  
+COPY --from=builder /app/runpodctl /usr/bin/runpodctl
+COPY --from=builder /app/configure-github-action /usr/bin/configure-github-action  
+CMD runpodctl --help
