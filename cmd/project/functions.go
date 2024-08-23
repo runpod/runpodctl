@@ -811,7 +811,10 @@ func buildProjectDockerfile() (err error) {
 	// save to Dockerfile in project directory
 	projectFolder, _ := os.Getwd()
 	dockerfilePath := filepath.Join(projectFolder, "Dockerfile")
-	os.WriteFile(dockerfilePath, []byte(dockerfile), 0o644)
+	err = os.WriteFile(dockerfilePath, []byte(dockerfile), 0o644)
+	if err != nil {
+		return err
+	}
 	fmt.Printf("Dockerfile created at %s\n", dockerfilePath)
 	return nil
 }

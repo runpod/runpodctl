@@ -357,25 +357,11 @@ var BuildProjectDockerfileCmd = &cobra.Command{
 	Short: "builds Dockerfile for current project",
 	Long:  "builds a local Dockerfile for the project in the current folder. You can use this Dockerfile to build an image and deploy it to any API server.",
 	Run: func(cmd *cobra.Command, args []string) {
-		buildProjectDockerfile()
-		// config := loadProjectConfig()
-		// projectConfig := config.Get("project").(*toml.Tree)
-		// projectId := projectConfig.Get("uuid").(string)
-		// projectName := config.Get("name").(string)
-		// //print next steps
-		// fmt.Println("Next steps:")
-		// fmt.Println()
-		// suggestedDockerTag := fmt.Sprintf("runpod-sls-worker-%s-%s:0.1", projectName, projectId)
-		// //docker build
-		// fmt.Println("# Build Docker image")
-		// fmt.Printf("docker build -t %s .\n", suggestedDockerTag)
-		// //dockerhub push
-		// fmt.Println("# Push Docker image to a container registry such as Dockerhub")
-		// fmt.Printf("docker push %s\n", suggestedDockerTag)
-		// //go to runpod url and deploy
-		// fmt.Println()
-		// fmt.Println("Deploy docker image as a serverless endpoint on Runpod")
-		// fmt.Println("https://www.runpod.io/console/serverless")
+		err := buildProjectDockerfile()
+		if err != nil {
+			log.Fatalf("Error generating endpoint configuration: %v", err)
+			return
+		}
 	},
 }
 
