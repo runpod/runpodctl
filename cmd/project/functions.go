@@ -623,16 +623,20 @@ func deployProject(networkVolumeId string) (endpointId string, err error) {
 	return deployedEndpointId, nil
 }
 
-func upsertProjectFromEndpointConfig() (endpointId string, err error) {
+func upsertProjectFromEndpointConfig(imagePrefix string) (endpointId string, err error) {
 	// check for presence of endpoint config, error otherwise
 	config := loadTomlConfig("endpoint.toml")
 	//create template based on image / config
 	uuid := mustGetPathAs[string](config, "uuid")
 	env := mapToApiEnv(createEnvVars(mustGetPathAs[*toml.Tree](config, "template", "env_vars"), uuid))
 	endpointName := mustGetPathAs[string](config, "template", "name")
+	imageName := mustGetPathAs[string](config, "template", "image_name")
+	if imagePrefix != "" {
+		imageName = filepath.Join(imagePrefix, imageName)
+	}
 	projectEndpointTemplateId, err := api.CreateTemplate(&api.CreateTemplateInput{
 		Name:              fmt.Sprintf("%s-%d", endpointName, time.Now().UTC().UnixMilli()),
-		ImageName:         mustGetPathAs[string](config, "template", "image_name"),
+		ImageName:         imageName,
 		Env:               env,
 		DockerStartCmd:    mustGetPathAs[string](config, "template", "docker_start_cmd"),
 		IsServerless:      true,

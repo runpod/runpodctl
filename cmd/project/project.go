@@ -24,6 +24,7 @@ var (
 	setDefaultNetworkVolume bool
 	includeEnvInDockerfile  bool
 	showPrefixInPodLogs     bool
+	imagePrefix             string
 )
 
 const inputPromptPrefix string = "   > "
@@ -301,7 +302,7 @@ var DeployProjectFromEndpointConfigCmd = &cobra.Command{
 	Long:  "deploys a serverless endpoint from the provided endpoint config",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Deploying project...")
-		endpointId, err := upsertProjectFromEndpointConfig()
+		endpointId, err := upsertProjectFromEndpointConfig(imagePrefix)
 		if err != nil {
 			fmt.Println("Failed to deploy project: ", err)
 			return
@@ -376,4 +377,5 @@ func init() {
 
 	StartProjectCmd.Flags().BoolVar(&showPrefixInPodLogs, "prefix-pod-logs", true, "Include the Pod ID as a prefix in log messages from the project Pod.")
 	BuildProjectDockerfileCmd.Flags().BoolVar(&includeEnvInDockerfile, "include-env", false, "Incorporate environment variables defined in runpod.toml into the generated Dockerfile.")
+	DeployProjectFromEndpointConfigCmd.Flags().StringVarP(&imagePrefix, "image-prefix", "i", "", "Prefix for the full docker image name in the deployed template")
 }
