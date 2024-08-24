@@ -359,7 +359,7 @@ var BuildProjectDockerfileCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		err := buildProjectDockerfile()
 		if err != nil {
-			log.Fatalf("Error generating endpoint configuration: %v", err)
+			log.Fatalf("Error generating dockerfile: %v", err)
 			return
 		}
 	},

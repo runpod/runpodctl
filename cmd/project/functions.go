@@ -690,9 +690,10 @@ func buildEndpointConfig(projectFolder string, projectId string) (err error) {
 	handlerPath := path.Join(remoteProjectPath, config.GetPath([]string{"runtime", "handler_path"}).(string))
 	pythonCmd := fmt.Sprintf("python -u %s", handlerPath)
 	projectName := mustGetPathAs[string](config, "name")
+	endpointName := fmt.Sprintf("%s-endpoint-%s", projectName, projectId)
 	templateConfig := map[string]any{
-		"name":                   fmt.Sprintf("%s-endpoint-%s", projectName, projectId),
-		"image_name":             mustGetPathAs[string](config, "project", "base_image"), //TODO: make it a parameter
+		"name":                   endpointName,
+		"image_name":             endpointName,
 		"env_vars":               mustGetPathAs[*toml.Tree](config, "project", "env_vars").ToMap(),
 		"container_disk_size_gb": mustGetPathAs[int64](config, "project", "container_disk_size_gb"),
 		"volume_mount_path":      mustGetPathAs[string](config, "project", "volume_mount_path"),
@@ -798,10 +799,10 @@ func buildProjectDockerfile() (err error) {
 	// base image: from toml
 	dockerfile = strings.ReplaceAll(dockerfile, "<<BASE_IMAGE>>", mustGetPathAs[string](config, "project", "base_image"))
 	// pip requirements
-	dockerfile = strings.ReplaceAll(dockerfile, "<<REQUIREMENTS_PATH>>", mustGetPathAs[string](config, "project", "requirements_path"))
-	dockerfile = strings.ReplaceAll(dockerfile, "<<PYTHON_VERSION>>", mustGetPathAs[string](config, "project", "python_version"))
+	dockerfile = strings.ReplaceAll(dockerfile, "<<REQUIREMENTS_PATH>>", mustGetPathAs[string](config, "runtime", "requirements_path"))
+	dockerfile = strings.ReplaceAll(dockerfile, "<<PYTHON_VERSION>>", mustGetPathAs[string](config, "runtime", "python_version"))
 	// cmd: start handler
-	dockerfile = strings.ReplaceAll(dockerfile, "<<HANDLER_PATH>>", mustGetPathAs[string](config, "project", "handler_path"))
+	dockerfile = strings.ReplaceAll(dockerfile, "<<HANDLER_PATH>>", mustGetPathAs[string](config, "runtime", "handler_path"))
 	if includeEnvInDockerfile {
 		dockerEnv := formatAsDockerEnv(createEnvVars(mustGetPathAs[*toml.Tree](config, "project", "env_vars"), mustGetPathAs[string](config, "project", "uuid")))
 		dockerfile = strings.ReplaceAll(dockerfile, "<<SET_ENV_VARS>>", "\n"+dockerEnv)
