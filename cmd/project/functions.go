@@ -688,11 +688,6 @@ func buildEndpointConfig(projectFolder string, projectId string) (err error) {
 	// parse project toml
 	config := loadTomlConfig("runpod.toml")
 	endpointConfig := mustGetPathAs[*toml.Tree](config, "endpoint")
-	projectPathUuid := path.Join(mustGetPathAs[string](config, "project", "volume_mount_path"), mustGetPathAs[string](config, "project", "uuid"))
-	projectPathUuidProd := path.Join(projectPathUuid, "prod")
-	remoteProjectPath := path.Join(projectPathUuidProd, config.Get("name").(string))
-	handlerPath := path.Join(remoteProjectPath, config.GetPath([]string{"runtime", "handler_path"}).(string))
-	pythonCmd := fmt.Sprintf("python -u %s", handlerPath)
 	projectName := mustGetPathAs[string](config, "name")
 	endpointName := fmt.Sprintf("%s-endpoint-%s", projectName, projectId)
 	templateConfig := map[string]any{
@@ -701,7 +696,7 @@ func buildEndpointConfig(projectFolder string, projectId string) (err error) {
 		"env_vars":               mustGetPathAs[*toml.Tree](config, "project", "env_vars").ToMap(),
 		"container_disk_size_gb": mustGetPathAs[int64](config, "project", "container_disk_size_gb"),
 		"volume_mount_path":      mustGetPathAs[string](config, "project", "volume_mount_path"),
-		"docker_start_cmd":       pythonCmd,
+		"docker_start_cmd":       "", //this is populated in the dockerfile
 	}
 	// dump these into their own toml
 	resultMap := map[string]any{
