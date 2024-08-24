@@ -3,7 +3,6 @@
 
 local: version
 	go build -o bin/runpodctl .
-	go build -o bin/configure-github-action ./cmd/configure-github-action
 
 release: buildall strip compress
 
