@@ -63,3 +63,23 @@ func GenerateSSHKeyPair(keyName string) ([]byte, error) {
 	fmt.Printf("SSH key pair generated: %s (private), %s (public)\n", privateKeyPath, publicKeyPath)
 	return publicKeyBytes, nil
 }
+
+func GetLocalSSHKey() ([]byte, error) {
+	usr, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current user: %w", err)
+	}
+
+	keyPath := filepath.Join(usr, ".ssh", "RunPod-Key-Go.pub")
+
+	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
+		return nil, nil // No existing key found
+	}
+
+	publicKey, err := os.ReadFile(keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read existing public key: %w", err)
+	}
+
+	return publicKey, nil
+}
