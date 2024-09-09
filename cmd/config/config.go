@@ -2,13 +2,13 @@ package config
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/runpod/runpodctl/api"
 	"github.com/runpod/runpodctl/cmd/ssh"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	sshcrypto "golang.org/x/crypto/ssh"
 )
 
 var (
@@ -31,7 +31,7 @@ var ConfigCmd = &cobra.Command{
 			return fmt.Errorf("failed to get or create local SSH key: %w", err)
 		}
 
-		if err := updateSSHKeyInCloud(publicKey); err != nil {
+		if err := ensureSSHKeyInCloud(publicKey); err != nil {
 			return fmt.Errorf("failed to update SSH key in the cloud: %w", err)
 		}
 
@@ -69,24 +69,30 @@ func getOrCreateSSHKey() ([]byte, error) {
 	return publicKey, nil
 }
 
-// Checks if the SSH key exists in the cloud and adds it if necessary
-func updateSSHKeyInCloud(publicKey []byte) error {
+// ensureSSHKeyInCloud checks if the SSH key exists in the cloud and adds it if necessary
+func ensureSSHKeyInCloud(publicKey []byte) error {
 	_, cloudKeys, err := api.GetPublicSSHKeys()
 	if err != nil {
-		return fmt.Errorf("failed to get SSH key in the cloud: %w", err)
+		return fmt.Errorf("failed to get SSH keys from the cloud: %w", err)
 	}
 
-	// Trim any whitespace from the publicKey
-	publicKeyStr := strings.TrimSpace(string(publicKey))
+	// Parse the local public key
+	localPubKey, _, _, _, err := sshcrypto.ParseAuthorizedKey(publicKey)
+	if err != nil {
+		return fmt.Errorf("failed to parse local public key: %w", err)
+	}
+
+	localFingerprint := sshcrypto.FingerprintSHA256(localPubKey)
 
 	// Check if the publicKey already exists in the cloud
 	for _, cloudKey := range cloudKeys {
-		if strings.TrimSpace(cloudKey.Key) == publicKeyStr {
+		if cloudKey.Fingerprint == localFingerprint {
 			fmt.Println("SSH key already exists in the cloud. No action needed.")
 			return nil
 		}
 	}
 
+	// If the key doesn't exist, add it
 	if err := api.AddPublicSSHKey(publicKey); err != nil {
 		return fmt.Errorf("failed to add the SSH key: %w", err)
 	}
