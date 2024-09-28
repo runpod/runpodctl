@@ -34,6 +34,7 @@ type Pod struct {
 	ContainerDiskInGb int
 	CostPerHr         float32
 	DesiredStatus     string
+	DataCenterId      string
 	DockerArgs        string
 	Env               []string
 	GpuCount          int
@@ -140,6 +141,7 @@ type CreatePodInput struct {
 	ContainerDiskInGb int       `json:"containerDiskInGb"`
 	DeployCost        float32   `json:"deployCost,omitempty"`
 	DockerArgs        string    `json:"dockerArgs"`
+	DataCenterId      string    `json:"dataCenterId"`
 	Env               []*PodEnv `json:"env"`
 	GpuCount          int       `json:"gpuCount"`
 	GpuTypeId         string    `json:"gpuTypeId"`
