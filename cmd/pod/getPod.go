@@ -51,6 +51,7 @@ var GetPodCmd = &cobra.Command{
 					fmt.Sprintf("%d", p.MemoryInGb),
 					fmt.Sprintf("%d", p.ContainerDiskInGb),
 					fmt.Sprintf("%d", p.VolumeInGb),
+					fmt.Sprintf("%s", p.Machine.Location),
 					fmt.Sprintf("%.3f", p.CostPerHr),
 					fmt.Sprintf("%s", strings.Join(ports[:], ",")),
 				)
@@ -60,7 +61,7 @@ var GetPodCmd = &cobra.Command{
 
 		header := []string{"ID", "Name", "GPU", "Image Name", "Status"}
 		if AllFields {
-			header = append(header, "Pod Type", "vCPU", "Mem", "Container Disk", "Volume Disk", "$/hr", "Ports")
+			header = append(header, "Pod Type", "vCPU", "Mem", "Container Disk", "Volume Disk", "Location", "$/hr", "Ports")
 		}
 
 		tb := tablewriter.NewWriter(os.Stdout)
