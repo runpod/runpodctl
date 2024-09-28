@@ -24,6 +24,7 @@ var (
 	minVcpuCount      int
 	name              string
 	ports             []string
+	startSSH          bool
 	templateId        string
 	volumeInGb        int
 	volumeMountPath   string
@@ -47,6 +48,7 @@ var CreatePodCmd = &cobra.Command{
 			MinMemoryInGb:     minMemoryInGb,
 			MinVcpuCount:      minVcpuCount,
 			Name:              name,
+			StartSSH:          startSSH,
 			TemplateId:        templateId,
 			VolumeInGb:        volumeInGb,
 			VolumeMountPath:   volumeMountPath,
@@ -99,6 +101,7 @@ func init() {
 	CreatePodCmd.Flags().StringVar(&volumeMountPath, "volumePath", "/runpod", "container volume path")
 	CreatePodCmd.Flags().StringVar(&networkVolumeId, "networkVolumeId", "", "network volume id")
 	CreatePodCmd.Flags().StringVar(&dataCenterId, "dataCenterId", "", "datacenter id to create in")
+	CreatePodCmd.Flags().BoolVar(&startSSH, "startSSH", false, "enable SSH login")
 
 	CreatePodCmd.MarkFlagRequired("gpuType")   //nolint
 	CreatePodCmd.MarkFlagRequired("imageName") //nolint
