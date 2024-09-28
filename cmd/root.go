@@ -44,6 +44,9 @@ func registerCommands() {
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(sshCmd)
 
+    //Diagnostic tools
+	rootCmd.AddCommand(gpuTestCmd)
+
 	// Remote File Execution
 	rootCmd.AddCommand(execCmd)
 
