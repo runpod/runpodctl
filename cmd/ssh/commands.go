@@ -109,7 +109,58 @@ func promptKeyName() string {
 	return strings.ReplaceAll(keyName, " ", "-")
 }
 
+// ConnectStringCmd shows the SSH connect command for a given pod
+var ConnectCmd = &cobra.Command{
+	Use:   "connect [podID|name]",
+	Args:  cobra.MaximumNArgs(1),
+	Short: "Shows the SSH connect command for pods",
+	Long:  `Shows the full featured SSH connect command for a given pod if a pod ID or name is provided. When no argument is provided, shows the connect information for all pods.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		verbose, err := cmd.Flags().GetBool("verbose")
+		cobra.CheckErr(err)
+
+		pods, err := api.GetPods()
+		cobra.CheckErr(err)
+
+		// show connect info for all pods
+		if len(args) == 0 {
+			for _, pod := range pods {
+				displayConnectString(pod, true)
+			}
+			return
+		}
+
+		// for a specific pod
+		nameOrID := args[0]
+		for _, pod := range pods {
+			if pod.Id == nameOrID || pod.Name == nameOrID {
+				displayConnectString(pod, verbose)
+				return
+			}
+		}
+
+		fmt.Fprintf(os.Stderr, "No pod with id or name \"%s\" found", nameOrID)
+	},
+}
+
+func displayConnectString(pod *api.Pod, verbose bool) {
+	if pod.Runtime == nil || pod.Runtime.Ports == nil {
+		fmt.Printf("# pod { id: \"%s\", name: \"%s\" } not yet ready\n", pod.Id, pod.Name)
+		return
+	}
+	for _, port := range pod.Runtime.Ports {
+		if port.IsIpPublic && port.PrivatePort == 22 {
+			if verbose {
+				fmt.Printf("ssh root@%s -p %-5d  # pod { id: \"%s\", name: \"%s\" }\n", port.Ip, port.PublicPort, pod.Id, pod.Name)
+			} else {
+				fmt.Printf("ssh root@%s -p %d\n", port.Ip, port.PublicPort)
+			}
+		}
+	}
+}
+
 func init() {
 	AddKeyCmd.Flags().String("key", "", "The public key to add.")
 	AddKeyCmd.Flags().String("key-file", "", "The file containing the public key to add.")
+	ConnectCmd.Flags().BoolP("verbose", "v", false, "include identifying pod information (name and id)")
 }
