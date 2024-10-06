@@ -14,6 +14,7 @@ var (
 	secureCloud       bool
 	containerDiskInGb int
 	deployCost        float32
+	dataCenterId      string
 	dockerArgs        string
 	env               []string
 	gpuCount          int
@@ -38,6 +39,7 @@ var CreatePodCmd = &cobra.Command{
 		input := &api.CreatePodInput{
 			ContainerDiskInGb: containerDiskInGb,
 			DeployCost:        deployCost,
+			DataCenterId:      dataCenterId,
 			DockerArgs:        dockerArgs,
 			GpuCount:          gpuCount,
 			GpuTypeId:         gpuTypeId,
@@ -96,6 +98,7 @@ func init() {
 	CreatePodCmd.Flags().IntVar(&volumeInGb, "volumeSize", 1, "persistent volume disk size in GB")
 	CreatePodCmd.Flags().StringVar(&volumeMountPath, "volumePath", "/runpod", "container volume path")
 	CreatePodCmd.Flags().StringVar(&networkVolumeId, "networkVolumeId", "", "network volume id")
+	CreatePodCmd.Flags().StringVar(&dataCenterId, "dataCenterId", "", "datacenter id to create in")
 
 	CreatePodCmd.MarkFlagRequired("gpuType")   //nolint
 	CreatePodCmd.MarkFlagRequired("imageName") //nolint
