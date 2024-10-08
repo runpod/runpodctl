@@ -362,7 +362,7 @@ func StartOnDemandPod(id string) (pod map[string]interface{}, err error) {
 func StartSpotPod(id string, bidPerGpu float32, gpuCount int) (podBidResume map[string]interface{}, err error) {
 	input := Input{
 		Query: `
-		mutation Mutation($podId: String!, $bidPerGpu: Float!) {
+		mutation Mutation($podId: String!, $bidPerGpu: Float!, $gpuCount: Int!) {
 			podBidResume(input: {podId: $podId, bidPerGpu: $bidPerGpu, gpuCount: $gpuCount}) {
 			  id
 			  costPerHr
