@@ -765,6 +765,85 @@ func getPathOr[T any](tree *toml.Tree, defaultValue T, keys ...string) (t T, err
 	return t, nil
 }
 
+//pod create expects a single gpu type id, but endpoint create expects a comma-separated list of gpu-categories
+//we want to unify those concepts so that the resulting endpoint will reliably have the same gpu types as the development pod
+//that means we need some code to expand gpu categories into gpu types for pod deploy
+//and some code to turn a list of gpu types into a list of gpu categories for endpoint deploy
+
+// these are stolen from ai-api code run on backend
+var prodGpuCategoryToTypes = map[string][]string{
+	"ADA_24":     {"NVIDIA GeForce RTX 4090"},
+	"AMPERE_16":  {"NVIDIA RTX A4000", "NVIDIA RTX A4500", "NVIDIA RTX 4000 Ada Generation"},
+	"AMPERE_24":  {"NVIDIA RTX A5000", "NVIDIA L4", "NVIDIA GeForce RTX 3090"},
+	"AMPERE_48":  {"NVIDIA A40", "NVIDIA RTX A6000"},
+	"ADA_48_PRO": {"NVIDIA RTX 6000 Ada Generation", "NVIDIA L40", "NVIDIA L40S"},
+	"AMPERE_80":  {"NVIDIA A100 80GB PCIe", "NVIDIA A100-SXM4-80GB"},
+	"ADA_80_PRO": {"NVIDIA H100 PCIe", "NVIDIA H100 80GB HBM3"},
+}
+var devGpuCategoryToTypes = map[string][]string{
+	"ADA_24":    {"NVIDIA GeForce RTX 4090"},
+	"AMPERE_16": {"NVIDIA GeForce RTX 3070", "NVIDIA GeForce RTX 3080"},
+	"AMPERE_24": {"NVIDIA RTX A5000", "NVIDIA L4", "NVIDIA GeForce RTX 3090"},
+	"AMPERE_48": {"NVIDIA RTX A6000", "NVIDIA A40"},
+	"AMPERE_80": {"NVIDIA A100 80GB PCIe", "NVIDIA A100-SXM4-80GB"},
+}
+
+// in: list of gpu categories (e.g. ["AMPERE_16","AMPERE_24"])
+// can also include individual gpu types (e.g. ["NVIDIA RTX A4000","AMPERE_24"])
+// and excluded individual gpu types (e.g. ["-NVIDIA RTX A4000","AMPERE_24"])
+// out: array of gpu types with those categories expanded
+func gpuCategoriesToTypes(gpuCategories []string) []string {
+	gpuCategoryMapping := prodGpuCategoryToTypes
+	if os.Getenv("ENV") != "prod" {
+		gpuCategoryMapping = devGpuCategoryToTypes
+	}
+	allAllowedGpuTypes := map[string]struct{}{}
+	for _, category := range gpuCategoryMapping {
+		for _, gpuType := range category {
+			allAllowedGpuTypes[gpuType] = struct{}{}
+		}
+	}
+	//expand out categories
+	excludeGpuIds := map[string]struct{}{}
+	var ids []string
+	for _, id := range gpuCategories {
+		if strings.HasPrefix(id, "-") {
+			excludeGpuIds[id[1:]] = struct{}{}
+			continue
+		}
+		if gpuTypes, ok := gpuCategoryMapping[id]; ok {
+			ids = append(ids, gpuTypes...)
+		} else {
+			ids = append(ids, id)
+		}
+	}
+	//handle excluded and invalid types
+	var finalIds []string
+	for _, id := range ids {
+		if _, exclude := excludeGpuIds[id]; exclude {
+			continue
+		}
+		if _, ok := allAllowedGpuTypes[id]; ok {
+			fmt.Printf("the following gpu type is not recognized or supported on serverless: %s", id)
+			continue
+		}
+		finalIds = append(finalIds, id)
+	}
+
+	fmt.Printf("GpuIdToTypes %s=%s\n", strings.Join(gpuCategories, ","), strings.Join(finalIds, ","))
+
+	return finalIds
+}
+
+// in: list of gpu types (e.g. ["NVIDIA RTX A4000","NVIDIA RTX A5000"])
+// can also include gpu categories (e.g. ["AMPERE_16","NVIDIA RTX A5000"])
+// and excluded gpu types (e.g. ["-NVIDIA RTX A4000","NVIDIA RTX A5000"])
+// out: array of gpu categories with individual gpu types collapsed
+// func gpuTypesToCategories(gpuTypes []string) []string {
+// 	var categories []string
+// 	return
+// }
+
 // get the value in the toml file at key0.key1.key2, or use a default value.
 // if the value exists but is the wrong type, panic with a useful error message.
 // see also: [getPathOr], [mustGetPathAs]
