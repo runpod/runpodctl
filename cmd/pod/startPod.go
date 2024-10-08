@@ -9,7 +9,6 @@ import (
 )
 
 var bidPerGpu float32
-var gpuCount int
 
 var StartPodCmd = &cobra.Command{
 	Use:   "pod [podId]",
