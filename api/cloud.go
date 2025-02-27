@@ -68,3 +68,69 @@ func GetCloud(in *GetCloudInput) (gpuTypes []interface{}, err error) {
 	}
 	return
 }
+
+// GetDCsByGPU returns a mapping of GPU ID to dataCenterIDs.
+// If there is an API failure, the map will simply be empty.
+func GetDCsByGPU() (mapping map[string][]string) {
+	mapping = make(map[string][]string)
+
+	input := Input{
+		Query: `
+		  query GetDcGPUs {
+			dataCenters {
+			  id
+			  gpuAvailability {
+			    gpuTypeId
+			  }
+			}
+		  }
+		`,
+	}
+
+	res, err := Query(input)
+	if err != nil {
+		return
+	}
+	defer res.Body.Close()
+	rawData, err := io.ReadAll(res.Body)
+	if err != nil {
+		return
+	}
+	if res.StatusCode != 200 {
+		return
+	}
+
+	type response struct {
+		Data struct {
+			DataCenters []struct {
+				ID              string `json:"id"`
+				GpuAvailability []struct {
+					GpuTypeID string `json:"gpuTypeId"`
+				} `json:"gpuAvailability"`
+			} `json:"dataCenters"`
+			Errors []struct {
+				Message string `json:"message"`
+			} `json:"errors"`
+		} `json:"data"`
+	}
+
+	var r response
+	if err = json.Unmarshal(rawData, &r); err != nil {
+		return
+	}
+
+	if r.Data.Errors != nil {
+		return
+	}
+
+	for _, dc := range r.Data.DataCenters {
+		for _, ga := range dc.GpuAvailability {
+			gpu := ga.GpuTypeID
+			if _, ok := mapping[gpu]; !ok {
+				mapping[gpu] = []string{}
+			}
+			mapping[gpu] = append(mapping[gpu], dc.ID)
+		}
+	}
+	return mapping
+}
