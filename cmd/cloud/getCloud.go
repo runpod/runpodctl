@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/runpod/runpodctl/api"
 	"github.com/runpod/runpodctl/format"
@@ -18,6 +19,7 @@ var (
 	memory    int
 	vcpu      int
 	secure    bool
+	showDC    bool
 )
 
 var GetCloudCmd = &cobra.Command{
@@ -49,6 +51,11 @@ var GetCloudCmd = &cobra.Command{
 		gpuTypes, err := api.GetCloud(input)
 		cobra.CheckErr(err)
 
+		var dcsByGPU map[string][]string
+		if showDC {
+			dcsByGPU = api.GetDCsByGPU()
+		}
+
 		data := [][]string{}
 		for _, gpu := range gpuTypes {
 			gpuType, ok := gpu.(map[string]interface{})
@@ -76,10 +83,16 @@ var GetCloudCmd = &cobra.Command{
 				spotPriceString,
 				onDemandPriceString,
 			}
+			if dcsByGPU != nil {
+				row = decorateDataCenters(row, kv["gpuTypeId"].(string), dcsByGPU)
+			}
 			data = append(data, row)
 		}
 
 		header := []string{"GPU Type", "Mem GB", "vCPU", "Spot $/HR", "OnDemand $/HR"}
+		if dcsByGPU != nil {
+			header = append(header, "Data centers")
+		}
 		tb := tablewriter.NewWriter(os.Stdout)
 		tb.SetHeader(header)
 		tb.AppendBulk(data)
@@ -88,10 +101,20 @@ var GetCloudCmd = &cobra.Command{
 	},
 }
 
+func decorateDataCenters(fields []string, gpuID string, dcsByGPU map[string][]string) []string {
+	dcs, ok := dcsByGPU[gpuID]
+	if !ok {
+		return fields
+	}
+
+	return append(fields, strings.Join(dcs, ","))
+}
+
 func init() {
 	GetCloudCmd.Flags().BoolVarP(&community, "community", "c", false, "show listings from community cloud only")
 	GetCloudCmd.Flags().IntVar(&disk, "disk", 0, "minimum disk size in GB you need")
 	GetCloudCmd.Flags().IntVar(&memory, "mem", 0, "minimum sys memory size in GB you need")
 	GetCloudCmd.Flags().IntVar(&vcpu, "vcpu", 0, "minimum vCPUs you need")
 	GetCloudCmd.Flags().BoolVarP(&secure, "secure", "s", false, "show listings from secure cloud only")
+	GetCloudCmd.Flags().BoolVarP(&showDC, "datacenter", "d", false, "show which datacenters provide which gpu types")
 }
