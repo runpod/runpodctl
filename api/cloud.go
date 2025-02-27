@@ -28,6 +28,7 @@ func GetCloud(in *GetCloudInput) (gpuTypes []interface{}, err error) {
 				minMemory
 				minVcpu
 			  }
+			  memoryInGb
 			}
 		}
 		`,

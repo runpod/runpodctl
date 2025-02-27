@@ -69,8 +69,15 @@ var GetCloudCmd = &cobra.Command{
 			if ok && spotPrice > 0 {
 				onDemandPriceString = fmt.Sprintf("%.3f", onDemandPrice)
 			}
+			vRAM, ok := gpuType["memoryInGb"].(float64)
+			vRAMString := ""
+			if ok {
+				vRAMString = fmt.Sprintf("%.0f", vRAM)
+			}
+
 			row := []string{
 				fmt.Sprintf("%dx %s", gpuCount, kv["gpuTypeId"].(string)),
+				vRAMString,
 				fmt.Sprintf("%.f", kv["minMemory"]),
 				fmt.Sprintf("%.f", kv["minVcpu"]),
 				spotPriceString,
@@ -79,7 +86,7 @@ var GetCloudCmd = &cobra.Command{
 			data = append(data, row)
 		}
 
-		header := []string{"GPU Type", "Mem GB", "vCPU", "Spot $/HR", "OnDemand $/HR"}
+		header := []string{"GPU Type", "VRAM GB", "Mem GB", "vCPU", "Spot $/HR", "OnDemand $/HR"}
 		tb := tablewriter.NewWriter(os.Stdout)
 		tb.SetHeader(header)
 		tb.AppendBulk(data)
