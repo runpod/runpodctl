@@ -70,11 +70,28 @@ var CreatePodCmd = &cobra.Command{
 		} else {
 			input.CloudType = "COMMUNITY"
 		}
-		pod, err := api.CreatePod(input)
+
+		var pod map[string]interface{}
+		var err error
+
+		// Get the flag value and check if it was explicitly set
+		bidPerGpuFlag := cmd.Flags().Lookup("bidPerGpu")
+		if bidPerGpuFlag.Changed {
+			if bidPerGpu <= 0 {
+				cobra.CheckErr(fmt.Errorf("bidPerGpu must be greater than 0"))
+			}
+			pod, err = api.CreateSpotPod(input, bidPerGpu)
+		} else {
+			pod, err = api.CreatePod(input)
+		}
 		cobra.CheckErr(err)
 
 		if pod["desiredStatus"] == "RUNNING" {
-			fmt.Printf(`pod "%s" created for $%.3f / hr`, pod["id"], pod["costPerHr"])
+			podType := "pod"
+			if bidPerGpu > 0 {
+				podType = "spot pod"
+			}
+			fmt.Printf(`%s "%s" created for $%.3f / hr`, podType, pod["id"], pod["costPerHr"])
 			fmt.Println()
 		} else {
 			cobra.CheckErr(fmt.Errorf(`pod "%s" start failed; status is %s`, args[0], pod["desiredStatus"]))
@@ -102,6 +119,7 @@ func init() {
 	CreatePodCmd.Flags().StringVar(&networkVolumeId, "networkVolumeId", "", "network volume id")
 	CreatePodCmd.Flags().StringVar(&dataCenterId, "dataCenterId", "", "datacenter id to create in")
 	CreatePodCmd.Flags().BoolVar(&startSSH, "startSSH", false, "enable SSH login")
+	CreatePodCmd.Flags().Float32Var(&bidPerGpu, "bidPerGpu", 0, "bid per gpu for spot price (if set, creates a spot pod)")
 
 	CreatePodCmd.MarkFlagRequired("gpuType")   //nolint
 	CreatePodCmd.MarkFlagRequired("imageName") //nolint
