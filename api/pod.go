@@ -139,6 +139,7 @@ func GetPods() (pods []*Pod, err error) {
 }
 
 type CreatePodInput struct {
+	GlobalNetwork  bool 		`json:"globalNetwork"`
 	CloudType         string    `json:"cloudType"`
 	ContainerDiskInGb int       `json:"containerDiskInGb"`
 	DeployCost        float32   `json:"deployCost,omitempty"`

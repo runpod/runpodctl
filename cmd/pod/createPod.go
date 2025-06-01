@@ -10,6 +10,7 @@ import (
 )
 
 var (
+	globalNetwork     bool
 	communityCloud    bool
 	secureCloud       bool
 	containerDiskInGb int
@@ -38,6 +39,7 @@ var CreatePodCmd = &cobra.Command{
 	Long:  "start a pod from runpod.io",
 	Run: func(cmd *cobra.Command, args []string) {
 		input := &api.CreatePodInput{
+			GlobalNetwork: globalNetwork,
 			ContainerDiskInGb: containerDiskInGb,
 			DeployCost:        deployCost,
 			DataCenterId:      dataCenterId,
@@ -83,6 +85,7 @@ var CreatePodCmd = &cobra.Command{
 }
 
 func init() {
+	CreatePodCmd.Flags().BoolVar(&globalNetwork, "globalNetworking", false, "enable global networking if applicable")
 	CreatePodCmd.Flags().BoolVar(&communityCloud, "communityCloud", false, "create in community cloud")
 	CreatePodCmd.Flags().BoolVar(&secureCloud, "secureCloud", false, "create in secure cloud")
 	CreatePodCmd.Flags().IntVar(&containerDiskInGb, "containerDiskSize", 20, "container disk size in GB")
