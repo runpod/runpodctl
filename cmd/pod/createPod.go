@@ -85,7 +85,7 @@ var CreatePodCmd = &cobra.Command{
 }
 
 func init() {
-	CreatePodCmd.Flags().BoolVar(&globalNetwork, "globalNetworking", false, "enable global networking if applicable")
+	CreatePodCmd.Flags().BoolVar(&globalNetwork, "globalNetwork", false, "enable global networking (if applicable)")
 	CreatePodCmd.Flags().BoolVar(&communityCloud, "communityCloud", false, "create in community cloud")
 	CreatePodCmd.Flags().BoolVar(&secureCloud, "secureCloud", false, "create in secure cloud")
 	CreatePodCmd.Flags().IntVar(&containerDiskInGb, "containerDiskSize", 20, "container disk size in GB")
