@@ -36,13 +36,17 @@ type Pod struct {
 	DesiredStatus     string
 	DataCenterId      string
 	DockerArgs        string
+	DockerID          string
 	Env               []string
 	GpuCount          int
 	ImageName         string
+	LastStatusChange  string
+	MachineID         string
 	MemoryInGb        int
 	Name              string
 	PodType           string
 	Ports             string
+	UptimeSeconds     int
 	VcpuCount         int
 	VolumeInGb        int
 	VolumeMountPath   string
@@ -54,7 +58,10 @@ type Machine struct {
 	Location       string
 }
 type Runtime struct {
-	Ports []*Ports
+	UptimeInSeconds int
+	Ports           []*Ports
+	Gpus            []*Gpu
+	Container       *Container
 }
 
 type Ports struct {
@@ -63,6 +70,17 @@ type Ports struct {
 	PrivatePort int
 	PublicPort  int
 	PortType    string
+}
+
+type Gpu struct {
+	Id               string
+	GpuUtilPercent   float32
+	MemoryUtilPercent float32
+}
+
+type Container struct {
+	CpuPercent    float32
+	MemoryPercent float32
 }
 
 func GetPods() (pods []*Pod, err error) {
@@ -96,12 +114,22 @@ func GetPods() (pods []*Pod, err error) {
 				  location
 				}
 				runtime {
+				  uptimeInSeconds
 				  ports	{
 					ip
 					isIpPublic
 					privatePort
 					publicPort
 					PortType: type
+				  }
+				  gpus {
+					id
+					gpuUtilPercent
+					memoryUtilPercent
+				  }
+				  container {
+					cpuPercent
+					memoryPercent
 				  }
 				}
 			  }

@@ -34,10 +34,42 @@ type CreateEndpointInput struct {
 	WorkersMax      int    `json:"workersMax"`
 }
 
-// there are many more fields in the result of the query but I just care about these for CLI port
+// Template represents a pod template
+type Template struct {
+	Id                string    `json:"id"`
+	Name              string    `json:"name"`
+	ImageName         string    `json:"imageName"`
+	DockerArgs        string    `json:"dockerArgs"`
+	ContainerDiskInGb int       `json:"containerDiskInGb"`
+	VolumeInGb        int       `json:"volumeInGb"`
+	VolumeMountPath   string    `json:"volumeMountPath"`
+	Ports             string    `json:"ports"`
+	Env               []*PodEnv `json:"env"`
+	IsServerless      bool      `json:"isServerless"`
+	StartSSH          bool      `json:"startSsh"`
+	IsPublic          bool      `json:"isPublic"`
+	Readme            string    `json:"readme"`
+}
+
+// Endpoint represents a serverless endpoint
 type Endpoint struct {
-	Name string `json:"name"`
-	Id   string
+	Id              string    `json:"id"`
+	Name            string    `json:"name"`
+	TemplateId      string    `json:"templateId"`
+	GpuIds          string    `json:"gpuIds"`
+	GpuCount        int       `json:"gpuCount"`
+	NetworkVolumeId string    `json:"networkVolumeId"`
+	Locations       string    `json:"locations"`
+	IdleTimeout     int       `json:"idleTimeout"`
+	ScalerType      string    `json:"scalerType"`
+	ScalerValue     int       `json:"scalerValue"`
+	WorkersMin      int       `json:"workersMin"`
+	WorkersMax      int       `json:"workersMax"`
+	WorkersStandby  int       `json:"workersStandby"`
+	Type            string    `json:"type"`
+	Version         int       `json:"version"`
+	CreatedAt       string    `json:"createdAt"`
+	Env             []*PodEnv `json:"env"`
 }
 type EndpointOut struct {
 	Data   *EndpointData   `json:"data"`
@@ -48,6 +80,26 @@ type EndpointData struct {
 }
 type MySelfDataEndpoint struct {
 	Endpoints []*Endpoint
+}
+
+type TemplateOut struct {
+	Data   *TemplateData   `json:"data"`
+	Errors []*GraphQLError `json:"errors"`
+}
+type TemplateData struct {
+	Myself *MySelfDataTemplate
+}
+type MySelfDataTemplate struct {
+	PodTemplates []*Template `json:"podTemplates"`
+}
+
+type PublicTemplatesOut struct {
+	Data   *PublicTemplatesData `json:"data"`
+	Errors []*GraphQLError      `json:"errors"`
+}
+
+type PublicTemplatesData struct {
+	Templates []*Template `json:"templates"`
 }
 
 type UpdateEndpointTemplateInput struct {
@@ -265,13 +317,13 @@ func GetEndpoints() (endpoints []*Endpoint, err error) {
 	if err != nil {
 		return
 	}
-	if res.StatusCode != 200 {
-		err = fmt.Errorf("statuscode %d", res.StatusCode)
-		return
-	}
 	defer res.Body.Close()
 	rawData, err := io.ReadAll(res.Body)
 	if err != nil {
+		return
+	}
+	if res.StatusCode != 200 {
+		err = fmt.Errorf("statuscode %d, response: %s", res.StatusCode, string(rawData))
 		return
 	}
 	data := &EndpointOut{}
@@ -287,5 +339,204 @@ func GetEndpoints() (endpoints []*Endpoint, err error) {
 		return
 	}
 	endpoints = data.Data.Myself.Endpoints
+	return
+}
+
+func GetTemplates() (templates []*Template, err error) {
+	// Get user templates
+	userTemplates, err := GetUserTemplates()
+	if err != nil {
+		return nil, err
+	}
+
+	// Get public templates
+	publicTemplates, err := GetPublicTemplates()
+	if err != nil {
+		// If public templates fail, just return user templates
+		return userTemplates, nil
+	}
+
+	// Combine both lists
+	templates = append(userTemplates, publicTemplates...)
+	return templates, nil
+}
+
+func GetUserTemplates() (templates []*Template, err error) {
+	input := Input{
+		Query: `
+		query UserTemplates {
+			myself {
+			  podTemplates {
+				id
+				name
+				imageName
+				dockerArgs
+				containerDiskInGb
+				volumeInGb
+				volumeMountPath
+				ports
+				env {
+				  key
+				  value
+				}
+				isServerless
+				startSsh
+				isPublic
+				readme
+			  }
+			}
+		  }
+		`,
+	}
+	res, err := Query(input)
+	if err != nil {
+		return
+	}
+	defer res.Body.Close()
+	rawData, err := io.ReadAll(res.Body)
+	if err != nil {
+		return
+	}
+	if res.StatusCode != 200 {
+		err = fmt.Errorf("statuscode %d, response: %s", res.StatusCode, string(rawData))
+		return
+	}
+	data := &TemplateOut{}
+	if err = json.Unmarshal(rawData, data); err != nil {
+		return
+	}
+	if len(data.Errors) > 0 {
+		err = errors.New(data.Errors[0].Message)
+		return
+	}
+	if data == nil || data.Data == nil || data.Data.Myself == nil || data.Data.Myself.PodTemplates == nil {
+		templates = []*Template{} // Return empty slice instead of error
+		return
+	}
+	templates = data.Data.Myself.PodTemplates
+	return
+}
+
+func GetPublicTemplates() (templates []*Template, err error) {
+	input := Input{
+		Query: `
+		query PublicTemplates {
+			templates {
+				id
+				name
+				imageName
+				dockerArgs
+				containerDiskInGb
+				volumeInGb
+				volumeMountPath
+				ports
+				env {
+				  key
+				  value
+				}
+				isServerless
+				startSsh
+				isPublic
+				readme
+			}
+		}
+		`,
+	}
+	res, err := Query(input)
+	if err != nil {
+		return
+	}
+	defer res.Body.Close()
+	rawData, err := io.ReadAll(res.Body)
+	if err != nil {
+		return
+	}
+	if res.StatusCode != 200 {
+		err = fmt.Errorf("statuscode %d, response: %s", res.StatusCode, string(rawData))
+		return
+	}
+	data := &PublicTemplatesOut{}
+	if err = json.Unmarshal(rawData, data); err != nil {
+		return
+	}
+	if len(data.Errors) > 0 {
+		err = errors.New(data.Errors[0].Message)
+		return
+	}
+	if data == nil || data.Data == nil || data.Data.Templates == nil {
+		templates = []*Template{} // Return empty slice instead of error
+		return
+	}
+	templates = data.Data.Templates
+	return
+}
+
+func DeleteTemplate(templateName string) (err error) {
+	input := Input{
+		Query: `
+		mutation Mutation($templateName: String) {
+			deleteTemplate(templateName: $templateName)
+		}
+		`,
+		Variables: map[string]interface{}{"templateName": templateName},
+	}
+	res, err := Query(input)
+	if err != nil {
+		return
+	}
+	defer res.Body.Close()
+	rawData, err := io.ReadAll(res.Body)
+	if err != nil {
+		return
+	}
+	if res.StatusCode != 200 {
+		err = fmt.Errorf("statuscode %d, response: %s", res.StatusCode, string(rawData))
+		return
+	}
+	data := make(map[string]interface{})
+	if err = json.Unmarshal(rawData, &data); err != nil {
+		return
+	}
+	gqlErrors, ok := data["errors"].([]interface{})
+	if ok && len(gqlErrors) > 0 {
+		firstErr, _ := gqlErrors[0].(map[string]interface{})
+		err = errors.New(firstErr["message"].(string))
+		return
+	}
+	return
+}
+
+func DeleteEndpoint(endpointId string) (err error) {
+	input := Input{
+		Query: `
+		mutation Mutation($endpointId: String) {
+			deleteEndpoint(endpointId: $endpointId)
+		}
+		`,
+		Variables: map[string]interface{}{"endpointId": endpointId},
+	}
+	res, err := Query(input)
+	if err != nil {
+		return
+	}
+	if res.StatusCode != 200 {
+		err = fmt.Errorf("statuscode %d", res.StatusCode)
+		return
+	}
+	defer res.Body.Close()
+	rawData, err := io.ReadAll(res.Body)
+	if err != nil {
+		return
+	}
+	data := make(map[string]interface{})
+	if err = json.Unmarshal(rawData, &data); err != nil {
+		return
+	}
+	gqlErrors, ok := data["errors"].([]interface{})
+	if ok && len(gqlErrors) > 0 {
+		firstErr, _ := gqlErrors[0].(map[string]interface{})
+		err = errors.New(firstErr["message"].(string))
+		return
+	}
 	return
 }
