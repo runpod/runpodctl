@@ -3,8 +3,8 @@ package croc
 import (
 	"errors"
 	"fmt"
-	"math/rand/v2"
 	"log"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strconv"

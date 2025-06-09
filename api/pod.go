@@ -73,8 +73,8 @@ type Ports struct {
 }
 
 type Gpu struct {
-	Id               string
-	GpuUtilPercent   float32
+	Id                string
+	GpuUtilPercent    float32
 	MemoryUtilPercent float32
 }
 

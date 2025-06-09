@@ -19,11 +19,12 @@ var rootCmd = &cobra.Command{
 	Use:   "runpodctl",
 	Short: "CLI for runpod.io",
 	Long:  "The RunPod CLI tool to manage resources on runpod.io and develop serverless applications.",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		// If no subcommands provided, launch TUI
 		if len(args) == 0 {
-			runTUI()
+			return runTUI()
 		}
+		return nil
 	},
 }
 

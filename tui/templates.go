@@ -1,4 +1,4 @@
-package cmd
+package tui
 
 import (
 	"fmt"
@@ -9,14 +9,8 @@ import (
 	"github.com/runpod/runpodctl/api"
 )
 
-func createTemplatesScreen(app *tview.Application, pages *tview.Pages, runpodPurple, runpodBlue, runpodDarkBg, runpodLightGray tcell.Color) (*tview.Flex, func()) {
-	table := tview.NewTable().
-		SetBorders(true).
-		SetSelectable(true, false).
-		SetFixed(1, 0).
-		SetBordersColor(runpodBlue).
-		SetSeparator(tview.Borders.Vertical).
-		SetEvaluateAllRows(true)
+func CreateTemplatesScreen(app *tview.Application, pages *tview.Pages, runpodPurple, runpodBlue, runpodDarkBg, runpodLightGray tcell.Color) (*tview.Flex, func()) {
+	table := CreateBaseTable(runpodBlue)
 
 	selectedBg := tcell.NewRGBColor(20, 10, 60)
 
@@ -24,31 +18,11 @@ func createTemplatesScreen(app *tview.Application, pages *tview.Pages, runpodPur
 	var terminalWidth int = 120
 	var lastTerminalWidth int = 120
 
-	emptyState := tview.NewTextView()
-	emptyState.SetDynamicColors(true)
-	emptyState.SetBackgroundColor(runpodDarkBg)
-	emptyState.SetTextAlign(tview.AlignCenter)
-	emptyState.SetText(fmt.Sprintf(`[#824edc]📄 No templates found[-]
-
-[#CBCCD2]You don't have any templates yet.[-]
-
-[#6134E2]Templates include both your custom templates and public system templates.[-]
-[#6134E2]Create your first template with:[-]
-[#824edc]runpodctl create template[-]
-
-[#666666]Press 'r' to refresh or 'q' to quit[-]`))
+	emptyState := CreateEmptyState("📄 No templates found", "You don't have any templates yet.\n\nTemplates include both your custom templates and public system templates.", "template", "runpodctl create template", runpodDarkBg)
 
 	contentArea := tview.NewFlex()
 
-	loadingContent := tview.NewTextView()
-	loadingContent.SetDynamicColors(true)
-	loadingContent.SetBackgroundColor(runpodDarkBg)
-	loadingContent.SetTextAlign(tview.AlignCenter)
-	loadingContent.SetText(fmt.Sprintf(`[#824edc]Loading templates...[-]
-
-⣾ Fetching data from API...
-
-[#CBCCD2]Please wait while we retrieve your templates[-]`))
+	loadingContent := CreateLoadingContent("Loading templates...", "Fetching data from API...", runpodDarkBg)
 
 	var updateContent func()
 	var showLoading func()
@@ -69,35 +43,18 @@ func createTemplatesScreen(app *tview.Application, pages *tview.Pages, runpodPur
 		app.SetFocus(loadingContent)
 	}
 
-	formatColumnText := func(text string, maxWidth int) string {
-		if len(text) <= maxWidth {
-			return text
-		}
-		if maxWidth <= 3 {
-			return text[:maxWidth]
-		}
-		return text[:maxWidth-3] + "..."
-	}
-
-	abs := func(x int) int {
-		if x < 0 {
-			return -x
-		}
-		return x
-	}
-
 	repopulateTable := func() {
 		app.QueueUpdateDraw(func() {
 			table.Clear()
 
-			table.SetCell(0, 0, tview.NewTableCell(" Name ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-			table.SetCell(0, 1, tview.NewTableCell(" ID ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-			table.SetCell(0, 2, tview.NewTableCell(" Image ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-			table.SetCell(0, 3, tview.NewTableCell(" Type ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-			table.SetCell(0, 4, tview.NewTableCell(" Owner ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-			table.SetCell(0, 5, tview.NewTableCell(" Disk GB ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-			table.SetCell(0, 6, tview.NewTableCell(" Volume GB ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-			table.SetCell(0, 7, tview.NewTableCell(" SSH ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
+			table.SetCell(0, 0, CreateHeaderCell("Name", runpodPurple))
+			table.SetCell(0, 1, CreateHeaderCell("ID", runpodPurple))
+			table.SetCell(0, 2, CreateHeaderCell("Image", runpodPurple))
+			table.SetCell(0, 3, CreateHeaderCell("Type", runpodPurple))
+			table.SetCell(0, 4, CreateHeaderCell("Owner", runpodPurple))
+			table.SetCell(0, 5, CreateHeaderCell("Disk GB", runpodPurple))
+			table.SetCell(0, 6, CreateHeaderCell("Volume GB", runpodPurple))
+			table.SetCell(0, 7, CreateHeaderCell("SSH", runpodPurple))
 
 			for i, template := range templates {
 				row := i + 1
@@ -105,18 +62,24 @@ func createTemplatesScreen(app *tview.Application, pages *tview.Pages, runpodPur
 				nameWidth := int(float64(terminalWidth) * 0.20)
 				idWidth := int(float64(terminalWidth) * 0.12)
 				imageWidth := int(float64(terminalWidth) * 0.30)
-				
-				if nameWidth < 8 { nameWidth = 8 }
-				if idWidth < 6 { idWidth = 6 }
-				if imageWidth < 12 { imageWidth = 12 }
 
-				table.SetCell(row, 0, tview.NewTableCell(" "+formatColumnText(template.Name, nameWidth-2)+" ").
+				if nameWidth < 8 {
+					nameWidth = 8
+				}
+				if idWidth < 6 {
+					idWidth = 6
+				}
+				if imageWidth < 12 {
+					imageWidth = 12
+				}
+
+				table.SetCell(row, 0, tview.NewTableCell(" "+FormatColumnText(template.Name, nameWidth-2)+" ").
 					SetSelectedStyle(tcell.StyleDefault.Foreground(runpodLightGray).Background(selectedBg)))
 
-				table.SetCell(row, 1, tview.NewTableCell(" "+formatColumnText(template.Id, idWidth-2)+" ").
+				table.SetCell(row, 1, tview.NewTableCell(" "+FormatColumnText(template.Id, idWidth-2)+" ").
 					SetSelectedStyle(tcell.StyleDefault.Foreground(runpodLightGray).Background(selectedBg)))
 
-				table.SetCell(row, 2, tview.NewTableCell(" "+formatColumnText(template.ImageName, imageWidth-2)+" ").
+				table.SetCell(row, 2, tview.NewTableCell(" "+FormatColumnText(template.ImageName, imageWidth-2)+" ").
 					SetSelectedStyle(tcell.StyleDefault.Foreground(runpodLightGray).Background(selectedBg)))
 
 				templateType := "Pod"
@@ -164,18 +127,7 @@ func createTemplatesScreen(app *tview.Application, pages *tview.Pages, runpodPur
 		})
 	}
 
-	updateColumnSizing := func(newWidth int) {
-		if newWidth > 0 {
-			terminalWidth = newWidth - 4
-
-			if abs(terminalWidth-lastTerminalWidth) > 10 && len(templates) > 0 {
-				lastTerminalWidth = terminalWidth
-				go repopulateTable()
-				return
-			}
-			lastTerminalWidth = terminalWidth
-		}
-	}
+	updateColumnSizing := CreateColumnSizingFunc(&terminalWidth, &lastTerminalWidth, func() bool { return len(templates) > 0 }, repopulateTable)
 
 	table.SetDrawFunc(func(screen tcell.Screen, x int, y int, width int, height int) (int, int, int, int) {
 		updateColumnSizing(width)
@@ -184,14 +136,14 @@ func createTemplatesScreen(app *tview.Application, pages *tview.Pages, runpodPur
 
 	updateColumnSizing(120)
 
-	table.SetCell(0, 0, tview.NewTableCell(" Name ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-	table.SetCell(0, 1, tview.NewTableCell(" ID ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-	table.SetCell(0, 2, tview.NewTableCell(" Image ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-	table.SetCell(0, 3, tview.NewTableCell(" Type ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-	table.SetCell(0, 4, tview.NewTableCell(" Owner ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-	table.SetCell(0, 5, tview.NewTableCell(" Disk GB ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-	table.SetCell(0, 6, tview.NewTableCell(" Volume GB ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-	table.SetCell(0, 7, tview.NewTableCell(" SSH ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
+	table.SetCell(0, 0, CreateHeaderCell("Name", runpodPurple))
+	table.SetCell(0, 1, CreateHeaderCell("ID", runpodPurple))
+	table.SetCell(0, 2, CreateHeaderCell("Image", runpodPurple))
+	table.SetCell(0, 3, CreateHeaderCell("Type", runpodPurple))
+	table.SetCell(0, 4, CreateHeaderCell("Owner", runpodPurple))
+	table.SetCell(0, 5, CreateHeaderCell("Disk GB", runpodPurple))
+	table.SetCell(0, 6, CreateHeaderCell("Volume GB", runpodPurple))
+	table.SetCell(0, 7, CreateHeaderCell("SSH", runpodPurple))
 
 	refreshTemplates := func() {
 		app.QueueUpdateDraw(func() {
@@ -248,32 +200,14 @@ Press 'r' to retry[-]`, err.Error()))
 		})
 	}
 
-	statusBar := tview.NewTextView()
-	statusBar.SetDynamicColors(true)
-	statusBar.SetBackgroundColor(runpodDarkBg)
-	statusBar.SetText("[#824edc]Commands:[-] [#6134E2]Enter[-] - Details | [#6134E2]d[-] - Delete | [#6134E2]r/F5[-] - Refresh | [#6134E2]1,2,3[-] - Switch Screens | [#6134E2]q[-] - Quit")
+	statusBar := CreateStatusBar("[#6134E2]Enter[-] - Details | [#6134E2]d[-] - Delete | [#6134E2]r/F5[-] - Refresh", runpodDarkBg)
 
 	mainFlex := tview.NewFlex().
 		SetDirection(tview.FlexRow).
 		AddItem(contentArea, 0, 1, true).
 		AddItem(statusBar, 1, 0, false)
 
-	emptyState.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		switch event.Rune() {
-		case 'q':
-			app.Stop()
-			return nil
-		case 'r', 'R':
-			go refreshTemplates()
-			return nil
-		}
-		switch event.Key() {
-		case tcell.KeyF5:
-			go refreshTemplates()
-			return nil
-		}
-		return event
-	})
+	emptyState.SetInputCapture(CreateBasicInputCapture(app, refreshTemplates))
 
 	table.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Rune() {
@@ -302,7 +236,7 @@ Press 'r' to retry[-]`, err.Error()))
 					pages.AddPage("error-public-delete", errorModal, true, true)
 					pages.SwitchToPage("error-public-delete")
 				} else {
-					showTemplateDeleteConfirmation(app, pages, template, refreshTemplates, runpodPurple, runpodBlue, runpodDarkBg, runpodLightGray)
+					ShowTemplateDeleteConfirmation(app, pages, template, refreshTemplates, runpodPurple, runpodBlue, runpodDarkBg, runpodLightGray)
 				}
 			}
 			return nil
@@ -317,21 +251,14 @@ Press 'r' to retry[-]`, err.Error()))
 		return event
 	})
 
-	loadingContent.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		switch event.Rune() {
-		case 'q':
-			app.Stop()
-			return nil
-		}
-		return event
-	})
+	loadingContent.SetInputCapture(CreateBasicInputCapture(app, refreshTemplates))
 
 	updateContent()
 
 	return mainFlex, refreshTemplates
 }
 
-func showTemplateDeleteConfirmation(app *tview.Application, pages *tview.Pages, template *api.Template, refreshTemplates func(), runpodPurple, runpodBlue, runpodDarkBg, runpodLightGray tcell.Color) {
+func ShowTemplateDeleteConfirmation(app *tview.Application, pages *tview.Pages, template *api.Template, refreshTemplates func(), runpodPurple, runpodBlue, runpodDarkBg, runpodLightGray tcell.Color) {
 	templateType := "Pod"
 	if template.IsServerless {
 		templateType = "Serverless"

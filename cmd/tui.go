@@ -5,6 +5,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+	"github.com/runpod/runpodctl/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -64,9 +65,9 @@ func runTUI() error {
 	}
 	updateNavHeader()
 
-	podsScreen, refreshPods := createPodsScreen(app, pages, runpodPurple, runpodBlue, runpodDarkBg, runpodLightGray)
-	templatesScreen, refreshTemplates := createTemplatesScreen(app, pages, runpodPurple, runpodBlue, runpodDarkBg, runpodLightGray)
-	endpointsScreen, refreshEndpoints := createEndpointsScreen(app, pages, runpodPurple, runpodBlue, runpodDarkBg, runpodLightGray)
+	podsScreen, refreshPods := tui.CreatePodsScreen(app, pages, runpodPurple, runpodBlue, runpodDarkBg, runpodLightGray)
+	templatesScreen, refreshTemplates := tui.CreateTemplatesScreen(app, pages, runpodPurple, runpodBlue, runpodDarkBg, runpodLightGray)
+	endpointsScreen, refreshEndpoints := tui.CreateEndpointsScreen(app, pages, runpodPurple, runpodBlue, runpodDarkBg, runpodLightGray)
 
 	switchScreen := func(newScreen string) {
 		if newScreen == currentScreen {

@@ -1,4 +1,4 @@
-package cmd
+package tui
 
 import (
 	"fmt"
@@ -10,55 +10,20 @@ import (
 	"github.com/runpod/runpodctl/api"
 )
 
-func createPodsScreen(app *tview.Application, pages *tview.Pages, runpodPurple, runpodBlue, runpodDarkBg, runpodLightGray tcell.Color) (*tview.Flex, func()) {
-	table := tview.NewTable().
-		SetBorders(true).
-		SetSelectable(true, false).
-		SetFixed(1, 0).
-		SetBordersColor(runpodBlue).
-		SetSeparator(tview.Borders.Vertical).
-		SetEvaluateAllRows(true)
+func CreatePodsScreen(app *tview.Application, pages *tview.Pages, runpodPurple, runpodBlue, runpodDarkBg, runpodLightGray tcell.Color) (*tview.Flex, func()) {
+	table := CreateBaseTable(runpodBlue)
 
 	selectedBg := tcell.NewRGBColor(20, 10, 60)
-
-	formatColumnText := func(text string, maxWidth int) string {
-		if len(text) <= maxWidth {
-			return text
-		}
-		if maxWidth <= 3 {
-			return text[:maxWidth]
-		}
-		return text[:maxWidth-3] + "..."
-	}
 
 	var terminalWidth int = 120
 	var lastTerminalWidth int = 120
 	var pods []*api.Pod
 
-	emptyState := tview.NewTextView()
-	emptyState.SetDynamicColors(true)
-	emptyState.SetBackgroundColor(runpodDarkBg)
-	emptyState.SetTextAlign(tview.AlignCenter)
-	emptyState.SetText(fmt.Sprintf(`[#824edc]🚀 No pods found[-]
-
-[#CBCCD2]You don't have any pods yet.[-]
-
-[#6134E2]Create your first pod with:[-]
-[#824edc]runpodctl create pod[-]
-
-[#666666]Press 'r' to refresh or 'q' to quit[-]`))
+	emptyState := CreateEmptyState("🚀 No pods found", "You don't have any pods yet.", "pod", "runpodctl create pod", runpodDarkBg)
 
 	contentArea := tview.NewFlex()
 
-	loadingContent := tview.NewTextView()
-	loadingContent.SetDynamicColors(true)
-	loadingContent.SetBackgroundColor(runpodDarkBg)
-	loadingContent.SetTextAlign(tview.AlignCenter)
-	loadingContent.SetText(fmt.Sprintf(`[#824edc]Loading pods...[-]
-
-⣾ Fetching data from API...
-
-[#CBCCD2]Please wait while we retrieve your pods[-]`))
+	loadingContent := CreateLoadingContent("Loading pods...", "Fetching data from API...", runpodDarkBg)
 
 	var updateContent func()
 	var showLoading func()
@@ -79,26 +44,19 @@ func createPodsScreen(app *tview.Application, pages *tview.Pages, runpodPurple, 
 		app.SetFocus(loadingContent)
 	}
 
-	abs := func(x int) int {
-		if x < 0 {
-			return -x
-		}
-		return x
-	}
-
 	repopulateTable := func() {
 		app.QueueUpdateDraw(func() {
 			table.Clear()
 
-			table.SetCell(0, 0, tview.NewTableCell(" Name ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-			table.SetCell(0, 1, tview.NewTableCell(" ID ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-			table.SetCell(0, 2, tview.NewTableCell(" Status ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-			table.SetCell(0, 3, tview.NewTableCell(" CPU% ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-			table.SetCell(0, 4, tview.NewTableCell(" Memory% ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-			table.SetCell(0, 5, tview.NewTableCell(" GPU% ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-			table.SetCell(0, 6, tview.NewTableCell(" Uptime ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-			table.SetCell(0, 7, tview.NewTableCell(" Cost/Hr ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-			table.SetCell(0, 8, tview.NewTableCell(" Location ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
+			table.SetCell(0, 0, CreateHeaderCell("Name", runpodPurple))
+			table.SetCell(0, 1, CreateHeaderCell("ID", runpodPurple))
+			table.SetCell(0, 2, CreateHeaderCell("Status", runpodPurple))
+			table.SetCell(0, 3, CreateHeaderCell("CPU%", runpodPurple))
+			table.SetCell(0, 4, CreateHeaderCell("Memory%", runpodPurple))
+			table.SetCell(0, 5, CreateHeaderCell("GPU%", runpodPurple))
+			table.SetCell(0, 6, CreateHeaderCell("Uptime", runpodPurple))
+			table.SetCell(0, 7, CreateHeaderCell("Cost/Hr", runpodPurple))
+			table.SetCell(0, 8, CreateHeaderCell("Location", runpodPurple))
 
 			for i, pod := range pods {
 				row := i + 1
@@ -106,15 +64,21 @@ func createPodsScreen(app *tview.Application, pages *tview.Pages, runpodPurple, 
 				nameWidth := int(float64(terminalWidth) * 0.22)
 				idWidth := int(float64(terminalWidth) * 0.12)
 				locationWidth := int(float64(terminalWidth) * 0.15)
-				
-				if nameWidth < 8 { nameWidth = 8 }
-				if idWidth < 6 { idWidth = 6 }
-				if locationWidth < 8 { locationWidth = 8 }
 
-				table.SetCell(row, 0, tview.NewTableCell(" "+formatColumnText(pod.Name, nameWidth-2)+" ").
+				if nameWidth < 8 {
+					nameWidth = 8
+				}
+				if idWidth < 6 {
+					idWidth = 6
+				}
+				if locationWidth < 8 {
+					locationWidth = 8
+				}
+
+				table.SetCell(row, 0, tview.NewTableCell(" "+FormatColumnText(pod.Name, nameWidth-2)+" ").
 					SetSelectedStyle(tcell.StyleDefault.Foreground(runpodLightGray).Background(selectedBg)))
 
-				table.SetCell(row, 1, tview.NewTableCell(" "+formatColumnText(pod.Id, idWidth-2)+" ").
+				table.SetCell(row, 1, tview.NewTableCell(" "+FormatColumnText(pod.Id, idWidth-2)+" ").
 					SetSelectedStyle(tcell.StyleDefault.Foreground(runpodLightGray).Background(selectedBg)))
 
 				statusColor := runpodLightGray
@@ -209,7 +173,7 @@ func createPodsScreen(app *tview.Application, pages *tview.Pages, runpodPurple, 
 				if pod.Machine != nil && pod.Machine.Location != "" {
 					location = pod.Machine.Location
 				}
-				table.SetCell(row, 8, tview.NewTableCell(" "+formatColumnText(location, locationWidth-2)+" ").
+				table.SetCell(row, 8, tview.NewTableCell(" "+FormatColumnText(location, locationWidth-2)+" ").
 					SetSelectedStyle(tcell.StyleDefault.Foreground(runpodLightGray).Background(selectedBg)))
 			}
 
@@ -219,31 +183,17 @@ func createPodsScreen(app *tview.Application, pages *tview.Pages, runpodPurple, 
 		})
 	}
 
-	updateColumnSizing := func(newWidth int) {
-		if newWidth > 0 {
-			terminalWidth = newWidth - 4
+	updateColumnSizing := CreateColumnSizingFunc(&terminalWidth, &lastTerminalWidth, func() bool { return len(pods) > 0 }, repopulateTable)
 
-			if abs(terminalWidth-lastTerminalWidth) > 10 && len(pods) > 0 {
-				lastTerminalWidth = terminalWidth
-				go func() {
-					time.Sleep(100 * time.Millisecond)
-					repopulateTable()
-				}()
-			} else {
-				lastTerminalWidth = terminalWidth
-			}
-		}
-	}
-
-	table.SetCell(0, 0, tview.NewTableCell(" Name ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-	table.SetCell(0, 1, tview.NewTableCell(" ID ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-	table.SetCell(0, 2, tview.NewTableCell(" Status ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-	table.SetCell(0, 3, tview.NewTableCell(" CPU% ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-	table.SetCell(0, 4, tview.NewTableCell(" Memory% ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-	table.SetCell(0, 5, tview.NewTableCell(" GPU% ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-	table.SetCell(0, 6, tview.NewTableCell(" Uptime ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-	table.SetCell(0, 7, tview.NewTableCell(" Cost/Hr ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
-	table.SetCell(0, 8, tview.NewTableCell(" Location ").SetTextColor(runpodPurple).SetAttributes(tcell.AttrBold).SetSelectable(false))
+	table.SetCell(0, 0, CreateHeaderCell("Name", runpodPurple))
+	table.SetCell(0, 1, CreateHeaderCell("ID", runpodPurple))
+	table.SetCell(0, 2, CreateHeaderCell("Status", runpodPurple))
+	table.SetCell(0, 3, CreateHeaderCell("CPU%", runpodPurple))
+	table.SetCell(0, 4, CreateHeaderCell("Memory%", runpodPurple))
+	table.SetCell(0, 5, CreateHeaderCell("GPU%", runpodPurple))
+	table.SetCell(0, 6, CreateHeaderCell("Uptime", runpodPurple))
+	table.SetCell(0, 7, CreateHeaderCell("Cost/Hr", runpodPurple))
+	table.SetCell(0, 8, CreateHeaderCell("Location", runpodPurple))
 
 	refreshPods := func() {
 		app.QueueUpdateDraw(func() {
@@ -265,7 +215,7 @@ func createPodsScreen(app *tview.Application, pages *tview.Pages, runpodPurple, 
 [#CBCCD2]Error: %s
 
 Press 'r' to retry[-]`, err.Error()))
-				
+
 				errorContent.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 					switch event.Rune() {
 					case 'r', 'R':
@@ -286,7 +236,7 @@ Press 'r' to retry[-]`, err.Error()))
 					}
 					return event
 				})
-				
+
 				contentArea.Clear()
 				contentArea.AddItem(errorContent, 0, 1, true)
 				app.SetFocus(errorContent)
@@ -307,41 +257,16 @@ Press 'r' to retry[-]`, err.Error()))
 
 	updateColumnSizing(120)
 
-	statusBar := tview.NewTextView()
-	statusBar.SetDynamicColors(true)
-	statusBar.SetBackgroundColor(runpodDarkBg)
-	statusBar.SetText("[#824edc]Commands:[-] [#6134E2]Enter[-] - Details | [#6134E2]s[-] - Stop | [#6134E2]t[-] - Start | [#6134E2]d[-] - Delete | [#6134E2]r/F5[-] - Refresh | [#6134E2]1,2,3[-] - Switch Screens | [#6134E2]q[-] - Quit")
+	statusBar := CreateStatusBar("[#6134E2]Enter[-] - Details | [#6134E2]s[-] - Stop | [#6134E2]t[-] - Start | [#6134E2]d[-] - Delete | [#6134E2]r/F5[-] - Refresh", runpodDarkBg)
 
 	mainFlex := tview.NewFlex().
 		SetDirection(tview.FlexRow).
 		AddItem(contentArea, 0, 1, true).
 		AddItem(statusBar, 1, 0, false)
 
-	emptyState.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		switch event.Rune() {
-		case 'q':
-			app.Stop()
-			return nil
-		case 'r', 'R':
-			go refreshPods()
-			return nil
-		}
-		switch event.Key() {
-		case tcell.KeyF5:
-			go refreshPods()
-			return nil
-		}
-		return event
-	})
+	emptyState.SetInputCapture(CreateBasicInputCapture(app, refreshPods))
 
-	loadingContent.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		switch event.Rune() {
-		case 'q':
-			app.Stop()
-			return nil
-		}
-		return event
-	})
+	loadingContent.SetInputCapture(CreateBasicInputCapture(app, refreshPods))
 
 	table.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Rune() {
@@ -368,7 +293,7 @@ Press 'r' to retry[-]`, err.Error()))
 			selectedRow, _ := table.GetSelection()
 			if selectedRow > 0 && selectedRow <= len(pods) {
 				pod := pods[selectedRow-1]
-				showDeleteConfirmation(app, pages, pod, refreshPods, runpodPurple, runpodBlue, runpodDarkBg, runpodLightGray)
+				ShowDeleteConfirmation(app, pages, pod, refreshPods, runpodPurple, runpodBlue, runpodDarkBg, runpodLightGray)
 			}
 			return nil
 		case 't', 'T':
@@ -402,7 +327,7 @@ Press 'r' to retry[-]`, err.Error()))
 	return mainFlex, refreshPods
 }
 
-func showDeleteConfirmation(app *tview.Application, pages *tview.Pages, pod *api.Pod, refreshPods func(), runpodPurple, runpodBlue, runpodDarkBg, runpodLightGray tcell.Color) {
+func ShowDeleteConfirmation(app *tview.Application, pages *tview.Pages, pod *api.Pod, refreshPods func(), runpodPurple, runpodBlue, runpodDarkBg, runpodLightGray tcell.Color) {
 	modal := tview.NewModal().
 		SetText(fmt.Sprintf("Are you sure you want to delete pod?\n\nName: %s\nID: %s\nStatus: %s\n\nThis action cannot be undone!", pod.Name, pod.Id, pod.DesiredStatus)).
 		AddButtons([]string{"Delete", "Cancel"}).
@@ -412,10 +337,10 @@ func showDeleteConfirmation(app *tview.Application, pages *tview.Pages, pod *api
 					SetText(fmt.Sprintf("🗑️ Deleting pod '%s'...\n\nPlease wait...", pod.Name)).
 					SetBackgroundColor(runpodDarkBg).
 					SetTextColor(runpodLightGray)
-				
+
 				pages.AddPage("deleting", deletingModal, true, true)
 				pages.SwitchToPage("deleting")
-				
+
 				go func() {
 					_, err := api.RemovePod(pod.Id)
 					app.QueueUpdateDraw(func() {
@@ -447,12 +372,12 @@ func showDeleteConfirmation(app *tview.Application, pages *tview.Pages, pod *api
 				pages.SwitchToPage("pods")
 			}
 		})
-	
+
 	modal.SetBackgroundColor(runpodDarkBg).
 		SetButtonBackgroundColor(runpodBlue).
 		SetButtonTextColor(runpodLightGray).
 		SetTextColor(runpodLightGray)
-	
+
 	pages.AddPage("confirm-delete", modal, true, true)
 	pages.SwitchToPage("confirm-delete")
 }
