@@ -2,7 +2,10 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -15,8 +18,9 @@ func CreatePodsScreen(app *tview.Application, pages *tview.Pages, runpodPurple, 
 
 	selectedBg := tcell.NewRGBColor(20, 10, 60)
 
-	var terminalWidth int = 120
-	var lastTerminalWidth int = 120
+	terminalWidth := 120
+	lastTerminalWidth := 120
+
 	var pods []*api.Pod
 
 	emptyState := CreateEmptyState("🚀 No pods found", "You don't have any pods yet.", "pod", "runpodctl create pod", runpodDarkBg)
@@ -257,7 +261,7 @@ Press 'r' to retry[-]`, err.Error()))
 
 	updateColumnSizing(120)
 
-	statusBar := CreateStatusBar("[#6134E2]Enter[-] - Details | [#6134E2]s[-] - Stop | [#6134E2]t[-] - Start | [#6134E2]d[-] - Delete | [#6134E2]r/F5[-] - Refresh", runpodDarkBg)
+	statusBar := CreateStatusBar("[#6134E2]Enter[-] - Details | [#6134E2]h[-] - SSH | [#6134E2]s[-] - Stop | [#6134E2]t[-] - Start | [#6134E2]d[-] - Delete | [#6134E2]r/F5[-] - Refresh", runpodDarkBg)
 
 	mainFlex := tview.NewFlex().
 		SetDirection(tview.FlexRow).
@@ -309,9 +313,28 @@ Press 'r' to retry[-]`, err.Error()))
 				}()
 			}
 			return nil
+		case 'h', 'H':
+			selectedRow, _ := table.GetSelection()
+			if selectedRow > 0 && selectedRow <= len(pods) {
+				pod := pods[selectedRow-1]
+				sshCommand := getSSHConnectionInfo(pod)
+				if sshCommand != "" {
+					app.Suspend(func() {
+						connectToSSH(sshCommand)
+					})
+				}
+			}
+			return nil
 		}
 
 		switch event.Key() {
+		case tcell.KeyEnter:
+			selectedRow, _ := table.GetSelection()
+			if selectedRow > 0 && selectedRow <= len(pods) {
+				pod := pods[selectedRow-1]
+				ShowPodDetails(app, pages, pod, runpodPurple, runpodBlue, runpodDarkBg, runpodLightGray)
+			}
+			return nil
 		case tcell.KeyF5:
 			go refreshPods()
 			return nil
@@ -380,4 +403,150 @@ func ShowDeleteConfirmation(app *tview.Application, pages *tview.Pages, pod *api
 
 	pages.AddPage("confirm-delete", modal, true, true)
 	pages.SwitchToPage("confirm-delete")
+}
+
+func ShowPodDetails(app *tview.Application, pages *tview.Pages, pod *api.Pod, runpodPurple, runpodBlue, runpodDarkBg, runpodLightGray tcell.Color) {
+	detailsView := tview.NewTextView()
+	detailsView.SetDynamicColors(true)
+	detailsView.SetBackgroundColor(runpodDarkBg)
+	detailsView.SetBorder(true)
+	detailsView.SetTitle(fmt.Sprintf(" Pod Details: %s ", pod.Name))
+	detailsView.SetTitleColor(runpodPurple)
+	detailsView.SetBorderColor(runpodBlue)
+
+	details := fmt.Sprintf(`[#6134E2]Name:[-] %s
+[#6134E2]ID:[-] %s
+[#6134E2]Status:[-] %s
+[#6134E2]Cost per Hour:[-] $%.2f
+[#6134E2]Location:[-] %s
+
+[#6134E2]== Runtime Information ==[white]
+`, pod.Name, pod.Id, pod.DesiredStatus, pod.CostPerHr, func() string {
+		if pod.Machine != nil && pod.Machine.Location != "" {
+			return pod.Machine.Location
+		}
+		return "Unknown"
+	}())
+
+	if pod.Runtime != nil {
+		details += fmt.Sprintf(`[#6134E2]Uptime:[-] %s
+`, func() string {
+			uptimeSeconds := pod.Runtime.UptimeInSeconds
+			if uptimeSeconds > 0 {
+				hours := uptimeSeconds / 3600
+				minutes := (uptimeSeconds % 3600) / 60
+				if hours > 0 {
+					return fmt.Sprintf("%dh %dm", hours, minutes)
+				} else if minutes > 0 {
+					return fmt.Sprintf("%dm", minutes)
+				} else {
+					return fmt.Sprintf("%ds", uptimeSeconds)
+				}
+			}
+			return "N/A"
+		}())
+
+		if pod.Runtime.Container != nil {
+			details += fmt.Sprintf(`[#6134E2]CPU Usage:[-] %.1f%%
+[#6134E2]Memory Usage:[-] %.1f%%
+`, pod.Runtime.Container.CpuPercent, pod.Runtime.Container.MemoryPercent)
+		}
+
+		if len(pod.Runtime.Gpus) > 0 {
+			details += "\n[#6134E2]== GPU Information ==[white]\n"
+			for i, gpu := range pod.Runtime.Gpus {
+				details += fmt.Sprintf(`[#6134E2]GPU %d:[-] %.1f%% utilization
+`, i+1, gpu.GpuUtilPercent)
+			}
+		}
+	} else {
+		details += "Runtime information not available\n"
+	}
+
+	details += fmt.Sprintf(`
+[#6134E2]== Machine Information ==[white]
+[#6134E2]Pod Type:[-] %s
+[#6134E2]vCPUs:[-] %d
+[#6134E2]Memory:[-] %d GB
+[#6134E2]Disk:[-] %d GB
+`, pod.PodType, pod.VcpuCount, pod.MemoryInGb, pod.ContainerDiskInGb)
+
+	if pod.GpuCount > 0 {
+		gpuType := "Unknown"
+		if pod.Machine != nil && pod.Machine.GpuDisplayName != "" {
+			gpuType = pod.Machine.GpuDisplayName
+		}
+		details += fmt.Sprintf(`[#6134E2]GPU Count:[-] %d
+[#6134E2]GPU Type:[-] %s
+`, pod.GpuCount, gpuType)
+	}
+
+	sshInfo := getSSHConnectionInfo(pod)
+	if sshInfo != "" {
+		details += fmt.Sprintf(`
+[#6134E2]== SSH Connection ==[white]
+[#6134E2]Command:[-] %s
+`, sshInfo)
+	}
+
+	details += "\n[#CBCCD2]Press ESC or 'q' to go back | Press 's' to SSH (if available)[-]"
+
+	detailsView.SetText(details)
+
+	detailsView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyEscape:
+			pages.RemovePage("pod-details")
+			pages.SwitchToPage("pods")
+			return nil
+		}
+		switch event.Rune() {
+		case 'q', 'Q':
+			pages.RemovePage("pod-details")
+			pages.SwitchToPage("pods")
+			return nil
+		case 's', 'S':
+			sshCommand := getSSHConnectionInfo(pod)
+			if sshCommand != "" {
+				app.Suspend(func() {
+					connectToSSH(sshCommand)
+				})
+			}
+			return nil
+		}
+		return event
+	})
+
+	pages.AddPage("pod-details", detailsView, true, true)
+	pages.SwitchToPage("pod-details")
+}
+
+func getSSHConnectionInfo(pod *api.Pod) string {
+	if pod.Runtime == nil || pod.Runtime.Ports == nil {
+		return ""
+	}
+	for _, port := range pod.Runtime.Ports {
+		if port.IsIpPublic && port.PrivatePort == 22 {
+			return fmt.Sprintf("ssh root@%s -p %d", port.Ip, port.PublicPort)
+		}
+	}
+	return ""
+}
+
+func connectToSSH(sshCommand string) {
+	fmt.Printf("Connecting via SSH...\n%s\n\n", sshCommand)
+
+	args := strings.Fields(sshCommand)[1:] // Remove "ssh" from the beginning
+
+	cmd := exec.Command("ssh", args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("SSH connection failed: %v\n", err)
+	}
+
+	fmt.Println("Press Enter to return to TUI...")
+	_, _ = fmt.Scanln()
 }
