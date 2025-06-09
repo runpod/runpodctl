@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"strconv"
-	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -103,19 +102,13 @@ func createTemplatesScreen(app *tview.Application, pages *tview.Pages, runpodPur
 			for i, template := range templates {
 				row := i + 1
 
-				nameWidth := 20
-				idWidth := 12
-				imageWidth := 25
-
-				if terminalWidth < 100 {
-					nameWidth = 12
-					idWidth = 8
-					imageWidth = 15
-				} else if terminalWidth > 150 {
-					nameWidth = 30
-					idWidth = 16
-					imageWidth = 35
-				}
+				nameWidth := int(float64(terminalWidth) * 0.20)
+				idWidth := int(float64(terminalWidth) * 0.12)
+				imageWidth := int(float64(terminalWidth) * 0.30)
+				
+				if nameWidth < 8 { nameWidth = 8 }
+				if idWidth < 6 { idWidth = 6 }
+				if imageWidth < 12 { imageWidth = 12 }
 
 				table.SetCell(row, 0, tview.NewTableCell(" "+formatColumnText(template.Name, nameWidth-2)+" ").
 					SetSelectedStyle(tcell.StyleDefault.Foreground(runpodLightGray).Background(selectedBg)))
@@ -177,13 +170,10 @@ func createTemplatesScreen(app *tview.Application, pages *tview.Pages, runpodPur
 
 			if abs(terminalWidth-lastTerminalWidth) > 10 && len(templates) > 0 {
 				lastTerminalWidth = terminalWidth
-				go func() {
-					time.Sleep(100 * time.Millisecond)
-					repopulateTable()
-				}()
-			} else {
-				lastTerminalWidth = terminalWidth
+				go repopulateTable()
+				return
 			}
+			lastTerminalWidth = terminalWidth
 		}
 	}
 
@@ -399,4 +389,3 @@ func showTemplateDeleteConfirmation(app *tview.Application, pages *tview.Pages, 
 	pages.AddPage("confirm-delete", modal, true, true)
 	pages.SwitchToPage("confirm-delete")
 }
-

@@ -95,10 +95,13 @@ func createEndpointsScreen(app *tview.Application, pages *tview.Pages, runpodPur
 			for i, endpoint := range endpoints {
 				row := i + 1
 
-				totalWeight := 8
-				nameWidth := terminalWidth * 3 / totalWeight
-				idWidth := terminalWidth * 2 / totalWeight
-				locationWidth := terminalWidth * 3 / totalWeight
+				nameWidth := int(float64(terminalWidth) * 0.25)
+				idWidth := int(float64(terminalWidth) * 0.15)
+				locationWidth := int(float64(terminalWidth) * 0.20)
+				
+				if nameWidth < 8 { nameWidth = 8 }
+				if idWidth < 6 { idWidth = 6 }
+				if locationWidth < 8 { locationWidth = 8 }
 
 				table.SetCell(row, 0, tview.NewTableCell(" "+formatColumnText(endpoint.Name, nameWidth-2)+" ").
 					SetSelectedStyle(tcell.StyleDefault.Foreground(runpodLightGray).Background(selectedBg)))

@@ -103,19 +103,13 @@ func createPodsScreen(app *tview.Application, pages *tview.Pages, runpodPurple, 
 			for i, pod := range pods {
 				row := i + 1
 
-				nameWidth := 20
-				idWidth := 12
-				locationWidth := 15
-
-				if terminalWidth < 100 {
-					nameWidth = 12
-					idWidth = 8
-					locationWidth = 10
-				} else if terminalWidth > 150 {
-					nameWidth = 30
-					idWidth = 16
-					locationWidth = 20
-				}
+				nameWidth := int(float64(terminalWidth) * 0.22)
+				idWidth := int(float64(terminalWidth) * 0.12)
+				locationWidth := int(float64(terminalWidth) * 0.15)
+				
+				if nameWidth < 8 { nameWidth = 8 }
+				if idWidth < 6 { idWidth = 6 }
+				if locationWidth < 8 { locationWidth = 8 }
 
 				table.SetCell(row, 0, tview.NewTableCell(" "+formatColumnText(pod.Name, nameWidth-2)+" ").
 					SetSelectedStyle(tcell.StyleDefault.Foreground(runpodLightGray).Background(selectedBg)))
