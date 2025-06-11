@@ -1,6 +1,6 @@
 <div align="center">
 
-# RunPod CLI
+# Runpod CLI
 
 runpodctl is the CLI tool to automate / manage GPU pods for [runpod.io](https://runpod.io).
 
@@ -10,7 +10,7 @@ _Note: All pods automatically come with runpodctl installed with a pod-scoped AP
 
 ## Table of Contents
 
-- [RunPod CLI](#runpod-cli)
+- [Runpod CLI](#runpod-cli)
   - [Table of Contents](#table-of-contents)
   - [Get Started](#get-started)
     - [Install](#install)
@@ -57,8 +57,8 @@ Please checkout this [video tutorial](https://www.youtube.com/watch?v=QN1vdGhjcR
 
 - [Installing the latest version of runpodctl](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=1384s)
 - [Uploading large datasets](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2068s)
-- [File transfers from PC to RunPod](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2106s)
-- [Downloading folders from RunPod](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2549s)
+- [File transfers from PC to Runpod](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2106s)
+- [Downloading folders from Runpod](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2549s)
 - [Adding runpodctl to your environment path](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2589s)
 - [Downloading model files](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=4871s)
 
@@ -109,7 +109,7 @@ You can use the following links for google colab
 
 ## Pod Commands
 
-Before using pod commands, configure the API key obtained from your [RunPod account](https://runpod.io/console/user/settings).
+Before using pod commands, configure the API key obtained from your [Runpod account](https://runpod.io/console/user/settings).
 
 ```bash
 # configure API key
@@ -132,7 +132,7 @@ runpodctl start pod {podId} --bid=0.3
 runpodctl stop pod {podId}
 ```
 
-For a comprehensive list of commands, visit [RunPod CLI documentation](docs/runpodctl.md).
+For a comprehensive list of commands, visit [Runpod CLI documentation](docs/runpodctl.md).
 
 ## Acknowledgements
 
