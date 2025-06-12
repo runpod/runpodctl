@@ -11,6 +11,7 @@ import (
 
 var (
 	globalNetwork     bool
+	supportPublicIP   bool
 	communityCloud    bool
 	secureCloud       bool
 	containerDiskInGb int
@@ -39,7 +40,8 @@ var CreatePodCmd = &cobra.Command{
 	Long:  "start a pod from runpod.io",
 	Run: func(cmd *cobra.Command, args []string) {
 		input := &api.CreatePodInput{
-			GlobalNetwork: globalNetwork,
+			GlobalNetwork:     globalNetwork,
+			SupportPublicIp:   supportPublicIP,
 			ContainerDiskInGb: containerDiskInGb,
 			DeployCost:        deployCost,
 			DataCenterId:      dataCenterId,
@@ -68,8 +70,14 @@ var CreatePodCmd = &cobra.Command{
 			input.Env[i] = &api.PodEnv{Key: e[0], Value: e[1]}
 		}
 		if secureCloud {
+			if input.SupportPublicIp {
+				cobra.CheckErr(fmt.Errorf("Public IP can only be used in community cloud"))
+			}
 			input.CloudType = "SECURE"
 		} else {
+			if input.GlobalNetwork {
+				cobra.CheckErr(fmt.Errorf("Global networking can only be used in secure cloud"))
+			}
 			input.CloudType = "COMMUNITY"
 		}
 		pod, err := api.CreatePod(input)
@@ -85,7 +93,8 @@ var CreatePodCmd = &cobra.Command{
 }
 
 func init() {
-	CreatePodCmd.Flags().BoolVar(&globalNetwork, "globalNetwork", false, "enable global networking (if applicable)")
+	CreatePodCmd.Flags().BoolVar(&globalNetwork, "globalNetwork", false, "enable global networking (requires secure cloud)")
+	CreatePodCmd.Flags().BoolVar(&supportPublicIP, "publicIP", false, "enable public ip (requires community cloud)")
 	CreatePodCmd.Flags().BoolVar(&communityCloud, "communityCloud", false, "create in community cloud")
 	CreatePodCmd.Flags().BoolVar(&secureCloud, "secureCloud", false, "create in secure cloud")
 	CreatePodCmd.Flags().IntVar(&containerDiskInGb, "containerDiskSize", 20, "container disk size in GB")
