@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v2
       - uses: actions/setup-go@v2
         with:
-          go-version: 1.22
+          go-version: 1.24
       - name: Gets latest created release info
         id: release
         uses: jossef/action-latest-release-info@v1.2.1
@@ -95,6 +95,22 @@ jobs:
           asset_path: bin/runpodctl-android-arm64
           asset_name: runpodctl-android-arm64
           asset_content_type: application/octet-stream
+      - name: Generate checksum
+        uses: jmgilman/actions-generate-checksum@v1
+        with:
+          patterns: |
+            runpodctl-*
+          output: checksum-standalone.txt
+          method: sha256
+      - name: upload checksum
+        uses: actions/upload-release-asset@v1.0.2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          upload_url: ${{ steps.release.outputs.upload_url }}
+          asset_path: checksum.txt
+          asset_name: checksum.txt
+          asset_content_type: text/plain
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v5
         with:
