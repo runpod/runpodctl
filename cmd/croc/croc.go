@@ -813,7 +813,7 @@ func (c *Client) Receive() (err error) {
 				conn, banner2, externalIP, errConn := tcp.ConnectToTCPServer(serverTry, c.Options.RelayPassword, c.Options.SharedSecret[:3], 500*time.Millisecond)
 				if errConn != nil {
 					log.Debug(errConn)
-					log.Debugf("could not connect to " + serverTry)
+					log.Debugf("could not connect to %s", serverTry)
 					continue
 				}
 				log.Debugf("local connection established to %s", serverTry)
