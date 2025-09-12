@@ -1,16 +1,11 @@
+version: 2
+
 builds:
   - binary: runpodctl
-    goos:
-      - darwin
-      - linux
-      - windows
-    goarch:
-      - amd64
-      - arm64
-    env:
-      - CGO_ENABLED=0
-    flags:
-      - -mod=mod
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    env: [CGO_ENABLED=0]
+    flags: [-mod=mod]
 
 release:
   prerelease: auto
