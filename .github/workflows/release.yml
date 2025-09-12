@@ -1,9 +1,11 @@
----
 name: release
 
 on:
-  release:
-    types: [published]
+  # Preferred: run when a semver tag is pushed (vX.Y.Z or vX.Y.Z-rc1, etc.)
+  push:
+    tags:
+      - "v*"
+  # Manual run (optional)
   workflow_dispatch:
 
 permissions:
@@ -11,111 +13,28 @@ permissions:
 
 jobs:
   release:
-    concurrency: main
     name: release
     runs-on: ubuntu-latest
+    concurrency: release-${{ github.ref }}
 
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-go@v2
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          go-version: 1.24
-      - name: Gets latest created release info
-        id: release
-        uses: jossef/action-latest-release-info@v1.2.1
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+          fetch-depth: 0  # GoReleaser needs full history/tags
 
-      - name: build
-        run: |
-          export CGO_ENABLED=0
-          echo "${{ steps.release.outputs.tag_name }}" | tr -d '\n' > version 
-          env GOOS=android GOARCH=arm64 go build -o bin/runpodctl-android-arm64 .
-          env GOOS=darwin GOARCH=amd64 go build -o bin/runpodctl-darwin-amd64 .
-          env GOOS=darwin GOARCH=arm64 go build -o bin/runpodctl-darwin-arm64 .
-          env GOOS=linux GOARCH=amd64 go build -o bin/runpodctl-linux-amd64 .
-          env GOOS=linux GOARCH=arm64 go build -o bin/runpodctl-linux-arm64 .
-          env GOOS=windows GOARCH=amd64 go build -o bin/runpodctl-windows-amd64.exe .
-          strip bin/* || true # strip the binary's DWARF debug info, where applicable
-          ./tools/upx --best bin/* || true # compress the binaries
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Use the Go version you actually build with; adjust if needed
+          go-version: "1.24.x"
 
-      - name: upload linux amd64 release binary
-        uses: actions/upload-release-asset@v1.0.2
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          upload_url: ${{ steps.release.outputs.upload_url }}
-          asset_path: bin/runpodctl-linux-amd64
-          asset_name: runpodctl-linux-amd64
-          asset_content_type: application/octet-stream
-      - name: upload darwin amd64 release binary
-        uses: actions/upload-release-asset@v1.0.2
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          upload_url: ${{ steps.release.outputs.upload_url }}
-          asset_path: bin/runpodctl-darwin-amd64
-          asset_name: runpodctl-darwin-amd64
-          asset_content_type: application/octet-stream
-
-      - name: upload darwin arm64 release binary
-        uses: actions/upload-release-asset@v1.0.2
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          upload_url: ${{ steps.release.outputs.upload_url }}
-          asset_path: bin/runpodctl-darwin-arm64
-          asset_name: runpodctl-darwin-arm64
-          asset_content_type: application/octet-stream
-
-      - name: upload windows amd64 release binary
-        uses: actions/upload-release-asset@v1.0.2
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          upload_url: ${{ steps.release.outputs.upload_url }}
-          asset_path: bin/runpodctl-windows-amd64.exe
-          asset_name: runpodctl-windows-amd64.exe
-          asset_content_type: application/octet-stream
-      - name: upload linux arm64 release binary
-        uses: actions/upload-release-asset@v1.0.2
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          upload_url: ${{ steps.release.outputs.upload_url }}
-          asset_path: bin/runpodctl-linux-arm64
-          asset_name: runpodctl-linux-arm64
-          asset_content_type: application/octet-stream
-      - name: upload android arm64 release binary
-        uses: actions/upload-release-asset@v1.0.2
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          upload_url: ${{ steps.release.outputs.upload_url }}
-          asset_path: bin/runpodctl-android-arm64
-          asset_name: runpodctl-android-arm64
-          asset_content_type: application/octet-stream
-      - name: Generate checksum
-        uses: jmgilman/actions-generate-checksum@v1
-        with:
-          patterns: |
-            runpodctl-*
-          output: checksum-standalone.txt
-          method: sha256
-      - name: upload checksum
-        uses: actions/upload-release-asset@v1.0.2
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          upload_url: ${{ steps.release.outputs.upload_url }}
-          asset_path: checksum.txt
-          asset_name: checksum.txt
-          asset_content_type: text/plain
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v5
+        uses: goreleaser/goreleaser-action@v6
         with:
-          distribution: goreleaser
           version: latest
-          args: release --clean --skip=validate
+          args: release --clean
         env:
-          GITHUB_TOKEN: ${{ secrets.PUBLISHER_TOKEN }}
+          # If you have a PAT with extra perms (e.g., for Homebrew tap),
+          # keep PUBLISHER_TOKEN. Otherwise GITHUB_TOKEN is fine.
+          GITHUB_TOKEN: ${{ secrets.PUBLISHER_TOKEN || secrets.GITHUB_TOKEN }}
