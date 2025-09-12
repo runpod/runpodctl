@@ -102,6 +102,15 @@ jobs:
             runpodctl-*
           output: checksum-standalone.txt
           method: sha256
+      - name: upload checksum
+        uses: actions/upload-release-asset@v1.0.2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          upload_url: ${{ steps.release.outputs.upload_url }}
+          asset_path: checksum-standalone.txt
+          asset_name: checksum-standalone.txt
+          asset_content_type: text/plain
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v5
         with:
