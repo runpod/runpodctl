@@ -1,6 +1,6 @@
 module github.com/runpod/runpodctl
 
-go 1.22
+go 1.23.8
 
 require (
 	github.com/denisbrodbeck/machineid v1.0.1
@@ -17,7 +17,7 @@ require (
 	github.com/schollz/progressbar/v3 v3.14.3
 	github.com/spf13/cobra v1.4.0
 	github.com/spf13/viper v1.10.1
-	golang.org/x/crypto v0.24.0
+	golang.org/x/crypto v0.35.0
 	golang.org/x/mod v0.17.0
 	golang.org/x/time v0.5.0
 )
@@ -50,9 +50,9 @@ require (
 	github.com/tscholl2/siec v0.0.0-20240310163802-c2c6f6198406 // indirect
 	github.com/twmb/murmur3 v1.1.8 // indirect
 	golang.org/x/net v0.25.0 // indirect
-	golang.org/x/sys v0.21.0 // indirect
-	golang.org/x/term v0.21.0 // indirect
-	golang.org/x/text v0.16.0 // indirect
+	golang.org/x/sys v0.30.0 // indirect
+	golang.org/x/term v0.29.0 // indirect
+	golang.org/x/text v0.22.0 // indirect
 	gopkg.in/ini.v1 v1.66.2 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
