@@ -1,11 +1,9 @@
 name: release
 
 on:
-  # Preferred: run when a semver tag is pushed (vX.Y.Z or vX.Y.Z-rc1, etc.)
   push:
     tags:
       - "v*"
-  # Manual run (optional)
   workflow_dispatch:
 
 permissions:
@@ -21,13 +19,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # GoReleaser needs full history/tags
+          fetch-depth: 0
+          ref: ${{ github.ref }}   # build the tagged commit
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          # Use the Go version you actually build with; adjust if needed
-          go-version: "1.24.x"
+          go-version: "1.24.x"     
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
@@ -35,6 +33,4 @@ jobs:
           version: latest
           args: release --clean
         env:
-          # If you have a PAT with extra perms (e.g., for Homebrew tap),
-          # keep PUBLISHER_TOKEN. Otherwise GITHUB_TOKEN is fine.
           GITHUB_TOKEN: ${{ secrets.PUBLISHER_TOKEN || secrets.GITHUB_TOKEN }}
