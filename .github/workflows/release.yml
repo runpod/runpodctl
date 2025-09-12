@@ -95,6 +95,13 @@ jobs:
           asset_path: bin/runpodctl-android-arm64
           asset_name: runpodctl-android-arm64
           asset_content_type: application/octet-stream
+      - name: Generate checksum
+        uses: jmgilman/actions-generate-checksum@v1
+        with:
+          patterns: |
+            runpodctl-*
+          output: checksum-standalone.txt
+          method: sha256
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v5
         with:
