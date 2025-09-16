@@ -19,7 +19,13 @@ type Input struct {
 	Variables map[string]interface{} `json:"variables"`
 }
 
+const GraphQLTimeoutKey = "graphqlTimeout"
+
 func Query(input Input) (res *http.Response, err error) {
+	if input.Variables == nil {
+		input.Variables = map[string]interface{}{}
+	}
+
 	jsonValue, err := json.Marshal(input)
 	if err != nil {
 		return nil, err
@@ -53,6 +59,11 @@ func Query(input Input) (res *http.Response, err error) {
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	client := &http.Client{Timeout: time.Second * 10}
+	timeout := viper.GetDuration(GraphQLTimeoutKey)
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+
+	client := &http.Client{Timeout: timeout}
 	return client.Do(req)
 }

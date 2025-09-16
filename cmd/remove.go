@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"github.com/runpod/runpodctl/cmd/model"
 	"github.com/runpod/runpodctl/cmd/pod"
 	"github.com/runpod/runpodctl/cmd/pods"
 
@@ -14,6 +15,8 @@ var removeCmd = &cobra.Command{
 }
 
 func init() {
+	// Model repository command is hidden because the feature is still in development.
+	removeCmd.AddCommand(model.RemoveModelCmd)
 	removeCmd.AddCommand(pod.RemovePodCmd)
 	removeCmd.AddCommand(pods.RemovePodsCmd)
 }
