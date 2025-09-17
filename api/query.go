@@ -41,7 +41,7 @@ func Query(input Input) (res *http.Response, err error) {
 		return nil, errors.New("API key not found")
 	}
 
-	req, err := http.NewRequest("POST", apiUrl+"?api_key="+apiKey, bytes.NewBuffer(jsonValue))
+	req, err := http.NewRequest("POST", apiUrl, bytes.NewBuffer(jsonValue))
 	if err != nil {
 		return
 	}
@@ -51,6 +51,7 @@ func Query(input Input) (res *http.Response, err error) {
 
 	req.Header.Add("Content-Type", "application/json")
 	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	client := &http.Client{Timeout: time.Second * 10}
 	return client.Do(req)
