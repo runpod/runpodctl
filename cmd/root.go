@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/runpod/runpodctl/api"
 	"github.com/runpod/runpodctl/cmd/config"
@@ -61,14 +62,19 @@ func registerCommands() {
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute(ver string) {
-	version = ver
-	api.Version = ver
-	rootCmd.Version = ver
+	sanitizedVersion := sanitizeVersion(ver)
+	version = sanitizedVersion
+	api.Version = sanitizedVersion
+	rootCmd.Version = sanitizedVersion
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func sanitizeVersion(ver string) string {
+	return strings.TrimRight(ver, "\r\n")
 }
 
 // initConfig reads in config file and ENV variables if set.
