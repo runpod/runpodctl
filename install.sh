@@ -113,16 +113,20 @@ download_url_constructor() {
         exit 1
     fi
 
-    DOWNLOAD_URL="https://github.com/runpod/runpodctl/releases/download/${VERSION}/runpodctl-${os_type}-${arch_type}"
+    local version_without_v_prefix=${VERSION#v}
+
+    DOWNLOAD_URL="https://github.com/runpod/runpodctl/releases/download/${VERSION}/runpodctl_${version_without_v_prefix}_${os_type}_${arch_type}.tar.gz"
 }
 
 # ---------------------------- Download & Install ---------------------------- #
 download_and_install_cli() {
-    local cli_file_name="runpodctl"
-    if ! wget -q --progress=bar "$DOWNLOAD_URL" -O "$cli_file_name"; then
-        echo "Failed to download $cli_file_name."
+    local cli_archive_file_name="runpod.tar.gz"
+    if ! wget -q --progress=bar "$DOWNLOAD_URL" -O "$cli_archive_file_name"; then
+        echo "Failed to download $cli_archive_file_name."
         exit 1
     fi
+    local cli_file_name="runpodctl"
+    tar -xzf "$cli_archive_file_name" "$cli_file_name"
     chmod +x "$cli_file_name"
     if ! mv "$cli_file_name" /usr/local/bin/; then
         echo "Failed to move $cli_file_name to /usr/local/bin/."
