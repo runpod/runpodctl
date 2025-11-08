@@ -30,4 +30,4 @@ darwin-amd64: version
 lint: version
 	golangci-lint run
 version:
-	echo "1.0.0-test" > VERSION
+	@test -f version || (echo "Error: version file not found" && exit 1)
