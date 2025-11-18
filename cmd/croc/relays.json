@@ -54,6 +54,56 @@
       "address": "relay10.runpod.net",
       "password": "Op7X0378LX7ZB602&qIX#@qHU",
       "ports": "9009,9010,9011,9012,9013,9014,9015,9016,9017,9018,9019,9020"
+    },
+    {
+      "address": "relay11.runpod.net",
+      "password": "Op7X0378LX7ZB602&qIX#@qHU",
+      "ports": "9009,9010,9011,9012,9013,9014,9015,9016,9017,9018,9019,9020"
+    },
+    {
+      "address": "relay12.runpod.net",
+      "password": "Op7X0378LX7ZB602&qIX#@qHU",
+      "ports": "9009,9010,9011,9012,9013,9014,9015,9016,9017,9018,9019,9020"
+    },
+    {
+      "address": "relay13.runpod.net",
+      "password": "Op7X0378LX7ZB602&qIX#@qHU",
+      "ports": "9009,9010,9011,9012,9013,9014,9015,9016,9017,9018,9019,9020"
+    },
+    {
+      "address": "relay14.runpod.net",
+      "password": "Op7X0378LX7ZB602&qIX#@qHU",
+      "ports": "9009,9010,9011,9012,9013,9014,9015,9016,9017,9018,9019,9020"
+    },
+    {
+      "address": "relay15.runpod.net",
+      "password": "Op7X0378LX7ZB602&qIX#@qHU",
+      "ports": "9009,9010,9011,9012,9013,9014,9015,9016,9017,9018,9019,9020"
+    },
+    {
+      "address": "relay16.runpod.net",
+      "password": "Op7X0378LX7ZB602&qIX#@qHU",
+      "ports": "9009,9010,9011,9012,9013,9014,9015,9016,9017,9018,9019,9020"
+    },
+    {
+      "address": "relay17.runpod.net",
+      "password": "Op7X0378LX7ZB602&qIX#@qHU",
+      "ports": "9009,9010,9011,9012,9013,9014,9015,9016,9017,9018,9019,9020"
+    },
+    {
+      "address": "relay18.runpod.net",
+      "password": "Op7X0378LX7ZB602&qIX#@qHU",
+      "ports": "9009,9010,9011,9012,9013,9014,9015,9016,9017,9018,9019,9020"
+    },
+    {
+      "address": "relay19.runpod.net",
+      "password": "Op7X0378LX7ZB602&qIX#@qHU",
+      "ports": "9009,9010,9011,9012,9013,9014,9015,9016,9017,9018,9019,9020"
+    },
+    {
+      "address": "relay20.runpod.net",
+      "password": "Op7X0378LX7ZB602&qIX#@qHU",
+      "ports": "9009,9010,9011,9012,9013,9014,9015,9016,9017,9018,9019,9020"
     }
   ]
 }

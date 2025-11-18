@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -40,15 +41,17 @@ func Query(input Input) (res *http.Response, err error) {
 		return nil, errors.New("API key not found")
 	}
 
-	req, err := http.NewRequest("POST", apiUrl+"?api_key="+apiKey, bytes.NewBuffer(jsonValue))
+	req, err := http.NewRequest("POST", apiUrl, bytes.NewBuffer(jsonValue))
 	if err != nil {
 		return
 	}
 
-	userAgent := "RunPod-CLI/" + Version + " (" + runtime.GOOS + "; " + runtime.GOARCH + ")"
+	sanitizedVersion := strings.TrimRight(Version, "\r\n")
+	userAgent := "RunPod-CLI/" + sanitizedVersion + " (" + runtime.GOOS + "; " + runtime.GOARCH + ")"
 
 	req.Header.Add("Content-Type", "application/json")
 	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	client := &http.Client{Timeout: time.Second * 10}
 	return client.Do(req)
