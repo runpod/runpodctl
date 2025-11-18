@@ -70,7 +70,7 @@ func GetLocalSSHKey() ([]byte, error) {
 		return nil, fmt.Errorf("failed to get user home directory: %w", err)
 	}
 
-	keyPath := filepath.Join(homeDir, ".runpod", "ssh", "RunPod-Key-Go.pub")
+	keyPath := filepath.Join(homeDir, ".runpod", "ssh", "Runpod-Key-Go.pub")
 
 	publicKey, err := os.ReadFile(keyPath)
 	if err != nil {

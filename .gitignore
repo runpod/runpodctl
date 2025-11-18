@@ -1,9 +1,11 @@
 # Binaries for programs and plugins
+.DS_STORE
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
+runpodctl
 
 # Test binary, built with `go test -c`
 *.test

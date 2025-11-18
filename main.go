@@ -2,7 +2,6 @@ package main
 
 import (
 	_ "embed"
-	"strings"
 
 	"github.com/runpod/runpodctl/cmd"
 )
@@ -11,5 +10,5 @@ import (
 var Version string
 
 func main() {
-	cmd.Execute(strings.TrimRight(Version, "\r\n"))
+	cmd.Execute(Version)
 }
