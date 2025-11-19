@@ -47,15 +47,14 @@ func TestRelayRTT(relay Relay, index int, numPings int) RelayRTT {
 				pingMu.Unlock()
 				return
 			}
+			defer c.Close()
 
 			err = c.Send([]byte("ping"))
 			if err != nil {
-				c.Close()
 				return // Skip this ping if send fails
 			}
 
 			b, err := c.Receive()
-			c.Close()
 			if err != nil || !bytes.Equal(b, []byte("pong")) {
 				return // Skip this ping if receive fails or wrong response
 			}
