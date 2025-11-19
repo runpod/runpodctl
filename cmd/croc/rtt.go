@@ -91,7 +91,7 @@ func TestRelayRTT(relay Relay, index int, numPings int) RelayRTT {
 func TestAllRelaysRTT(relays []Relay, numPings int, topN int) ([]RelayRTT, RelayRTT) {
 	// Suppress debug logs from comm package during RTT testing
 	originalLevel := log.GetLevel()
-	log.SetLevel("debug")
+	log.SetLevel("warn")
 	defer log.SetLevel(originalLevel)
 
 	rtts := make([]RelayRTT, len(relays))
