@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
-# Unified Installer for RunPod CLI Tool
+# Unified Installer for Runpod CLI Tool
 #
-# This script provides a unified approach to installing the RunPod CLI tool.
+# This script provides a unified approach to installing the Runpod CLI tool.
 #
 # Usage:
 #   wget -qO- cli.runpod.io | bash

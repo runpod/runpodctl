@@ -3,11 +3,11 @@ package exec
 import (
 	"fmt"
 
-	"github.com/runpod/runpodctl/cmd/project"
+	"github.com/runpod/runpodctl/cmd/ssh"
 )
 
 func PythonOverSSH(podID string, file string) error {
-	sshConn, err := project.PodSSHConnection(podID)
+	sshConn, err := ssh.PodSSHConnection(podID)
 	if err != nil {
 		return fmt.Errorf("getting SSH connection: %w", err)
 	}

@@ -20,7 +20,7 @@ var (
 var ConfigCmd = &cobra.Command{
 	Use:   "config",
 	Short: "Manage CLI configuration",
-	Long:  "RunPod CLI Config Settings",
+	Long:  "Runpod CLI Config Settings",
 	RunE: func(c *cobra.Command, args []string) error {
 		if err := saveConfig(); err != nil {
 			return fmt.Errorf("error saving config: %w", err)
@@ -57,7 +57,7 @@ func getOrCreateSSHKey() ([]byte, error) {
 
 	if publicKey == nil {
 		fmt.Println("No existing local SSH key found, generating a new one.")
-		publicKey, err = ssh.GenerateSSHKeyPair("RunPod-Key-Go")
+		publicKey, err = ssh.GenerateSSHKeyPair("Runpod-Key-Go")
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate SSH key: %w", err)
 		}
@@ -102,11 +102,11 @@ func ensureSSHKeyInCloud(publicKey []byte) error {
 }
 
 func init() {
-	ConfigCmd.Flags().StringVar(&apiKey, "apiKey", "", "RunPod API key")
+	ConfigCmd.Flags().StringVar(&apiKey, "apiKey", "", "Runpod API key")
 	viper.BindPFlag("apiKey", ConfigCmd.Flags().Lookup("apiKey")) //nolint
 	viper.SetDefault("apiKey", "")
 
-	ConfigCmd.Flags().StringVar(&apiUrl, "apiUrl", "https://api.runpod.io/graphql", "RunPod API URL")
+	ConfigCmd.Flags().StringVar(&apiUrl, "apiUrl", "https://api.runpod.io/graphql", "Runpod API URL")
 	viper.BindPFlag("apiUrl", ConfigCmd.Flags().Lookup("apiUrl")) //nolint
 
 	ConfigCmd.MarkFlagRequired("apiKey")

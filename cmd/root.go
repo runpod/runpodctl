@@ -19,7 +19,7 @@ var version string
 var rootCmd = &cobra.Command{
 	Use:   "runpodctl",
 	Short: "CLI for runpod.io",
-	Long:  "The RunPod CLI tool to manage resources on runpod.io and develop serverless applications.",
+	Long:  "The Runpod CLI tool to manage resources on runpod.io and develop serverless applications.",
 }
 
 func GetRootCmd() *cobra.Command {
@@ -41,7 +41,6 @@ func registerCommands() {
 	rootCmd.AddCommand(startCmd)
 	rootCmd.AddCommand(stopCmd)
 	rootCmd.AddCommand(versionCmd)
-	rootCmd.AddCommand(projectCmd)
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(sshCmd)
 

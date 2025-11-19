@@ -1,19 +1,15 @@
-## runpodctl update
+## runpodctl scp-help
 
-update runpodctl
-
-### Synopsis
-
-update runpodctl to the latest version
+help for using scp (secure copy over SSH)
 
 ```
-runpodctl update [flags]
+runpodctl scp-help [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for update
+  -h, --help   help for scp-help
 ```
 
 ### SEE ALSO
