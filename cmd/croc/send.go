@@ -52,8 +52,8 @@ var SendCmd = &cobra.Command{
 			log.Fatal("Could not get list of relays. Please contact support for help!")
 		}
 
-		// Test all relays' RTT in parallel, performs 5 pings and selects from top 3 fastest (smear load on relays)
-		_, best := TestAllRelaysRTT(relays, 5, 3)
+		// Test all relays' RTT in parallel, performs 2 pings and selects from top 3 fastest (smear load on relays)
+		_, best := TestAllRelaysRTT(relays, 2, 3)
 		
 		randIndex := best.Index
 		// Choose a random relay from the array

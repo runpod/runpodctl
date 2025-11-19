@@ -36,20 +36,16 @@ func TestRelayRTT(relay Relay, index int, numPings int) RelayRTT {
 		go func() {
 			defer pingWg.Done()
 
-			start := time.Now()
 			timeout := 1 * time.Second
+			// with the croc pinger, it cannot use an existing connection so we need to create a new one for each ping
 			c, err := comm.NewConnection(addr, timeout)
-			
-			// If connection timed out, record timeout value as RTT
 			if err != nil {
-				pingMu.Lock()
-				rttMeasurements = append(rttMeasurements, timeout)
-				pingMu.Unlock()
-				return
+				return // Skip this ping if we cannot form a connection
 			}
 			defer c.Close()
 
-			err = c.Send([]byte("ping"))
+			start := time.Now()
+			err = c.Send([]byte("ping")) 
 			if err != nil {
 				return // Skip this ping if send fails
 			}
@@ -95,7 +91,7 @@ func TestRelayRTT(relay Relay, index int, numPings int) RelayRTT {
 func TestAllRelaysRTT(relays []Relay, numPings int, topN int) ([]RelayRTT, RelayRTT) {
 	// Suppress debug logs from comm package during RTT testing
 	originalLevel := log.GetLevel()
-	log.SetLevel("warn")
+	log.SetLevel("debug")
 	defer log.SetLevel(originalLevel)
 
 	rtts := make([]RelayRTT, len(relays))
@@ -123,13 +119,37 @@ func TestAllRelaysRTT(relays []Relay, numPings int, topN int) ([]RelayRTT, Relay
 	// Wait for all hosts to complete testing
 	wg.Wait()
 
+	var selected RelayRTT
+
+	// Check if all RTT tests failed - count total successful pings
+	totalSuccessfulPings := 0
+	for _, rtt := range rtts {
+		totalSuccessfulPings += rtt.SuccessfulPings
+	}
+
+	// If all tests failed (no successful pings), randomly select from original relays
+	if totalSuccessfulPings == 0 && len(relays) > 0 {
+		randomIndex := rand.IntN(len(relays))
+		randomRelay := relays[randomIndex]
+		ports := strings.Split(randomRelay.Ports, ",")
+		addr := randomRelay.Address + ":" + ports[0]
+		
+		selected = RelayRTT{
+			Index:           randomIndex,
+			RTT:             time.Hour, // High RTT since we couldn't test it
+			Addr:            addr,
+			SuccessfulPings: 0,
+		}
+		log.Debugf("All RTT tests failed, randomly selected relay: %s", addr)
+		return rtts, selected
+	}
+
 	// Sort results by RTT (fastest first)
 	sort.Slice(rtts, func(i, j int) bool {
 		return rtts[i].RTT < rtts[j].RTT
 	})
 
 	// Select one of the top N fastest servers
-	var selected RelayRTT
 	if len(rtts) == 0 {
 		selected.RTT = time.Hour
 	} else {
