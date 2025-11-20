@@ -1,6 +1,6 @@
 .PHONY: proto
 
-# Build configuration
+# Git version and commit
 VERSION = git describe --tags --exact-match HEAD 2>/dev/null || git describe --tags 2>/dev/null || echo "unknown"
 COMMIT = git rev-parse HEAD 2>/dev/null || echo "unknown"
 
