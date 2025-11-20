@@ -6,6 +6,8 @@ builds:
     goarch: [amd64, arm64]
     env: [CGO_ENABLED=0]
     flags: [-mod=mod]
+    ldflags:
+      - -s -w -X main.Version={{ .Version }}-{{ .Github.sha }}
 
 release:
   prerelease: auto
@@ -20,8 +22,8 @@ brews:
       owner: runpod
       name: homebrew-runpodctl
     commit_author:
-      name: rachfop
-      email: prachford@icloud.com
+      name: runpod
+      email: support@runpod.io
 
 checksum:
   name_template: "checksums.txt"
