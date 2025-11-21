@@ -7,7 +7,7 @@ builds:
     env: [CGO_ENABLED=0]
     flags: [-mod=mod]
     ldflags:
-      - -s -w -X main.Version={{ .Version }}-{{ .Github.sha }}
+      - -s -w -X main.Version={{ .Version }}-{{ .ShortCommit }}
 
 release:
   prerelease: auto
