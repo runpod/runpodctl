@@ -59,7 +59,6 @@ var ReceiveCmd = &cobra.Command{
 
 		if relayIndex < 0 || relayIndex >= len(relays) {
 			log.Fatalf("Relay index %d not found; please retry 'runpodctl send' to generate a valid code.", relayIndex)
-			return
 		}
 		relay := relays[relayIndex]
 
@@ -67,7 +66,7 @@ var ReceiveCmd = &cobra.Command{
 			Curve:         "p256",
 			Debug:         false,
 			IsSender:      false,
-			NoPrompt:      true,	
+			NoPrompt:      true,
 			Overwrite:     true,
 			RelayAddress:  relay.Address,
 			RelayPassword: relay.Password,
