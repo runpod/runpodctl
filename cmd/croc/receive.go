@@ -65,11 +65,14 @@ var ReceiveCmd = &cobra.Command{
 		crocOptions := croc.Options{
 			Curve:         "p256",
 			Debug:         false,
+			DisableLocal:  true,
+			HashAlgorithm: "xxhash",
 			IsSender:      false,
 			NoPrompt:      true,
 			Overwrite:     true,
 			RelayAddress:  relay.Address,
 			RelayPassword: relay.Password,
+			RelayPorts:    strings.Split(relay.Ports, ","),
 			SharedSecret:  sharedSecretCode,
 		}
 
