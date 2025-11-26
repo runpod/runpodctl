@@ -40,7 +40,7 @@ archives:
         formats: [zip]
     name_template: "{{ .Binary }}-{{ .Os }}-{{ .Arch }}"
 
-  # UPX linux/amd64 artifact, also archived
+  # UPX linux/amd64 artifact, also archived for internal Runpod use
   - id: upx
     ids: [linux_amd64_upx]
     formats: [tar.gz]
@@ -61,5 +61,5 @@ homebrew_casks:
     ids: [default]
 
 checksum:
-  name_template: "{{ .ProjectName }}-{{ .Version }}_checksums_sha256.txt"
+  name_template: "checksums_{{ .Version }}_sha256.txt"
   algorithm: sha256
