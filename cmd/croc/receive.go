@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schollz/croc/v9/src/croc"
 	"github.com/schollz/croc/v9/src/models"
 	"github.com/spf13/cobra"
 )
@@ -62,15 +61,19 @@ var ReceiveCmd = &cobra.Command{
 		}
 		relay := relays[relayIndex]
 
-		crocOptions := croc.Options{
+		crocOptions := Options{
 			Curve:         "p256",
 			Debug:         false,
+			DisableLocal:  true,
+			HashAlgorithm: "xxhash",
 			IsSender:      false,
 			NoPrompt:      true,
 			Overwrite:     true,
 			RelayAddress:  relay.Address,
 			RelayPassword: relay.Password,
+			RelayPorts:    strings.Split(relay.Ports, ","),
 			SharedSecret:  sharedSecretCode,
+			ZipFolder:     true,
 		}
 
 		if crocOptions.RelayAddress != models.DEFAULT_RELAY {
@@ -79,7 +82,7 @@ var ReceiveCmd = &cobra.Command{
 			crocOptions.RelayAddress = ""
 		}
 
-		cr, err := croc.New(crocOptions)
+		cr, err := New(crocOptions)
 		if err != nil {
 			log.Fatalf("croc: %v", err)
 		}
