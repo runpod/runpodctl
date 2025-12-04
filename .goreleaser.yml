@@ -1,7 +1,8 @@
 version: 2
 
 builds:
-  - binary: runpodctl
+  - id: default
+    binary: runpodctl
     goos: [darwin, linux, windows]
     goarch: [amd64, arm64]
     env: [CGO_ENABLED=0]
@@ -9,13 +10,46 @@ builds:
     ldflags:
       - -s -w -X main.Version={{ .Version }}-{{ .ShortCommit }}
 
+  - id: linux_amd64_upx
+    binary: runpodctl
+    goos: [linux]
+    goarch: [amd64]
+    env: [CGO_ENABLED=0]
+    flags: [-mod=mod]
+    ldflags:
+      - -s -w -X main.Version={{ .Version }}-{{ .ShortCommit }}
+
+upx:
+  - enabled: true
+    ids: [linux_amd64_upx]
+    goos: [linux]
+    goarch: [amd64]
+    lzma: false
+    compress: best
+
+universal_binaries:
+  - id: default
+    replace: true
+
+archives:
+  - id: default
+    ids: [default]
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .Binary }}-{{ .Os }}-{{ .Arch }}"
+
+  # UPX linux/amd64 artifact, also archived for internal Runpod use
+  - id: upx
+    ids: [linux_amd64_upx]
+    formats: [tar.gz]
+    name_template: "{{ .Binary }}-{{ .Os }}-{{ .Arch }}-upx"
+
 release:
   prerelease: auto
 
-universal_binaries:
-  - replace: true
-
-brews:
+homebrew_casks:
   - name: runpodctl
     homepage: "https://github.com/runpod/runpodctl"
     repository:
@@ -24,6 +58,8 @@ brews:
     commit_author:
       name: runpod
       email: support@runpod.io
+    ids: [default]
 
 checksum:
-  name_template: "checksums.txt"
+  name_template: "checksums_{{ .Version }}_sha256.txt"
+  algorithm: sha256
