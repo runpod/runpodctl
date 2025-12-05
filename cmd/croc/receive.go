@@ -73,6 +73,7 @@ var ReceiveCmd = &cobra.Command{
 			RelayPassword: relay.Password,
 			RelayPorts:    strings.Split(relay.Ports, ","),
 			SharedSecret:  sharedSecretCode,
+			ZipFolder:     true,
 		}
 
 		if crocOptions.RelayAddress != models.DEFAULT_RELAY {
