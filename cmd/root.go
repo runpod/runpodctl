@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/runpod/runpodctl/api"
 	"github.com/runpod/runpodctl/cmd/config"
@@ -12,6 +13,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
+
+const graphqlTimeoutFlagName = "graphql-timeout"
 
 var version string
 
@@ -32,6 +35,8 @@ func init() {
 }
 
 func registerCommands() {
+	viper.SetDefault(api.GraphQLTimeoutKey, 10*time.Second)
+
 	rootCmd.AddCommand(config.ConfigCmd)
 	// RootCmd.AddCommand(connectCmd)
 	// RootCmd.AddCommand(copyCmd)
@@ -57,6 +62,9 @@ func registerCommands() {
 	rootCmd.Version = version
 	rootCmd.Flags().BoolP("version", "v", false, "Print the version of runpodctl")
 	rootCmd.SetVersionTemplate(`{{printf "runpodctl %s\n" .Version}}`)
+
+	rootCmd.PersistentFlags().Duration(graphqlTimeoutFlagName, 10*time.Second, "GraphQL request timeout duration (e.g. 10s, 1m)")
+	viper.BindPFlag(api.GraphQLTimeoutKey, rootCmd.PersistentFlags().Lookup(graphqlTimeoutFlagName)) //nolint
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.

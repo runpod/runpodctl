@@ -9,7 +9,8 @@ CLI tool to manage your pods for runpod.io
 ### Options
 
 ```
-  -h, --help   help for runpodctl
+      --graphql-timeout duration   GraphQL request timeout duration (e.g. 10s, 1m) (default 10s)
+  -h, --help                       help for runpodctl
 ```
 
 ### SEE ALSO

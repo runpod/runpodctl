@@ -23,6 +23,7 @@ _Note: All pods automatically come with runpodctl installed with a pod-scoped AP
     - [To receive a file](#to-receive-a-file)
     - [Using Google Drive](#using-google-drive)
   - [Pod Commands](#pod-commands)
+  - [Model Repository Commands](#model-repository-commands)
   - [Acknowledgements](#acknowledgements)
 
 ## Get Started
@@ -133,6 +134,32 @@ runpodctl stop pod {podId}
 ```
 
 For a comprehensive list of commands, visit [RunPod CLI documentation](docs/runpodctl.md).
+
+## Model Repository Commands
+
+Model repository commands let you upload, list, and remove AI models that can later be deployed with pods.
+
+```bash
+# Upload a model directory to your account's repository
+runpodctl create model \
+  --provider huggingface \
+  --name lodestones/Chroma \
+  --credential-reference secret://runpod/model-storage \
+  --version 1.0.0 \
+  --model-path ./chroma-model
+
+# List models in your repository
+runpodctl get models
+
+# Remove a model by owner and name
+runpodctl remove model \
+  --owner your-org \
+  --name lodestones/Chroma
+```
+
+Supplying `--model-path` archives the directory into a `.tar.gz` file, starts a multipart upload, transfers the artifact using the pre-signed URLs, and finalizes the upload automatically.
+
+You can still pass `--create-upload` on its own to inspect the multipart session details without uploading any files.
 
 ## Acknowledgements
 

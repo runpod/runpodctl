@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"github.com/runpod/runpodctl/cmd/cloud"
+	"github.com/runpod/runpodctl/cmd/model"
 	"github.com/runpod/runpodctl/cmd/pod"
 
 	"github.com/spf13/cobra"
@@ -14,6 +15,8 @@ var getCmd = &cobra.Command{
 }
 
 func init() {
+	// Model repository command is hidden because the feature is still in development.
 	getCmd.AddCommand(cloud.GetCloudCmd)
+	getCmd.AddCommand(model.GetModelsCmd)
 	getCmd.AddCommand(pod.GetPodCmd)
 }
