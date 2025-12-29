@@ -37,6 +37,9 @@ var CreatePodCmd = &cobra.Command{
 	Short: "start a pod",
 	Long:  "start a pod from runpod.io",
 	Run: func(cmd *cobra.Command, args []string) {
+		if templateId == "" && imageName == "" {
+			cobra.CheckErr(fmt.Errorf("--imageName is required when --templateId is not specified"))
+		}
 		input := &api.CreatePodInput{
 			ContainerDiskInGb: containerDiskInGb,
 			DeployCost:        deployCost,
@@ -103,6 +106,5 @@ func init() {
 	CreatePodCmd.Flags().StringVar(&dataCenterId, "dataCenterId", "", "datacenter id to create in")
 	CreatePodCmd.Flags().BoolVar(&startSSH, "startSSH", false, "enable SSH login")
 
-	CreatePodCmd.MarkFlagRequired("gpuType")   //nolint
-	CreatePodCmd.MarkFlagRequired("imageName") //nolint
+	CreatePodCmd.MarkFlagRequired("gpuType") //nolint
 }
