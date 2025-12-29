@@ -35,6 +35,9 @@ var CreatePodsCmd = &cobra.Command{
 	Short: "create a group of pods",
 	Long:  "create a group of pods on runpod.io",
 	Run: func(cmd *cobra.Command, args []string) {
+		if templateId == "" && imageName == "" {
+			cobra.CheckErr(fmt.Errorf("--imageName is required when --templateId is not specified"))
+		}
 		gpus := strings.Split(gpuTypeId, ",")
 		gpusIndex := 0
 		input := &api.CreatePodInput{
@@ -106,7 +109,6 @@ func init() {
 	CreatePodsCmd.Flags().StringVar(&templateId, "templateId", "", "templateId to use with the pods")
 	CreatePodsCmd.Flags().StringVar(&volumeMountPath, "volumePath", "/runpod", "container volume path")
 
-	CreatePodsCmd.MarkFlagRequired("gpuType")   //nolint
-	CreatePodsCmd.MarkFlagRequired("imageName") //nolint
-	CreatePodsCmd.MarkFlagRequired("name")      //nolint
+	CreatePodsCmd.MarkFlagRequired("gpuType") //nolint
+	CreatePodsCmd.MarkFlagRequired("name")   //nolint
 }
