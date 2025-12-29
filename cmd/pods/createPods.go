@@ -50,6 +50,11 @@ var CreatePodsCmd = &cobra.Command{
 			VolumeInGb:        volumeInGb,
 			VolumeMountPath:   volumeMountPath,
 		}
+		input.ClearUnchangedTemplateFields(api.TemplateFieldFlags{
+			ContainerDiskChanged: cmd.Flags().Changed("containerDiskSize"),
+			VolumeSizeChanged:    cmd.Flags().Changed("volumeSize"),
+			VolumePathChanged:    cmd.Flags().Changed("volumePath"),
+		})
 		if len(ports) > 0 {
 			input.Ports = strings.Join(ports, ",")
 		}

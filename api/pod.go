@@ -140,7 +140,7 @@ func GetPods() (pods []*Pod, err error) {
 
 type CreatePodInput struct {
 	CloudType         string    `json:"cloudType"`
-	ContainerDiskInGb int       `json:"containerDiskInGb"`
+	ContainerDiskInGb int       `json:"containerDiskInGb,omitempty"`
 	DeployCost        float32   `json:"deployCost,omitempty"`
 	DockerArgs        string    `json:"dockerArgs"`
 	DataCenterId      string    `json:"dataCenterId"`
@@ -156,12 +156,37 @@ type CreatePodInput struct {
 	SupportPublicIp   bool      `json:"supportPublicIp"`
 	StartSSH          bool      `json:"startSsh"`
 	TemplateId        string    `json:"templateId"`
-	VolumeInGb        int       `json:"volumeInGb"`
-	VolumeMountPath   string    `json:"volumeMountPath"`
+	VolumeInGb        int       `json:"volumeInGb,omitempty"`
+	VolumeMountPath   string    `json:"volumeMountPath,omitempty"`
 }
 type PodEnv struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
+}
+
+// TemplateFieldFlags indicates which template-related fields were explicitly set by the user.
+type TemplateFieldFlags struct {
+	ContainerDiskChanged bool
+	VolumeSizeChanged    bool
+	VolumePathChanged    bool
+}
+
+// ClearUnchangedTemplateFields resets disk/volume fields to zero values when templateId is set
+// and those fields were not explicitly changed by the user. This allows the template's settings
+// to be used instead of CLI defaults (omitempty will exclude zero values from JSON).
+func (input *CreatePodInput) ClearUnchangedTemplateFields(flags TemplateFieldFlags) {
+	if input.TemplateId == "" {
+		return
+	}
+	if !flags.ContainerDiskChanged {
+		input.ContainerDiskInGb = 0
+	}
+	if !flags.VolumeSizeChanged {
+		input.VolumeInGb = 0
+	}
+	if !flags.VolumePathChanged {
+		input.VolumeMountPath = ""
+	}
 }
 
 func CreatePod(podInput *CreatePodInput) (pod map[string]interface{}, err error) {
