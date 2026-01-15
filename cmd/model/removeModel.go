@@ -14,13 +14,11 @@ var (
 	removeName  string
 )
 
-// RemoveModelCmd removes a model from the RunPod model repository.
-// Hidden while the model repository feature is in development and not ready for general use.
 var RemoveModelCmd = &cobra.Command{
 	Use:    "model",
 	Args:   cobra.ExactArgs(0),
-	Short:  "remove a model",
-	Long:   "remove a model from the RunPod model repository",
+	Short:  "internal command",
+	Long:   "",
 	Hidden: true,
 	Run: func(cmd *cobra.Command, args []string) {
 		if removeOwner == "" || removeName == "" {
@@ -63,8 +61,8 @@ var RemoveModelCmd = &cobra.Command{
 }
 
 func init() {
-	RemoveModelCmd.Flags().StringVar(&removeOwner, "owner", "", "account or namespace that owns the model")
-	RemoveModelCmd.Flags().StringVar(&removeName, "name", "", "model name within the owner namespace")
+	RemoveModelCmd.Flags().StringVar(&removeOwner, "owner", "", "")
+	RemoveModelCmd.Flags().StringVar(&removeName, "name", "", "")
 
 	RemoveModelCmd.MarkFlagRequired("owner") //nolint
 	RemoveModelCmd.MarkFlagRequired("name")  //nolint

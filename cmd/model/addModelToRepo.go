@@ -79,13 +79,11 @@ type modelFile struct {
 // TODO: replace the manual completion call with github.com/aws/aws-sdk-go-v2/service/s3's
 // CompleteMultipartUpload to rely on the SDK for payload formatting and signing logic.
 
-// AddModelToRepoCmd uploads a model to the RunPod model repository.
-// Hidden while the model repository feature is in development and not ready for general use.
 var AddModelToRepoCmd = &cobra.Command{
 	Use:    "model",
 	Args:   cobra.ExactArgs(0),
-	Short:  "upload a model",
-	Long:   "upload a model to the RunPod model repository",
+	Short:  "internal command",
+	Long:   "",
 	Hidden: true,
 	Run: func(cmd *cobra.Command, args []string) {
 		setModelGraphQLTimeout(cmd)
@@ -189,18 +187,18 @@ var AddModelToRepoCmd = &cobra.Command{
 }
 
 func init() {
-	AddModelToRepoCmd.Flags().StringVar(&addModelName, "name", "", "model name within your namespace")
-	AddModelToRepoCmd.Flags().StringVar(&addModelCredentialReference, "credential-reference", "", "reference that allows RunPod to access the model artifact")
-	AddModelToRepoCmd.Flags().StringVar(&addModelCredentialType, "credential-type", "", "type of credential used to access the model artifact (API_KEY, OAUTH_TOKEN, OTHER, USERNAME_PASSWORD)")
-	AddModelToRepoCmd.Flags().StringVar(&addModelVersionStatus, "version-status", "", "status to assign to the uploaded model version")
-	AddModelToRepoCmd.Flags().StringVar(&addModelStatus, "model-status", "", "status to assign to the model record")
-	AddModelToRepoCmd.Flags().BoolVar(&addModelCreateUpload, "create-upload", false, "initialize a multipart upload session for the model artifact")
-	AddModelToRepoCmd.Flags().StringVar(&addModelFileName, "file-name", "", "file name to use for the model artifact upload")
-	AddModelToRepoCmd.Flags().StringVar(&addModelFileSize, "file-size", "", "size of the model artifact in bytes")
-	AddModelToRepoCmd.Flags().StringVar(&addModelPartSize, "part-size", "", "preferred multipart upload part size in bytes")
-	AddModelToRepoCmd.Flags().StringVar(&addModelContentType, "content-type", "", "content type for the model artifact upload")
-	AddModelToRepoCmd.Flags().StringVar(&addModelDirectoryPath, "model-path", "", "path to a directory containing the model files to upload")
-	AddModelToRepoCmd.Flags().StringToStringVar(&addModelMetadata, "metadata", nil, "key=value metadata to associate with the model and upload")
+	AddModelToRepoCmd.Flags().StringVar(&addModelName, "name", "", "")
+	AddModelToRepoCmd.Flags().StringVar(&addModelCredentialReference, "credential-reference", "", "")
+	AddModelToRepoCmd.Flags().StringVar(&addModelCredentialType, "credential-type", "", "")
+	AddModelToRepoCmd.Flags().StringVar(&addModelVersionStatus, "version-status", "", "")
+	AddModelToRepoCmd.Flags().StringVar(&addModelStatus, "model-status", "", "")
+	AddModelToRepoCmd.Flags().BoolVar(&addModelCreateUpload, "create-upload", false, "")
+	AddModelToRepoCmd.Flags().StringVar(&addModelFileName, "file-name", "", "")
+	AddModelToRepoCmd.Flags().StringVar(&addModelFileSize, "file-size", "", "")
+	AddModelToRepoCmd.Flags().StringVar(&addModelPartSize, "part-size", "", "")
+	AddModelToRepoCmd.Flags().StringVar(&addModelContentType, "content-type", "", "")
+	AddModelToRepoCmd.Flags().StringVar(&addModelDirectoryPath, "model-path", "", "")
+	AddModelToRepoCmd.Flags().StringToStringVar(&addModelMetadata, "metadata", nil, "")
 
 	AddModelToRepoCmd.MarkFlagRequired("name") //nolint
 }
@@ -260,10 +258,15 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 }
 
 func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInput) error {
+	var modelVersionHash string
+
 	for _, file := range files {
 		input := *baseInput
 		input.FileName = file.RelativePath
 		input.FileSizeBytes = strconv.FormatInt(file.Size, 10)
+		if modelVersionHash != "" {
+			input.ModelVersionHash = modelVersionHash
+		}
 
 		result, err := api.CreateModelRepoUpload(&input)
 		if err != nil {
@@ -271,6 +274,12 @@ func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInp
 		}
 		if result.Upload == nil {
 			return fmt.Errorf("upload response missing upload session details for %s", file.RelativePath)
+		}
+		if modelVersionHash == "" {
+			if result.Version == nil || result.Version.Hash == "" {
+				return fmt.Errorf("upload response missing model version hash for %s", file.RelativePath)
+			}
+			modelVersionHash = result.Version.Hash
 		}
 
 		if err = completeModelUpload(result.Upload, file.AbsolutePath); err != nil {
