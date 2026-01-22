@@ -51,9 +51,9 @@ var GetCloudCmd = &cobra.Command{
 		gpuTypes, err := api.GetCloud(input)
 		cobra.CheckErr(err)
 
-		var dcsByGPU map[string][]string
+		var dcs dcDecorator
 		if showDC {
-			dcsByGPU = api.GetDCsByGPU()
+			dcs = dcDecorator{api.GetDCsByGPU()}
 		}
 
 		data := [][]string{}
@@ -83,16 +83,12 @@ var GetCloudCmd = &cobra.Command{
 				spotPriceString,
 				onDemandPriceString,
 			}
-			if dcsByGPU != nil {
-				row = decorateDataCenters(row, kv["gpuTypeId"].(string), dcsByGPU)
-			}
+			row = dcs.decorateRow(row, kv["gpuTypeId"].(string))
 			data = append(data, row)
 		}
 
 		header := []string{"GPU Type", "Mem GB", "vCPU", "Spot $/HR", "OnDemand $/HR"}
-		if dcsByGPU != nil {
-			header = append(header, "Data centers")
-		}
+		header = dcs.decorateHeader(header, "Data centers")
 		tb := tablewriter.NewWriter(os.Stdout)
 		tb.SetHeader(header)
 		tb.AppendBulk(data)
@@ -101,13 +97,27 @@ var GetCloudCmd = &cobra.Command{
 	},
 }
 
-func decorateDataCenters(fields []string, gpuID string, dcsByGPU map[string][]string) []string {
-	dcs, ok := dcsByGPU[gpuID]
+type dcDecorator struct {
+	dcsByGPU map[string][]string
+}
+
+func (d *dcDecorator) decorateRow(fields []string, gpuID string) []string {
+	if d.dcsByGPU == nil {
+		return fields
+	}
+	dcs, ok := d.dcsByGPU[gpuID]
 	if !ok {
 		return fields
 	}
 
 	return append(fields, strings.Join(dcs, ","))
+}
+
+func (d *dcDecorator) decorateHeader(headers []string, columnName string) []string {
+	if d.dcsByGPU == nil {
+		return headers
+	}
+	return append(headers, columnName)
 }
 
 func init() {
