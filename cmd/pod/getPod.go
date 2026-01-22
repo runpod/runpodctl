@@ -23,7 +23,8 @@ var GetPodCmd = &cobra.Command{
 		pods, err := api.GetPods()
 		cobra.CheckErr(err)
 
-		toTable(pods, args)
+		pods = filter(pods, args)
+		toTable(pods)
 	},
 }
 
@@ -31,12 +32,20 @@ func init() {
 	GetPodCmd.Flags().BoolVarP(&AllFields, "allfields", "a", false, "include all fields in output")
 }
 
-func toTable(pods []*api.Pod, args []string) {
-	data := make([][]string, len(pods))
-	for i, p := range pods {
+func filter(pods []*api.Pod, args []string) []*api.Pod {
+	filtered := make([]*api.Pod, 0) // ensures [] instead of "null" if no pods when mashalling
+	for _, p := range pods {
 		if len(args) == 1 && p.Id != strings.ToLower(args[0]) {
 			continue
 		}
+		filtered = append(filtered, p)
+	}
+	return filtered
+}
+
+func toTable(pods []*api.Pod) {
+	data := make([][]string, len(pods))
+	for i, p := range pods {
 		row := []string{p.Id, p.Name, fmt.Sprintf("%d %s", p.GpuCount, p.Machine.GpuDisplayName), p.ImageName, p.DesiredStatus}
 		if AllFields {
 
