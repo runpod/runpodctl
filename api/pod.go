@@ -219,6 +219,75 @@ func CreatePod(podInput *CreatePodInput) (pod map[string]interface{}, err error)
 	return
 }
 
+type PodEditJobInput struct {
+	PodId             string    `json:"podId"`
+	ContainerDiskInGb int       `json:"containerDiskInGb"`
+	DockerArgs        string    `json:"dockerArgs"`
+	Env               []*PodEnv `json:"env"`
+	ImageName         string    `json:"imageName"`
+	Ports             string    `json:"ports"`
+	VolumeInGb        int       `json:"volumeInGb"`
+	VolumeMountPath   string    `json:"volumeMountPath"`
+}
+
+type EnvironmentVariableInput struct {
+}
+
+func UpdatePod(podInput *PodEditJobInput) (pod map[string]interface{}, err error) {
+	input := Input{
+		Query: `
+		mutation podEditJob($input: PodEditJobInput!) {
+			podEditJob(input: $input) {
+			  id
+			  containerDiskInGb
+			  dockerArgs
+			  env
+			  imageName
+			  name
+			  ports
+			  volumeInGb
+			  volumeMountPath
+			}
+		}
+		`,
+		Variables: map[string]interface{}{"input": podInput},
+	}
+	res, err := Query(input)
+	if err != nil {
+		return
+	}
+	defer res.Body.Close()
+	rawData, err := io.ReadAll(res.Body)
+	if err != nil {
+		return
+	}
+	if res.StatusCode != 200 {
+		err = fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
+		return
+	}
+	data := make(map[string]interface{})
+	if err = json.Unmarshal(rawData, &data); err != nil {
+		return
+	}
+	gqlErrors, ok := data["errors"].([]interface{})
+	if ok && len(gqlErrors) > 0 {
+		firstErr, _ := gqlErrors[0].(map[string]interface{})
+		err = errors.New(firstErr["message"].(string))
+		return
+	}
+	gqldata, ok := data["data"].(map[string]interface{})
+	if !ok || gqldata == nil {
+		err = fmt.Errorf("data is nil: %s", string(rawData))
+		return
+	}
+	pod, ok = gqldata["podEditJob"].(map[string]interface{})
+	if !ok || pod == nil {
+		err = fmt.Errorf("podEditJob is nil: %s", string(rawData))
+		return
+	}
+	return
+}
+
 func StopPod(id string) (podStop map[string]interface{}, err error) {
 	input := Input{
 		Query: `

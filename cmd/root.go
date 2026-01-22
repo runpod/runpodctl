@@ -42,6 +42,7 @@ func registerCommands() {
 	// RootCmd.AddCommand(copyCmd)
 	rootCmd.AddCommand(createCmd)
 	rootCmd.AddCommand(getCmd)
+	rootCmd.AddCommand(editCmd)
 	rootCmd.AddCommand(removeCmd)
 	rootCmd.AddCommand(startCmd)
 	rootCmd.AddCommand(stopCmd)
