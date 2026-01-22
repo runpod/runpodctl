@@ -1,7 +1,9 @@
 package pod
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -13,6 +15,7 @@ import (
 )
 
 var AllFields bool
+var outputJSON bool
 
 var GetPodCmd = &cobra.Command{
 	Use:   "pod [podId]",
@@ -24,12 +27,18 @@ var GetPodCmd = &cobra.Command{
 		cobra.CheckErr(err)
 
 		pods = filter(pods, args)
-		toTable(pods)
+
+		if outputJSON {
+			cobra.CheckErr(toJSON(os.Stdout, pods))
+		} else {
+			toTable(pods)
+		}
 	},
 }
 
 func init() {
 	GetPodCmd.Flags().BoolVarP(&AllFields, "allfields", "a", false, "include all fields in output")
+	GetPodCmd.Flags().BoolVarP(&outputJSON, "json", "j", false, "use json as output format")
 }
 
 func filter(pods []*api.Pod, args []string) []*api.Pod {
@@ -87,4 +96,14 @@ func toTable(pods []*api.Pod) {
 	tb.AppendBulk(data)
 	format.TableDefaults(tb)
 	tb.Render()
+}
+
+func toJSON(w io.Writer, pods []*api.Pod) error {
+	b, err := json.MarshalIndent(pods, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	_, err = w.Write(b)
+	return err
 }
