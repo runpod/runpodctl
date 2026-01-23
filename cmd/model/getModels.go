@@ -20,13 +20,11 @@ var (
 	getAll      bool
 )
 
-// GetModelsCmd lists models that are available in the RunPod model repository.
-// Hidden while the model repository feature is in development and not ready for general use.
 var GetModelsCmd = &cobra.Command{
 	Use:    "models",
 	Args:   cobra.ExactArgs(0),
-	Short:  "list models",
-	Long:   "list models available in the RunPod model repository",
+	Short:  "internal command",
+	Long:   "",
 	Hidden: true,
 	Run: func(cmd *cobra.Command, args []string) {
 		input := &api.GetModelsInput{
@@ -56,9 +54,9 @@ var GetModelsCmd = &cobra.Command{
 }
 
 func init() {
-	GetModelsCmd.Flags().StringVar(&getProvider, "provider", "", "filter models by provider (e.g. huggingface)")
-	GetModelsCmd.Flags().StringVar(&getName, "name", "", "filter models by name")
-	GetModelsCmd.Flags().BoolVar(&getAll, "all", false, "list all models available in the RunPod repository")
+	GetModelsCmd.Flags().StringVar(&getProvider, "provider", "", "")
+	GetModelsCmd.Flags().StringVar(&getName, "name", "", "")
+	GetModelsCmd.Flags().BoolVar(&getAll, "all", false, "")
 }
 
 func displayModels(models []*api.Model) {

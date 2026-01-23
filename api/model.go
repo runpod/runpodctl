@@ -201,6 +201,7 @@ type CreateModelRepoUploadInput struct {
 	Name                string                 `json:"name,omitempty"`
 	FileName            string                 `json:"fileName"`
 	FileSizeBytes       string                 `json:"fileSizeBytes"`
+	ModelVersionHash    string                 `json:"modelVersionHash,omitempty"`
 	PartSizeBytes       string                 `json:"partSizeBytes,omitempty"`
 	ContentType         string                 `json:"contentType,omitempty"`
 	Metadata            map[string]interface{} `json:"metadata,omitempty"`
@@ -647,6 +648,7 @@ func CreateModelRepoUpload(input *CreateModelRepoUploadInput) (*ModelRepoMutatio
 	addString("contentType", input.ContentType)
 	addString("credentialType", input.CredentialType)
 	addString("credentialReference", input.CredentialReference)
+	addString("modelVersionHash", input.ModelVersionHash)
 
 	if len(input.Metadata) > 0 {
 		payload["metadata"] = input.Metadata
