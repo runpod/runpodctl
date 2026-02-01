@@ -17,7 +17,7 @@ func TestRootCmd_Structure(t *testing.T) {
 func TestRootCmd_HasResourceCommands(t *testing.T) {
 	root := GetRootCmd()
 
-	expectedCommands := []string{"pod", "serverless", "template", "network-volume", "registry"}
+	expectedCommands := []string{"pod", "serverless", "template", "network-volume", "registry", "user", "gpu", "datacenter", "billing"}
 	for _, expected := range expectedCommands {
 		found := false
 		for _, cmd := range root.Commands() {
@@ -35,7 +35,7 @@ func TestRootCmd_HasResourceCommands(t *testing.T) {
 func TestRootCmd_HasUtilityCommands(t *testing.T) {
 	root := GetRootCmd()
 
-	expectedCommands := []string{"ssh", "config", "send <file>", "receive <code>", "version"}
+	expectedCommands := []string{"ssh", "doctor", "send <file>", "receive <code>", "version"}
 	for _, expected := range expectedCommands {
 		found := false
 		for _, cmd := range root.Commands() {
@@ -68,7 +68,7 @@ func TestRootCmd_HasLegacyCommands(t *testing.T) {
 	root := GetRootCmd()
 
 	// legacy commands should exist but be hidden
-	legacyCommands := []string{"get", "create", "remove", "start", "stop"}
+	legacyCommands := []string{"get", "create", "remove", "start", "stop", "config"}
 	for _, expected := range legacyCommands {
 		found := false
 		for _, cmd := range root.Commands() {

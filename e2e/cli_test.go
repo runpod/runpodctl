@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 )
 
@@ -321,4 +322,313 @@ func TestCLI_NetworkVolumeGet(t *testing.T) {
 	}
 
 	t.Logf("got volume: %v", volume["name"])
+}
+
+func TestCLI_User(t *testing.T) {
+	stdout, stderr, err := runCLI("user")
+	if err != nil {
+		t.Fatalf("failed to run user: %v\nstderr: %s", err, stderr)
+	}
+
+	var user map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &user); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	if user["id"] == nil {
+		t.Error("expected user id")
+	}
+	t.Logf("user: %v, balance: %v", user["email"], user["clientBalance"])
+}
+
+func TestCLI_UserAlias(t *testing.T) {
+	stdout, stderr, err := runCLI("me")
+	if err != nil {
+		t.Fatalf("failed to run me: %v\nstderr: %s", err, stderr)
+	}
+
+	var user map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &user); err != nil {
+		t.Fatalf("output is not valid json: %v", err)
+	}
+
+	t.Logf("me alias works, user: %v", user["email"])
+}
+
+func TestCLI_GpuList(t *testing.T) {
+	stdout, stderr, err := runCLI("gpu", "list")
+	if err != nil {
+		t.Fatalf("failed to run gpu list: %v\nstderr: %s", err, stderr)
+	}
+
+	var gpus []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &gpus); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	if len(gpus) == 0 {
+		t.Error("expected at least one gpu")
+	}
+	t.Logf("found %d available gpus", len(gpus))
+}
+
+func TestCLI_DatacenterList(t *testing.T) {
+	stdout, stderr, err := runCLI("datacenter", "list")
+	if err != nil {
+		t.Fatalf("failed to run datacenter list: %v\nstderr: %s", err, stderr)
+	}
+
+	var dcs []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &dcs); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	if len(dcs) == 0 {
+		t.Error("expected at least one datacenter")
+	}
+	t.Logf("found %d datacenters", len(dcs))
+}
+
+func TestCLI_DatacenterListAlias(t *testing.T) {
+	stdout, stderr, err := runCLI("dc", "list")
+	if err != nil {
+		t.Fatalf("failed to run dc list: %v\nstderr: %s", err, stderr)
+	}
+
+	var dcs []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &dcs); err != nil {
+		t.Fatalf("output is not valid json: %v", err)
+	}
+
+	t.Logf("dc alias works, found %d datacenters", len(dcs))
+}
+
+func TestCLI_BillingPods(t *testing.T) {
+	stdout, stderr, err := runCLI("billing", "pods")
+	if err != nil {
+		t.Fatalf("failed to run billing pods: %v\nstderr: %s", err, stderr)
+	}
+
+	var records []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &records); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	t.Logf("found %d pod billing records", len(records))
+}
+
+func TestCLI_BillingServerless(t *testing.T) {
+	stdout, stderr, err := runCLI("billing", "serverless")
+	if err != nil {
+		t.Fatalf("failed to run billing serverless: %v\nstderr: %s", err, stderr)
+	}
+
+	var records []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &records); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	t.Logf("found %d serverless billing records", len(records))
+}
+
+func TestCLI_BillingNetworkVolume(t *testing.T) {
+	stdout, stderr, err := runCLI("billing", "network-volume")
+	if err != nil {
+		t.Fatalf("failed to run billing network-volume: %v\nstderr: %s", err, stderr)
+	}
+
+	var records []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &records); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	t.Logf("found %d network volume billing records", len(records))
+}
+
+func TestCLI_Doctor(t *testing.T) {
+	stdout, stderr, err := runCLI("doctor")
+	if err != nil {
+		t.Fatalf("failed to run doctor: %v\nstderr: %s", err, stderr)
+	}
+
+	var report map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	if report["healthy"] != true {
+		t.Errorf("expected healthy to be true, got %v", report["healthy"])
+	}
+
+	checks, ok := report["checks"].([]interface{})
+	if !ok {
+		t.Fatalf("expected checks to be array")
+	}
+
+	expectedChecks := []string{"api_key", "api_connectivity", "ssh_key"}
+	for i, check := range checks {
+		checkMap := check.(map[string]interface{})
+		if checkMap["name"] != expectedChecks[i] {
+			t.Errorf("expected check %d to be %s, got %s", i, expectedChecks[i], checkMap["name"])
+		}
+		if checkMap["status"] != "pass" {
+			t.Errorf("expected check %s to pass, got %s", checkMap["name"], checkMap["status"])
+		}
+	}
+
+	t.Logf("doctor report: %d checks, healthy: %v", len(checks), report["healthy"])
+}
+
+// Legacy command tests - ensure backwards compatibility
+
+func TestCLI_LegacyGetPod(t *testing.T) {
+	stdout, stderr, err := runCLI("get", "pod")
+	if err != nil {
+		t.Fatalf("failed to run legacy get pod: %v\nstderr: %s", err, stderr)
+	}
+
+	// should contain deprecation warning in stderr
+	if !strings.Contains(stderr, "deprecated") {
+		t.Error("expected deprecation warning in stderr")
+	}
+
+	// should return table output (not JSON)
+	if strings.HasPrefix(strings.TrimSpace(stdout), "[") || strings.HasPrefix(strings.TrimSpace(stdout), "{") {
+		t.Error("legacy get pod should return table output, not JSON")
+	}
+
+	// should contain table headers
+	if !strings.Contains(stdout, "ID") || !strings.Contains(stdout, "NAME") || !strings.Contains(stdout, "STATUS") {
+		t.Error("expected table headers in output")
+	}
+
+	t.Logf("legacy get pod works, output length: %d bytes", len(stdout))
+}
+
+func TestCLI_LegacyGetPodWithID(t *testing.T) {
+	// first get a pod id using new command
+	listOut, _, err := runCLI("pod", "list")
+	if err != nil {
+		t.Skip("skipping - can't list pods")
+	}
+
+	var pods []map[string]interface{}
+	if err := json.Unmarshal([]byte(listOut), &pods); err != nil || len(pods) == 0 {
+		t.Skip("skipping - no pods found")
+	}
+
+	podID := pods[0]["id"].(string)
+
+	stdout, stderr, err := runCLI("get", "pod", podID)
+	if err != nil {
+		t.Fatalf("failed to run legacy get pod <id>: %v\nstderr: %s", err, stderr)
+	}
+
+	if !strings.Contains(stderr, "deprecated") {
+		t.Error("expected deprecation warning")
+	}
+
+	if !strings.Contains(stdout, podID) {
+		t.Errorf("expected pod id %s in output", podID)
+	}
+
+	t.Logf("legacy get pod <id> works for pod %s", podID)
+}
+
+func TestCLI_LegacyGetPodAllFields(t *testing.T) {
+	// first get a pod id
+	listOut, _, err := runCLI("pod", "list")
+	if err != nil {
+		t.Skip("skipping - can't list pods")
+	}
+
+	var pods []map[string]interface{}
+	if err := json.Unmarshal([]byte(listOut), &pods); err != nil || len(pods) == 0 {
+		t.Skip("skipping - no pods found")
+	}
+
+	podID := pods[0]["id"].(string)
+
+	stdout, stderr, err := runCLI("get", "pod", podID, "--allfields")
+	if err != nil {
+		t.Fatalf("failed to run legacy get pod --allfields: %v\nstderr: %s", err, stderr)
+	}
+
+	// --allfields should include extra columns
+	if !strings.Contains(stdout, "VCPU") || !strings.Contains(stdout, "$/HR") || !strings.Contains(stdout, "PORTS") {
+		t.Error("expected allfields columns (VCPU, $/HR, PORTS) in output")
+	}
+
+	t.Logf("legacy get pod --allfields works")
+}
+
+func TestCLI_LegacyCreatePodHelp(t *testing.T) {
+	stdout, _, err := runCLI("create", "pod", "--help")
+	if err != nil {
+		t.Fatalf("failed to run legacy create pod --help: %v", err)
+	}
+
+	// should have the original flags
+	expectedFlags := []string{"--gpuType", "--imageName", "--containerDiskSize", "--volumeSize"}
+	for _, flag := range expectedFlags {
+		if !strings.Contains(stdout, flag) {
+			t.Errorf("expected flag %s in create pod help", flag)
+		}
+	}
+
+	t.Log("legacy create pod --help works with original flags")
+}
+
+func TestCLI_LegacyRemovePodHelp(t *testing.T) {
+	stdout, _, err := runCLI("remove", "pod", "--help")
+	if err != nil {
+		t.Fatalf("failed to run legacy remove pod --help: %v", err)
+	}
+
+	if !strings.Contains(stdout, "remove a pod") {
+		t.Error("expected 'remove a pod' in help output")
+	}
+
+	t.Log("legacy remove pod --help works")
+}
+
+func TestCLI_LegacyStartPodHelp(t *testing.T) {
+	stdout, _, err := runCLI("start", "pod", "--help")
+	if err != nil {
+		t.Fatalf("failed to run legacy start pod --help: %v", err)
+	}
+
+	// should have bid flag for spot instances
+	if !strings.Contains(stdout, "--bid") {
+		t.Error("expected --bid flag in start pod help")
+	}
+
+	t.Log("legacy start pod --help works with original flags")
+}
+
+func TestCLI_LegacyStopPodHelp(t *testing.T) {
+	stdout, _, err := runCLI("stop", "pod", "--help")
+	if err != nil {
+		t.Fatalf("failed to run legacy stop pod --help: %v", err)
+	}
+
+	if !strings.Contains(stdout, "stop a pod") {
+		t.Error("expected 'stop a pod' in help output")
+	}
+
+	t.Log("legacy stop pod --help works")
+}
+
+func TestCLI_LegacyConfigHelp(t *testing.T) {
+	stdout, _, err := runCLI("config", "--help")
+	if err != nil {
+		t.Fatalf("failed to run legacy config --help: %v", err)
+	}
+
+	// should have the original apiKey flag
+	if !strings.Contains(stdout, "--apiKey") {
+		t.Error("expected --apiKey flag in config help")
+	}
+
+	t.Log("legacy config --help works with original flags")
 }

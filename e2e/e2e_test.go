@@ -208,3 +208,138 @@ func TestE2E_RegistryList(t *testing.T) {
 		t.Logf("got registry auth: %s (%s)", auth.Name, auth.ID)
 	}
 }
+
+func TestE2E_User(t *testing.T) {
+	client, err := api.NewClient()
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	user, err := client.GetUser()
+	if err != nil {
+		t.Fatalf("failed to get user: %v", err)
+	}
+
+	if user.ID == "" {
+		t.Error("expected user id")
+	}
+	t.Logf("user: %s, balance: $%.2f, spend/hr: $%.2f", user.Email, user.ClientBalance, user.CurrentSpendPerHr)
+}
+
+func TestE2E_GpuList(t *testing.T) {
+	client, err := api.NewClient()
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	gpus, err := client.ListGpuTypes(false)
+	if err != nil {
+		t.Fatalf("failed to list gpus: %v", err)
+	}
+
+	if len(gpus) == 0 {
+		t.Error("expected at least one gpu type")
+	}
+	t.Logf("found %d available gpu types", len(gpus))
+
+	// check that we filtered out unavailable ones
+	for _, gpu := range gpus {
+		if !gpu.Available && gpu.StockStatus == "" {
+			t.Errorf("gpu %s should have been filtered out", gpu.ID)
+		}
+	}
+}
+
+func TestE2E_GpuListIncludeUnavailable(t *testing.T) {
+	client, err := api.NewClient()
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	gpusAll, err := client.ListGpuTypes(true)
+	if err != nil {
+		t.Fatalf("failed to list all gpus: %v", err)
+	}
+
+	gpusAvailable, err := client.ListGpuTypes(false)
+	if err != nil {
+		t.Fatalf("failed to list available gpus: %v", err)
+	}
+
+	// including unavailable should return more or equal GPUs
+	if len(gpusAll) < len(gpusAvailable) {
+		t.Errorf("expected all gpus (%d) >= available gpus (%d)", len(gpusAll), len(gpusAvailable))
+	}
+	t.Logf("all gpus: %d, available gpus: %d", len(gpusAll), len(gpusAvailable))
+}
+
+func TestE2E_DataCenterList(t *testing.T) {
+	client, err := api.NewClient()
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	dataCenters, err := client.ListDataCenters()
+	if err != nil {
+		t.Fatalf("failed to list datacenters: %v", err)
+	}
+
+	if len(dataCenters) == 0 {
+		t.Error("expected at least one datacenter")
+	}
+	t.Logf("found %d datacenters", len(dataCenters))
+
+	// check that we have gpu availability info
+	hasAvailability := false
+	for _, dc := range dataCenters {
+		if len(dc.GpuAvailability) > 0 {
+			hasAvailability = true
+			break
+		}
+	}
+	if !hasAvailability {
+		t.Error("expected at least one datacenter with gpu availability")
+	}
+}
+
+func TestE2E_BillingPods(t *testing.T) {
+	client, err := api.NewClient()
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	records, err := client.GetPodBilling(nil)
+	if err != nil {
+		t.Fatalf("failed to get pod billing: %v", err)
+	}
+
+	t.Logf("found %d pod billing records", len(records))
+}
+
+func TestE2E_BillingEndpoints(t *testing.T) {
+	client, err := api.NewClient()
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	records, err := client.GetEndpointBilling(nil)
+	if err != nil {
+		t.Fatalf("failed to get endpoint billing: %v", err)
+	}
+
+	t.Logf("found %d endpoint billing records", len(records))
+}
+
+func TestE2E_BillingNetworkVolumes(t *testing.T) {
+	client, err := api.NewClient()
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	records, err := client.GetNetworkVolumeBilling(nil)
+	if err != nil {
+		t.Fatalf("failed to get network volume billing: %v", err)
+	}
+
+	t.Logf("found %d network volume billing records", len(records))
+}

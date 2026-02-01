@@ -22,6 +22,14 @@ var ConfigCmd = &cobra.Command{
 	Short: "Manage CLI configuration",
 	Long:  "RunPod CLI Config Settings",
 	RunE: func(c *cobra.Command, args []string) error {
+		// explicitly set viper values from flags to ensure they're available
+		if apiKey != "" {
+			viper.Set("apiKey", apiKey)
+		}
+		if apiUrl != "" {
+			viper.Set("apiUrl", apiUrl)
+		}
+
 		if err := saveConfig(); err != nil {
 			return fmt.Errorf("error saving config: %w", err)
 		}

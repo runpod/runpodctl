@@ -4,6 +4,11 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/runpod/runpod/cmd/billing"
+	"github.com/runpod/runpod/cmd/config"
+	"github.com/runpod/runpod/cmd/datacenter"
+	"github.com/runpod/runpod/cmd/doctor"
+	"github.com/runpod/runpod/cmd/gpu"
 	"github.com/runpod/runpod/cmd/legacy"
 	"github.com/runpod/runpod/cmd/pod"
 	"github.com/runpod/runpod/cmd/project"
@@ -11,6 +16,7 @@ import (
 	"github.com/runpod/runpod/cmd/serverless"
 	"github.com/runpod/runpod/cmd/template"
 	"github.com/runpod/runpod/cmd/transfer"
+	"github.com/runpod/runpod/cmd/user"
 	"github.com/runpod/runpod/cmd/volume"
 	"github.com/runpod/runpod/internal/api"
 
@@ -27,6 +33,11 @@ var rootCmd = &cobra.Command{
 	Short: "cli for runpod.io",
 	Long: `runpod cli - manage gpu pods, serverless endpoints, and more.
 
+getting started:
+  1. get your api key at https://www.runpod.io/console/user/settings
+  2. run: runpod doctor (will prompt for key and save it)
+  or: export RUNPOD_API_KEY=your-key
+
 resources:
   pod            manage gpu pods
   serverless     manage serverless endpoints (alias: sls)
@@ -34,11 +45,18 @@ resources:
   network-volume manage network volumes (alias: nv)
   registry       manage container registry auth (alias: reg)
 
-file transfer:
-  send           send files to a pod
-  receive        receive files from a pod
+info:
+  user           show account info and balance (alias: me)
+  gpu            list available gpu types
+  datacenter     list datacenters and availability (alias: dc)
+  billing        view billing history
 
-legacy commands (deprecated): get, create, remove, start, stop`,
+utilities:
+  doctor         diagnose and fix cli issues
+  ssh            manage ssh keys and connections
+  send/receive   transfer files to/from pods
+
+legacy commands (deprecated): get, create, remove, start, stop, config`,
 }
 
 // GetRootCmd returns the root command
@@ -62,9 +80,15 @@ func registerCommands() {
 	rootCmd.AddCommand(volume.Cmd)
 	rootCmd.AddCommand(registry.Cmd)
 
+	// Info commands
+	rootCmd.AddCommand(user.Cmd)
+	rootCmd.AddCommand(gpu.Cmd)
+	rootCmd.AddCommand(datacenter.Cmd)
+	rootCmd.AddCommand(billing.Cmd)
+
 	// Utility commands
 	rootCmd.AddCommand(sshCmd)
-	rootCmd.AddCommand(configCmd)
+	rootCmd.AddCommand(doctor.Cmd)
 	rootCmd.AddCommand(transfer.SendCmd)
 	rootCmd.AddCommand(transfer.ReceiveCmd)
 
@@ -90,6 +114,14 @@ func registerCommands() {
 	rootCmd.AddCommand(legacy.RemoveCmd)
 	rootCmd.AddCommand(legacy.StartCmd)
 	rootCmd.AddCommand(legacy.StopCmd)
+
+	// Legacy config command (hidden, still works with --apiKey flag)
+	config.ConfigCmd.Hidden = true
+	config.ConfigCmd.Short = "deprecated: use 'runpod doctor'"
+	config.ConfigCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
+		fmt.Fprintln(os.Stderr, "warning: 'runpod config' is deprecated, use 'runpod doctor' instead")
+	}
+	rootCmd.AddCommand(config.ConfigCmd)
 
 	// Version flag
 	rootCmd.Version = version

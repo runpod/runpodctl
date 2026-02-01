@@ -4,14 +4,28 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/runpod/runpod/cmd/pod"
 	"github.com/spf13/cobra"
 )
 
-// These are hidden legacy commands that redirect to new syntax
-// They detect old-style verb-noun commands and show deprecation warning
+// These are hidden legacy commands that provide backwards compatibility
+// They show deprecation warnings but execute the same functionality
 
-func printDeprecationWarning(oldCmd, newCmd string) {
-	fmt.Fprintf(os.Stderr, "warning: '%s' is deprecated, use '%s' instead\n", oldCmd, newCmd)
+func wrapWithDeprecation(cmd *cobra.Command, oldSyntax, newSyntax string) {
+	originalPreRun := cmd.PreRun
+	originalPreRunE := cmd.PreRunE
+
+	cmd.PreRun = nil
+	cmd.PreRunE = func(c *cobra.Command, args []string) error {
+		fmt.Fprintf(os.Stderr, "warning: '%s' is deprecated, use '%s' instead\n", oldSyntax, newSyntax)
+		if originalPreRunE != nil {
+			return originalPreRunE(c, args)
+		}
+		if originalPreRun != nil {
+			originalPreRun(c, args)
+		}
+		return nil
+	}
 }
 
 // GetCmd is the legacy 'get' command
@@ -39,129 +53,41 @@ var RemoveCmd = &cobra.Command{
 var StartCmd = &cobra.Command{
 	Use:    "start",
 	Hidden: true,
-	Short:  "deprecated: use 'runpod <resource> start <id>'",
+	Short:  "deprecated: use 'runpod pod start <id>'",
 }
 
 // StopCmd is the legacy 'stop' command
 var StopCmd = &cobra.Command{
 	Use:    "stop",
 	Hidden: true,
-	Short:  "deprecated: use 'runpod <resource> stop <id>'",
-}
-
-// Legacy pod subcommands
-var legacyGetPodCmd = &cobra.Command{
-	Use:   "pod [id]",
-	Short: "deprecated: use 'runpod pod list' or 'runpod pod get <id>'",
-	Run: func(cmd *cobra.Command, args []string) {
-		if len(args) == 0 {
-			printDeprecationWarning("runpod get pod", "runpod pod list")
-			// Execute: runpod pod list
-			newCmd := cmd.Root().Commands()
-			for _, c := range newCmd {
-				if c.Use == "pod" {
-					for _, sub := range c.Commands() {
-						if sub.Use == "list" {
-							sub.Run(sub, args)
-							return
-						}
-					}
-				}
-			}
-		} else {
-			printDeprecationWarning("runpod get pod <id>", "runpod pod get <id>")
-			// Execute: runpod pod get <id>
-			newCmd := cmd.Root().Commands()
-			for _, c := range newCmd {
-				if c.Use == "pod" {
-					for _, sub := range c.Commands() {
-						if sub.Use == "get <pod-id>" {
-							sub.Run(sub, args)
-							return
-						}
-					}
-				}
-			}
-		}
-	},
-}
-
-var legacyCreatePodCmd = &cobra.Command{
-	Use:   "pod",
-	Short: "deprecated: use 'runpod pod create'",
-	Run: func(cmd *cobra.Command, args []string) {
-		printDeprecationWarning("runpod create pod", "runpod pod create")
-		fmt.Fprintln(os.Stderr, "use: runpod pod create --image=<image> [flags]")
-	},
-}
-
-var legacyRemovePodCmd = &cobra.Command{
-	Use:   "pod <id>",
-	Short: "deprecated: use 'runpod pod delete <id>'",
-	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		printDeprecationWarning("runpod remove pod <id>", "runpod pod delete <id>")
-		// Execute: runpod pod delete <id>
-		newCmd := cmd.Root().Commands()
-		for _, c := range newCmd {
-			if c.Use == "pod" {
-				for _, sub := range c.Commands() {
-					if sub.Use == "delete <pod-id>" {
-						sub.Run(sub, args)
-						return
-					}
-				}
-			}
-		}
-	},
-}
-
-var legacyStartPodCmd = &cobra.Command{
-	Use:   "pod <id>",
-	Short: "deprecated: use 'runpod pod start <id>'",
-	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		printDeprecationWarning("runpod start pod <id>", "runpod pod start <id>")
-		// Execute: runpod pod start <id>
-		newCmd := cmd.Root().Commands()
-		for _, c := range newCmd {
-			if c.Use == "pod" {
-				for _, sub := range c.Commands() {
-					if sub.Use == "start <pod-id>" {
-						sub.Run(sub, args)
-						return
-					}
-				}
-			}
-		}
-	},
-}
-
-var legacyStopPodCmd = &cobra.Command{
-	Use:   "pod <id>",
-	Short: "deprecated: use 'runpod pod stop <id>'",
-	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		printDeprecationWarning("runpod stop pod <id>", "runpod pod stop <id>")
-		// Execute: runpod pod stop <id>
-		newCmd := cmd.Root().Commands()
-		for _, c := range newCmd {
-			if c.Use == "pod" {
-				for _, sub := range c.Commands() {
-					if sub.Use == "stop <pod-id>" {
-						sub.Run(sub, args)
-						return
-					}
-				}
-			}
-		}
-	},
+	Short:  "deprecated: use 'runpod pod stop <id>'",
 }
 
 func init() {
-	GetCmd.AddCommand(legacyGetPodCmd)
-	CreateCmd.AddCommand(legacyCreatePodCmd)
-	RemoveCmd.AddCommand(legacyRemovePodCmd)
-	StartCmd.AddCommand(legacyStartPodCmd)
-	StopCmd.AddCommand(legacyStopPodCmd)
+	// Use the actual old commands but wrap them with deprecation warnings
+	
+	// get pod - use the old GetPodCmd which has --allfields support
+	getPodCmd := *pod.GetPodCmd // copy the command
+	wrapWithDeprecation(&getPodCmd, "runpod get pod", "runpod pod list")
+	GetCmd.AddCommand(&getPodCmd)
+
+	// create pod - use the old CreatePodCmd
+	createPodCmd := *pod.CreatePodCmd
+	wrapWithDeprecation(&createPodCmd, "runpod create pod", "runpod pod create")
+	CreateCmd.AddCommand(&createPodCmd)
+
+	// remove pod - use the old RemovePodCmd
+	removePodCmd := *pod.RemovePodCmd
+	wrapWithDeprecation(&removePodCmd, "runpod remove pod", "runpod pod delete <id>")
+	RemoveCmd.AddCommand(&removePodCmd)
+
+	// start pod - use the old StartPodCmd
+	startPodCmd := *pod.StartPodCmd
+	wrapWithDeprecation(&startPodCmd, "runpod start pod", "runpod pod start <id>")
+	StartCmd.AddCommand(&startPodCmd)
+
+	// stop pod - use the old StopPodCmd
+	stopPodCmd := *pod.StopPodCmd
+	wrapWithDeprecation(&stopPodCmd, "runpod stop pod", "runpod pod stop <id>")
+	StopCmd.AddCommand(&stopPodCmd)
 }

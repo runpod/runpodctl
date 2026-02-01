@@ -24,7 +24,7 @@ func TestPodCmd_Structure(t *testing.T) {
 	}
 
 	// check subcommands exist
-	expectedSubcommands := []string{"list", "get <pod-id>", "create", "update <pod-id>", "start <pod-id>", "stop <pod-id>", "delete <pod-id>"}
+	expectedSubcommands := []string{"list", "get <pod-id>", "create", "update <pod-id>", "start <pod-id>", "stop <pod-id>", "restart <pod-id>", "reset <pod-id>", "delete <pod-id>"}
 	for _, expected := range expectedSubcommands {
 		found := false
 		for _, cmd := range Cmd.Commands() {

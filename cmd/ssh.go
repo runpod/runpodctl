@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/runpod/runpod/cmd/ssh"
 	"github.com/runpod/runpod/internal/api"
 	"github.com/runpod/runpod/internal/output"
 
@@ -86,7 +87,7 @@ func runSSHAddKey(cmd *cobra.Command, args []string) error {
 			return nil
 		}
 		keyName := promptKeyName()
-		publicKey, err = generateSSHKeyPair(keyName)
+		publicKey, err = ssh.GenerateSSHKeyPair(keyName)
 		if err != nil {
 			output.Error(err)
 			return fmt.Errorf("failed to generate ssh key: %w", err)
@@ -194,12 +195,12 @@ func confirmAddKey() bool {
 }
 
 func promptKeyName() string {
-	fmt.Fprint(os.Stderr, "please enter a name for this key (default 'runpod-cli-key'): ")
+	fmt.Fprint(os.Stderr, "please enter a name for this key (default 'RunPod-Key-Go'): ")
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Scan()
 	keyName := scanner.Text()
 	if keyName == "" {
-		return "runpod-cli-key"
+		return "RunPod-Key-Go"
 	}
 	return strings.ReplaceAll(keyName, " ", "-")
 }

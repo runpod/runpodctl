@@ -192,3 +192,33 @@ func (c *Client) DeletePod(podID string) error {
 	_, err := c.Delete("/pods/" + podID)
 	return err
 }
+
+// ResetPod resets a pod
+func (c *Client) ResetPod(podID string) (*Pod, error) {
+	data, err := c.Post("/pods/"+podID+"/reset", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var pod Pod
+	if err := json.Unmarshal(data, &pod); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &pod, nil
+}
+
+// RestartPod restarts a pod
+func (c *Client) RestartPod(podID string) (*Pod, error) {
+	data, err := c.Post("/pods/"+podID+"/restart", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var pod Pod
+	if err := json.Unmarshal(data, &pod); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &pod, nil
+}

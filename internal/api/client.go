@@ -36,7 +36,7 @@ func NewClient() (*Client, error) {
 		apiKey = viper.GetString("apiKey")
 	}
 	if apiKey == "" {
-		return nil, fmt.Errorf("api key not found. run 'runpod config --apiKey=xxx' or set RUNPOD_API_KEY")
+		return nil, fmt.Errorf("api key not configured. get your key at https://www.runpod.io/console/user/settings then: export RUNPOD_API_KEY=your-key OR run: runpod doctor")
 	}
 
 	baseURL := os.Getenv("RUNPOD_API_URL")
