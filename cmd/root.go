@@ -56,7 +56,7 @@ utilities:
   ssh            manage ssh keys and connections
   send/receive   transfer files to/from pods
 
-legacy commands (deprecated): get, create, remove, start, stop, config`,
+runpod v2 (formerly runpodctl) - legacy commands still supported`,
 }
 
 // GetRootCmd returns the root command
@@ -134,7 +134,7 @@ func registerCommands() {
 	// Version flag
 	rootCmd.Version = version
 	rootCmd.Flags().BoolP("version", "v", false, "print the version of runpod")
-	rootCmd.SetVersionTemplate(`runpod {{ .Version }}
+	rootCmd.SetVersionTemplate(`runpod {{ .Version }} (formerly runpodctl)
 `)
 }
 
@@ -142,7 +142,7 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "print the version",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("runpod %s\n", version)
+		fmt.Printf("runpod %s (formerly runpodctl)\n", version)
 	},
 }
 
