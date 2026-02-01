@@ -5,8 +5,8 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/runpod/runpodctl/api"
-	"github.com/runpod/runpodctl/format"
+	"github.com/runpod/runpod/api"
+	"github.com/runpod/runpod/format"
 
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"

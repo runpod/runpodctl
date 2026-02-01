@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/runpod/runpodctl/api"
+	"github.com/runpod/runpod/api"
 
 	"github.com/fatih/color"
 	"golang.org/x/crypto/ssh"

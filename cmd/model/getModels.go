@@ -9,7 +9,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/runpod/runpodctl/api"
+	"github.com/runpod/runpod/api"
 
 	"github.com/spf13/cobra"
 )

@@ -34,7 +34,7 @@ var SendCmd = &cobra.Command{
 	Short: "send file(s), or folder",
 	Long:  "send file(s), or folder to pod or any computer",
 	Run: func(_ *cobra.Command, args []string) {
-		log := log.New(os.Stderr, "runpodctl-send: ", 0)
+		log := log.New(os.Stderr, "runpod-send: ", 0)
 		src, err := filepath.Abs(args[0])
 		if err != nil {
 			log.Fatalf("error getting absolute path of %s: %v", args[0], err)

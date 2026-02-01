@@ -2,7 +2,7 @@ version: 2
 
 builds:
   - id: default
-    binary: runpodctl
+    binary: runpod
     goos: [darwin, linux, windows]
     goarch: [amd64, arm64]
     env: [CGO_ENABLED=0]
@@ -11,7 +11,7 @@ builds:
       - -s -w -X main.Version={{ .Version }}-{{ .ShortCommit }}
 
   - id: linux_amd64_upx
-    binary: runpodctl
+    binary: runpod
     goos: [linux]
     goarch: [amd64]
     env: [CGO_ENABLED=0]
@@ -50,7 +50,7 @@ release:
   prerelease: auto
 
 homebrew_casks:
-  - name: runpodctl
+  - name: runpod
     homepage: "https://github.com/runpod/runpodctl"
     repository:
       owner: runpod

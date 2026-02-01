@@ -3,8 +3,8 @@ package config
 import (
 	"fmt"
 
-	"github.com/runpod/runpodctl/api"
-	"github.com/runpod/runpodctl/cmd/ssh"
+	"github.com/runpod/runpod/api"
+	"github.com/runpod/runpod/cmd/ssh"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"

@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/runpod/runpodctl/api"
+	"github.com/runpod/runpod/api"
 
 	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
@@ -240,7 +240,7 @@ var NewProjectCmd = &cobra.Command{
 		// Create Project
 		createNewProject(projectName, cudaVersion, pythonVersion, modelType, modelName, initCurrentDir)
 		fmt.Printf("\nProject %s created successfully! \nNavigate to your project directory with `cd %s`\n\n", projectName, projectName)
-		fmt.Println("Tip: Run `runpodctl project dev` to start a development session for your project.")
+		fmt.Println("tip: run `runpod project dev` to start a development session for your project.")
 	},
 }
 
