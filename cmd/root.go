@@ -25,21 +25,18 @@ var outputFormat string
 var rootCmd = &cobra.Command{
 	Use:   "runpod",
 	Short: "cli for runpod.io",
-	Long: `runpod cli - manage gpu pods, serverless endpoints, and more on runpod.
+	Long: `runpod cli - manage gpu pods, serverless endpoints, and more.
 
 resources:
-  pod         manage gpu pods
-  serverless  manage serverless endpoints (alias: sls)
-  template    manage templates (alias: tpl)
-  volume      manage network volumes (alias: vol)
-  registry    manage container registry auth (alias: reg)
+  pod            manage gpu pods
+  serverless     manage serverless endpoints (alias: sls)
+  template       manage templates (alias: tpl)
+  network-volume manage network volumes (alias: nv)
+  registry       manage container registry auth (alias: reg)
 
-utilities:
-  ssh         manage ssh keys and connections
-  send        send files using croc
-  receive     receive files using croc
-  project     manage serverless projects
-  config      configure cli settings
+file transfer:
+  send           send files to a pod
+  receive        receive files from a pod
 
 legacy commands (deprecated): get, create, remove, start, stop`,
 }
@@ -56,7 +53,7 @@ func init() {
 
 func registerCommands() {
 	// Global flags
-	rootCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "json", "output format (json, yaml, table)")
+	rootCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "json", "output format (json, yaml)")
 
 	// Core resource commands
 	rootCmd.AddCommand(pod.Cmd)
@@ -71,11 +68,12 @@ func registerCommands() {
 	rootCmd.AddCommand(transfer.SendCmd)
 	rootCmd.AddCommand(transfer.ReceiveCmd)
 
-	// Project commands
+	// Project commands (hidden - deprecated, will be replaced)
 	projectCmd := &cobra.Command{
-		Use:   "project",
-		Short: "manage serverless projects",
-		Long:  "create, develop, build, and deploy serverless projects",
+		Use:    "project",
+		Short:  "manage serverless projects (deprecated)",
+		Long:   "create, develop, build, and deploy serverless projects",
+		Hidden: true,
 	}
 	projectCmd.AddCommand(project.NewProjectCmd)
 	projectCmd.AddCommand(project.StartProjectCmd)

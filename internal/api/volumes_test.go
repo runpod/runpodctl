@@ -12,11 +12,9 @@ func TestListNetworkVolumes(t *testing.T) {
 		if r.URL.Path != "/networkvolumes" {
 			t.Errorf("expected /networkvolumes, got %s", r.URL.Path)
 		}
-		json.NewEncoder(w).Encode(NetworkVolumeListResponse{
-			NetworkVolumes: []NetworkVolume{
-				{ID: "vol-1", Name: "volume-1", Size: 100},
-				{ID: "vol-2", Name: "volume-2", Size: 200},
-			},
+		json.NewEncoder(w).Encode([]NetworkVolume{
+			{ID: "vol-1", Name: "volume-1", Size: 100},
+			{ID: "vol-2", Name: "volume-2", Size: 200},
 		})
 	}))
 	defer server.Close()

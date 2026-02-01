@@ -16,7 +16,6 @@ func TestParseFormat(t *testing.T) {
 	}{
 		{"json", FormatJSON},
 		{"yaml", FormatYAML},
-		{"table", FormatTable},
 		{"invalid", FormatJSON}, // defaults to json
 		{"", FormatJSON},
 	}

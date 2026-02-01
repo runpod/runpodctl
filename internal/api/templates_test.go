@@ -12,11 +12,9 @@ func TestListTemplates(t *testing.T) {
 		if r.URL.Path != "/templates" {
 			t.Errorf("expected /templates, got %s", r.URL.Path)
 		}
-		json.NewEncoder(w).Encode(TemplateListResponse{
-			Templates: []Template{
-				{ID: "tpl-1", Name: "template-1"},
-				{ID: "tpl-2", Name: "template-2"},
-			},
+		json.NewEncoder(w).Encode([]Template{
+			{ID: "tpl-1", Name: "template-1"},
+			{ID: "tpl-2", Name: "template-2"},
 		})
 	}))
 	defer server.Close()

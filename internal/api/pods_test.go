@@ -15,11 +15,9 @@ func TestListPods(t *testing.T) {
 		if r.Method != http.MethodGet {
 			t.Errorf("expected GET, got %s", r.Method)
 		}
-		json.NewEncoder(w).Encode(PodListResponse{
-			Pods: []Pod{
-				{ID: "pod-1", Name: "test-pod-1"},
-				{ID: "pod-2", Name: "test-pod-2"},
-			},
+		json.NewEncoder(w).Encode([]Pod{
+			{ID: "pod-1", Name: "test-pod-1"},
+			{ID: "pod-2", Name: "test-pod-2"},
 		})
 	}))
 	defer server.Close()
@@ -50,7 +48,7 @@ func TestListPods_WithOptions(t *testing.T) {
 		if query.Get("includeMachine") != "true" {
 			t.Errorf("expected includeMachine=true")
 		}
-		json.NewEncoder(w).Encode(PodListResponse{Pods: []Pod{}})
+		json.NewEncoder(w).Encode([]Pod{})
 	}))
 	defer server.Close()
 

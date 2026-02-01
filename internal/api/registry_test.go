@@ -12,11 +12,9 @@ func TestListContainerRegistryAuths(t *testing.T) {
 		if r.URL.Path != "/containerregistryauth" {
 			t.Errorf("expected /containerregistryauth, got %s", r.URL.Path)
 		}
-		json.NewEncoder(w).Encode(ContainerRegistryAuthListResponse{
-			ContainerRegistryAuths: []ContainerRegistryAuth{
-				{ID: "reg-1", Name: "dockerhub"},
-				{ID: "reg-2", Name: "gcr"},
-			},
+		json.NewEncoder(w).Encode([]ContainerRegistryAuth{
+			{ID: "reg-1", Name: "dockerhub"},
+			{ID: "reg-2", Name: "gcr"},
 		})
 	}))
 	defer server.Close()

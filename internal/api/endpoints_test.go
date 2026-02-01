@@ -12,11 +12,9 @@ func TestListEndpoints(t *testing.T) {
 		if r.URL.Path != "/endpoints" {
 			t.Errorf("expected /endpoints, got %s", r.URL.Path)
 		}
-		json.NewEncoder(w).Encode(EndpointListResponse{
-			Endpoints: []Endpoint{
-				{ID: "ep-1", Name: "endpoint-1"},
-				{ID: "ep-2", Name: "endpoint-2"},
-			},
+		json.NewEncoder(w).Encode([]Endpoint{
+			{ID: "ep-1", Name: "endpoint-1"},
+			{ID: "ep-2", Name: "endpoint-2"},
 		})
 	}))
 	defer server.Close()

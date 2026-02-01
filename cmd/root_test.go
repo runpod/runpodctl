@@ -17,7 +17,7 @@ func TestRootCmd_Structure(t *testing.T) {
 func TestRootCmd_HasResourceCommands(t *testing.T) {
 	root := GetRootCmd()
 
-	expectedCommands := []string{"pod", "serverless", "template", "volume", "registry"}
+	expectedCommands := []string{"pod", "serverless", "template", "network-volume", "registry"}
 	for _, expected := range expectedCommands {
 		found := false
 		for _, cmd := range root.Commands() {
@@ -35,7 +35,7 @@ func TestRootCmd_HasResourceCommands(t *testing.T) {
 func TestRootCmd_HasUtilityCommands(t *testing.T) {
 	root := GetRootCmd()
 
-	expectedCommands := []string{"ssh", "config", "send <file>", "receive <code>", "project", "version"}
+	expectedCommands := []string{"ssh", "config", "send <file>", "receive <code>", "version"}
 	for _, expected := range expectedCommands {
 		found := false
 		for _, cmd := range root.Commands() {
@@ -48,6 +48,20 @@ func TestRootCmd_HasUtilityCommands(t *testing.T) {
 			t.Errorf("expected command %s not found", expected)
 		}
 	}
+}
+
+func TestRootCmd_ProjectIsHidden(t *testing.T) {
+	root := GetRootCmd()
+
+	for _, cmd := range root.Commands() {
+		if cmd.Use == "project" {
+			if !cmd.Hidden {
+				t.Error("project command should be hidden")
+			}
+			return
+		}
+	}
+	t.Error("project command not found")
 }
 
 func TestRootCmd_HasLegacyCommands(t *testing.T) {
@@ -84,6 +98,9 @@ func TestRootCmd_OutputFlag(t *testing.T) {
 	}
 	if flag.DefValue != "json" {
 		t.Errorf("expected default 'json', got %s", flag.DefValue)
+	}
+	if flag.Usage != "output format (json, yaml)" {
+		t.Errorf("expected usage 'output format (json, yaml)', got %s", flag.Usage)
 	}
 }
 

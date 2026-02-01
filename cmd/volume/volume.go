@@ -4,12 +4,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Cmd is the volume command group
+// Cmd is the network-volume command group
 var Cmd = &cobra.Command{
-	Use:     "volume",
+	Use:     "network-volume",
 	Short:   "manage network volumes",
 	Long:    "manage network volumes on runpod",
-	Aliases: []string{"vol", "volumes"},
+	Aliases: []string{"nv"},
 }
 
 func init() {

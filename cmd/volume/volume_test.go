@@ -5,26 +5,19 @@ import (
 )
 
 func TestVolumeCmd_Structure(t *testing.T) {
-	if Cmd.Use != "volume" {
-		t.Errorf("expected use 'volume', got %s", Cmd.Use)
+	if Cmd.Use != "network-volume" {
+		t.Errorf("expected use 'network-volume', got %s", Cmd.Use)
 	}
 
 	// check aliases
-	hasVol := false
-	hasVolumes := false
+	hasNv := false
 	for _, alias := range Cmd.Aliases {
-		if alias == "vol" {
-			hasVol = true
-		}
-		if alias == "volumes" {
-			hasVolumes = true
+		if alias == "nv" {
+			hasNv = true
 		}
 	}
-	if !hasVol {
-		t.Error("expected alias 'vol'")
-	}
-	if !hasVolumes {
-		t.Error("expected alias 'volumes'")
+	if !hasNv {
+		t.Error("expected alias 'nv'")
 	}
 
 	// check subcommands

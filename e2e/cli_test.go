@@ -74,15 +74,6 @@ func TestCLI_PodListYAML(t *testing.T) {
 	t.Logf("yaml output length: %d bytes", len(stdout))
 }
 
-func TestCLI_PodListTable(t *testing.T) {
-	stdout, stderr, err := runCLI("pod", "list", "--output", "table")
-	if err != nil {
-		t.Fatalf("failed to run pod list --output table: %v\nstderr: %s", err, stderr)
-	}
-
-	t.Logf("table output:\n%s", stdout)
-}
-
 func TestCLI_EndpointList(t *testing.T) {
 	stdout, stderr, err := runCLI("serverless", "list")
 	if err != nil {
@@ -141,10 +132,10 @@ func TestCLI_TemplateListAlias(t *testing.T) {
 	t.Logf("tpl alias works, found %d templates", len(templates))
 }
 
-func TestCLI_VolumeList(t *testing.T) {
-	stdout, stderr, err := runCLI("volume", "list")
+func TestCLI_NetworkVolumeList(t *testing.T) {
+	stdout, stderr, err := runCLI("network-volume", "list")
 	if err != nil {
-		t.Fatalf("failed to run volume list: %v\nstderr: %s", err, stderr)
+		t.Fatalf("failed to run network-volume list: %v\nstderr: %s", err, stderr)
 	}
 
 	var volumes []map[string]interface{}
@@ -155,11 +146,11 @@ func TestCLI_VolumeList(t *testing.T) {
 	t.Logf("found %d volumes", len(volumes))
 }
 
-func TestCLI_VolumeListAlias(t *testing.T) {
-	// test vol alias
-	stdout, stderr, err := runCLI("vol", "list")
+func TestCLI_NetworkVolumeListAlias(t *testing.T) {
+	// test nv alias
+	stdout, stderr, err := runCLI("nv", "list")
 	if err != nil {
-		t.Fatalf("failed to run vol list: %v\nstderr: %s", err, stderr)
+		t.Fatalf("failed to run nv list: %v\nstderr: %s", err, stderr)
 	}
 
 	var volumes []map[string]interface{}
@@ -167,7 +158,7 @@ func TestCLI_VolumeListAlias(t *testing.T) {
 		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
 	}
 
-	t.Logf("vol alias works, found %d volumes", len(volumes))
+	t.Logf("nv alias works, found %d volumes", len(volumes))
 }
 
 func TestCLI_RegistryList(t *testing.T) {
@@ -299,23 +290,23 @@ func TestCLI_TemplateGet(t *testing.T) {
 	t.Logf("got template: %v", template["name"])
 }
 
-func TestCLI_VolumeGet(t *testing.T) {
-	stdout, _, err := runCLI("volume", "list")
+func TestCLI_NetworkVolumeGet(t *testing.T) {
+	stdout, _, err := runCLI("network-volume", "list")
 	if err != nil {
-		t.Skip("skipping volume get test - can't list volumes")
+		t.Skip("skipping network-volume get test - can't list volumes")
 	}
 
 	var volumes []map[string]interface{}
 	if err := json.Unmarshal([]byte(stdout), &volumes); err != nil {
-		t.Skip("skipping volume get test - can't parse volume list")
+		t.Skip("skipping network-volume get test - can't parse volume list")
 	}
 
 	if len(volumes) == 0 {
-		t.Skip("skipping volume get test - no volumes found")
+		t.Skip("skipping network-volume get test - no volumes found")
 	}
 
 	volumeID := volumes[0]["id"].(string)
-	stdout, stderr, err := runCLI("volume", "get", volumeID)
+	stdout, stderr, err := runCLI("network-volume", "get", volumeID)
 	if err != nil {
 		t.Fatalf("failed to get volume %s: %v\nstderr: %s", volumeID, err, stderr)
 	}
