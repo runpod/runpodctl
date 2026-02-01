@@ -77,7 +77,8 @@ var updateCmd = &cobra.Command{
 	Short: "update runpod cli",
 	Long:  "update runpod cli to the latest version",
 	Run: func(c *cobra.Command, args []string) {
-		//fetch newest github release
+		// fetch newest github release
+		// TODO: update this URL when repo is renamed to runpod/runpod
 		githubApiUrl := "https://api.github.com/repos/runpod/runpodctl/releases/latest"
 		apiResp, err := GetJson(githubApiUrl)
 		if err != nil {

@@ -66,6 +66,8 @@ func GetRootCmd() *cobra.Command {
 
 func init() {
 	cobra.OnInitialize(initConfig)
+	// disable default completion command, we have our own
+	rootCmd.CompletionOptions.DisableDefaultCmd = true
 	registerCommands()
 }
 
@@ -107,6 +109,12 @@ func registerCommands() {
 
 	// Version command
 	rootCmd.AddCommand(versionCmd)
+
+	// Completion command (replaces default cobra completion)
+	rootCmd.AddCommand(completionCmd)
+
+	// Update command
+	rootCmd.AddCommand(updateCmd)
 
 	// Legacy commands (hidden, for backwards compatibility)
 	rootCmd.AddCommand(legacy.GetCmd)
