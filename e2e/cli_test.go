@@ -133,6 +133,159 @@ func TestCLI_TemplateListAlias(t *testing.T) {
 	t.Logf("tpl alias works, found %d templates", len(templates))
 }
 
+func TestCLI_TemplateListOfficial(t *testing.T) {
+	// test --type official filter
+	stdout, stderr, err := runCLI("template", "list", "--type", "official", "--limit", "5")
+	if err != nil {
+		t.Fatalf("failed to run template list --type official: %v\nstderr: %s", err, stderr)
+	}
+
+	var templates []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &templates); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	// verify all returned templates are official (isRunpod: true)
+	for _, tpl := range templates {
+		if isRunpod, ok := tpl["isRunpod"].(bool); !ok || !isRunpod {
+			t.Errorf("expected official template (isRunpod: true), got: %v", tpl["name"])
+		}
+	}
+
+	if len(templates) == 0 {
+		t.Error("expected at least one official template")
+	}
+	t.Logf("found %d official templates (limited to 5)", len(templates))
+}
+
+func TestCLI_TemplateListCommunity(t *testing.T) {
+	// test --type community filter
+	stdout, stderr, err := runCLI("template", "list", "--type", "community", "--limit", "5")
+	if err != nil {
+		t.Fatalf("failed to run template list --type community: %v\nstderr: %s", err, stderr)
+	}
+
+	var templates []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &templates); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	// verify all returned templates are community (not official)
+	for _, tpl := range templates {
+		isRunpod, _ := tpl["isRunpod"].(bool)
+		if isRunpod {
+			t.Errorf("expected community template (isRunpod: false), got official: %v", tpl["name"])
+		}
+	}
+
+	if len(templates) == 0 {
+		t.Error("expected at least one community template")
+	}
+	t.Logf("found %d community templates (limited to 5)", len(templates))
+}
+
+func TestCLI_TemplateListPagination(t *testing.T) {
+	// test pagination with limit and offset
+	stdout1, _, err := runCLI("template", "list", "--type", "official", "--limit", "3")
+	if err != nil {
+		t.Skip("skipping pagination test - can't get first page")
+	}
+
+	stdout2, _, err := runCLI("template", "list", "--type", "official", "--limit", "3", "--offset", "3")
+	if err != nil {
+		t.Skip("skipping pagination test - can't get second page")
+	}
+
+	var page1, page2 []map[string]interface{}
+	json.Unmarshal([]byte(stdout1), &page1)
+	json.Unmarshal([]byte(stdout2), &page2)
+
+	if len(page1) == 0 || len(page2) == 0 {
+		t.Skip("skipping pagination test - not enough templates")
+	}
+
+	// verify pages are different (first item on page 2 should not be on page 1)
+	page2FirstID := page2[0]["id"]
+	for _, tpl := range page1 {
+		if tpl["id"] == page2FirstID {
+			t.Error("pagination not working - same template on both pages")
+		}
+	}
+
+	t.Logf("pagination works: page1=%d templates, page2=%d templates", len(page1), len(page2))
+}
+
+func TestCLI_TemplateListAll(t *testing.T) {
+	// test --all flag returns many templates
+	stdout, stderr, err := runCLI("template", "list", "--all")
+	if err != nil {
+		t.Fatalf("failed to run template list --all: %v\nstderr: %s", err, stderr)
+	}
+
+	var templates []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &templates); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	// should have way more than the default limit of 10
+	if len(templates) < 100 {
+		t.Errorf("expected at least 100 templates with --all, got %d", len(templates))
+	}
+
+	t.Logf("found %d total templates with --all", len(templates))
+}
+
+func TestCLI_TemplateSearch(t *testing.T) {
+	// test search command
+	stdout, stderr, err := runCLI("template", "search", "pytorch")
+	if err != nil {
+		t.Fatalf("failed to search templates: %v\nstderr: %s", err, stderr)
+	}
+
+	var templates []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &templates); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	// verify all returned templates match search term
+	for _, tpl := range templates {
+		name := strings.ToLower(tpl["name"].(string))
+		imageName := ""
+		if img, ok := tpl["imageName"].(string); ok {
+			imageName = strings.ToLower(img)
+		}
+		if !strings.Contains(name, "pytorch") && !strings.Contains(imageName, "pytorch") {
+			t.Errorf("template %q doesn't match search term 'pytorch'", tpl["name"])
+		}
+	}
+
+	if len(templates) == 0 {
+		t.Error("expected at least one pytorch template")
+	}
+	t.Logf("found %d templates matching 'pytorch'", len(templates))
+}
+
+func TestCLI_TemplateSearchWithLimit(t *testing.T) {
+	// test search with --limit flag
+	stdout, stderr, err := runCLI("template", "search", "comfyui", "--limit", "5")
+	if err != nil {
+		t.Fatalf("failed to search templates: %v\nstderr: %s", err, stderr)
+	}
+
+	var templates []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &templates); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	if len(templates) == 0 {
+		t.Error("expected at least one comfyui template")
+	}
+	if len(templates) > 5 {
+		t.Errorf("expected at most 5 templates, got %d", len(templates))
+	}
+	t.Logf("found %d templates matching 'comfyui' (limited to 5)", len(templates))
+}
+
 func TestCLI_NetworkVolumeList(t *testing.T) {
 	stdout, stderr, err := runCLI("network-volume", "list")
 	if err != nil {

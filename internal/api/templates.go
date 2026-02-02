@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // Template represents a runpod template
@@ -11,6 +12,9 @@ type Template struct {
 	Name              string            `json:"name"`
 	ImageName         string            `json:"imageName"`
 	IsServerless      bool              `json:"isServerless,omitempty"`
+	IsPublic          bool              `json:"isPublic,omitempty"`
+	IsRunpod          bool              `json:"isRunpod,omitempty"`
+	Category          string            `json:"category,omitempty"`
 	Ports             []string          `json:"ports,omitempty"`
 	DockerEntrypoint  []string          `json:"dockerEntrypoint,omitempty"`
 	DockerStartCmd    []string          `json:"dockerStartCmd,omitempty"`
@@ -19,6 +23,24 @@ type Template struct {
 	VolumeInGb        int               `json:"volumeInGb,omitempty"`
 	VolumeMountPath   string            `json:"volumeMountPath,omitempty"`
 	Readme            string            `json:"readme,omitempty"`
+}
+
+// TemplateType for filtering
+type TemplateType string
+
+const (
+	TemplateTypeAll       TemplateType = "all"
+	TemplateTypeOfficial  TemplateType = "official"
+	TemplateTypeCommunity TemplateType = "community"
+	TemplateTypeUser      TemplateType = "user"
+)
+
+// TemplateListOptions for listing templates
+type TemplateListOptions struct {
+	Type   TemplateType
+	Search string // search term to filter by name/image
+	Limit  int
+	Offset int
 }
 
 // TemplateListResponse is the response from listing templates
@@ -50,7 +72,7 @@ type TemplateUpdateRequest struct {
 	Readme    string            `json:"readme,omitempty"`
 }
 
-// ListTemplates returns all templates
+// ListTemplates returns templates (user's own via REST API)
 func (c *Client) ListTemplates() ([]Template, error) {
 	data, err := c.Get("/templates", nil)
 	if err != nil {
@@ -65,19 +87,181 @@ func (c *Client) ListTemplates() ([]Template, error) {
 	return templates, nil
 }
 
+// ListAllTemplates returns templates based on filter options
+// Uses GraphQL podTemplates(input:) for official/community, REST API for user templates
+//
+// Default behavior (no type specified): official + community templates
+// --type official: only RunPod official templates
+// --type community: only community templates
+// --type user: only user's own templates
+// --all: everything including user templates
+func (c *Client) ListAllTemplates(opts *TemplateListOptions) ([]Template, error) {
+	query := `
+		query PodTemplates($input: PodTemplateInput) {
+			podTemplates(input: $input) {
+				id
+				name
+				imageName
+				isServerless
+				isPublic
+				isRunpod
+				category
+				containerDiskInGb
+				volumeInGb
+				volumeMountPath
+			}
+		}
+	`
+
+	var allTemplates []Template
+
+	// Determine what to fetch based on type filter
+	// Default (no type): official + community (NOT user - they need to explicitly ask)
+	fetchOfficial := opts == nil || opts.Type == "" || opts.Type == TemplateTypeAll || opts.Type == TemplateTypeOfficial
+	fetchCommunity := opts == nil || opts.Type == "" || opts.Type == TemplateTypeAll || opts.Type == TemplateTypeCommunity
+	fetchUser := opts != nil && (opts.Type == TemplateTypeAll || opts.Type == TemplateTypeUser)
+
+	// Fetch official RunPod templates (isRunpod: true) FIRST
+	if fetchOfficial && (opts == nil || opts.Type != TemplateTypeCommunity) {
+		variables := map[string]interface{}{
+			"input": map[string]interface{}{
+				"isRunpod": true,
+			},
+		}
+		data, err := c.graphqlRequest(query, variables)
+		if err == nil {
+			var resp struct {
+				Data struct {
+					PodTemplates []Template `json:"podTemplates"`
+				} `json:"data"`
+			}
+			if json.Unmarshal(data, &resp) == nil {
+				allTemplates = append(allTemplates, resp.Data.PodTemplates...)
+			}
+		}
+	}
+
+	// Fetch community templates (isRunpod: false) SECOND
+	if fetchCommunity && (opts == nil || opts.Type != TemplateTypeOfficial) {
+		variables := map[string]interface{}{
+			"input": map[string]interface{}{
+				"isRunpod": false,
+			},
+		}
+		data, err := c.graphqlRequest(query, variables)
+		if err == nil {
+			var resp struct {
+				Data struct {
+					PodTemplates []Template `json:"podTemplates"`
+				} `json:"data"`
+			}
+			if json.Unmarshal(data, &resp) == nil {
+				allTemplates = append(allTemplates, resp.Data.PodTemplates...)
+			}
+		}
+	}
+
+	// Fetch user's own templates via REST API LAST
+	if fetchUser {
+		userTemplates, err := c.ListTemplates()
+		if err == nil {
+			allTemplates = append(allTemplates, userTemplates...)
+		}
+	}
+
+	// Apply search filter (client-side, matching runpod-assistant behavior)
+	if opts != nil && opts.Search != "" {
+		searchTerm := strings.ToLower(opts.Search)
+		var filtered []Template
+		for _, t := range allTemplates {
+			if strings.Contains(strings.ToLower(t.ID), searchTerm) ||
+				strings.Contains(strings.ToLower(t.Name), searchTerm) ||
+				strings.Contains(strings.ToLower(t.ImageName), searchTerm) {
+				filtered = append(filtered, t)
+			}
+		}
+		allTemplates = filtered
+	}
+
+	// Apply pagination
+	if opts != nil {
+		if opts.Offset > 0 && opts.Offset < len(allTemplates) {
+			allTemplates = allTemplates[opts.Offset:]
+		}
+		if opts.Limit > 0 && opts.Limit < len(allTemplates) {
+			allTemplates = allTemplates[:opts.Limit]
+		}
+	}
+
+	return allTemplates, nil
+}
+
 // GetTemplate returns a single template by ID
+// First tries REST API (user templates), then falls back to GraphQL for any template
 func (c *Client) GetTemplate(templateID string) (*Template, error) {
+	// Try REST API first (works for user's own templates)
 	data, err := c.Get("/templates/"+templateID, nil)
+	if err == nil {
+		var template Template
+		if err := json.Unmarshal(data, &template); err == nil {
+			return &template, nil
+		}
+	}
+
+	// Fall back to GraphQL for official/public templates
+	return c.getTemplateByIDGraphQL(templateID)
+}
+
+// getTemplateByIDGraphQL retrieves a template by ID using GraphQL
+func (c *Client) getTemplateByIDGraphQL(templateID string) (*Template, error) {
+	query := `
+		query GetTemplate($id: String!) {
+			podTemplate(id: $id) {
+				id
+				name
+				imageName
+				isServerless
+				isPublic
+				isRunpod
+				category
+				containerDiskInGb
+				volumeInGb
+				volumeMountPath
+			}
+		}
+	`
+
+	variables := map[string]interface{}{
+		"id": templateID,
+	}
+
+	data, err := c.graphqlRequest(query, variables)
 	if err != nil {
 		return nil, err
 	}
 
-	var template Template
-	if err := json.Unmarshal(data, &template); err != nil {
+	var resp struct {
+		Data struct {
+			PodTemplate *Template `json:"podTemplate"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+
+	if err := json.Unmarshal(data, &resp); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	return &template, nil
+	if len(resp.Errors) > 0 {
+		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+	}
+
+	if resp.Data.PodTemplate == nil {
+		return nil, fmt.Errorf("template not found: %s", templateID)
+	}
+
+	return resp.Data.PodTemplate, nil
 }
 
 // CreateTemplate creates a new template
