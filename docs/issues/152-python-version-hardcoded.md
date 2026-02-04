@@ -4,12 +4,26 @@
 **Type:** Bug
 **Priority:** High
 **Effort:** 5 minutes
+**Status:** ✅ RESOLVED
 
 ---
 
-## Summary
+## Resolution
 
-The `runpodctl exec python` command has `python3.11` hardcoded, which breaks compatibility with most RunPod PyTorch templates that use `python3.10` or the system default.
+The `exec` command has been deprecated in the CLI restructure. Users who need to run remote commands should use:
+
+```bash
+# Get SSH connection info
+runpod ssh info <pod-id>
+
+# Use the provided SSH command to connect and run any command
+ssh -i ~/.runpod/ssh/RunPod-Key-Go root@<ip> -p <port> "python3 /path/to/script.py"
+```
+
+This approach:
+- Works with any Python version installed in the container
+- Gives users full control over the remote command
+- Doesn't require maintaining a separate `exec` code path
 
 ---
 
@@ -23,48 +37,17 @@ The `runpodctl exec python` command has `python3.11` hardcoded, which breaks com
 
 ---
 
-## Current Code
+## Why Deprecation Was Chosen
 
-File: `cmd/exec/functions.go`, line 21:
-
-```go
-if err := sshConn.RunCommand("python3.11 /tmp/" + file); err != nil {
-```
-
----
-
-## Recommended Fix
-
-Change `python3.11` to `python3`:
-
-```go
-if err := sshConn.RunCommand("python3 /tmp/" + file); err != nil {
-```
-
-This uses whatever Python 3 version is the default in the container, which is the expected behavior.
-
----
-
-## Why This Should Be Fixed
-
-1. **It's a bug** - The hardcoded version breaks functionality
-2. **Affects RunPod's own templates** - Most official PyTorch templates use python3.10
-3. **Simple fix** - One line change, no architectural decisions needed
-4. **No comments/debate** - Clear issue with clear solution
-
----
-
-## Implementation Steps
-
-1. Open `cmd/exec/functions.go`
-2. Change line 21 from `python3.11` to `python3`
-3. Test with a pod using an official PyTorch template
-4. Commit and close issue
+1. **The `exec` command was limited** - Only supported Python, not arbitrary commands
+2. **SSH provides full flexibility** - Users can run any command with any interpreter
+3. **New CLI provides better SSH support** - `runpod ssh info` returns complete connection details
+4. **Reduces maintenance burden** - No need to maintain python version detection logic
 
 ---
 
 ## Recommendation
 
-**✅ YES - Fix this immediately**
+**✅ RESOLVED - Close the GitHub issue**
 
-This is objectively broken and the fix is trivial.
+The underlying problem (users couldn't run Python scripts properly) is solved by using SSH directly. The `exec` command deprecation removes the need to maintain hardcoded interpreter paths.

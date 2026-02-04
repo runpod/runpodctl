@@ -59,7 +59,7 @@ utilities:
   send/receive   transfer files to/from pods
 
 runpod v2 (formerly runpodctl) - legacy commands still supported
-legacy (deprecated): (get, create, remove, start, stop, config, get models)`,
+legacy (deprecated): (get, create, remove, start, stop, exec, config, get models)`,
 }
 
 // GetRootCmd returns the root command
@@ -97,6 +97,7 @@ func registerCommands() {
 	rootCmd.AddCommand(doctor.Cmd)
 	rootCmd.AddCommand(transfer.SendCmd)
 	rootCmd.AddCommand(transfer.ReceiveCmd)
+	rootCmd.AddCommand(execCmd)
 
 	// Project commands (hidden - deprecated, will be replaced)
 	projectCmd := &cobra.Command{

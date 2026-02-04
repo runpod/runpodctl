@@ -9,31 +9,17 @@ import (
 
 var RemotePythonCmd = &cobra.Command{
 	Use:   "python [file]",
-	Short: "Runs a remote Python shell",
-	Long:  `Runs a remote Python shell with a local script file.`,
+	Short: "deprecated: use ssh and run the script manually",
+	Long:  `Deprecated. This command no longer runs code. Use 'runpod ssh info <pod-id>' and run your script over SSH.`,
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		podID, _ := cmd.Flags().GetString("pod_id")
-		file := args[0]
-
-		// Default to the session pod if no pod_id is provided
-		// if podID == "" {
-		// 	var err error
-		// 	podID, err = api.GetSessionPod()
-		// 	if err != nil {
-		// 		fmt.Fprintf(os.Stderr, "Error retrieving session pod: %v\n", err)
-		// 		return
-		// 	}
-		// }
-
-		fmt.Println("Running remote Python shell...")
-		if err := PythonOverSSH(podID, file); err != nil {
-			fmt.Fprintf(os.Stderr, "Error executing Python over SSH: %v\n", err)
-		}
+		fmt.Fprintln(os.Stderr, "warning: 'runpod exec' is deprecated and does not run code")
+		fmt.Fprintln(os.Stderr, "use 'runpod ssh info <pod-id>' and run your script over SSH")
 	},
 }
 
 func init() {
 	RemotePythonCmd.Flags().String("pod_id", "", "The ID of the pod to run the command on.")
+	RemotePythonCmd.Flags().String("python", "python3", "Python interpreter to use (default: python3).")
 	RemotePythonCmd.MarkFlagRequired("file")
 }

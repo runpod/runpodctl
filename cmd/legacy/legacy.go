@@ -3,9 +3,12 @@ package legacy
 import (
 	"fmt"
 	"os"
+	"strings"
 
+	"github.com/runpod/runpod/cmd/cloud"
 	"github.com/runpod/runpod/cmd/model"
 	"github.com/runpod/runpod/cmd/pod"
+	"github.com/runpod/runpod/cmd/pods"
 	"github.com/spf13/cobra"
 )
 
@@ -18,7 +21,11 @@ func wrapWithDeprecation(cmd *cobra.Command, oldSyntax, newSyntax string) {
 
 	cmd.PreRun = nil
 	cmd.PreRunE = func(c *cobra.Command, args []string) error {
-		fmt.Fprintf(os.Stderr, "warning: '%s' is deprecated, use '%s' instead\n", oldSyntax, newSyntax)
+		if strings.TrimSpace(newSyntax) == "" {
+			fmt.Fprintf(os.Stderr, "warning: '%s' is deprecated\n", oldSyntax)
+		} else {
+			fmt.Fprintf(os.Stderr, "warning: '%s' is deprecated, use '%s' instead\n", oldSyntax, newSyntax)
+		}
 		if originalPreRunE != nil {
 			return originalPreRunE(c, args)
 		}
@@ -67,6 +74,11 @@ var StopCmd = &cobra.Command{
 func init() {
 	// Use the actual old commands but wrap them with deprecation warnings
 	
+	// get cloud - legacy cloud listing
+	getCloudCmd := *cloud.GetCloudCmd
+	wrapWithDeprecation(&getCloudCmd, "runpod get cloud", "")
+	GetCmd.AddCommand(&getCloudCmd)
+
 	// get pod - use the old GetPodCmd which has --allfields support
 	getPodCmd := *pod.GetPodCmd // copy the command
 	wrapWithDeprecation(&getPodCmd, "runpod get pod", "runpod pod list")
@@ -82,10 +94,20 @@ func init() {
 	wrapWithDeprecation(&createPodCmd, "runpod create pod", "runpod pod create")
 	CreateCmd.AddCommand(&createPodCmd)
 
+	// create pods - legacy multi-pod creation
+	createPodsCmd := *pods.CreatePodsCmd
+	wrapWithDeprecation(&createPodsCmd, "runpod create pods", "")
+	CreateCmd.AddCommand(&createPodsCmd)
+
 	// remove pod - use the old RemovePodCmd
 	removePodCmd := *pod.RemovePodCmd
 	wrapWithDeprecation(&removePodCmd, "runpod remove pod", "runpod pod delete <id>")
 	RemoveCmd.AddCommand(&removePodCmd)
+
+	// remove pods - legacy multi-pod removal
+	removePodsCmd := *pods.RemovePodsCmd
+	wrapWithDeprecation(&removePodsCmd, "runpod remove pods", "")
+	RemoveCmd.AddCommand(&removePodsCmd)
 
 	// start pod - use the old StartPodCmd
 	startPodCmd := *pod.StartPodCmd
