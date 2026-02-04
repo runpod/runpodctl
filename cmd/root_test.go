@@ -116,6 +116,9 @@ func TestRootCmd_HelpMentionsLegacy(t *testing.T) {
 	if !strings.Contains(output, "legacy (deprecated):") {
 		t.Error("help should list legacy commands")
 	}
+	if !strings.Contains(output, "project") {
+		t.Error("help should mention legacy project command")
+	}
 	if !strings.Contains(output, "get models") {
 		t.Error("help should mention legacy model command")
 	}

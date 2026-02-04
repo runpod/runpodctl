@@ -59,7 +59,7 @@ utilities:
   send/receive   transfer files to/from pods
 
 runpod v2 (formerly runpodctl) - legacy commands still supported
-legacy (deprecated): (get, create, remove, start, stop, exec, config, get models)`,
+legacy (deprecated): (get, create, remove, start, stop, exec, project, config, get models)`,
 }
 
 // GetRootCmd returns the root command

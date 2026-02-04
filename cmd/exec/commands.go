@@ -9,12 +9,18 @@ import (
 
 var RemotePythonCmd = &cobra.Command{
 	Use:   "python [file]",
-	Short: "deprecated: use ssh and run the script manually",
-	Long:  `Deprecated. This command no longer runs code. Use 'runpod ssh info <pod-id>' and run your script over SSH.`,
+	Short: "deprecated: use ssh instead (still supported)",
+	Long:  `Deprecated. This command is kept for backward compatibility. Use 'runpod ssh info <pod-id>' and run your script over SSH.`,
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Fprintln(os.Stderr, "warning: 'runpod exec' is deprecated and does not run code")
-		fmt.Fprintln(os.Stderr, "use 'runpod ssh info <pod-id>' and run your script over SSH")
+		podID, _ := cmd.Flags().GetString("pod_id")
+		pythonCommand, _ := cmd.Flags().GetString("python")
+		file := args[0]
+
+		fmt.Println("Running remote Python shell...")
+		if err := PythonOverSSH(podID, file, pythonCommand); err != nil {
+			fmt.Fprintf(os.Stderr, "Error executing Python over SSH: %v\n", err)
+		}
 	},
 }
 

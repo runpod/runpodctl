@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,24 @@ func runCLI(args ...string) (string, string, error) {
 	binary := home + "/go/bin/runpod"
 
 	cmd := exec.Command(binary, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	return stdout.String(), stderr.String(), err
+}
+
+func runCLIWithInput(dir string, input string, args ...string) (string, string, error) {
+	// use the binary from go/bin
+	home, _ := os.UserHomeDir()
+	binary := home + "/go/bin/runpod"
+
+	cmd := exec.Command(binary, args...)
+	cmd.Dir = dir
+	if strings.TrimSpace(input) != "" {
+		cmd.Stdin = strings.NewReader(input)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -102,6 +121,42 @@ func TestCLI_Help(t *testing.T) {
 	}
 	if stdout == "" {
 		t.Error("expected help output")
+	}
+}
+
+func TestCLI_ProjectCreateLegacy(t *testing.T) {
+	tmpDir := t.TempDir()
+	projectName := "e2e-project-" + time.Now().Format("20060102150405")
+	input := "11.8.0\n3.10\n"
+
+	stdout, stderr, err := runCLIWithInput(tmpDir, input,
+		"project", "create",
+		"--name", projectName,
+		"--type", "Hello_World",
+	)
+	if err != nil {
+		t.Fatalf("failed to run project create: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	projectDir := filepath.Join(tmpDir, projectName)
+	tomlPath := filepath.Join(projectDir, "runpod.toml")
+	if _, err := os.Stat(tomlPath); err != nil {
+		t.Fatalf("expected runpod.toml to be created: %v", err)
+	}
+
+	handlerPath := filepath.Join(projectDir, "src", "handler.py")
+	if _, err := os.Stat(handlerPath); err != nil {
+		t.Fatalf("expected handler.py to be created: %v", err)
+	}
+
+	_, stderr, err = runCLIWithInput(projectDir, "", "project", "build")
+	if err != nil {
+		t.Fatalf("failed to run project build: %v\nstderr: %s", err, stderr)
+	}
+
+	dockerfilePath := filepath.Join(projectDir, "Dockerfile")
+	if _, err := os.Stat(dockerfilePath); err != nil {
+		t.Fatalf("expected Dockerfile to be created: %v", err)
 	}
 }
 

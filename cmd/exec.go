@@ -16,8 +16,8 @@ var execCmd = &cobra.Command{
 	Long:   `Execute a local file remotely in a pod.`,
 	Hidden: true,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
-		fmt.Fprintln(os.Stderr, "warning: 'runpod exec' is deprecated and does not run code")
-		fmt.Fprintln(os.Stderr, "use 'runpod ssh info <pod-id>' and run your script over SSH")
+		fmt.Fprintln(os.Stderr, "warning: 'runpod exec' is deprecated; use 'runpod ssh info <pod-id>' and run your script over SSH")
+		fmt.Fprintln(os.Stderr, "note: legacy exec behavior is kept for backward compatibility")
 	},
 }
 
