@@ -10,6 +10,7 @@ import (
 	"github.com/runpod/runpod/cmd/doctor"
 	"github.com/runpod/runpod/cmd/gpu"
 	"github.com/runpod/runpod/cmd/legacy"
+	"github.com/runpod/runpod/cmd/model"
 	"github.com/runpod/runpod/cmd/pod"
 	"github.com/runpod/runpod/cmd/project"
 	"github.com/runpod/runpod/cmd/registry"
@@ -42,6 +43,7 @@ resources:
   pod            manage gpu pods
   serverless     manage serverless endpoints (alias: sls)
   template       manage templates (alias: tpl)
+  model          manage model repository
   network-volume manage network volumes (alias: nv)
   registry       manage container registry auth (alias: reg)
 
@@ -56,7 +58,8 @@ utilities:
   ssh            manage ssh keys and connections
   send/receive   transfer files to/from pods
 
-runpod v2 (formerly runpodctl) - legacy commands still supported`,
+runpod v2 (formerly runpodctl) - legacy commands still supported
+legacy (deprecated): (get, create, remove, start, stop, config, get models)`,
 }
 
 // GetRootCmd returns the root command
@@ -79,6 +82,7 @@ func registerCommands() {
 	rootCmd.AddCommand(pod.Cmd)
 	rootCmd.AddCommand(serverless.Cmd)
 	rootCmd.AddCommand(template.Cmd)
+	rootCmd.AddCommand(model.Cmd)
 	rootCmd.AddCommand(volume.Cmd)
 	rootCmd.AddCommand(registry.Cmd)
 

@@ -10,6 +10,7 @@ import (
 	"github.com/runpod/runpod/cmd/ssh"
 	"github.com/runpod/runpod/internal/api"
 	"github.com/runpod/runpod/internal/output"
+	"github.com/runpod/runpod/internal/sshconnect"
 
 	"github.com/spf13/cobra"
 )
@@ -17,7 +18,7 @@ import (
 var sshCmd = &cobra.Command{
 	Use:   "ssh",
 	Short: "manage ssh keys and connections",
-	Long:  "manage ssh keys and show connection commands for pods",
+	Long:  "manage ssh keys and show ssh info for pods. uses the api key from RUNPOD_API_KEY or ~/.runpod/config.toml (runpod doctor).",
 }
 
 var sshListKeysCmd = &cobra.Command{
@@ -34,12 +35,22 @@ var sshAddKeyCmd = &cobra.Command{
 	RunE:  runSSHAddKey,
 }
 
+var sshInfoCmd = &cobra.Command{
+	Use:   "info <pod-id>",
+	Short: "show ssh info for a pod",
+	Long:  "show ssh info for a pod (command + key). does not connect.",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runSSHInfo,
+}
+
 var sshConnectCmd = &cobra.Command{
-	Use:   "connect [pod-id]",
-	Short: "show ssh connect command for pods",
-	Long:  "show the ssh connect command for a specific pod or all pods",
-	Args:  cobra.MaximumNArgs(1),
-	RunE:  runSSHConnect,
+	Use:        "connect [pod-id]",
+	Short:      "deprecated: use 'runpod ssh info'",
+	Long:       "deprecated alias for 'runpod ssh info'",
+	Args:       cobra.MaximumNArgs(1),
+	Deprecated: "use 'runpod ssh info' instead",
+	Hidden:     true,
+	RunE:       runSSHConnectLegacy,
 }
 
 var (
@@ -51,11 +62,13 @@ var (
 func init() {
 	sshCmd.AddCommand(sshListKeysCmd)
 	sshCmd.AddCommand(sshAddKeyCmd)
+	sshCmd.AddCommand(sshInfoCmd)
 	sshCmd.AddCommand(sshConnectCmd)
 
 	sshAddKeyCmd.Flags().StringVar(&sshKey, "key", "", "the public key to add")
 	sshAddKeyCmd.Flags().StringVar(&sshKeyFile, "key-file", "", "file containing the public key")
 
+	sshInfoCmd.Flags().BoolVarP(&sshVerbose, "verbose", "v", false, "include pod id and name in output")
 	sshConnectCmd.Flags().BoolVarP(&sshVerbose, "verbose", "v", false, "include pod id and name in output")
 }
 
@@ -117,7 +130,15 @@ func runSSHAddKey(cmd *cobra.Command, args []string) error {
 	return output.Print(map[string]interface{}{"added": true}, &output.Config{Format: format})
 }
 
-func runSSHConnect(cmd *cobra.Command, args []string) error {
+func runSSHInfo(cmd *cobra.Command, args []string) error {
+	return runSSHInfoWithArgs(cmd, args, false)
+}
+
+func runSSHConnectLegacy(cmd *cobra.Command, args []string) error {
+	return runSSHInfoWithArgs(cmd, args, true)
+}
+
+func runSSHInfoWithArgs(cmd *cobra.Command, args []string, allowAll bool) error {
 	client, err := api.NewGraphQLClient()
 	if err != nil {
 		output.Error(err)
@@ -131,60 +152,34 @@ func runSSHConnect(cmd *cobra.Command, args []string) error {
 	}
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
+	keyInfo := sshconnect.ResolveKeyInfo(client)
 
-	if len(args) == 0 {
-		// Show connect info for all pods
-		var connections []map[string]interface{}
-		for _, pod := range pods {
-			conn := getConnectInfo(pod)
-			if conn != nil {
-				connections = append(connections, conn)
-			}
-		}
-		return output.Print(map[string]interface{}{"connections": connections}, &output.Config{Format: format})
+	if allowAll && len(args) == 0 {
+		connections := sshconnect.ListConnections(pods, keyInfo)
+		return output.Print(map[string]interface{}{
+			"connections": connections,
+		}, &output.Config{Format: format})
 	}
 
 	// Show connect info for specific pod
 	nameOrID := args[0]
-	for _, pod := range pods {
-		if pod.ID == nameOrID || pod.Name == nameOrID {
-			conn := getConnectInfo(pod)
-			if conn == nil {
-				return output.Print(map[string]interface{}{
-					"error":  "pod not ready",
-					"id":     pod.ID,
-					"name":   pod.Name,
-					"status": pod.DesiredStatus,
-				}, &output.Config{Format: format})
-			}
-			return output.Print(conn, &output.Config{Format: format})
+	pod, conn := sshconnect.FindPodConnection(pods, nameOrID, keyInfo)
+	if pod != nil {
+		if conn == nil {
+			return output.Print(map[string]interface{}{
+				"error":  "pod not ready",
+				"id":     pod.ID,
+				"name":   pod.Name,
+				"status": pod.DesiredStatus,
+			}, &output.Config{Format: format})
 		}
+		return output.Print(conn, &output.Config{Format: format})
 	}
 
 	errData := map[string]interface{}{"error": fmt.Sprintf("pod '%s' not found", nameOrID)}
 	data, _ := json.Marshal(errData)
 	fmt.Fprintln(os.Stderr, string(data))
 	return fmt.Errorf("pod '%s' not found", nameOrID)
-}
-
-func getConnectInfo(pod *api.LegacyPod) map[string]interface{} {
-	if pod.Runtime == nil || pod.Runtime.Ports == nil {
-		return nil
-	}
-
-	for _, port := range pod.Runtime.Ports {
-		if port.IsIpPublic && port.PrivatePort == 22 {
-			return map[string]interface{}{
-				"id":      pod.ID,
-				"name":    pod.Name,
-				"command": fmt.Sprintf("ssh root@%s -p %d", port.Ip, port.PublicPort),
-				"ip":      port.Ip,
-				"port":    port.PublicPort,
-			}
-		}
-	}
-
-	return nil
 }
 
 func confirmAddKey() bool {

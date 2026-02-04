@@ -108,3 +108,52 @@ func TestDeleteTemplate(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestTemplateFromGraphQL(t *testing.T) {
+	source := &templateGraphQL{
+		ID:                "tpl-graph",
+		Name:              "graph-template",
+		ImageName:         "runpod/graph",
+		Readme:            "hello",
+		Ports:             templatePorts{"22/tcp"},
+		Env:               []templateEnvPair{{Key: "A", Value: "1"}, {Key: "", Value: "ignore"}},
+		ContainerDiskInGb: 10,
+		VolumeInGb:        20,
+		VolumeMountPath:   "/data",
+	}
+
+	template := templateFromGraphQL(source)
+	if template == nil {
+		t.Fatal("expected template, got nil")
+	}
+	if template.ID != "tpl-graph" {
+		t.Errorf("expected tpl-graph, got %s", template.ID)
+	}
+	if template.Readme != "hello" {
+		t.Errorf("expected readme to be set")
+	}
+	if template.Env["A"] != "1" {
+		t.Errorf("expected env A to be set")
+	}
+	if _, ok := template.Env[""]; ok {
+		t.Errorf("expected empty env key to be skipped")
+	}
+}
+
+func TestTemplatePortsUnmarshal(t *testing.T) {
+	var ports templatePorts
+	if err := json.Unmarshal([]byte(`"22/tcp, 80/http"`), &ports); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ports) != 2 || ports[0] != "22/tcp" || ports[1] != "80/http" {
+		t.Errorf("unexpected ports: %v", ports)
+	}
+
+	ports = nil
+	if err := json.Unmarshal([]byte(`["22/tcp","80/http"]`), &ports); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ports) != 2 || ports[0] != "22/tcp" || ports[1] != "80/http" {
+		t.Errorf("unexpected ports: %v", ports)
+	}
+}

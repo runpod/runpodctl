@@ -20,6 +20,7 @@ var (
 	gpuCount          int
 	gpuTypeId         string
 	imageName         string
+	computeType       string
 	minMemoryInGb     int
 	minVcpuCount      int
 	name              string
@@ -37,6 +38,24 @@ var CreatePodCmd = &cobra.Command{
 	Short: "start a pod",
 	Long:  "start a pod from runpod.io",
 	Run: func(cmd *cobra.Command, args []string) {
+		ct := strings.ToUpper(strings.TrimSpace(computeType))
+		if ct == "" {
+			ct = "GPU"
+		}
+		switch ct {
+		case "GPU", "CPU":
+		default:
+			cobra.CheckErr(fmt.Errorf("invalid computeType %q (use GPU or CPU)", computeType))
+		}
+		if ct == "CPU" {
+			if gpuTypeId != "" {
+				cobra.CheckErr(fmt.Errorf("gpuType must be empty when computeType is CPU"))
+			}
+			gpuCount = 0
+		} else if gpuTypeId == "" {
+			cobra.CheckErr(fmt.Errorf("gpuType is required for GPU pods"))
+		}
+
 		input := &api.CreatePodInput{
 			ContainerDiskInGb: containerDiskInGb,
 			DeployCost:        deployCost,
@@ -92,6 +111,7 @@ func init() {
 	CreatePodCmd.Flags().IntVar(&gpuCount, "gpuCount", 1, "number of GPUs for the pod")
 	CreatePodCmd.Flags().StringVar(&gpuTypeId, "gpuType", "", "gpu type id, e.g. 'NVIDIA GeForce RTX 3090'")
 	CreatePodCmd.Flags().StringVar(&imageName, "imageName", "", "container image name")
+	CreatePodCmd.Flags().StringVar(&computeType, "computeType", "GPU", "compute type (GPU or CPU)")
 	CreatePodCmd.Flags().IntVar(&minMemoryInGb, "mem", 20, "minimum system memory needed")
 	CreatePodCmd.Flags().IntVar(&minVcpuCount, "vcpu", 1, "minimum vCPUs needed")
 	CreatePodCmd.Flags().StringVar(&name, "name", "", "any pod name for easy reference")
@@ -103,6 +123,5 @@ func init() {
 	CreatePodCmd.Flags().StringVar(&dataCenterId, "dataCenterId", "", "datacenter id to create in")
 	CreatePodCmd.Flags().BoolVar(&startSSH, "startSSH", false, "enable SSH login")
 
-	CreatePodCmd.MarkFlagRequired("gpuType")   //nolint
 	CreatePodCmd.MarkFlagRequired("imageName") //nolint
 }

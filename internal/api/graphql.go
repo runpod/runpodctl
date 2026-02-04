@@ -218,6 +218,8 @@ type LegacyPod struct {
 	ContainerDiskInGb int            `json:"containerDiskInGb"`
 	CostPerHr         float32        `json:"costPerHr"`
 	DesiredStatus     string         `json:"desiredStatus"`
+	LastStatusChange  interface{}    `json:"lastStatusChange,omitempty"`
+	UptimeSeconds     interface{}    `json:"uptimeSeconds,omitempty"`
 	DockerArgs        string         `json:"dockerArgs"`
 	Env               []string       `json:"env"`
 	GpuCount          int            `json:"gpuCount"`
@@ -264,6 +266,8 @@ func (c *GraphQLClient) GetPods() ([]*LegacyPod, error) {
 				containerDiskInGb
 				costPerHr
 				desiredStatus
+				lastStatusChange
+				uptimeSeconds
 				dockerArgs
 				env
 				gpuCount

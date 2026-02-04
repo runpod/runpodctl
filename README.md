@@ -61,7 +61,7 @@ runpod pod list
 runpod pod get pod_id
 
 # create a pod
-runpod pod create --image=runpod/pytorch:latest --gpu-type-ids=NVIDIA_A100
+runpod pod create --image=runpod/pytorch:latest --gpu-type-id=NVIDIA_A100
 
 # start/stop/delete a pod
 runpod pod start pod_id

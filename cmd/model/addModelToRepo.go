@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"encoding/xml"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -79,128 +78,142 @@ type modelFile struct {
 // TODO: replace the manual completion call with github.com/aws/aws-sdk-go-v2/service/s3's
 // CompleteMultipartUpload to rely on the SDK for payload formatting and signing logic.
 
+var addCmd = &cobra.Command{
+	Use:   "add",
+	Args:  cobra.ExactArgs(0),
+	Short: "add a model",
+	Long:  "add a model to the runpod model repository",
+	Run:   runAddModel,
+}
+
 var AddModelToRepoCmd = &cobra.Command{
 	Use:    "model",
 	Args:   cobra.ExactArgs(0),
-	Short:  "internal command",
+	Short:  "deprecated: use 'runpod model add'",
 	Long:   "",
 	Hidden: true,
-	Run: func(cmd *cobra.Command, args []string) {
-		setModelGraphQLTimeout(cmd)
-
-		var modelFiles []modelFile
-
-		if addModelDirectoryPath != "" {
-			modelPath := filepath.Clean(addModelDirectoryPath)
-			info, err := os.Stat(modelPath)
-			if err != nil {
-				cobra.CheckErr(fmt.Errorf("unable to read model directory: %w", err))
-			}
-			if !info.IsDir() {
-				cobra.CheckErr(fmt.Errorf("model-path %q must be a directory", addModelDirectoryPath))
-			}
-
-			files, err := collectModelFiles(modelPath)
-			cobra.CheckErr(err)
-			if len(files) == 0 {
-				cobra.CheckErr(fmt.Errorf("model-path %q does not contain any files to upload", addModelDirectoryPath))
-			}
-
-			modelFiles = files
-			addModelCreateUpload = true
-		}
-
-		var metadata map[string]interface{}
-		if len(addModelMetadata) > 0 {
-			metadata = make(map[string]interface{}, len(addModelMetadata))
-			for key, value := range addModelMetadata {
-				metadata[key] = value
-			}
-		}
-
-		input := &api.AddModelToRepoInput{
-			Name:                addModelName,
-			CredentialReference: addModelCredentialReference,
-			CredentialType:      addModelCredentialType,
-			ModelStatus:         addModelStatus,
-			VersionStatus:       addModelVersionStatus,
-			Metadata:            metadata,
-		}
-
-		model, err := api.AddModelToRepo(input)
-		if err != nil {
-			if errors.Is(err, api.ErrModelRepoNotImplemented) {
-				fmt.Println(api.ErrModelRepoNotImplemented.Error())
-				return
-			}
-
-			cobra.CheckErr(err)
-			return
-		}
-
-		if model != nil {
-			fmt.Printf("model %q registered with Model Repo (id: %s)\n", model.Name, model.ID)
-		}
-
-		shouldCreateUpload := addModelCreateUpload || addModelFileName != "" || addModelFileSize != "" || addModelPartSize != "" || addModelContentType != "" || len(addModelMetadata) > 0
-		if !shouldCreateUpload {
-			return
-		}
-
-		uploadInput := &api.CreateModelRepoUploadInput{
-			PartSizeBytes:       addModelPartSize,
-			ContentType:         addModelContentType,
-			CredentialReference: addModelCredentialReference,
-			CredentialType:      addModelCredentialType,
-			Metadata:            metadata,
-		}
-
-		uploadInput.Name = addModelName
-
-		if len(modelFiles) > 0 {
-			err := uploadModelFiles(modelFiles, uploadInput)
-			cobra.CheckErr(err)
-			return
-		}
-
-		if addModelFileName == "" {
-			cobra.CheckErr(fmt.Errorf("file-name is required when creating an upload"))
-		}
-		if addModelFileSize == "" {
-			cobra.CheckErr(fmt.Errorf("file-size is required when creating an upload"))
-		}
-
-		uploadInput.FileName = addModelFileName
-		uploadInput.FileSizeBytes = addModelFileSize
-
-		result, err := api.CreateModelRepoUpload(uploadInput)
-		cobra.CheckErr(err)
-
-		if result.Upload == nil {
-			cobra.CheckErr(fmt.Errorf("upload response missing upload session details"))
-		}
-
-		uploadJSON, err := json.MarshalIndent(result.Upload, "", "  ")
-		cobra.CheckErr(err)
-		fmt.Printf("multipart upload session created:\n%s\n", string(uploadJSON))
-	},
+	Run:    runAddModel,
 }
 
 func init() {
-	AddModelToRepoCmd.Flags().StringVar(&addModelName, "name", "", "")
-	AddModelToRepoCmd.Flags().StringVar(&addModelCredentialReference, "credential-reference", "", "")
-	AddModelToRepoCmd.Flags().StringVar(&addModelCredentialType, "credential-type", "", "")
-	AddModelToRepoCmd.Flags().StringVar(&addModelVersionStatus, "version-status", "", "")
-	AddModelToRepoCmd.Flags().StringVar(&addModelStatus, "model-status", "", "")
-	AddModelToRepoCmd.Flags().BoolVar(&addModelCreateUpload, "create-upload", false, "")
-	AddModelToRepoCmd.Flags().StringVar(&addModelFileName, "file-name", "", "")
-	AddModelToRepoCmd.Flags().StringVar(&addModelFileSize, "file-size", "", "")
-	AddModelToRepoCmd.Flags().StringVar(&addModelPartSize, "part-size", "", "")
-	AddModelToRepoCmd.Flags().StringVar(&addModelContentType, "content-type", "", "")
-	AddModelToRepoCmd.Flags().StringVar(&addModelDirectoryPath, "model-path", "", "")
-	AddModelToRepoCmd.Flags().StringToStringVar(&addModelMetadata, "metadata", nil, "")
-
+	bindAddModelFlags(addCmd)
+	bindAddModelFlags(AddModelToRepoCmd)
+	addCmd.MarkFlagRequired("name")            //nolint
 	AddModelToRepoCmd.MarkFlagRequired("name") //nolint
+}
+
+func bindAddModelFlags(cmd *cobra.Command) {
+	cmd.Flags().StringVar(&addModelName, "name", "", "model name")
+	cmd.Flags().StringVar(&addModelCredentialReference, "credential-reference", "", "credential reference (if required)")
+	cmd.Flags().StringVar(&addModelCredentialType, "credential-type", "", "credential type (if required)")
+	cmd.Flags().StringVar(&addModelVersionStatus, "version-status", "", "initial model version status")
+	cmd.Flags().StringVar(&addModelStatus, "model-status", "", "initial model status")
+	cmd.Flags().BoolVar(&addModelCreateUpload, "create-upload", false, "create an upload session")
+	cmd.Flags().StringVar(&addModelFileName, "file-name", "", "file name for upload")
+	cmd.Flags().StringVar(&addModelFileSize, "file-size", "", "file size in bytes")
+	cmd.Flags().StringVar(&addModelPartSize, "part-size", "", "multipart upload part size in bytes")
+	cmd.Flags().StringVar(&addModelContentType, "content-type", "", "upload content type")
+	cmd.Flags().StringVar(&addModelDirectoryPath, "model-path", "", "directory containing model files to upload")
+	cmd.Flags().StringToStringVar(&addModelMetadata, "metadata", nil, "metadata key=value pairs")
+}
+
+func runAddModel(cmd *cobra.Command, args []string) {
+	setModelGraphQLTimeout(cmd)
+
+	var modelFiles []modelFile
+
+	if addModelDirectoryPath != "" {
+		modelPath := filepath.Clean(addModelDirectoryPath)
+		info, err := os.Stat(modelPath)
+		if err != nil {
+			cobra.CheckErr(fmt.Errorf("unable to read model directory: %w", err))
+		}
+		if !info.IsDir() {
+			cobra.CheckErr(fmt.Errorf("model-path %q must be a directory", addModelDirectoryPath))
+		}
+
+		files, err := collectModelFiles(modelPath)
+		cobra.CheckErr(err)
+		if len(files) == 0 {
+			cobra.CheckErr(fmt.Errorf("model-path %q does not contain any files to upload", addModelDirectoryPath))
+		}
+
+		modelFiles = files
+		addModelCreateUpload = true
+	}
+
+	var metadata map[string]interface{}
+	if len(addModelMetadata) > 0 {
+		metadata = make(map[string]interface{}, len(addModelMetadata))
+		for key, value := range addModelMetadata {
+			metadata[key] = value
+		}
+	}
+
+	input := &api.AddModelToRepoInput{
+		Name:                addModelName,
+		CredentialReference: addModelCredentialReference,
+		CredentialType:      addModelCredentialType,
+		ModelStatus:         addModelStatus,
+		VersionStatus:       addModelVersionStatus,
+		Metadata:            metadata,
+	}
+
+	model, err := api.AddModelToRepo(input)
+	if err != nil {
+		if handleModelRepoError(err) {
+			return
+		}
+
+		cobra.CheckErr(err)
+		return
+	}
+
+	if model != nil {
+		fmt.Printf("model %q registered with Model Repo (id: %s)\n", model.Name, model.ID)
+	}
+
+	shouldCreateUpload := addModelCreateUpload || addModelFileName != "" || addModelFileSize != "" || addModelPartSize != "" || addModelContentType != "" || len(addModelMetadata) > 0
+	if !shouldCreateUpload {
+		return
+	}
+
+	uploadInput := &api.CreateModelRepoUploadInput{
+		PartSizeBytes:       addModelPartSize,
+		ContentType:         addModelContentType,
+		CredentialReference: addModelCredentialReference,
+		CredentialType:      addModelCredentialType,
+		Metadata:            metadata,
+	}
+
+	uploadInput.Name = addModelName
+
+	if len(modelFiles) > 0 {
+		err := uploadModelFiles(modelFiles, uploadInput)
+		cobra.CheckErr(err)
+		return
+	}
+
+	if addModelFileName == "" {
+		cobra.CheckErr(fmt.Errorf("file-name is required when creating an upload"))
+	}
+	if addModelFileSize == "" {
+		cobra.CheckErr(fmt.Errorf("file-size is required when creating an upload"))
+	}
+
+	uploadInput.FileName = addModelFileName
+	uploadInput.FileSizeBytes = addModelFileSize
+
+	result, err := api.CreateModelRepoUpload(uploadInput)
+	cobra.CheckErr(err)
+
+	if result.Upload == nil {
+		cobra.CheckErr(fmt.Errorf("upload response missing upload session details"))
+	}
+
+	uploadJSON, err := json.MarshalIndent(result.Upload, "", "  ")
+	cobra.CheckErr(err)
+	fmt.Printf("multipart upload session created:\n%s\n", string(uploadJSON))
 }
 
 func collectModelFiles(dir string) ([]modelFile, error) {

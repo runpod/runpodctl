@@ -11,6 +11,9 @@ type Pod struct {
 	ID                string                 `json:"id"`
 	Name              string                 `json:"name"`
 	DesiredStatus     string                 `json:"desiredStatus"`
+	CreatedAt         interface{}            `json:"createdAt,omitempty"`
+	LastStatusChange  interface{}            `json:"lastStatusChange,omitempty"`
+	UptimeSeconds     interface{}            `json:"uptimeSeconds,omitempty"`
 	ImageName         string                 `json:"imageName"`
 	GpuTypeID         string                 `json:"gpuTypeId,omitempty"`
 	GpuCount          int                    `json:"gpuCount"`
@@ -34,7 +37,9 @@ type PodListResponse struct {
 // PodCreateRequest is the request to create a pod
 type PodCreateRequest struct {
 	Name              string            `json:"name,omitempty"`
-	ImageName         string            `json:"imageName"`
+	ImageName         string            `json:"imageName,omitempty"`
+	TemplateID        string            `json:"templateId,omitempty"`
+	ComputeType       string            `json:"computeType,omitempty"`
 	GpuTypeIDs        []string          `json:"gpuTypeIds,omitempty"`
 	GpuCount          int               `json:"gpuCount,omitempty"`
 	VolumeInGb        int               `json:"volumeInGb,omitempty"`

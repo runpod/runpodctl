@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/runpod/runpod/cmd/model"
 	"github.com/runpod/runpod/cmd/pod"
 	"github.com/spf13/cobra"
 )
@@ -70,6 +71,11 @@ func init() {
 	getPodCmd := *pod.GetPodCmd // copy the command
 	wrapWithDeprecation(&getPodCmd, "runpod get pod", "runpod pod list")
 	GetCmd.AddCommand(&getPodCmd)
+
+	// get models - legacy model listing
+	getModelsCmd := *model.GetModelsCmd
+	wrapWithDeprecation(&getModelsCmd, "runpod get models", "runpod model list")
+	GetCmd.AddCommand(&getModelsCmd)
 
 	// create pod - use the old CreatePodCmd
 	createPodCmd := *pod.CreatePodCmd

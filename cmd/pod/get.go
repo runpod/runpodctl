@@ -5,6 +5,7 @@ import (
 
 	"github.com/runpod/runpod/internal/api"
 	"github.com/runpod/runpod/internal/output"
+	"github.com/runpod/runpod/internal/sshconnect"
 
 	"github.com/spf13/cobra"
 )
@@ -42,6 +43,48 @@ func runGet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get pod: %w", err)
 	}
 
+	sshInfo := map[string]interface{}{}
+	gqlClient, err := api.NewGraphQLClient()
+	if err == nil {
+		pods, gqlErr := gqlClient.GetPods()
+		if gqlErr == nil {
+			keyInfo := sshconnect.ResolveKeyInfo(gqlClient)
+			sshPod, conn := sshconnect.FindPodConnection(pods, podID, keyInfo)
+			if sshPod != nil {
+				if pod.LastStatusChange == nil && sshPod.LastStatusChange != nil {
+					pod.LastStatusChange = sshPod.LastStatusChange
+				}
+				if pod.UptimeSeconds == nil && sshPod.UptimeSeconds != nil {
+					pod.UptimeSeconds = sshPod.UptimeSeconds
+				}
+				if conn == nil {
+					sshInfo = map[string]interface{}{
+						"error":  "pod not ready",
+						"id":     sshPod.ID,
+						"name":   sshPod.Name,
+						"status": sshPod.DesiredStatus,
+					}
+				} else {
+					sshInfo = conn
+				}
+			} else {
+				sshInfo = map[string]interface{}{"error": "ssh info unavailable"}
+			}
+		} else {
+			sshInfo = map[string]interface{}{"error": "ssh info unavailable"}
+		}
+	} else {
+		sshInfo = map[string]interface{}{"error": "ssh info unavailable"}
+	}
+
+	response := struct {
+		*api.Pod
+		SSH map[string]interface{} `json:"ssh"`
+	}{
+		Pod: pod,
+		SSH: sshInfo,
+	}
+
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
-	return output.Print(pod, &output.Config{Format: format})
+	return output.Print(response, &output.Config{Format: format})
 }

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 // runCLI runs the runpod CLI and returns stdout, stderr, and error
@@ -24,6 +25,63 @@ func runCLI(args ...string) (string, string, error) {
 
 	err := cmd.Run()
 	return stdout.String(), stderr.String(), err
+}
+
+func parseStringSlice(value interface{}) []string {
+	switch v := value.(type) {
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []string:
+		return v
+	case string:
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return nil
+		}
+		parts := strings.Split(v, ",")
+		out := make([]string, 0, len(parts))
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				out = append(out, part)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func waitForPodSSHCommand(t *testing.T, podID string, attempts int, delay time.Duration) map[string]interface{} {
+	t.Helper()
+
+	for i := 0; i < attempts; i++ {
+		stdout, stderr, err := runCLI("pod", "get", podID)
+		if err == nil {
+			var pod map[string]interface{}
+			if err := json.Unmarshal([]byte(stdout), &pod); err == nil {
+				sshInfo, ok := pod["ssh"].(map[string]interface{})
+				if ok {
+					if cmd, ok := sshInfo["ssh_command"].(string); ok && strings.TrimSpace(cmd) != "" {
+						return pod
+					}
+				}
+			}
+		} else {
+			t.Logf("pod get attempt %d failed: %v\nstderr: %s", i+1, err, stderr)
+		}
+
+		time.Sleep(delay)
+	}
+
+	t.Fatalf("ssh command not available for pod %s after %d attempts", podID, attempts)
+	return nil
 }
 
 func TestCLI_Version(t *testing.T) {
@@ -73,6 +131,123 @@ func TestCLI_PodListYAML(t *testing.T) {
 		t.Error("expected yaml output")
 	}
 	t.Logf("yaml output length: %d bytes", len(stdout))
+}
+
+func TestCLI_PodCreateRequiresTemplateOrImage(t *testing.T) {
+	// test that pod create fails without template or image
+	_, stderr, err := runCLI("pod", "create", "--gpu-type-id", "NVIDIA GeForce RTX 4090")
+	if err == nil {
+		t.Fatal("expected error when creating pod without template or image")
+	}
+	if !strings.Contains(stderr, "either --template or --image is required") {
+		t.Errorf("expected error about template or image, got: %s", stderr)
+	}
+}
+
+func TestCLI_PodCreateFromTemplate(t *testing.T) {
+	// create a pod from template
+	stdout, stderr, err := runCLI("pod", "create",
+		"--template", "runpod-torch-v21",
+		"--gpu-type-id", "NVIDIA GeForce RTX 4090",
+		"--name", "e2e-test-template-pod")
+	if err != nil {
+		t.Fatalf("failed to create pod from template: %v\nstderr: %s", err, stderr)
+	}
+
+	var pod map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &pod); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	// verify pod was created with template settings
+	podID, ok := pod["id"].(string)
+	if !ok || podID == "" {
+		t.Fatal("expected pod id in response")
+	}
+
+	imageName, _ := pod["imageName"].(string)
+	if !strings.Contains(imageName, "pytorch") {
+		t.Errorf("expected pytorch image from template, got: %s", imageName)
+	}
+
+	t.Logf("created pod %s from template with image %s", podID, imageName)
+
+	t.Cleanup(func() {
+		_, _, err := runCLI("pod", "delete", podID)
+		if err != nil {
+			t.Logf("warning: failed to delete test pod %s: %v", podID, err)
+		} else {
+			t.Logf("cleaned up pod %s", podID)
+		}
+	})
+
+	podDetails := waitForPodSSHCommand(t, podID, 12, 10*time.Second)
+	if createdAt, ok := podDetails["createdAt"].(string); !ok || strings.TrimSpace(createdAt) == "" {
+		t.Errorf("expected createdAt to be set for pod %s", podID)
+	}
+
+	stdout, stderr, err = runCLI("ssh", "info", podID)
+	if err != nil {
+		t.Fatalf("failed to run ssh info for pod %s: %v\nstderr: %s", podID, err, stderr)
+	}
+
+	var sshInfo map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &sshInfo); err != nil {
+		t.Fatalf("ssh info output is not valid json: %v\noutput: %s", err, stdout)
+	}
+	if cmd, ok := sshInfo["ssh_command"].(string); !ok || strings.TrimSpace(cmd) == "" {
+		t.Fatalf("expected ssh_command in ssh info for pod %s", podID)
+	}
+}
+
+func TestCLI_PodCreateCPU(t *testing.T) {
+	name := "e2e-test-cpu-" + time.Now().Format("20060102150405")
+	stdout, stderr, err := runCLI("pod", "create",
+		"--compute-type", "cpu",
+		"--image", "ubuntu:22.04",
+		"--name", name)
+	if err != nil {
+		lower := strings.ToLower(stdout + stderr)
+		if strings.Contains(lower, "not supported") ||
+			strings.Contains(lower, "not enabled") ||
+			strings.Contains(lower, "compute type") ||
+			(strings.Contains(lower, "cpu") && strings.Contains(lower, "not")) {
+			t.Skipf("cpu pods not available for this account: %s", strings.TrimSpace(stderr))
+		}
+		t.Fatalf("failed to create cpu pod: %v\nstderr: %s", err, stderr)
+	}
+
+	var pod map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &pod); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	podID, ok := pod["id"].(string)
+	if !ok || podID == "" {
+		t.Fatal("expected pod id in response")
+	}
+
+	t.Cleanup(func() {
+		_, _, err := runCLI("pod", "delete", podID)
+		if err != nil {
+			t.Logf("warning: failed to delete test pod %s: %v", podID, err)
+		} else {
+			t.Logf("cleaned up pod %s", podID)
+		}
+	})
+
+	stdout, stderr, err = runCLI("pod", "get", podID)
+	if err != nil {
+		t.Fatalf("failed to get pod %s: %v\nstderr: %s", podID, err, stderr)
+	}
+
+	var podDetails map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &podDetails); err != nil {
+		t.Fatalf("pod get output is not valid json: %v\noutput: %s", err, stdout)
+	}
+	if createdAt, ok := podDetails["createdAt"].(string); !ok || strings.TrimSpace(createdAt) == "" {
+		t.Errorf("expected createdAt to be set for pod %s", podID)
+	}
 }
 
 func TestCLI_EndpointList(t *testing.T) {
@@ -286,6 +461,99 @@ func TestCLI_TemplateSearchWithLimit(t *testing.T) {
 	t.Logf("found %d templates matching 'comfyui' (limited to 5)", len(templates))
 }
 
+func TestCLI_TemplateSearchOpenclawStack(t *testing.T) {
+	// test search for specific template: openclaw-stack
+	stdout, stderr, err := runCLI("template", "search", "openclaw-stack")
+	if err != nil {
+		t.Fatalf("failed to search for openclaw-stack: %v\nstderr: %s", err, stderr)
+	}
+
+	var templates []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &templates); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	if len(templates) == 0 {
+		t.Fatal("expected to find openclaw-stack template")
+	}
+
+	// verify we found the right template
+	found := false
+	for _, tpl := range templates {
+		name, _ := tpl["name"].(string)
+		if name == "openclaw-stack" {
+			found = true
+			id, _ := tpl["id"].(string)
+			isRunpod, _ := tpl["isRunpod"].(bool)
+			t.Logf("found openclaw-stack template: id=%s, isRunpod=%v", id, isRunpod)
+
+			// verify it's an official RunPod template
+			if !isRunpod {
+				t.Error("expected openclaw-stack to be an official RunPod template")
+			}
+			break
+		}
+	}
+
+	if !found {
+		t.Errorf("openclaw-stack not found in results: %v", templates)
+	}
+}
+
+func TestCLI_TemplateSearchWithTypeOfficial(t *testing.T) {
+	// test search with --type official filter
+	stdout, stderr, err := runCLI("template", "search", "pytorch", "--type", "official")
+	if err != nil {
+		t.Fatalf("failed to search official templates: %v\nstderr: %s", err, stderr)
+	}
+
+	var templates []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &templates); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	if len(templates) == 0 {
+		t.Fatal("expected to find official pytorch templates")
+	}
+
+	// verify all results are official (isRunpod: true)
+	for _, tpl := range templates {
+		isRunpod, _ := tpl["isRunpod"].(bool)
+		if !isRunpod {
+			t.Errorf("expected official template, got community: %v", tpl["name"])
+		}
+	}
+
+	t.Logf("found %d official pytorch templates", len(templates))
+}
+
+func TestCLI_TemplateSearchWithTypeCommunity(t *testing.T) {
+	// test search with --type community filter
+	stdout, stderr, err := runCLI("template", "search", "comfyui", "--type", "community", "--limit", "5")
+	if err != nil {
+		t.Fatalf("failed to search community templates: %v\nstderr: %s", err, stderr)
+	}
+
+	var templates []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &templates); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	if len(templates) == 0 {
+		t.Fatal("expected to find community comfyui templates")
+	}
+
+	// verify all results are community (isRunpod: false or null)
+	for _, tpl := range templates {
+		isRunpod, _ := tpl["isRunpod"].(bool)
+		if isRunpod {
+			t.Errorf("expected community template, got official: %v", tpl["name"])
+		}
+	}
+
+	t.Logf("found %d community comfyui templates", len(templates))
+}
+
 func TestCLI_NetworkVolumeList(t *testing.T) {
 	stdout, stderr, err := runCLI("network-volume", "list")
 	if err != nil {
@@ -375,6 +643,19 @@ func TestCLI_PodGet(t *testing.T) {
 		t.Errorf("expected pod id %s, got %v", podID, pod["id"])
 	}
 
+	if createdAt, ok := pod["createdAt"].(string); !ok || strings.TrimSpace(createdAt) == "" {
+		t.Errorf("expected createdAt to be set")
+	}
+
+	sshInfo, ok := pod["ssh"].(map[string]interface{})
+	if !ok {
+		t.Errorf("expected ssh info to be present")
+	} else if cmd, ok := sshInfo["ssh_command"].(string); !ok || strings.TrimSpace(cmd) == "" {
+		if _, hasError := sshInfo["error"]; !hasError {
+			t.Errorf("expected ssh_command or error in ssh info")
+		}
+	}
+
 	t.Logf("got pod: %v", pod["name"])
 }
 
@@ -412,21 +693,7 @@ func TestCLI_EndpointGet(t *testing.T) {
 }
 
 func TestCLI_TemplateGet(t *testing.T) {
-	stdout, _, err := runCLI("template", "list")
-	if err != nil {
-		t.Skip("skipping template get test - can't list templates")
-	}
-
-	var templates []map[string]interface{}
-	if err := json.Unmarshal([]byte(stdout), &templates); err != nil {
-		t.Skip("skipping template get test - can't parse template list")
-	}
-
-	if len(templates) == 0 {
-		t.Skip("skipping template get test - no templates found")
-	}
-
-	templateID := templates[0]["id"].(string)
+	templateID := "runpod-torch-v21"
 	stdout, stderr, err := runCLI("template", "get", templateID)
 	if err != nil {
 		t.Fatalf("failed to get template %s: %v\nstderr: %s", templateID, err, stderr)
@@ -441,7 +708,35 @@ func TestCLI_TemplateGet(t *testing.T) {
 		t.Errorf("expected template id %s, got %v", templateID, template["id"])
 	}
 
+	readme, ok := template["readme"].(string)
+	if !ok || strings.TrimSpace(readme) == "" {
+		t.Errorf("expected template readme to be present")
+	}
+
+	ports := parseStringSlice(template["ports"])
+	if len(ports) == 0 {
+		t.Errorf("expected template ports to be present")
+	}
+
 	t.Logf("got template: %v", template["name"])
+}
+
+func TestCLI_ModelList(t *testing.T) {
+	stdout, stderr, err := runCLI("model", "list")
+	if err != nil {
+		t.Fatalf("failed to run model list: %v\nstderr: %s", err, stderr)
+	}
+
+	if strings.Contains(stdout, "model repository functionality not yet implemented") ||
+		strings.Contains(stderr, "model repository functionality not yet implemented") ||
+		strings.Contains(stdout, "Model Repo feature is not enabled for this user") ||
+		strings.Contains(stderr, "Model Repo feature is not enabled for this user") {
+		t.Skip("model repository not enabled for this account")
+	}
+
+	if strings.TrimSpace(stdout) == "" {
+		t.Error("expected model list output")
+	}
 }
 
 func TestCLI_NetworkVolumeGet(t *testing.T) {

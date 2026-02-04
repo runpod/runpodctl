@@ -17,7 +17,7 @@ func TestRootCmd_Structure(t *testing.T) {
 func TestRootCmd_HasResourceCommands(t *testing.T) {
 	root := GetRootCmd()
 
-	expectedCommands := []string{"pod", "serverless", "template", "network-volume", "registry", "user", "gpu", "datacenter", "billing"}
+	expectedCommands := []string{"pod", "serverless", "template", "model", "network-volume", "registry", "user", "gpu", "datacenter", "billing"}
 	for _, expected := range expectedCommands {
 		found := false
 		for _, cmd := range root.Commands() {
@@ -113,7 +113,10 @@ func TestRootCmd_HelpMentionsLegacy(t *testing.T) {
 	root.Execute()
 
 	output := buf.String()
-	if !strings.Contains(output, "legacy commands") {
-		t.Error("help should mention legacy commands")
+	if !strings.Contains(output, "legacy (deprecated):") {
+		t.Error("help should list legacy commands")
+	}
+	if !strings.Contains(output, "get models") {
+		t.Error("help should mention legacy model command")
 	}
 }

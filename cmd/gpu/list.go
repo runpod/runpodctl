@@ -17,6 +17,16 @@ var listCmd = &cobra.Command{
 
 var includeUnavailable bool
 
+type gpuTypeOutput struct {
+	GpuTypeID      string `json:"gpuTypeId"`
+	DisplayName    string `json:"displayName"`
+	MemoryInGb     int    `json:"memoryInGb"`
+	SecureCloud    bool   `json:"secureCloud"`
+	CommunityCloud bool   `json:"communityCloud"`
+	StockStatus    string `json:"stockStatus,omitempty"`
+	Available      bool   `json:"available"`
+}
+
 func init() {
 	listCmd.Flags().BoolVar(&includeUnavailable, "include-unavailable", false, "include gpus with no current availability")
 }
@@ -34,6 +44,19 @@ func runList(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	typed := make([]gpuTypeOutput, 0, len(gpus))
+	for _, gpu := range gpus {
+		typed = append(typed, gpuTypeOutput{
+			GpuTypeID:      gpu.ID,
+			DisplayName:    gpu.DisplayName,
+			MemoryInGb:     gpu.MemoryInGb,
+			SecureCloud:    gpu.SecureCloud,
+			CommunityCloud: gpu.CommunityCloud,
+			StockStatus:    gpu.StockStatus,
+			Available:      gpu.Available,
+		})
+	}
+
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
-	return output.Print(gpus, &output.Config{Format: format})
+	return output.Print(typed, &output.Config{Format: format})
 }

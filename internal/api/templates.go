@@ -25,6 +25,63 @@ type Template struct {
 	Readme            string            `json:"readme,omitempty"`
 }
 
+type templateEnvPair struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+type templatePorts []string
+
+func (p *templatePorts) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 || string(data) == "null" {
+		return nil
+	}
+	if data[0] == '"' {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return err
+		}
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return nil
+		}
+		parts := strings.Split(s, ",")
+		ports := make([]string, 0, len(parts))
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			ports = append(ports, part)
+		}
+		*p = ports
+		return nil
+	}
+
+	var ports []string
+	if err := json.Unmarshal(data, &ports); err != nil {
+		return err
+	}
+	*p = ports
+	return nil
+}
+
+type templateGraphQL struct {
+	ID                string            `json:"id"`
+	Name              string            `json:"name"`
+	ImageName         string            `json:"imageName"`
+	IsServerless      bool              `json:"isServerless,omitempty"`
+	IsPublic          bool              `json:"isPublic,omitempty"`
+	IsRunpod          bool              `json:"isRunpod,omitempty"`
+	Category          string            `json:"category,omitempty"`
+	Ports             templatePorts     `json:"ports,omitempty"`
+	Env               []templateEnvPair `json:"env,omitempty"`
+	ContainerDiskInGb int               `json:"containerDiskInGb,omitempty"`
+	VolumeInGb        int               `json:"volumeInGb,omitempty"`
+	VolumeMountPath   string            `json:"volumeMountPath,omitempty"`
+	Readme            string            `json:"readme,omitempty"`
+}
+
 // TemplateType for filtering
 type TemplateType string
 
@@ -224,9 +281,15 @@ func (c *Client) getTemplateByIDGraphQL(templateID string) (*Template, error) {
 				isPublic
 				isRunpod
 				category
+				ports
+				env {
+					key
+					value
+				}
 				containerDiskInGb
 				volumeInGb
 				volumeMountPath
+				readme
 			}
 		}
 	`
@@ -242,7 +305,7 @@ func (c *Client) getTemplateByIDGraphQL(templateID string) (*Template, error) {
 
 	var resp struct {
 		Data struct {
-			PodTemplate *Template `json:"podTemplate"`
+			PodTemplate *templateGraphQL `json:"podTemplate"`
 		} `json:"data"`
 		Errors []struct {
 			Message string `json:"message"`
@@ -261,7 +324,43 @@ func (c *Client) getTemplateByIDGraphQL(templateID string) (*Template, error) {
 		return nil, fmt.Errorf("template not found: %s", templateID)
 	}
 
-	return resp.Data.PodTemplate, nil
+	return templateFromGraphQL(resp.Data.PodTemplate), nil
+}
+
+func templateFromGraphQL(source *templateGraphQL) *Template {
+	if source == nil {
+		return nil
+	}
+
+	template := &Template{
+		ID:                source.ID,
+		Name:              source.Name,
+		ImageName:         source.ImageName,
+		IsServerless:      source.IsServerless,
+		IsPublic:          source.IsPublic,
+		IsRunpod:          source.IsRunpod,
+		Category:          source.Category,
+		Ports:             []string(source.Ports),
+		ContainerDiskInGb: source.ContainerDiskInGb,
+		VolumeInGb:        source.VolumeInGb,
+		VolumeMountPath:   source.VolumeMountPath,
+		Readme:            source.Readme,
+	}
+
+	if len(source.Env) > 0 {
+		env := make(map[string]string, len(source.Env))
+		for _, pair := range source.Env {
+			if pair.Key == "" {
+				continue
+			}
+			env[pair.Key] = pair.Value
+		}
+		if len(env) > 0 {
+			template.Env = env
+		}
+	}
+
+	return template
 }
 
 // CreateTemplate creates a new template

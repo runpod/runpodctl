@@ -14,15 +14,33 @@ import (
 var createCmd = &cobra.Command{
 	Use:   "create",
 	Short: "create a new pod",
-	Long:  "create a new gpu pod",
-	Args:  cobra.NoArgs,
-	RunE:  runCreate,
+	Long: `create a new pod.
+
+you can create a pod either from a template or by specifying an image directly.
+
+examples:
+  # create from template (recommended)
+  runpod pod create --template runpod-torch-v21 --gpu-type-id "NVIDIA RTX 4090"
+
+  # create with custom image
+  runpod pod create --image runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04 --gpu-type-id "NVIDIA RTX 4090"
+
+  # create a cpu pod
+  runpod pod create --compute-type cpu --image ubuntu:22.04
+
+  # find templates first
+  runpod template search pytorch
+  runpod template list --type official`,
+	Args: cobra.NoArgs,
+	RunE: runCreate,
 }
 
 var (
 	createName              string
 	createImageName         string
-	createGpuTypeIDs        string
+	createTemplateID        string
+	createComputeType       string
+	createGpuTypeID         string
 	createGpuCount          int
 	createVolumeInGb        int
 	createContainerDiskInGb int
@@ -35,8 +53,10 @@ var (
 
 func init() {
 	createCmd.Flags().StringVar(&createName, "name", "", "pod name")
-	createCmd.Flags().StringVar(&createImageName, "image", "", "docker image name (required)")
-	createCmd.Flags().StringVar(&createGpuTypeIDs, "gpu-type-ids", "", "comma-separated list of gpu type ids")
+	createCmd.Flags().StringVar(&createTemplateID, "template", "", "template id (use 'runpod template search' to find templates)")
+	createCmd.Flags().StringVar(&createImageName, "image", "", "docker image name (required if no template)")
+	createCmd.Flags().StringVar(&createComputeType, "compute-type", "GPU", "compute type (GPU or CPU)")
+	createCmd.Flags().StringVar(&createGpuTypeID, "gpu-type-id", "", "gpu type id (from 'runpod gpu list')")
 	createCmd.Flags().IntVar(&createGpuCount, "gpu-count", 1, "number of gpus")
 	createCmd.Flags().IntVar(&createVolumeInGb, "volume-in-gb", 0, "volume size in gb")
 	createCmd.Flags().IntVar(&createContainerDiskInGb, "container-disk-in-gb", 20, "container disk size in gb")
@@ -45,11 +65,33 @@ func init() {
 	createCmd.Flags().StringVar(&createEnv, "env", "", "environment variables as json object")
 	createCmd.Flags().StringVar(&createCloudType, "cloud-type", "SECURE", "cloud type (SECURE or COMMUNITY)")
 	createCmd.Flags().StringVar(&createDataCenterIDs, "data-center-ids", "", "comma-separated list of data center ids")
-
-	createCmd.MarkFlagRequired("image") //nolint:errcheck
 }
 
 func runCreate(cmd *cobra.Command, args []string) error {
+	// Validate: either template or image must be provided
+	if createTemplateID == "" && createImageName == "" {
+		return fmt.Errorf("either --template or --image is required\n\nuse 'runpod template search <term>' to find templates")
+	}
+
+	computeType := strings.ToUpper(strings.TrimSpace(createComputeType))
+	if computeType == "" {
+		computeType = "GPU"
+	}
+	switch computeType {
+	case "GPU", "CPU":
+	default:
+		return fmt.Errorf("invalid --compute-type %q (use GPU or CPU)", createComputeType)
+	}
+
+	gpuTypeID := strings.TrimSpace(createGpuTypeID)
+	if strings.Contains(gpuTypeID, ",") {
+		return fmt.Errorf("only one gpu type id is supported; use --gpu-count for multiple gpus of the same type")
+	}
+
+	if computeType == "CPU" && gpuTypeID != "" {
+		return fmt.Errorf("--gpu-type-id is not supported for compute type CPU")
+	}
+
 	client, err := api.NewClient()
 	if err != nil {
 		output.Error(err)
@@ -59,6 +101,8 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	req := &api.PodCreateRequest{
 		Name:              createName,
 		ImageName:         createImageName,
+		TemplateID:        createTemplateID,
+		ComputeType:       computeType,
 		GpuCount:          createGpuCount,
 		VolumeInGb:        createVolumeInGb,
 		ContainerDiskInGb: createContainerDiskInGb,
@@ -66,8 +110,12 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		CloudType:         createCloudType,
 	}
 
-	if createGpuTypeIDs != "" {
-		req.GpuTypeIDs = strings.Split(createGpuTypeIDs, ",")
+	if computeType == "CPU" {
+		req.GpuCount = 0
+	}
+
+	if gpuTypeID != "" {
+		req.GpuTypeIDs = []string{gpuTypeID}
 	}
 
 	if createPorts != "" {

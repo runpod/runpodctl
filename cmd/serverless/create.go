@@ -22,7 +22,7 @@ var (
 	createName          string
 	createTemplateID    string
 	createComputeType   string
-	createGpuTypeIDs    string
+	createGpuTypeID     string
 	createGpuCount      int
 	createWorkersMin    int
 	createWorkersMax    int
@@ -33,7 +33,7 @@ func init() {
 	createCmd.Flags().StringVar(&createName, "name", "", "endpoint name")
 	createCmd.Flags().StringVar(&createTemplateID, "template-id", "", "template id (required)")
 	createCmd.Flags().StringVar(&createComputeType, "compute-type", "GPU", "compute type (GPU or CPU)")
-	createCmd.Flags().StringVar(&createGpuTypeIDs, "gpu-type-ids", "", "comma-separated list of gpu type ids")
+	createCmd.Flags().StringVar(&createGpuTypeID, "gpu-type-id", "", "gpu type id (from 'runpod gpu list')")
 	createCmd.Flags().IntVar(&createGpuCount, "gpu-count", 1, "number of gpus per worker")
 	createCmd.Flags().IntVar(&createWorkersMin, "workers-min", 0, "minimum number of workers")
 	createCmd.Flags().IntVar(&createWorkersMax, "workers-max", 3, "maximum number of workers")
@@ -52,14 +52,18 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	req := &api.EndpointCreateRequest{
 		Name:        createName,
 		TemplateID:  createTemplateID,
-		ComputeType: createComputeType,
+		ComputeType: strings.ToUpper(strings.TrimSpace(createComputeType)),
 		GpuCount:    createGpuCount,
 		WorkersMin:  createWorkersMin,
 		WorkersMax:  createWorkersMax,
 	}
 
-	if createGpuTypeIDs != "" {
-		req.GpuTypeIDs = strings.Split(createGpuTypeIDs, ",")
+	gpuTypeID := strings.TrimSpace(createGpuTypeID)
+	if strings.Contains(gpuTypeID, ",") {
+		return fmt.Errorf("only one gpu type id is supported; use --gpu-count for multiple gpus of the same type")
+	}
+	if gpuTypeID != "" {
+		req.GpuTypeIDs = []string{gpuTypeID}
 	}
 
 	if createDataCenterIDs != "" {
