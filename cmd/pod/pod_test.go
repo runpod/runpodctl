@@ -80,6 +80,9 @@ func TestCreateCmd_Flags(t *testing.T) {
 	if flags.Lookup("global-networking") == nil {
 		t.Error("expected --global-networking flag")
 	}
+	if flags.Lookup("public-ip") == nil {
+		t.Error("expected --public-ip flag")
+	}
 }
 
 func TestDeleteCmd_Aliases(t *testing.T) {

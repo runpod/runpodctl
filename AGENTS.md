@@ -156,3 +156,5 @@ graphql fallback in `internal/api/graphql.go` for features rest doesn't support 
 - ssh keys are auto-generated and synced to account on `config` command
 - all text output is lowercase and concise
 - default output format is json for agent consumption
+- always add unit + e2e tests for new behavior
+- e2e tests must clean up resources they create (use `t.Cleanup`)

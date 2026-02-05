@@ -47,6 +47,7 @@ var (
 	createContainerDiskInGb int
 	createVolumeMountPath   string
 	createGlobalNetworking  bool
+	createPublicIP          bool
 	createPorts             string
 	createEnv               string
 	createCloudType         string
@@ -64,6 +65,7 @@ func init() {
 	createCmd.Flags().IntVar(&createContainerDiskInGb, "container-disk-in-gb", 20, "container disk size in gb")
 	createCmd.Flags().StringVar(&createVolumeMountPath, "volume-mount-path", "/workspace", "volume mount path")
 	createCmd.Flags().BoolVar(&createGlobalNetworking, "global-networking", false, "enable global networking (secure cloud only)")
+	createCmd.Flags().BoolVar(&createPublicIP, "public-ip", false, "require public ip (community cloud only)")
 	createCmd.Flags().StringVar(&createPorts, "ports", "", "comma-separated list of ports (e.g., '8888/http,22/tcp')")
 	createCmd.Flags().StringVar(&createEnv, "env", "", "environment variables as json object")
 	createCmd.Flags().StringVar(&createCloudType, "cloud-type", "SECURE", "cloud type (SECURE or COMMUNITY)")
@@ -111,6 +113,16 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	supportPublicIP := false
+	if createPublicIP {
+		if cloudType == "SECURE" {
+			fmt.Fprintln(os.Stderr, "note: secure cloud pods always have public ips; --public-ip has no effect")
+		}
+		if cloudType == "COMMUNITY" {
+			supportPublicIP = true
+		}
+	}
+
 	client, err := api.NewClient()
 	if err != nil {
 		output.Error(err)
@@ -123,11 +135,12 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		TemplateID:        createTemplateID,
 		ComputeType:       computeType,
 		GlobalNetworking:  createGlobalNetworking,
+		SupportPublicIp:   supportPublicIP,
 		GpuCount:          createGpuCount,
 		VolumeInGb:        createVolumeInGb,
 		ContainerDiskInGb: createContainerDiskInGb,
 		VolumeMountPath:   createVolumeMountPath,
-		CloudType:         createCloudType,
+		CloudType:         cloudType,
 	}
 
 	if computeType == "CPU" {

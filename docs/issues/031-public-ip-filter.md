@@ -1,15 +1,16 @@
 # Issue #31: Public IP Filter for Community Cloud
 
 **GitHub:** https://github.com/runpod/runpodctl/issues/31
-**Type:** Feature Request (needs clarification)
+**Type:** Feature Request
 **Priority:** Medium
-**Effort:** 15-30 minutes (if we decide to implement)
+**Effort:** 15 minutes
+**Status:** ✅ RESOLVED
 
 ---
 
 ## Summary
 
-User requested ability to filter for public IP when creating pods on community cloud. However, a contributor clarified that community cloud pods **always** get public IPs - the real issue may be SSH daemon not running.
+The CLI now supports `--public-ip` on `runpod pod create`, which maps to the REST `supportPublicIp` field for community cloud.
 
 ---
 
@@ -48,22 +49,17 @@ jojje then demonstrates:
 
 ---
 
-## Analysis
+## Resolution
 
-The issue has **two possible interpretations:**
+The CLI now exposes a dedicated flag for the public IP requirement:
 
-1. **Original interpretation:** "I want to filter for pods that will have public IP"
-   - But jojje says community pods ALWAYS get public IPs
-   - So this filter might be unnecessary for community cloud
+```bash
+runpod pod create --cloud-type community --public-ip --image ubuntu:22.04 --gpu-type-id "NVIDIA GeForce RTX 3090"
+```
 
-2. **Real pain point:** "I can't SSH into my pod"
-   - This is what pdlje82 actually needs (IDE connection)
-   - jojje's PR #165 (`--startSSH`) addresses this
-
-**Questions to answer:**
-- Do **secure cloud** pods sometimes NOT have public IPs?
-- If yes, then a `--public-ip` filter makes sense for secure cloud
-- If no, then the issue should be closed with explanation + merge PR #165
+Notes:
+- `--public-ip` only affects **community** cloud. Secure cloud pods always have public IPs.
+- If `--cloud-type SECURE` is set, the CLI prints a no-op note.
 
 ---
 
@@ -80,43 +76,14 @@ This ensures SSH daemon runs, allowing IDE connections.
 
 ---
 
-## Recommended Actions
+## Implementation Details
 
-1. **Check PR #165 status** - If not merged, consider merging it
-2. **Clarify the issue** - Ask: "Does secure cloud ever lack public IP?"
-3. **Decide:**
-   - If secure cloud always has public IP → Close issue, point to PR #165
-   - If secure cloud sometimes lacks public IP → Add `--public-ip` filter
-
----
-
-## Implementation (if needed)
-
-Add to `cmd/pod/create.go`:
-```go
-createCmd.Flags().BoolVar(&requirePublicIP, "public-ip", false, "require public IP (for secure cloud)")
-```
-
-Add to `internal/api/pods.go` `PodCreateRequest`:
-```go
-PublicIPFilter bool `json:"publicIpFilter,omitempty"`
-```
-
----
-
-## Why This Needs Clarification First
-
-1. **Contributor says it's not needed** for community cloud
-2. **Real issue might be SSH**, which PR #165 fixes
-3. **3 years old** with no official response - suggests low priority
-4. **Don't want to add unnecessary flags** that confuse users
+- New flag: `--public-ip` on `runpod pod create`
+- Request field: `supportPublicIp` in the REST create payload
+- Unit + E2E coverage added
 
 ---
 
 ## Recommendation
 
-**⚠️ INVESTIGATE FIRST**
-
-1. Check if PR #165 was merged
-2. Verify if secure cloud pods need this filter
-3. Then decide whether to implement or close with explanation
+**✅ RESOLVED - Close the GitHub issue**

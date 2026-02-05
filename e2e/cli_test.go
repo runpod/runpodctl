@@ -77,6 +77,43 @@ func parseStringSlice(value interface{}) []string {
 	}
 }
 
+func pickCommunityGpuType(t *testing.T) string {
+	t.Helper()
+
+	stdout, stderr, err := runCLI("gpu", "list")
+	if err != nil {
+		t.Skipf("skipping - can't list gpus: %v\nstderr: %s", err, stderr)
+	}
+
+	var gpus []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &gpus); err != nil {
+		t.Skipf("skipping - can't parse gpu list: %v", err)
+	}
+
+	for _, gpu := range gpus {
+		community, _ := gpu["communityCloud"].(bool)
+		available, _ := gpu["available"].(bool)
+		id, _ := gpu["gpuTypeId"].(string)
+		if community && available && strings.TrimSpace(id) != "" {
+			return id
+		}
+	}
+
+	t.Skip("skipping - no community gpu types available")
+	return ""
+}
+
+func shouldSkipCommunityCreate(errMsg string) bool {
+	lower := strings.ToLower(errMsg)
+	return strings.Contains(lower, "no longer any instances available") ||
+		strings.Contains(lower, "no instances available") ||
+		strings.Contains(lower, "not supported") ||
+		strings.Contains(lower, "not enabled") ||
+		strings.Contains(lower, "insufficient") ||
+		strings.Contains(lower, "quota") ||
+		strings.Contains(lower, "out of capacity")
+}
+
 func waitForPodSSHCommand(t *testing.T, podID string, attempts int, delay time.Duration) map[string]interface{} {
 	t.Helper()
 
@@ -216,6 +253,67 @@ func TestCLI_PodCreateGlobalNetworkingRequiresSecureCloud(t *testing.T) {
 	}
 	if !strings.Contains(lower, "data-center-ids") {
 		t.Errorf("expected data-center-ids hint, got: %s", stderr)
+	}
+}
+
+func TestCLI_PodCreateCommunityPublicIP(t *testing.T) {
+	gpuTypeID := pickCommunityGpuType(t)
+	name := "e2e-test-public-ip-" + time.Now().Format("20060102150405")
+
+	stdout, stderr, err := runCLI("pod", "create",
+		"--cloud-type", "community",
+		"--public-ip",
+		"--image", "ubuntu:22.04",
+		"--gpu-type-id", gpuTypeID,
+		"--name", name,
+	)
+	if err != nil {
+		if shouldSkipCommunityCreate(stdout + stderr) {
+			t.Skipf("community public ip unavailable: %s", strings.TrimSpace(stderr))
+		}
+		t.Fatalf("failed to create community pod with public ip: %v\nstderr: %s", err, stderr)
+	}
+
+	var pod map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &pod); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	podID, ok := pod["id"].(string)
+	if !ok || strings.TrimSpace(podID) == "" {
+		t.Fatal("expected pod id in response")
+	}
+
+	t.Cleanup(func() {
+		_, _, err := runCLI("pod", "delete", podID)
+		if err != nil {
+			t.Logf("warning: failed to delete test pod %s: %v", podID, err)
+		} else {
+			t.Logf("cleaned up pod %s", podID)
+		}
+	})
+
+	stdout, stderr, err = runCLI("pod", "get", podID, "--include-machine")
+	if err != nil {
+		t.Fatalf("failed to get pod %s: %v\nstderr: %s", podID, err, stderr)
+	}
+
+	var details map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &details); err != nil {
+		t.Fatalf("pod get output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	machine, ok := details["machine"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected machine info in pod get response")
+	}
+
+	supportPublicIP, ok := machine["supportPublicIp"].(bool)
+	if !ok {
+		t.Fatalf("expected machine.supportPublicIp to be present")
+	}
+	if !supportPublicIP {
+		t.Errorf("expected supportPublicIp true for community pod with --public-ip")
 	}
 }
 
