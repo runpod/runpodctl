@@ -1285,3 +1285,195 @@ func TestCLI_LegacyConfigHelp(t *testing.T) {
 
 	t.Log("legacy config --help works with original flags")
 }
+
+func TestCLI_LegacyGetCloud(t *testing.T) {
+	stdout, stderr, err := runCLI("get", "cloud")
+	if err != nil {
+		t.Fatalf("failed to run legacy get cloud: %v\nstderr: %s", err, stderr)
+	}
+
+	if !strings.Contains(stderr, "deprecated") {
+		t.Error("expected deprecation warning in stderr")
+	}
+
+	lower := strings.ToLower(stdout)
+	if !strings.Contains(lower, "gpu type") || !strings.Contains(lower, "spot $/hr") {
+		t.Fatalf("expected cloud table output, got: %s", stdout)
+	}
+}
+
+func TestCLI_LegacyGetModels(t *testing.T) {
+	stdout, stderr, err := runCLI("get", "models")
+	if err != nil {
+		t.Fatalf("failed to run legacy get models: %v\nstderr: %s", err, stderr)
+	}
+
+	if !strings.Contains(stderr, "deprecated") {
+		t.Error("expected deprecation warning in stderr")
+	}
+
+	if strings.TrimSpace(stdout) == "" {
+		t.Error("expected legacy get models output")
+	}
+}
+
+func TestCLI_LegacyCreatePodsHelp(t *testing.T) {
+	stdout, _, err := runCLI("create", "pods", "--help")
+	if err != nil {
+		t.Fatalf("failed to run legacy create pods --help: %v", err)
+	}
+
+	expectedFlags := []string{"--podCount", "--gpuType", "--imageName"}
+	for _, flag := range expectedFlags {
+		if !strings.Contains(stdout, flag) {
+			t.Errorf("expected flag %s in create pods help", flag)
+		}
+	}
+}
+
+func TestCLI_LegacyRemovePodsHelp(t *testing.T) {
+	stdout, _, err := runCLI("remove", "pods", "--help")
+	if err != nil {
+		t.Fatalf("failed to run legacy remove pods --help: %v", err)
+	}
+
+	if !strings.Contains(stdout, "--podCount") {
+		t.Error("expected --podCount flag in remove pods help")
+	}
+}
+
+func TestCLI_LegacyExecPythonHelp(t *testing.T) {
+	stdout, _, err := runCLI("exec", "python", "--help")
+	if err != nil {
+		t.Fatalf("failed to run legacy exec python --help: %v", err)
+	}
+
+	expectedFlags := []string{"--pod_id", "--python"}
+	for _, flag := range expectedFlags {
+		if !strings.Contains(stdout, flag) {
+			t.Errorf("expected flag %s in exec python help", flag)
+		}
+	}
+}
+
+func TestCLI_SSHListKeys(t *testing.T) {
+	stdout, stderr, err := runCLI("ssh", "list-keys")
+	if err != nil {
+		t.Fatalf("failed to run ssh list-keys: %v\nstderr: %s", err, stderr)
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("ssh list-keys output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	if _, ok := payload["keys"]; !ok {
+		t.Fatalf("expected keys in ssh list-keys output")
+	}
+}
+
+func TestCLI_SSHAddKeyHelp(t *testing.T) {
+	stdout, _, err := runCLI("ssh", "add-key", "--help")
+	if err != nil {
+		t.Fatalf("failed to run ssh add-key --help: %v", err)
+	}
+
+	expectedFlags := []string{"--key", "--key-file"}
+	for _, flag := range expectedFlags {
+		if !strings.Contains(stdout, flag) {
+			t.Errorf("expected flag %s in ssh add-key help", flag)
+		}
+	}
+}
+
+func TestCLI_CompletionGenerateBash(t *testing.T) {
+	stdout, stderr, err := runCLI("completion", "generate", "bash")
+	if err != nil {
+		t.Fatalf("failed to run completion generate bash: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "runpodctl") {
+		t.Error("expected runpodctl in bash completion output")
+	}
+}
+
+func TestCLI_SendMissingFile(t *testing.T) {
+	missingPath := filepath.Join(t.TempDir(), "missing-file.txt")
+	_, stderr, err := runCLI("send", missingPath)
+	if err == nil {
+		t.Fatal("expected error for missing file")
+	}
+	if !strings.Contains(stderr, "does not exist") {
+		t.Fatalf("expected missing file error, got: %s", stderr)
+	}
+}
+
+func TestCLI_ReceiveHelp(t *testing.T) {
+	stdout, _, err := runCLI("receive", "--help")
+	if err != nil {
+		t.Fatalf("failed to run receive --help: %v", err)
+	}
+	if !strings.Contains(stdout, "receive") {
+		t.Error("expected receive help output")
+	}
+}
+
+func TestCLI_UpdateHelp(t *testing.T) {
+	stdout, _, err := runCLI("update", "--help")
+	if err != nil {
+		t.Fatalf("failed to run update --help: %v", err)
+	}
+	if !strings.Contains(stdout, "update runpodctl") {
+		t.Error("expected update help output")
+	}
+}
+
+func TestCLI_HelpCoverage(t *testing.T) {
+	helpCases := [][]string{
+		{"completion"},
+		{"update"},
+		{"send"},
+		{"receive"},
+		{"exec"},
+		{"exec", "python"},
+		{"ssh", "add-key"},
+		{"project", "dev"},
+		{"project", "build"},
+		{"project", "deploy"},
+		{"serverless", "create"},
+		{"serverless", "update"},
+		{"serverless", "delete"},
+		{"template", "create"},
+		{"template", "update"},
+		{"template", "delete"},
+		{"network-volume", "create"},
+		{"network-volume", "update"},
+		{"network-volume", "delete"},
+		{"registry", "get"},
+		{"registry", "create"},
+		{"registry", "delete"},
+		{"pod", "update"},
+		{"pod", "start"},
+		{"pod", "stop"},
+		{"pod", "restart"},
+		{"pod", "reset"},
+		{"pod", "delete"},
+		{"model", "add"},
+		{"model", "remove"},
+		{"create", "pods"},
+		{"remove", "pods"},
+	}
+
+	for _, args := range helpCases {
+		name := strings.Join(args, " ")
+		t.Run(name, func(t *testing.T) {
+			cmdArgs := append(append([]string{}, args...), "--help")
+			stdout, stderr, err := runCLI(cmdArgs...)
+			if err != nil {
+				t.Fatalf("failed to run %s --help: %v\nstderr: %s", name, err, stderr)
+			}
+			if !strings.Contains(stdout, "Usage:") {
+				t.Fatalf("expected usage output for %s --help", name)
+			}
+		})
+	}
+}
