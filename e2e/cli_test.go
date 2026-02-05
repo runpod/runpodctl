@@ -260,7 +260,7 @@ func TestCLI_PodCreateRequiresTemplateOrImage(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when creating pod without template or image")
 	}
-	if !strings.Contains(stderr, "either --template or --image is required") {
+	if !strings.Contains(stderr, "either --template-id or --image is required") {
 		t.Errorf("expected error about template or image, got: %s", stderr)
 	}
 	if !strings.Contains(stderr, "runpodctl template search") {
@@ -352,7 +352,7 @@ func TestCLI_PodCreateCommunityPublicIP(t *testing.T) {
 func TestCLI_PodCreateFromTemplate(t *testing.T) {
 	// create a pod from template
 	stdout, stderr, err := runCLI("pod", "create",
-		"--template", "runpod-torch-v21",
+		"--template-id", "runpod-torch-v21",
 		"--gpu-type-id", "NVIDIA GeForce RTX 4090",
 		"--name", "e2e-test-template-pod")
 	if err != nil {

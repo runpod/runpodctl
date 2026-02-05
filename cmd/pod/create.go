@@ -21,7 +21,7 @@ you can create a pod either from a template or by specifying an image directly.
 
 examples:
   # create from template (recommended)
-  runpodctl pod create --template runpod-torch-v21 --gpu-type-id "NVIDIA RTX 4090"
+  runpodctl pod create --template-id runpod-torch-v21 --gpu-type-id "NVIDIA RTX 4090"
 
   # create with custom image
   runpodctl pod create --image runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04 --gpu-type-id "NVIDIA RTX 4090"
@@ -56,7 +56,7 @@ var (
 
 func init() {
 	createCmd.Flags().StringVar(&createName, "name", "", "pod name")
-	createCmd.Flags().StringVar(&createTemplateID, "template", "", "template id (use 'runpodctl template search' to find templates)")
+	createCmd.Flags().StringVar(&createTemplateID, "template-id", "", "template id (use 'runpodctl template search' to find templates)")
 	createCmd.Flags().StringVar(&createImageName, "image", "", "docker image name (required if no template)")
 	createCmd.Flags().StringVar(&createComputeType, "compute-type", "GPU", "compute type (GPU or CPU)")
 	createCmd.Flags().StringVar(&createGpuTypeID, "gpu-type-id", "", "gpu type id (from 'runpodctl gpu list')")
@@ -75,7 +75,7 @@ func init() {
 func runCreate(cmd *cobra.Command, args []string) error {
 	// Validate: either template or image must be provided
 	if createTemplateID == "" && createImageName == "" {
-		return fmt.Errorf("either --template or --image is required\n\nuse 'runpodctl template search <term>' to find templates")
+		return fmt.Errorf("either --template-id or --image is required\n\nuse 'runpodctl template search <term>' to find templates")
 	}
 
 	computeType := strings.ToUpper(strings.TrimSpace(createComputeType))
