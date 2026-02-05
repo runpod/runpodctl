@@ -147,6 +147,15 @@ rest api operations in `internal/api/`:
 
 graphql fallback in `internal/api/graphql.go` for features rest doesn't support (ssh keys, detailed pod info).
 
+## pitfalls (non-obvious)
+
+- templates are dual-source: official/community via graphql, user via rest; list/search merge results and apply search/pagination client-side; graphql failures are intentionally best-effort.
+- graphql template shapes are inconsistent: `ports` may be string or array, `env` is key/value pairs; normalize before output and only return `readme/env/ports` on `template get`.
+- `doctor` is the only mutating setup path (api key + ssh sync); onboarding/ssh changes must update both `cmd/doctor` and `internal/sshconnect` hints.
+- legacy commands must preserve stdout and behavior exactly; deprecation warnings go to stderr only (exec is the most common regression).
+- `cmd/project.go` is not wired into the cli; the hidden `project` command is created in `cmd/root.go` and wraps `cmd/project/*`.
+- api accepts `gpuTypeIds` arrays, but the cli is intentionally singular (`--gpu-type-id`); multi-id fallback must be an explicit new flag.
+
 ## important notes
 
 - **never start/stop servers** — user handles that
