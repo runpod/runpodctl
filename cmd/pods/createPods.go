@@ -4,29 +4,29 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/runpod/runpod/api"
+	"github.com/runpod/runpodctl/api"
 
 	"github.com/spf13/cobra"
 )
 
 var (
- communityCloud bool
- containerDiskInGb int
- deployCost float32
- dockerArgs string
- env []string
- gpuCount int
- gpuTypeId string
- imageName string
- minMemoryInGb int
- minVcpuCount int
- name string
- podCount int
- ports []string
- secureCloud bool
- templateId string
- volumeInGb int
- volumeMountPath string
+	communityCloud    bool
+	containerDiskInGb int
+	deployCost        float32
+	dockerArgs        string
+	env               []string
+	gpuCount          int
+	gpuTypeId         string
+	imageName         string
+	minMemoryInGb     int
+	minVcpuCount      int
+	name              string
+	podCount          int
+	ports             []string
+	secureCloud       bool
+	templateId        string
+	volumeInGb        int
+	volumeMountPath   string
 )
 
 var CreatePodsCmd = &cobra.Command{

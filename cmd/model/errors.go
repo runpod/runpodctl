@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/runpod/runpod/api"
+	"github.com/runpod/runpodctl/api"
 )
 
 func handleModelRepoError(err error) bool {

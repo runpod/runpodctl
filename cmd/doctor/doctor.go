@@ -6,10 +6,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/runpod/runpod/api"
-	"github.com/runpod/runpod/cmd/ssh"
-	internalapi "github.com/runpod/runpod/internal/api"
-	"github.com/runpod/runpod/internal/output"
+	"github.com/runpod/runpodctl/api"
+	"github.com/runpod/runpodctl/cmd/ssh"
+	internalapi "github.com/runpod/runpodctl/internal/api"
+	"github.com/runpod/runpodctl/internal/output"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -98,7 +98,7 @@ func checkAPIKey() checkResult {
 	fmt.Fprintln(os.Stderr, "  3. copy the key and paste it below")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprint(os.Stderr, "enter your runpod api key: ")
-	
+
 	reader := bufio.NewReader(os.Stdin)
 	input, err := reader.ReadString('\n')
 	if err != nil {
@@ -117,7 +117,7 @@ func checkAPIKey() checkResult {
 	home, _ := os.UserHomeDir()
 	configPath := home + "/.runpod"
 	os.MkdirAll(configPath, 0700)
-	
+
 	if err := viper.WriteConfig(); err != nil {
 		if err := viper.WriteConfigAs(configPath + "/config.toml"); err != nil {
 			result.Error = fmt.Sprintf("failed to save config: %v", err)

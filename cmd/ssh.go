@@ -7,10 +7,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/runpod/runpod/cmd/ssh"
-	"github.com/runpod/runpod/internal/api"
-	"github.com/runpod/runpod/internal/output"
-	"github.com/runpod/runpod/internal/sshconnect"
+	"github.com/runpod/runpodctl/cmd/ssh"
+	"github.com/runpod/runpodctl/internal/api"
+	"github.com/runpod/runpodctl/internal/output"
+	"github.com/runpod/runpodctl/internal/sshconnect"
 
 	"github.com/spf13/cobra"
 )

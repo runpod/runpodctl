@@ -3,7 +3,7 @@ package pod
 import (
 	"fmt"
 
-	"github.com/runpod/runpod/api"
+	"github.com/runpod/runpodctl/api"
 
 	"github.com/spf13/cobra"
 )

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/runpod/runpod/api"
+	"github.com/runpod/runpodctl/api"
 
 	"github.com/pelletier/go-toml"
 )

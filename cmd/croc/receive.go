@@ -48,16 +48,16 @@ var ReceiveCmd = &cobra.Command{
 		sharedSecretCode := args[0]
 		split := strings.Split(sharedSecretCode, "-")
 		if len(split) < 2 {
-		log.Fatalf("malformed code %q: expected at least 2 parts separated by dashes, but got %v. please retry 'runpodctl send' to generate a valid code.", sharedSecretCode, len(split))
+			log.Fatalf("malformed code %q: expected at least 2 parts separated by dashes, but got %v. please retry 'runpodctl send' to generate a valid code.", sharedSecretCode, len(split))
 		}
 
 		relayIndex, err := strconv.Atoi(split[len(split)-1]) // relay index is the final split value
 		if err != nil {
-		log.Fatalf("malformed relay, please retry 'runpodctl send' to generate a valid code.")
+			log.Fatalf("malformed relay, please retry 'runpodctl send' to generate a valid code.")
 		}
 
 		if relayIndex < 0 || relayIndex >= len(relays) {
-		log.Fatalf("relay index %d not found; please retry 'runpodctl send' to generate a valid code.", relayIndex)
+			log.Fatalf("relay index %d not found; please retry 'runpodctl send' to generate a valid code.", relayIndex)
 		}
 		relay := relays[relayIndex]
 

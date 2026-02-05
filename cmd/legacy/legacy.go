@@ -5,10 +5,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/runpod/runpod/cmd/cloud"
-	"github.com/runpod/runpod/cmd/model"
-	"github.com/runpod/runpod/cmd/pod"
-	"github.com/runpod/runpod/cmd/pods"
+	"github.com/runpod/runpodctl/cmd/cloud"
+	"github.com/runpod/runpodctl/cmd/model"
+	"github.com/runpod/runpodctl/cmd/pod"
+	"github.com/runpod/runpodctl/cmd/pods"
 	"github.com/spf13/cobra"
 )
 
@@ -73,7 +73,7 @@ var StopCmd = &cobra.Command{
 
 func init() {
 	// Use the actual old commands but wrap them with deprecation warnings
-	
+
 	// get cloud - legacy cloud listing
 	getCloudCmd := *cloud.GetCloudCmd
 	wrapWithDeprecation(&getCloudCmd, "runpodctl get cloud", "")

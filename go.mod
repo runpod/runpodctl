@@ -1,4 +1,4 @@
-module github.com/runpod/runpod
+module github.com/runpod/runpodctl
 
 go 1.24
 

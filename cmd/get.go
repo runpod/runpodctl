@@ -1,9 +1,9 @@
 package cmd
 
 import (
-	"github.com/runpod/runpod/cmd/cloud"
-	"github.com/runpod/runpod/cmd/model"
-	"github.com/runpod/runpod/cmd/pod"
+	"github.com/runpod/runpodctl/cmd/cloud"
+	"github.com/runpod/runpodctl/cmd/model"
+	"github.com/runpod/runpodctl/cmd/pod"
 
 	"github.com/spf13/cobra"
 )

@@ -45,7 +45,7 @@ func TestRelayRTT(relay Relay, index int, numPings int) RelayRTT {
 			defer c.Close()
 
 			start := time.Now()
-			err = c.Send([]byte("ping")) 
+			err = c.Send([]byte("ping"))
 			if err != nil {
 				return // Skip this ping if send fails
 			}
@@ -133,7 +133,7 @@ func TestAllRelaysRTT(relays []Relay, numPings int, topN int) ([]RelayRTT, Relay
 		randomRelay := relays[randomIndex]
 		ports := strings.Split(randomRelay.Ports, ",")
 		addr := randomRelay.Address + ":" + ports[0]
-		
+
 		selected = RelayRTT{
 			Index:           randomIndex,
 			RTT:             time.Hour, // High RTT since we couldn't test it
@@ -171,4 +171,3 @@ func TestAllRelaysRTT(relays []Relay, numPings int, topN int) ([]RelayRTT, Relay
 
 	return rtts, selected
 }
-

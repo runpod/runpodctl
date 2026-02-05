@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/runpod/runpod/cmd/project"
+	"github.com/runpod/runpodctl/cmd/project"
 )
 
 func PythonOverSSH(podID string, file string, pythonCommand string) error {

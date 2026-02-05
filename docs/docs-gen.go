@@ -3,7 +3,7 @@ package main
 import (
 	"log"
 
-	"github.com/runpod/runpod/cmd"
+	"github.com/runpod/runpodctl/cmd"
 
 	"github.com/spf13/cobra/doc"
 )

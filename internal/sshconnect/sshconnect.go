@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/runpod/runpod/internal/api"
+	"github.com/runpod/runpodctl/internal/api"
 	sshcrypto "golang.org/x/crypto/ssh"
 )
 

@@ -3,8 +3,8 @@ package pod
 import (
 	"fmt"
 
-	"github.com/runpod/runpod/internal/api"
-	"github.com/runpod/runpod/internal/output"
+	"github.com/runpod/runpodctl/internal/api"
+	"github.com/runpod/runpodctl/internal/output"
 
 	"github.com/spf13/cobra"
 )

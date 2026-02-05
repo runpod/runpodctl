@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"github.com/runpod/runpod/cmd/project"
+	"github.com/runpod/runpodctl/cmd/project"
 
 	"github.com/spf13/cobra"
 )

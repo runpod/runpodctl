@@ -25,9 +25,9 @@ type GpuTypeWithAvailability struct {
 
 // DataCenter represents a data center
 type DataCenter struct {
-	ID              string                    `json:"id"`
-	Name            string                    `json:"name"`
-	Location        string                    `json:"location"`
+	ID              string                        `json:"id"`
+	Name            string                        `json:"name"`
+	Location        string                        `json:"location"`
 	GpuAvailability []GpuAvailabilityInDataCenter `json:"gpuAvailability,omitempty"`
 }
 
@@ -40,14 +40,14 @@ type GpuAvailabilityInDataCenter struct {
 
 // User represents user account info
 type User struct {
-	ID                 string  `json:"id"`
-	Email              string  `json:"email"`
-	ClientBalance      float64 `json:"clientBalance"`
-	CurrentSpendPerHr  float64 `json:"currentSpendPerHr"`
-	SpendLimit         float64 `json:"spendLimit"`
-	NotifyPodsStale    bool    `json:"notifyPodsStale"`
-	NotifyPodsGeneral  bool    `json:"notifyPodsGeneral"`
-	NotifyLowBalance   bool    `json:"notifyLowBalance"`
+	ID                string  `json:"id"`
+	Email             string  `json:"email"`
+	ClientBalance     float64 `json:"clientBalance"`
+	CurrentSpendPerHr float64 `json:"currentSpendPerHr"`
+	SpendLimit        float64 `json:"spendLimit"`
+	NotifyPodsStale   bool    `json:"notifyPodsStale"`
+	NotifyPodsGeneral bool    `json:"notifyPodsGeneral"`
+	NotifyLowBalance  bool    `json:"notifyLowBalance"`
 }
 
 // graphqlRequest makes a GraphQL request

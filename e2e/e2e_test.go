@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/runpod/runpod/internal/api"
+	"github.com/runpod/runpodctl/internal/api"
 	"github.com/spf13/viper"
 )
 
