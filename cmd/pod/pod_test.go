@@ -77,6 +77,9 @@ func TestCreateCmd_Flags(t *testing.T) {
 	if flags.Lookup("volume-in-gb") == nil {
 		t.Error("expected --volume-in-gb flag")
 	}
+	if flags.Lookup("global-networking") == nil {
+		t.Error("expected --global-networking flag")
+	}
 }
 
 func TestDeleteCmd_Aliases(t *testing.T) {

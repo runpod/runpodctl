@@ -199,6 +199,26 @@ func TestCLI_PodCreateRequiresTemplateOrImage(t *testing.T) {
 	}
 }
 
+func TestCLI_PodCreateGlobalNetworkingRequiresSecureCloud(t *testing.T) {
+	_, stderr, err := runCLI("pod", "create",
+		"--global-networking",
+		"--cloud-type", "community",
+		"--data-center-ids", "US-MO-2",
+		"--image", "ubuntu:22.04",
+		"--gpu-type-id", "NVIDIA GeForce RTX 3090",
+	)
+	if err == nil {
+		t.Fatal("expected error when using --global-networking with community cloud")
+	}
+	lower := strings.ToLower(stderr)
+	if !strings.Contains(lower, "global networking") || !strings.Contains(lower, "secure cloud") {
+		t.Errorf("expected global networking secure cloud error, got: %s", stderr)
+	}
+	if !strings.Contains(lower, "data-center-ids") {
+		t.Errorf("expected data-center-ids hint, got: %s", stderr)
+	}
+}
+
 func TestCLI_PodCreateFromTemplate(t *testing.T) {
 	// create a pod from template
 	stdout, stderr, err := runCLI("pod", "create",

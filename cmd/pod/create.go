@@ -3,6 +3,7 @@ package pod
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/runpod/runpod/internal/api"
@@ -45,6 +46,7 @@ var (
 	createVolumeInGb        int
 	createContainerDiskInGb int
 	createVolumeMountPath   string
+	createGlobalNetworking  bool
 	createPorts             string
 	createEnv               string
 	createCloudType         string
@@ -61,6 +63,7 @@ func init() {
 	createCmd.Flags().IntVar(&createVolumeInGb, "volume-in-gb", 0, "volume size in gb")
 	createCmd.Flags().IntVar(&createContainerDiskInGb, "container-disk-in-gb", 20, "container disk size in gb")
 	createCmd.Flags().StringVar(&createVolumeMountPath, "volume-mount-path", "/workspace", "volume mount path")
+	createCmd.Flags().BoolVar(&createGlobalNetworking, "global-networking", false, "enable global networking (secure cloud only)")
 	createCmd.Flags().StringVar(&createPorts, "ports", "", "comma-separated list of ports (e.g., '8888/http,22/tcp')")
 	createCmd.Flags().StringVar(&createEnv, "env", "", "environment variables as json object")
 	createCmd.Flags().StringVar(&createCloudType, "cloud-type", "SECURE", "cloud type (SECURE or COMMUNITY)")
@@ -92,6 +95,22 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--gpu-type-id is not supported for compute type CPU")
 	}
 
+	cloudType := strings.ToUpper(strings.TrimSpace(createCloudType))
+	if cloudType == "" {
+		cloudType = "SECURE"
+	}
+	if createGlobalNetworking {
+		if computeType != "GPU" {
+			return fmt.Errorf("global networking requires compute type GPU")
+		}
+		if cloudType != "SECURE" {
+			return fmt.Errorf("global networking is only supported on secure cloud (set --cloud-type SECURE)")
+		}
+		if strings.TrimSpace(createDataCenterIDs) != "" {
+			fmt.Fprintln(os.Stderr, "note: global networking availability varies by data center; if create fails, try another secure data center or omit --data-center-ids")
+		}
+	}
+
 	client, err := api.NewClient()
 	if err != nil {
 		output.Error(err)
@@ -103,6 +122,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		ImageName:         createImageName,
 		TemplateID:        createTemplateID,
 		ComputeType:       computeType,
+		GlobalNetworking:  createGlobalNetworking,
 		GpuCount:          createGpuCount,
 		VolumeInGb:        createVolumeInGb,
 		ContainerDiskInGb: createContainerDiskInGb,
@@ -136,10 +156,29 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	pod, err := client.CreatePod(req)
 	if err != nil {
+		if createGlobalNetworking {
+			err = decorateGlobalNetworkingError(err, createDataCenterIDs)
+		}
 		output.Error(err)
 		return fmt.Errorf("failed to create pod: %w", err)
 	}
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
 	return output.Print(pod, &output.Config{Format: format})
+}
+
+func decorateGlobalNetworkingError(err error, dataCenterIDs string) error {
+	if err == nil {
+		return nil
+	}
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "global networking") && !strings.Contains(msg, "globalnetworking") {
+		return err
+	}
+
+	hint := "global networking is only available for on-demand GPU pods in some secure cloud data centers"
+	if strings.TrimSpace(dataCenterIDs) != "" {
+		hint += "; try another secure data center or omit --data-center-ids"
+	}
+	return fmt.Errorf("%s: %w", hint, err)
 }

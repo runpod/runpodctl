@@ -40,6 +40,7 @@ type PodCreateRequest struct {
 	ImageName         string            `json:"imageName,omitempty"`
 	TemplateID        string            `json:"templateId,omitempty"`
 	ComputeType       string            `json:"computeType,omitempty"`
+	GlobalNetworking  bool              `json:"globalNetworking,omitempty"`
 	GpuTypeIDs        []string          `json:"gpuTypeIds,omitempty"`
 	GpuCount          int               `json:"gpuCount,omitempty"`
 	VolumeInGb        int               `json:"volumeInGb,omitempty"`
