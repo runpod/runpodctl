@@ -10,7 +10,7 @@
 
 ## Summary
 
-The CLI now supports `--public-ip` on `runpod pod create`, which maps to the REST `supportPublicIp` field for community cloud.
+The CLI now supports `--public-ip` on `runpodctl pod create`, which maps to the REST `supportPublicIp` field for community cloud.
 
 ---
 
@@ -54,7 +54,7 @@ jojje then demonstrates:
 The CLI now exposes a dedicated flag for the public IP requirement:
 
 ```bash
-runpod pod create --cloud-type community --public-ip --image ubuntu:22.04 --gpu-type-id "NVIDIA GeForce RTX 3090"
+runpodctl pod create --cloud-type community --public-ip --image ubuntu:22.04 --gpu-type-id "NVIDIA GeForce RTX 3090"
 ```
 
 Notes:
@@ -78,7 +78,7 @@ This ensures SSH daemon runs, allowing IDE connections.
 
 ## Implementation Details
 
-- New flag: `--public-ip` on `runpod pod create`
+- New flag: `--public-ip` on `runpodctl pod create`
 - Request field: `supportPublicIp` in the REST create payload
 - Unit + E2E coverage added
 

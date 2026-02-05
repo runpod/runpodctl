@@ -1,6 +1,6 @@
 # AGENTS.md
 
-runpod cli: command-line tool for managing gpu pods, serverless endpoints, and developing serverless applications on runpod.
+runpodctl cli: command-line tool for managing gpu pods, serverless endpoints, and developing serverless applications on runpod.
 
 ## codebase structure
 
@@ -70,7 +70,7 @@ runpod/
 ## configuration
 
 - config file: `~/.runpod/config.toml`
-- api key via: `runpod config --apiKey=xxx`
+- api key via: `runpodctl config --apiKey=xxx`
 - environment override: `RUNPOD_API_KEY`, `RUNPOD_API_URL`
 
 ## build commands
@@ -90,38 +90,38 @@ go test ./...
 
 ## command structure
 
-commands follow noun-verb pattern: `runpod <resource> <action>`
+commands follow noun-verb pattern: `runpodctl <resource> <action>`
 
 | command | description |
 |---------|-------------|
-| `runpod pod list` | list all pods |
-| `runpod pod get <id>` | get pod by id |
-| `runpod pod create --image=<img>` | create a pod |
-| `runpod pod start <id>` | start a stopped pod |
-| `runpod pod stop <id>` | stop a running pod |
-| `runpod pod delete <id>` | delete a pod |
-| `runpod serverless list` | list endpoints (alias: sls) |
-| `runpod serverless get <id>` | get endpoint details |
-| `runpod template list` | list templates (alias: tpl) |
-| `runpod volume list` | list network volumes (alias: vol) |
-| `runpod registry list` | list registry auths (alias: reg) |
-| `runpod send <file>` | send file via croc |
-| `runpod receive <code>` | receive file via croc |
-| `runpod ssh list-keys` | list account ssh keys |
-| `runpod ssh connect <pod>` | show ssh connect command |
-| `runpod project create` | create serverless project |
-| `runpod project dev` | start dev session |
-| `runpod project deploy` | deploy as endpoint |
-| `runpod config --apiKey=xxx` | configure api key |
+| `runpodctl pod list` | list all pods |
+| `runpodctl pod get <id>` | get pod by id |
+| `runpodctl pod create --image=<img>` | create a pod |
+| `runpodctl pod start <id>` | start a stopped pod |
+| `runpodctl pod stop <id>` | stop a running pod |
+| `runpodctl pod delete <id>` | delete a pod |
+| `runpodctl serverless list` | list endpoints (alias: sls) |
+| `runpodctl serverless get <id>` | get endpoint details |
+| `runpodctl template list` | list templates (alias: tpl) |
+| `runpodctl volume list` | list network volumes (alias: vol) |
+| `runpodctl registry list` | list registry auths (alias: reg) |
+| `runpodctl send <file>` | send file via croc |
+| `runpodctl receive <code>` | receive file via croc |
+| `runpodctl ssh list-keys` | list account ssh keys |
+| `runpodctl ssh connect <pod>` | show ssh connect command |
+| `runpodctl project create` | create serverless project |
+| `runpodctl project dev` | start dev session |
+| `runpodctl project deploy` | deploy as endpoint |
+| `runpodctl config --apiKey=xxx` | configure api key |
 
 ## output format
 
 default output is json (for agents). use `--output=table` for human-readable format.
 
 ```bash
-runpod pod list                    # json output
-runpod pod list --output=table     # table output
-runpod pod list --output=yaml      # yaml output
+runpodctl pod list                    # json output
+runpodctl pod list --output=table     # table output
+runpodctl pod list --output=yaml      # yaml output
 ```
 
 ## where to make changes

@@ -25,7 +25,7 @@ var removeCmd = &cobra.Command{
 var RemoveModelCmd = &cobra.Command{
 	Use:    "model",
 	Args:   cobra.ExactArgs(0),
-	Short:  "deprecated: use 'runpod model remove'",
+	Short:  "deprecated: use 'runpodctl model remove'",
 	Long:   "",
 	Hidden: true,
 	Run:    runRemoveModel,

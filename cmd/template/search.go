@@ -17,10 +17,10 @@ var searchCmd = &cobra.Command{
 searches official and community templates by default.
 
 examples:
-  runpod template search pytorch            # search for "pytorch" templates
-  runpod template search comfyui            # search for "comfyui" templates
-  runpod template search llama --limit 5    # search, limit to 5 results
-  runpod template search vllm --type official  # search only official templates`,
+  runpodctl template search pytorch            # search for "pytorch" templates
+  runpodctl template search comfyui            # search for "comfyui" templates
+  runpodctl template search llama --limit 5    # search, limit to 5 results
+  runpodctl template search vllm --type official  # search only official templates`,
 	Args: cobra.ExactArgs(1),
 	RunE: runSearch,
 }

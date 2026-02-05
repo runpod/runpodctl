@@ -9,8 +9,8 @@ import (
 func TestRootCmd_Structure(t *testing.T) {
 	root := GetRootCmd()
 
-	if root.Use != "runpod" {
-		t.Errorf("expected use 'runpod', got %s", root.Use)
+	if root.Use != "runpodctl" {
+		t.Errorf("expected use 'runpodctl', got %s", root.Use)
 	}
 }
 

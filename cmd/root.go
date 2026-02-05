@@ -30,13 +30,13 @@ var outputFormat string
 
 // rootCmd is the base command
 var rootCmd = &cobra.Command{
-	Use:   "runpod",
+	Use:   "runpodctl",
 	Short: "cli for runpod.io",
-	Long: `runpod cli - manage gpu pods, serverless endpoints, and more.
+	Long: `runpodctl cli - manage gpu pods, serverless endpoints, and more.
 
 getting started:
   1. get your api key at https://www.runpod.io/console/user/settings
-  2. run: runpod doctor (will prompt for key and save it)
+  2. run: runpodctl doctor (will prompt for key and save it)
   or: export RUNPOD_API_KEY=your-key
 
 resources:
@@ -58,7 +58,7 @@ utilities:
   ssh            manage ssh keys and connections
   send/receive   transfer files to/from pods
 
-runpod v2 (formerly runpodctl) - legacy commands still supported
+runpodctl v2 - legacy commands still supported
 legacy (deprecated): (get, create, remove, start, stop, exec, project, config, get models)`,
 }
 
@@ -133,16 +133,16 @@ func registerCommands() {
 
 	// Legacy config command (hidden, still works with --apiKey flag)
 	config.ConfigCmd.Hidden = true
-	config.ConfigCmd.Short = "deprecated: use 'runpod doctor'"
+	config.ConfigCmd.Short = "deprecated: use 'runpodctl doctor'"
 	config.ConfigCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
-		fmt.Fprintln(os.Stderr, "warning: 'runpod config' is deprecated, use 'runpod doctor' instead")
+		fmt.Fprintln(os.Stderr, "warning: 'runpodctl config' is deprecated, use 'runpodctl doctor' instead")
 	}
 	rootCmd.AddCommand(config.ConfigCmd)
 
 	// Version flag
 	rootCmd.Version = version
-	rootCmd.Flags().BoolP("version", "v", false, "print the version of runpod")
-	rootCmd.SetVersionTemplate(`runpod {{ .Version }} (formerly runpodctl)
+	rootCmd.Flags().BoolP("version", "v", false, "print the version of runpodctl")
+	rootCmd.SetVersionTemplate(`runpodctl {{ .Version }}
 `)
 }
 
@@ -150,7 +150,7 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "print the version",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("runpod %s (formerly runpodctl)\n", version)
+		fmt.Printf("runpodctl %s\n", version)
 	},
 }
 

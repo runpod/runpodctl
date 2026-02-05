@@ -29,7 +29,7 @@ func ResolveKeyInfo(client *api.GraphQLClient) KeyInfo {
 	info := KeyInfo{
 		Path:   keyPath,
 		Exists: exists,
-		Source: "runpod doctor",
+		Source: "runpodctl doctor",
 	}
 	if !exists {
 		return info
@@ -86,7 +86,7 @@ func BuildConnection(pod *api.LegacyPod, keyInfo KeyInfo) map[string]interface{}
 				"ssh_key":     keyInfo,
 			}
 			if !keyInfo.Exists || (keyInfo.InAccount != nil && !*keyInfo.InAccount) {
-				conn["setup"] = "runpod doctor"
+				conn["setup"] = "runpodctl doctor"
 			}
 			return conn
 		}

@@ -13,15 +13,15 @@ var listCmd = &cobra.Command{
 	Long: `list templates including official, community, and user templates.
 
 by default shows official + community templates (limited to 10).
-use 'runpod template search <term>' to search for specific templates.
+use 'runpodctl template search <term>' to search for specific templates.
 
 examples:
-  runpod template list                      # official + community (first 10)
-  runpod template list --type official      # all official templates (no limit)
-  runpod template list --type community     # community templates (first 10)
-  runpod template list --type user          # all your own templates (no limit)
-  runpod template list --all                # everything including user templates
-  runpod template list --limit 50           # show 50 templates`,
+  runpodctl template list                      # official + community (first 10)
+  runpodctl template list --type official      # all official templates (no limit)
+  runpodctl template list --type community     # community templates (first 10)
+  runpodctl template list --type user          # all your own templates (no limit)
+  runpodctl template list --all                # everything including user templates
+  runpodctl template list --limit 50           # show 50 templates`,
 	Args: cobra.NoArgs,
 	RunE: runList,
 }

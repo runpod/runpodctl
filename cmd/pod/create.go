@@ -21,17 +21,17 @@ you can create a pod either from a template or by specifying an image directly.
 
 examples:
   # create from template (recommended)
-  runpod pod create --template runpod-torch-v21 --gpu-type-id "NVIDIA RTX 4090"
+  runpodctl pod create --template runpod-torch-v21 --gpu-type-id "NVIDIA RTX 4090"
 
   # create with custom image
-  runpod pod create --image runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04 --gpu-type-id "NVIDIA RTX 4090"
+  runpodctl pod create --image runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04 --gpu-type-id "NVIDIA RTX 4090"
 
   # create a cpu pod
-  runpod pod create --compute-type cpu --image ubuntu:22.04
+  runpodctl pod create --compute-type cpu --image ubuntu:22.04
 
   # find templates first
-  runpod template search pytorch
-  runpod template list --type official`,
+  runpodctl template search pytorch
+  runpodctl template list --type official`,
 	Args: cobra.NoArgs,
 	RunE: runCreate,
 }
@@ -56,10 +56,10 @@ var (
 
 func init() {
 	createCmd.Flags().StringVar(&createName, "name", "", "pod name")
-	createCmd.Flags().StringVar(&createTemplateID, "template", "", "template id (use 'runpod template search' to find templates)")
+	createCmd.Flags().StringVar(&createTemplateID, "template", "", "template id (use 'runpodctl template search' to find templates)")
 	createCmd.Flags().StringVar(&createImageName, "image", "", "docker image name (required if no template)")
 	createCmd.Flags().StringVar(&createComputeType, "compute-type", "GPU", "compute type (GPU or CPU)")
-	createCmd.Flags().StringVar(&createGpuTypeID, "gpu-type-id", "", "gpu type id (from 'runpod gpu list')")
+	createCmd.Flags().StringVar(&createGpuTypeID, "gpu-type-id", "", "gpu type id (from 'runpodctl gpu list')")
 	createCmd.Flags().IntVar(&createGpuCount, "gpu-count", 1, "number of gpus")
 	createCmd.Flags().IntVar(&createVolumeInGb, "volume-in-gb", 0, "volume size in gb")
 	createCmd.Flags().IntVar(&createContainerDiskInGb, "container-disk-in-gb", 20, "container disk size in gb")
@@ -75,7 +75,7 @@ func init() {
 func runCreate(cmd *cobra.Command, args []string) error {
 	// Validate: either template or image must be provided
 	if createTemplateID == "" && createImageName == "" {
-		return fmt.Errorf("either --template or --image is required\n\nuse 'runpod template search <term>' to find templates")
+		return fmt.Errorf("either --template or --image is required\n\nuse 'runpodctl template search <term>' to find templates")
 	}
 
 	computeType := strings.ToUpper(strings.TrimSpace(createComputeType))

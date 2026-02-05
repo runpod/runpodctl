@@ -89,7 +89,7 @@ var addCmd = &cobra.Command{
 var AddModelToRepoCmd = &cobra.Command{
 	Use:    "model",
 	Args:   cobra.ExactArgs(0),
-	Short:  "deprecated: use 'runpod model add'",
+	Short:  "deprecated: use 'runpodctl model add'",
 	Long:   "",
 	Hidden: true,
 	Run:    runAddModel,

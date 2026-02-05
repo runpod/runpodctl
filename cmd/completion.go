@@ -12,7 +12,7 @@ import (
 var completionCmd = &cobra.Command{
 	Use:   "completion",
 	Short: "install shell completion",
-	Long:  "install shell completion for runpod (auto-detects your shell)",
+	Long:  "install shell completion for runpodctl (auto-detects your shell)",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return installCompletion()
@@ -51,7 +51,7 @@ func detectShell() string {
 	}
 
 	// default to bash if we can't detect
-	fmt.Fprintln(os.Stderr, "could not detect shell, defaulting to bash. specify shell: runpod completion [bash|zsh|fish|powershell]")
+	fmt.Fprintln(os.Stderr, "could not detect shell, defaulting to bash. specify shell: runpodctl completion [bash|zsh|fish|powershell]")
 	return "bash"
 }
 
@@ -68,12 +68,12 @@ func installCompletion() error {
 	switch shell {
 	case "bash":
 		configFile = filepath.Join(home, ".bashrc")
-		completionLine = "source <(runpod completion generate bash)"
+		completionLine = "source <(runpodctl completion generate bash)"
 	case "zsh":
 		configFile = filepath.Join(home, ".zshrc")
-		completionLine = "source <(runpod completion generate zsh)"
+		completionLine = "source <(runpodctl completion generate zsh)"
 	case "fish":
-		configFile = filepath.Join(home, ".config", "fish", "completions", "runpod.fish")
+		configFile = filepath.Join(home, ".config", "fish", "completions", "runpodctl.fish")
 		// for fish, we write the completion directly
 		if err := os.MkdirAll(filepath.Dir(configFile), 0755); err != nil {
 			return fmt.Errorf("could not create fish completions dir: %w", err)
@@ -91,7 +91,7 @@ func installCompletion() error {
 		return nil
 	case "powershell":
 		fmt.Fprintln(os.Stderr, "for powershell, add this to your profile:")
-		fmt.Fprintln(os.Stderr, "  runpod completion generate powershell | Out-String | Invoke-Expression")
+		fmt.Fprintln(os.Stderr, "  runpodctl completion generate powershell | Out-String | Invoke-Expression")
 		return nil
 	default:
 		return fmt.Errorf("unknown shell: %s", shell)
@@ -99,7 +99,7 @@ func installCompletion() error {
 
 	// check if already installed
 	content, err := os.ReadFile(configFile)
-	if err == nil && strings.Contains(string(content), "runpod completion") {
+	if err == nil && strings.Contains(string(content), "runpodctl completion") {
 		fmt.Fprintf(os.Stderr, "completion already installed in %s\n", configFile)
 		return nil
 	}
@@ -111,7 +111,7 @@ func installCompletion() error {
 	}
 	defer f.Close()
 
-	if _, err := f.WriteString("\n# runpod cli completion\n" + completionLine + "\n"); err != nil {
+	if _, err := f.WriteString("\n# runpodctl cli completion\n" + completionLine + "\n"); err != nil {
 		return fmt.Errorf("could not write to %s: %w", configFile, err)
 	}
 
@@ -127,7 +127,7 @@ var generateCompletionCmd = &cobra.Command{
 	Long:      "output the completion script for manual installation or piping",
 	ValidArgs: []string{"bash", "zsh", "fish", "powershell"},
 	Args:      cobra.MaximumNArgs(1),
-	Hidden:    true, // hidden - most users just need 'runpod completion'
+	Hidden:    true, // hidden - most users just need 'runpodctl completion'
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var shell string
 		if len(args) > 0 {

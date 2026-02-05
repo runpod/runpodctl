@@ -18,7 +18,7 @@ import (
 var sshCmd = &cobra.Command{
 	Use:   "ssh",
 	Short: "manage ssh keys and connections",
-	Long:  "manage ssh keys and show ssh info for pods. uses the api key from RUNPOD_API_KEY or ~/.runpod/config.toml (runpod doctor).",
+	Long:  "manage ssh keys and show ssh info for pods. uses the api key from RUNPOD_API_KEY or ~/.runpod/config.toml (runpodctl doctor).",
 }
 
 var sshListKeysCmd = &cobra.Command{
@@ -45,10 +45,10 @@ var sshInfoCmd = &cobra.Command{
 
 var sshConnectCmd = &cobra.Command{
 	Use:        "connect [pod-id]",
-	Short:      "deprecated: use 'runpod ssh info'",
-	Long:       "deprecated alias for 'runpod ssh info'",
+	Short:      "deprecated: use 'runpodctl ssh info'",
+	Long:       "deprecated alias for 'runpodctl ssh info'",
 	Args:       cobra.MaximumNArgs(1),
-	Deprecated: "use 'runpod ssh info' instead",
+	Deprecated: "use 'runpodctl ssh info' instead",
 	Hidden:     true,
 	RunE:       runSSHConnectLegacy,
 }

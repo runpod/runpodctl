@@ -40,7 +40,7 @@ func NewGraphQLClient() (*GraphQLClient, error) {
 		apiKey = viper.GetString("apiKey")
 	}
 	if apiKey == "" {
-		return nil, fmt.Errorf("api key not found. run 'runpod config --apiKey=xxx' or set RUNPOD_API_KEY")
+		return nil, fmt.Errorf("api key not found. run 'runpodctl config --apiKey=xxx' or set RUNPOD_API_KEY")
 	}
 
 	apiURL := os.Getenv("RUNPOD_GRAPHQL_URL")

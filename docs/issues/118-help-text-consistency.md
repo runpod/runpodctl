@@ -74,7 +74,7 @@ None.
 - ✅ Capitalization is consistent (all lowercase)
 - ✅ No "(s)" in send/receive or other command descriptions
 **How to verify:**
-- `runpod --help` shows lowercase descriptions
+- `runpodctl --help` shows lowercase descriptions
 - `send`/`receive` descriptions use proper plural wording
 
 ---

@@ -6,7 +6,7 @@ COMMIT = git rev-parse HEAD 2>/dev/null || echo "unknown"
 
 local:
 	@COMMIT=$$($(COMMIT)); \
-	go build -mod=mod -ldflags "-s -w -X main.Version=dev-$$COMMIT" -o bin/runpod .
+	go build -mod=mod -ldflags "-s -w -X main.Version=dev-$$COMMIT" -o bin/runpodctl .
 
 release: buildall strip compress
 
@@ -22,7 +22,7 @@ strip:
 define build-target
 	@VERSION=$$($(VERSION)); \
 	COMMIT=$$($(COMMIT)); \
-	env CGO_ENABLED=0 GOOS=$(1) GOARCH=$(2) go build -mod=mod -ldflags "-s -w -X main.Version=$$VERSION-$$COMMIT" -o bin/runpod-$(1)-$(2)$(3) .
+	env CGO_ENABLED=0 GOOS=$(1) GOARCH=$(2) go build -mod=mod -ldflags "-s -w -X main.Version=$$VERSION-$$COMMIT" -o bin/runpodctl-$(1)-$(2)$(3) .
 endef
 
 # Platform-specific targets

@@ -11,7 +11,7 @@
   - Add E2E coverage
 
 - #152 Python version for exec
-  - Add `--python` flag to `runpod exec python` (default `python3`)
+  - Add `--python` flag to `runpodctl exec python` (default `python3`)
   - Use the flag when running remote commands
   - Add unit test for flag handling
 

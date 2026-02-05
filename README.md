@@ -1,16 +1,16 @@
 <div align="center">
 
-# runpod cli
+# runpodctl cli
 
-runpod is the cli tool to manage gpu pods, serverless endpoints, and more on [runpod.io](https://runpod.io).
+runpodctl is the cli tool to manage gpu pods, serverless endpoints, and more on [runpod.io](https://runpod.io).
 
-_note: all pods automatically come with runpod cli installed with a pod-scoped api key._
+_note: all pods automatically come with runpodctl installed with a pod-scoped api key._
 
 </div>
 
 ## table of contents
 
-- [runpod cli](#runpod-cli)
+- [runpodctl cli](#runpodctl-cli)
   - [table of contents](#table-of-contents)
   - [get started](#get-started)
     - [install](#install)
@@ -45,54 +45,54 @@ brew install runpod/runpodctl/runpodctl
 #### windows powershell
 
 ```powershell
-wget https://github.com/runpod/runpodctl/releases/latest/download/runpod-windows-amd64.exe -O runpod.exe
+wget https://github.com/runpod/runpodctl/releases/latest/download/runpodctl-windows-amd64.exe -O runpodctl.exe
 ```
 
 ## quick start
 
 ```bash
 # configure api key
-runpod config --apiKey=your_api_key
+runpodctl config --apiKey=your_api_key
 
 # list all pods
-runpod pod list
+runpodctl pod list
 
 # get a specific pod
-runpod pod get pod_id
+runpodctl pod get pod_id
 
 # create a pod
-runpod pod create --image=runpod/pytorch:latest --gpu-type-id=NVIDIA_A100
+runpodctl pod create --image=runpod/pytorch:latest --gpu-type-id=NVIDIA_A100
 
 # start/stop/delete a pod
-runpod pod start pod_id
-runpod pod stop pod_id
-runpod pod delete pod_id
+runpodctl pod start pod_id
+runpodctl pod stop pod_id
+runpodctl pod delete pod_id
 ```
 
 ## commands
 
-commands follow noun-verb pattern: `runpod <resource> <action>`
+commands follow noun-verb pattern: `runpodctl <resource> <action>`
 
 ### pod management
 
 ```bash
-runpod pod list                    # list all pods
-runpod pod get <id>                # get pod details
-runpod pod create --image=<img>    # create a pod
-runpod pod update <id>             # update a pod
-runpod pod start <id>              # start a stopped pod
-runpod pod stop <id>               # stop a running pod
-runpod pod delete <id>             # delete a pod
+runpodctl pod list                    # list all pods
+runpodctl pod get <id>                # get pod details
+runpodctl pod create --image=<img>    # create a pod
+runpodctl pod update <id>             # update a pod
+runpodctl pod start <id>              # start a stopped pod
+runpodctl pod stop <id>               # stop a running pod
+runpodctl pod delete <id>             # delete a pod
 ```
 
 ### serverless endpoints
 
 ```bash
-runpod serverless list             # list endpoints (alias: sls)
-runpod serverless get <id>         # get endpoint details
-runpod serverless create           # create endpoint
-runpod serverless update <id>      # update endpoint
-runpod serverless delete <id>      # delete endpoint
+runpodctl serverless list             # list endpoints (alias: sls)
+runpodctl serverless get <id>         # get endpoint details
+runpodctl serverless create           # create endpoint
+runpodctl serverless update <id>      # update endpoint
+runpodctl serverless delete <id>      # delete endpoint
 ```
 
 other resources: `template` (alias: `tpl`), `volume` (alias: `vol`), `registry` (alias: `reg`)
@@ -103,11 +103,11 @@ send and receive files without api key using croc:
 
 ```bash
 # send a file
-runpod send data.txt
+runpodctl send data.txt
 # output: code is: 8338-galileo-collect-fidel
 
 # receive on another computer
-runpod receive 8338-galileo-collect-fidel
+runpodctl receive 8338-galileo-collect-fidel
 ```
 
 ## output format
@@ -115,9 +115,9 @@ runpod receive 8338-galileo-collect-fidel
 default output is json (optimized for agents). use `--output` flag for alternatives:
 
 ```bash
-runpod pod list                    # json (default)
-runpod pod list --output=table     # human-readable table
-runpod pod list --output=yaml      # yaml format
+runpodctl pod list                    # json (default)
+runpodctl pod list --output=table     # human-readable table
+runpodctl pod list --output=yaml      # yaml format
 ```
 
 ## legacy commands

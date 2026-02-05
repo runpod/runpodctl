@@ -121,63 +121,62 @@ Attempted open web search via `WebFetch` (Bing/DuckDuckGo) repeatedly timed out,
 
 ## Compatibility check (docs vs new CLI)
 
-The current branch renames the binary to `runpod` and reorganizes commands into noun-verb groups. Legacy wrappers exist for core old commands, but docs still reference `runpodctl`.
+The current branch keeps the binary as `runpodctl` and reorganizes commands into noun-verb groups. Legacy wrappers exist for core old commands.
 
 | Documented `runpodctl` command | Status in new CLI | Replacement / notes |
 | --- | --- | --- |
-| `runpodctl config --apiKey` | Deprecated | `runpod doctor` (legacy `runpod config` still exists but hidden) |
-| `runpodctl create pod` | Supported | `runpod pod create` (legacy `runpod create pod` hidden) |
-| `runpodctl create pods` | Potential gap | Bulk-create is not exposed in new root commands; needs confirmation or docs update |
-| `runpodctl get pod` | Supported | `runpod pod list` (legacy `runpod get pod` hidden) |
-| `runpodctl get pod <id>` | Supported | `runpod pod get <id>` |
-| `runpodctl get cloud` | Replaced | `runpod gpu list` and `runpod datacenter list` provide availability |
-| `runpodctl start pod` | Supported | `runpod pod start` (legacy `runpod start pod` hidden) |
-| `runpodctl stop pod` | Supported | `runpod pod stop` (legacy `runpod stop pod` hidden) |
-| `runpodctl remove pod` | Supported | `runpod pod delete` (legacy `runpod remove pod` hidden) |
-| `runpodctl remove pods` | Potential gap | Bulk delete not exposed in new root commands |
-| `runpodctl send` / `receive` | Supported | `runpod send` / `runpod receive` (transfer subsystem retained) |
-| `runpodctl ssh list-keys` | Supported | `runpod ssh list-keys` |
-| `runpodctl ssh add-key` | Supported | `runpod ssh add-key` |
-| `runpodctl ssh connect` | Deprecated | `runpod ssh info` (legacy alias exists) |
-| `runpodctl update` | Supported | `runpod update` |
-| `runpodctl version` | Supported | `runpod version` or `runpod --version` |
+| `runpodctl config --apiKey` | Deprecated | `runpodctl doctor` (legacy `runpodctl config` still exists but hidden) |
+| `runpodctl create pod` | Supported | `runpodctl pod create` (legacy `runpodctl create pod` hidden) |
+| `runpodctl create pods` | Supported | legacy bulk-create via `runpodctl create pods` |
+| `runpodctl get pod` | Supported | `runpodctl pod list` (legacy `runpodctl get pod` hidden) |
+| `runpodctl get pod <id>` | Supported | `runpodctl pod get <id>` |
+| `runpodctl get cloud` | Replaced | `runpodctl gpu list` and `runpodctl datacenter list` provide availability |
+| `runpodctl start pod` | Supported | `runpodctl pod start` (legacy `runpodctl start pod` hidden) |
+| `runpodctl stop pod` | Supported | `runpodctl pod stop` (legacy `runpodctl stop pod` hidden) |
+| `runpodctl remove pod` | Supported | `runpodctl pod delete` (legacy `runpodctl remove pod` hidden) |
+| `runpodctl remove pods` | Supported | legacy bulk-delete via `runpodctl remove pods` |
+| `runpodctl send` / `receive` | Supported | `runpodctl send` / `runpodctl receive` (transfer subsystem retained) |
+| `runpodctl ssh list-keys` | Supported | `runpodctl ssh list-keys` |
+| `runpodctl ssh add-key` | Supported | `runpodctl ssh add-key` |
+| `runpodctl ssh connect` | Deprecated | `runpodctl ssh info` (legacy alias exists) |
+| `runpodctl update` | Supported | `runpodctl update` |
+| `runpodctl version` | Supported | `runpodctl version` or `runpodctl --version` |
 
 ## New capabilities in the current branch (vs origin/main)
 
 ### Resource coverage expansion
 
-- Serverless endpoints: `runpod serverless list/get/create/update/delete`
-- Templates: `runpod template list/get/search/create/update/delete`
-- Network volumes: `runpod volume list/get/create/update/delete`
-- Container registry auth: `runpod registry list/get/create/delete`
-- Model repository: `runpod model list/add/remove` with upload workflow support
+- Serverless endpoints: `runpodctl serverless list/get/create/update/delete`
+- Templates: `runpodctl template list/get/search/create/update/delete`
+- Network volumes: `runpodctl volume list/get/create/update/delete`
+- Container registry auth: `runpodctl registry list/get/create/delete`
+- Model repository: `runpodctl model list/add/remove` with upload workflow support
 
 ### Account, availability, and cost visibility
 
-- `runpod user` shows account info including balance and spend
-- `runpod billing` history for pods, serverless, and network volumes
-- `runpod gpu list` for GPU types and availability
-- `runpod datacenter list` for availability by region
+- `runpodctl user` shows account info including balance and spend
+- `runpodctl billing` history for pods, serverless, and network volumes
+- `runpodctl gpu list` for GPU types and availability
+- `runpodctl datacenter list` for availability by region
 
 ### Pod workflow improvements
 
-- Unified `runpod pod` group with `list/get/create/update/start/stop/restart/reset/delete`
+- Unified `runpodctl pod` group with `list/get/create/update/start/stop/restart/reset/delete`
 - Template-first pod creation with explicit flags for data centers, ports, and mount paths
 - Standardized output formatting (`--output json|yaml`)
 
 ### Operational and UX improvements
 
-- `runpod doctor` for configuration and SSH key setup (replaces `runpodctl config`)
-- `runpod ssh info` shows SSH command + key status
-- `runpod completion` for shell completions
+- `runpodctl doctor` for configuration and SSH key setup (replaces `runpodctl config`)
+- `runpodctl ssh info` shows SSH command + key status
+- `runpodctl completion` for shell completions
 - Hidden legacy commands preserve old `runpodctl` syntax to reduce breakage
 
 ## Risks, mitigations, and next steps
 
-- Docs and install paths still reference `runpodctl` while the new binary is `runpod`. Update docs and distribution scripts to avoid user confusion.
+- Docs and install paths should continue to reference `runpodctl` to avoid user confusion.
 - The most-used doc examples (`create pods`, `remove pods`) do not map cleanly to new commands; either re-expose bulk operations or update docs with new equivalents.
 - Publish a migration guide:
-  - `runpodctl` -> `runpod` binary rename
   - Old -> new command mappings (table above)
   - Legacy compatibility window and deprecation timelines
 - Re-run install instructions on base images to ensure the correct binary/version is installed.

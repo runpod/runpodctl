@@ -32,7 +32,7 @@ var GetModelsCmd = &cobra.Command{
 	Use:     "models",
 	Aliases: []string{"model"},
 	Args:    cobra.ExactArgs(0),
-	Short:   "deprecated: use 'runpod model list'",
+	Short:   "deprecated: use 'runpodctl model list'",
 	Hidden:  true,
 	Run:     runModelList,
 }

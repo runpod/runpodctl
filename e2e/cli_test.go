@@ -16,11 +16,11 @@ import (
 	"unicode/utf8"
 )
 
-// runCLI runs the runpod CLI and returns stdout, stderr, and error
+// runCLI runs the runpodctl CLI and returns stdout, stderr, and error
 func runCLI(args ...string) (string, string, error) {
 	// use the binary from go/bin
 	home, _ := os.UserHomeDir()
-	binary := home + "/go/bin/runpod"
+	binary := home + "/go/bin/runpodctl"
 
 	cmd := exec.Command(binary, args...)
 	var stdout, stderr bytes.Buffer
@@ -34,7 +34,7 @@ func runCLI(args ...string) (string, string, error) {
 func runCLIWithInput(dir string, input string, args ...string) (string, string, error) {
 	// use the binary from go/bin
 	home, _ := os.UserHomeDir()
-	binary := home + "/go/bin/runpod"
+	binary := home + "/go/bin/runpodctl"
 
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = dir
@@ -262,6 +262,9 @@ func TestCLI_PodCreateRequiresTemplateOrImage(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "either --template or --image is required") {
 		t.Errorf("expected error about template or image, got: %s", stderr)
+	}
+	if !strings.Contains(stderr, "runpodctl template search") {
+		t.Errorf("expected runpodctl hint in error, got: %s", stderr)
 	}
 }
 

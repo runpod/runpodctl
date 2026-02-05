@@ -152,16 +152,16 @@ func runReceive(cmd *cobra.Command, args []string) {
 	sharedSecretCode := args[0]
 	split := strings.Split(sharedSecretCode, "-")
 	if len(split) < 2 {
-		logger.Fatalf("malformed code %q: expected at least 2 parts separated by dashes, but got %v. please retry 'runpod send' to generate a valid code.", sharedSecretCode, len(split))
+		logger.Fatalf("malformed code %q: expected at least 2 parts separated by dashes, but got %v. please retry 'runpodctl send' to generate a valid code.", sharedSecretCode, len(split))
 	}
 
 	relayIndex, err := strconv.Atoi(split[len(split)-1])
 	if err != nil {
-		logger.Fatalf("malformed relay, please retry 'runpod send' to generate a valid code.")
+		logger.Fatalf("malformed relay, please retry 'runpodctl send' to generate a valid code.")
 	}
 
 	if relayIndex < 0 || relayIndex >= len(relays) {
-		logger.Fatalf("relay index %d not found; please retry 'runpod send' to generate a valid code.", relayIndex)
+		logger.Fatalf("relay index %d not found; please retry 'runpodctl send' to generate a valid code.", relayIndex)
 	}
 	relay := relays[relayIndex]
 

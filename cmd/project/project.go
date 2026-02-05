@@ -240,7 +240,7 @@ var NewProjectCmd = &cobra.Command{
 		// Create Project
 		createNewProject(projectName, cudaVersion, pythonVersion, modelType, modelName, initCurrentDir)
 		fmt.Printf("\nProject %s created successfully! \nNavigate to your project directory with `cd %s`\n\n", projectName, projectName)
-		fmt.Println("tip: run `runpod project dev` to start a development session for your project.")
+		fmt.Println("tip: run `runpodctl project dev` to start a development session for your project.")
 	},
 }
 

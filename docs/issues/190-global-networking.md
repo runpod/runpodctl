@@ -14,7 +14,7 @@ Global networking is now supported in the CLI via a dedicated flag on pod creati
 
 ```bash
 # Enable global networking (secure cloud only)
-runpod pod create --global-networking --image ubuntu:latest --gpu-type-id "NVIDIA RTX 4090"
+runpodctl pod create --global-networking --image ubuntu:latest --gpu-type-id "NVIDIA RTX 4090"
 ```
 
 Notes:
@@ -45,7 +45,7 @@ RunPod's "Global Networking" feature allows pods in different data centers/regio
 
 ## How It's Implemented
 
-- New flag: `--global-networking` on `runpod pod create`
+- New flag: `--global-networking` on `runpodctl pod create`
 - Request field: `globalNetworking` in the REST create payload
 - CLI validation enforces GPU + secure cloud constraints
 - Errors are decorated with a hint when the API rejects global networking

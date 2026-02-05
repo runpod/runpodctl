@@ -33,7 +33,7 @@ func init() {
 	createCmd.Flags().StringVar(&createName, "name", "", "endpoint name")
 	createCmd.Flags().StringVar(&createTemplateID, "template-id", "", "template id (required)")
 	createCmd.Flags().StringVar(&createComputeType, "compute-type", "GPU", "compute type (GPU or CPU)")
-	createCmd.Flags().StringVar(&createGpuTypeID, "gpu-type-id", "", "gpu type id (from 'runpod gpu list')")
+	createCmd.Flags().StringVar(&createGpuTypeID, "gpu-type-id", "", "gpu type id (from 'runpodctl gpu list')")
 	createCmd.Flags().IntVar(&createGpuCount, "gpu-count", 1, "number of gpus per worker")
 	createCmd.Flags().IntVar(&createWorkersMin, "workers-min", 0, "minimum number of workers")
 	createCmd.Flags().IntVar(&createWorkersMax, "workers-max", 3, "maximum number of workers")
