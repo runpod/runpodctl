@@ -4,12 +4,13 @@
 **Type:** Polish/Documentation
 **Priority:** Low
 **Effort:** 20-30 minutes
+**Status:** ✅ RESOLVED
 
 ---
 
 ## Summary
 
-Help command strings are inconsistent - some start with capital letters, others don't. Also uses "(s)" for optional plurals which violates Google's style guide.
+Help command strings were inconsistent (capitalization and "(s)" plurals). The CLI now uses consistent lowercase help text and avoids "(s)" in command descriptions.
 
 ---
 
@@ -69,64 +70,25 @@ None.
 
 ## Current State (New CLI)
 
-Let me check if the new CLI has the same issues:
-
-```
-Available Commands:
-  billing        view billing history
-  completion     install shell completion
-  datacenter     list datacenters
-  doctor         diagnose and fix cli issues
-  gpu            list available gpu types
-  help           Help about any command
-  model          manage model repository
-  network-volume manage network volumes
-  pod            manage gpu pods
-  receive        receive file(s) or folder    <-- still has (s)
-  registry       manage container registry auth
-  send           send file(s) or folder       <-- still has (s)
-  serverless     manage serverless endpoints
-  ssh            manage ssh keys and connections
-  template       manage templates
-  update         update runpod cli
-  user           show account info
-  version        print the version
-```
-
 **New CLI status:**
-- ✅ Capitalization is now consistent (all lowercase)
-- ❌ Still uses "(s)" in send/receive
+- ✅ Capitalization is consistent (all lowercase)
+- ✅ No "(s)" in send/receive or other command descriptions
+**How to verify:**
+- `runpod --help` shows lowercase descriptions
+- `send`/`receive` descriptions use proper plural wording
 
 ---
 
-## Recommended Fix
+## Resolution
 
-Update `cmd/transfer/transfer.go` (or wherever send/receive are defined):
-
-**Before:**
-```go
-Short: "receive file(s) or folder"
-Short: "send file(s) or folder"
-```
-
-**After:**
-```go
-Short: "receive files or folders"
-Short: "send files or folders"
-```
-
-Or use singular:
-```go
-Short: "receive a file or folder"
-Short: "send a file or folder"
-```
+Command help text is now consistent and lowercase across the CLI. `(s)` patterns were removed in favor of proper plurals.
 
 ---
 
-## Files to Modify
+## Files Updated
 
-1. `cmd/transfer/transfer.go` - send and receive short descriptions
-2. Any other files with "(s)" pattern (search for it)
+1. `cmd/transfer/transfer.go` and `cmd/croc/*.go` - send/receive descriptions
+2. Command help strings across `cmd/` for consistent lowercase
 
 ---
 
@@ -141,15 +103,6 @@ Short: "send a file or folder"
 
 ## Recommendation
 
-**⚠️ LOW PRIORITY - Do eventually**
+**✅ RESOLVED - Close the GitHub issue**
 
-This is valid feedback but should not be prioritized over functional issues like #152 and #161.
-
-**When to do it:**
-- During a "cleanup" pass before a major release
-- When you have spare time between higher-priority tasks
-- As a good first issue for a new contributor
-
-**Don't:**
-- Rush this before more important fixes
-- Spend more than 20-30 minutes on it
+Help text is now consistent and avoids optional plurals.

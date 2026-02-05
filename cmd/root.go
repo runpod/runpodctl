@@ -121,6 +121,9 @@ func registerCommands() {
 	// Update command
 	rootCmd.AddCommand(updateCmd)
 
+	// Help command (lowercase description)
+	rootCmd.SetHelpCommand(newHelpCmd(rootCmd))
+
 	// Legacy commands (hidden, for backwards compatibility)
 	rootCmd.AddCommand(legacy.GetCmd)
 	rootCmd.AddCommand(legacy.CreateCmd)
@@ -149,6 +152,29 @@ var versionCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Printf("runpod %s (formerly runpodctl)\n", version)
 	},
+}
+
+func newHelpCmd(root *cobra.Command) *cobra.Command {
+	return &cobra.Command{
+		Use:   "help [command]",
+		Short: "help about any command",
+		Long:  "help about any command",
+		Args:  cobra.ArbitraryArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			target := root
+			if len(args) == 0 {
+				_ = target.Help()
+				return
+			}
+			c, _, err := target.Find(args)
+			if err != nil || c == nil {
+				fmt.Fprintf(os.Stderr, "unknown help topic %q\n", args)
+				_ = target.Help()
+				return
+			}
+			_ = c.Help()
+		},
+	}
 }
 
 // Execute runs the root command

@@ -10,7 +10,7 @@ import (
 var RemotePythonCmd = &cobra.Command{
 	Use:   "python [file]",
 	Short: "deprecated: use ssh instead (still supported)",
-	Long:  `Deprecated. This command is kept for backward compatibility. Use 'runpod ssh info <pod-id>' and run your script over SSH.`,
+	Long:  `deprecated. this command is kept for backward compatibility. use 'runpod ssh info <pod-id>' and run your script over ssh.`,
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		podID, _ := cmd.Flags().GetString("pod_id")

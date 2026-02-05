@@ -8,9 +8,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // runCLI runs the runpod CLI and returns stdout, stderr, and error
@@ -158,6 +161,32 @@ func TestCLI_Help(t *testing.T) {
 	}
 	if stdout == "" {
 		t.Error("expected help output")
+	}
+}
+
+func TestCLI_HelpTextConsistency(t *testing.T) {
+	stdout, _, err := runCLI("--help")
+	if err != nil {
+		t.Fatalf("failed to run --help: %v", err)
+	}
+	if strings.Contains(stdout, "(s)") {
+		t.Error("help output should not contain '(s)'")
+	}
+
+	re := regexp.MustCompile(`^\\s{2}([a-z0-9-]+)\\s+(.+)$`)
+	for _, line := range strings.Split(stdout, "\n") {
+		match := re.FindStringSubmatch(line)
+		if match == nil {
+			continue
+		}
+		desc := strings.TrimSpace(match[2])
+		if desc == "" {
+			continue
+		}
+		r, _ := utf8.DecodeRuneInString(desc)
+		if unicode.IsLetter(r) && !unicode.IsLower(r) {
+			t.Errorf("help description should start lowercase: %q", desc)
+		}
 	}
 }
 

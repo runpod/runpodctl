@@ -19,8 +19,8 @@ var (
 
 var ConfigCmd = &cobra.Command{
 	Use:   "config",
-	Short: "Manage CLI configuration",
-	Long:  "RunPod CLI Config Settings",
+	Short: "manage cli configuration",
+	Long:  "runpod cli config settings",
 	RunE: func(c *cobra.Command, args []string) error {
 		// explicitly set viper values from flags to ensure they're available
 		if apiKey != "" {
@@ -110,11 +110,11 @@ func ensureSSHKeyInCloud(publicKey []byte) error {
 }
 
 func init() {
-	ConfigCmd.Flags().StringVar(&apiKey, "apiKey", "", "RunPod API key")
+	ConfigCmd.Flags().StringVar(&apiKey, "apiKey", "", "runpod api key")
 	viper.BindPFlag("apiKey", ConfigCmd.Flags().Lookup("apiKey")) //nolint
 	viper.SetDefault("apiKey", "")
 
-	ConfigCmd.Flags().StringVar(&apiUrl, "apiUrl", "https://api.runpod.io/graphql", "RunPod API URL")
+	ConfigCmd.Flags().StringVar(&apiUrl, "apiUrl", "https://api.runpod.io/graphql", "runpod api url")
 	viper.BindPFlag("apiUrl", ConfigCmd.Flags().Lookup("apiUrl")) //nolint
 
 	ConfigCmd.MarkFlagRequired("apiKey")

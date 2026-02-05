@@ -37,8 +37,8 @@ var sendCode string
 var SendCmd = &cobra.Command{
 	Use:   "send <file>",
 	Args:  cobra.MinimumNArgs(1),
-	Short: "send file(s) or folder",
-	Long:  "send file(s) or folder to a pod or any computer using croc",
+	Short: "send files or folders",
+	Long:  "send files or folders to a pod or any computer using croc",
 	Run:   runSend,
 }
 
@@ -46,8 +46,8 @@ var SendCmd = &cobra.Command{
 var ReceiveCmd = &cobra.Command{
 	Use:   "receive <code>",
 	Args:  cobra.ExactArgs(1),
-	Short: "receive file(s) or folder",
-	Long:  "receive file(s) or folder from a pod or any computer using croc",
+	Short: "receive files or folders",
+	Long:  "receive files or folders from a pod or any computer using croc",
 	Run:   runReceive,
 }
 

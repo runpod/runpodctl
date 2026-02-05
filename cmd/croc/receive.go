@@ -37,8 +37,8 @@ func getRelays() ([]Relay, error) {
 var ReceiveCmd = &cobra.Command{
 	Use:   "receive [code]",
 	Args:  cobra.ExactArgs(1),
-	Short: "receive file(s), or folder",
-	Long:  "receive file(s), or folder from pod or any computer",
+	Short: "receive files or folders",
+	Long:  "receive files or folders from pod or any computer",
 	Run: func(cmd *cobra.Command, args []string) {
 		log := log.New(os.Stderr, "runpod-receive: ", 0)
 		relays, err := getRelays()

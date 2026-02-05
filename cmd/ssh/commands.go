@@ -15,8 +15,8 @@ import (
 // ListKeysCmd defines the command to list all SSH keys for the current user.
 var ListKeysCmd = &cobra.Command{
 	Use:   "list-keys",
-	Short: "List all SSH keys",
-	Long:  `List all the SSH keys associated with the current user's account.`,
+	Short: "list all ssh keys",
+	Long:  `list all the ssh keys associated with the current user's account.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		_, keys, err := api.GetPublicSSHKeys()
 		if err != nil {
@@ -54,8 +54,8 @@ func displaySSHKeys(keys []api.SSHKey) {
 
 var AddKeyCmd = &cobra.Command{
 	Use:   "add-key",
-	Short: "Adds an SSH key to the current user account",
-	Long:  `Adds an SSH key to the current user account. If no key is provided, one will be generated.`,
+	Short: "add an ssh key to the current user account",
+	Long:  `add an ssh key to the current user account. if no key is provided, one will be generated.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		key, _ := cmd.Flags().GetString("key")
 		keyFile, _ := cmd.Flags().GetString("key-file")
@@ -113,8 +113,8 @@ func promptKeyName() string {
 var ConnectCmd = &cobra.Command{
 	Use:   "connect [podID|name]",
 	Args:  cobra.MaximumNArgs(1),
-	Short: "Shows the SSH connect command for pods",
-	Long:  `Shows the full featured SSH connect command for a given pod if a pod ID or name is provided. When no argument is provided, shows the connect information for all pods.`,
+	Short: "show the ssh connect command for pods",
+	Long:  `show the full featured ssh connect command for a given pod if a pod id or name is provided. when no argument is provided, shows the connect information for all pods.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		verbose, err := cmd.Flags().GetBool("verbose")
 		cobra.CheckErr(err)
@@ -160,7 +160,7 @@ func displayConnectString(pod *api.Pod, verbose bool) {
 }
 
 func init() {
-	AddKeyCmd.Flags().String("key", "", "The public key to add.")
-	AddKeyCmd.Flags().String("key-file", "", "The file containing the public key to add.")
+	AddKeyCmd.Flags().String("key", "", "the public key to add")
+	AddKeyCmd.Flags().String("key-file", "", "the file containing the public key to add")
 	ConnectCmd.Flags().BoolP("verbose", "v", false, "include identifying pod information (name and id)")
 }

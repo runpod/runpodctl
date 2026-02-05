@@ -31,8 +31,8 @@ var relayUrl = "https://raw.githubusercontent.com/runpod/runpodctl/main/cmd/croc
 var SendCmd = &cobra.Command{
 	Use:   "send [file0] [file1] ...",
 	Args:  cobra.MinimumNArgs(1),
-	Short: "send file(s), or folder",
-	Long:  "send file(s), or folder to pod or any computer",
+	Short: "send files or folders",
+	Long:  "send files or folders to pod or any computer",
 	Run: func(_ *cobra.Command, args []string) {
 		log := log.New(os.Stderr, "runpod-send: ", 0)
 		src, err := filepath.Abs(args[0])
