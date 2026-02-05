@@ -1,19 +1,19 @@
-## runpodctl receive
+## runpodctl completion
 
-receive files or folders
+install shell completion
 
 ### Synopsis
 
-receive files or folders from a pod or any computer using croc
+install shell completion for runpodctl (auto-detects your shell)
 
 ```
-runpodctl receive <code> [flags]
+runpodctl completion [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for receive
+  -h, --help   help for completion
 ```
 
 ### Options inherited from parent commands

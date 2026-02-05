@@ -1,19 +1,19 @@
-## runpodctl receive
+## runpodctl doctor
 
-receive files or folders
+diagnose and fix cli issues
 
 ### Synopsis
 
-receive files or folders from a pod or any computer using croc
+check runpod connectivity and fix configuration issues
 
 ```
-runpodctl receive <code> [flags]
+runpodctl doctor [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for receive
+  -h, --help   help for doctor
 ```
 
 ### Options inherited from parent commands

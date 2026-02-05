@@ -1,19 +1,19 @@
-## runpodctl receive
+## runpodctl user
 
-receive files or folders
+show account info
 
 ### Synopsis
 
-receive files or folders from a pod or any computer using croc
+show current user account info including balance and spend
 
 ```
-runpodctl receive <code> [flags]
+runpodctl user [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for receive
+  -h, --help   help for user
 ```
 
 ### Options inherited from parent commands

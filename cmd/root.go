@@ -32,7 +32,7 @@ var outputFormat string
 var rootCmd = &cobra.Command{
 	Use:   "runpodctl",
 	Short: "cli for runpod.io",
-	Long: `runpodctl cli - manage gpu pods, serverless endpoints, and more.
+	Long: `runpodctl - manage your ai system.
 
 getting started:
   1. get your api key at https://www.runpod.io/console/user/settings
@@ -58,8 +58,8 @@ utilities:
   ssh            manage ssh keys and connections
   send/receive   transfer files to/from pods
 
-runpodctl v2 - legacy commands still supported
-legacy (deprecated): (get, create, remove, start, stop, exec, project, config, get models)`,
+deprecated
+  get, create, remove, start, stop, exec, project, config, get models`,
 }
 
 // GetRootCmd returns the root command

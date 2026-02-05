@@ -113,8 +113,8 @@ func TestRootCmd_HelpMentionsLegacy(t *testing.T) {
 	root.Execute()
 
 	output := buf.String()
-	if !strings.Contains(output, "legacy (deprecated):") {
-		t.Error("help should list legacy commands")
+	if !strings.Contains(output, "deprecated") {
+		t.Error("help should list deprecated commands")
 	}
 	if !strings.Contains(output, "project") {
 		t.Error("help should mention legacy project command")

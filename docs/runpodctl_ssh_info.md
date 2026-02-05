@@ -1,19 +1,20 @@
-## runpodctl ssh list-keys
+## runpodctl ssh info
 
-list all ssh keys
+show ssh info for a pod
 
 ### Synopsis
 
-list all ssh keys associated with your account
+show ssh info for a pod (command + key). does not connect.
 
 ```
-runpodctl ssh list-keys [flags]
+runpodctl ssh info <pod-id> [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for list-keys
+  -h, --help      help for info
+  -v, --verbose   include pod id and name in output
 ```
 
 ### Options inherited from parent commands
