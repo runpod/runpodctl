@@ -21,10 +21,10 @@ you can create a pod either from a template or by specifying an image directly.
 
 examples:
   # create from template (recommended)
-  runpodctl pod create --template-id runpod-torch-v21 --gpu-type-id "NVIDIA RTX 4090"
+  runpodctl pod create --template-id runpod-torch-v21 --gpu-id "NVIDIA RTX 4090"
 
   # create with custom image
-  runpodctl pod create --image runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04 --gpu-type-id "NVIDIA RTX 4090"
+  runpodctl pod create --image runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04 --gpu-id "NVIDIA RTX 4090"
 
   # create a cpu pod
   runpodctl pod create --compute-type cpu --image ubuntu:22.04
@@ -59,7 +59,7 @@ func init() {
 	createCmd.Flags().StringVar(&createTemplateID, "template-id", "", "template id (use 'runpodctl template search' to find templates)")
 	createCmd.Flags().StringVar(&createImageName, "image", "", "docker image name (required if no template)")
 	createCmd.Flags().StringVar(&createComputeType, "compute-type", "GPU", "compute type (GPU or CPU)")
-	createCmd.Flags().StringVar(&createGpuTypeID, "gpu-type-id", "", "gpu type id (from 'runpodctl gpu list')")
+	createCmd.Flags().StringVar(&createGpuTypeID, "gpu-id", "", "gpu id (from 'runpodctl gpu list')")
 	createCmd.Flags().IntVar(&createGpuCount, "gpu-count", 1, "number of gpus")
 	createCmd.Flags().IntVar(&createVolumeInGb, "volume-in-gb", 0, "volume size in gb")
 	createCmd.Flags().IntVar(&createContainerDiskInGb, "container-disk-in-gb", 20, "container disk size in gb")
@@ -90,11 +90,11 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	gpuTypeID := strings.TrimSpace(createGpuTypeID)
 	if strings.Contains(gpuTypeID, ",") {
-		return fmt.Errorf("only one gpu type id is supported; use --gpu-count for multiple gpus of the same type")
+		return fmt.Errorf("only one gpu id is supported; use --gpu-count for multiple gpus of the same type")
 	}
 
 	if computeType == "CPU" && gpuTypeID != "" {
-		return fmt.Errorf("--gpu-type-id is not supported for compute type CPU")
+		return fmt.Errorf("--gpu-id is not supported for compute type CPU")
 	}
 
 	cloudType := strings.ToUpper(strings.TrimSpace(createCloudType))

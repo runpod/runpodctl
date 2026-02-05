@@ -68,8 +68,8 @@ func TestCreateCmd_Flags(t *testing.T) {
 	if flags.Lookup("compute-type") == nil {
 		t.Error("expected --compute-type flag")
 	}
-	if flags.Lookup("gpu-type-id") == nil {
-		t.Error("expected --gpu-type-id flag")
+	if flags.Lookup("gpu-id") == nil {
+		t.Error("expected --gpu-id flag")
 	}
 	if flags.Lookup("gpu-count") == nil {
 		t.Error("expected --gpu-count flag")

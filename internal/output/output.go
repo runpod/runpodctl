@@ -28,6 +28,7 @@ func Print(data interface{}, cfg *Config) error {
 	if cfg == nil {
 		cfg = DefaultConfig
 	}
+	data = normalizeGPUKeys(data)
 
 	switch cfg.Format {
 	case FormatYAML:
@@ -63,5 +64,51 @@ func ParseFormat(s string) Format {
 		return FormatYAML
 	default:
 		return FormatJSON
+	}
+}
+
+func normalizeGPUKeys(data interface{}) interface{} {
+	if data == nil {
+		return data
+	}
+
+	switch data.(type) {
+	case map[string]interface{}, []interface{}:
+		return renameGPUKeys(data)
+	default:
+		raw, err := json.Marshal(data)
+		if err != nil {
+			return data
+		}
+		var decoded interface{}
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			return data
+		}
+		return renameGPUKeys(decoded)
+	}
+}
+
+func renameGPUKeys(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		updated := make(map[string]interface{}, len(typed))
+		for key, val := range typed {
+			newKey := key
+			switch key {
+			case "gpuTypeId":
+				newKey = "gpuId"
+			case "gpuTypeIds":
+				newKey = "gpuIds"
+			}
+			updated[newKey] = renameGPUKeys(val)
+		}
+		return updated
+	case []interface{}:
+		for i, item := range typed {
+			typed[i] = renameGPUKeys(item)
+		}
+		return typed
+	default:
+		return value
 	}
 }

@@ -18,7 +18,7 @@ var listCmd = &cobra.Command{
 var includeUnavailable bool
 
 type gpuTypeOutput struct {
-	GpuTypeID      string `json:"gpuTypeId"`
+	GpuID          string `json:"gpuId"`
 	DisplayName    string `json:"displayName"`
 	MemoryInGb     int    `json:"memoryInGb"`
 	SecureCloud    bool   `json:"secureCloud"`
@@ -47,7 +47,7 @@ func runList(cmd *cobra.Command, args []string) error {
 	typed := make([]gpuTypeOutput, 0, len(gpus))
 	for _, gpu := range gpus {
 		typed = append(typed, gpuTypeOutput{
-			GpuTypeID:      gpu.ID,
+			GpuID:          gpu.ID,
 			DisplayName:    gpu.DisplayName,
 			MemoryInGb:     gpu.MemoryInGb,
 			SecureCloud:    gpu.SecureCloud,

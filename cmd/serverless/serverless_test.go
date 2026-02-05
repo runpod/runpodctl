@@ -56,8 +56,8 @@ func TestCreateCmd_Flags(t *testing.T) {
 	if flags.Lookup("template-id") == nil {
 		t.Error("expected --template-id flag")
 	}
-	if flags.Lookup("gpu-type-id") == nil {
-		t.Error("expected --gpu-type-id flag")
+	if flags.Lookup("gpu-id") == nil {
+		t.Error("expected --gpu-id flag")
 	}
 	if flags.Lookup("workers-min") == nil {
 		t.Error("expected --workers-min flag")

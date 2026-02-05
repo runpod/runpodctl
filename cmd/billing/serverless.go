@@ -29,9 +29,9 @@ func init() {
 	serverlessCmd.Flags().StringVar(&slsStartTime, "start-time", "", "start time (RFC3339 format)")
 	serverlessCmd.Flags().StringVar(&slsEndTime, "end-time", "", "end time (RFC3339 format)")
 	serverlessCmd.Flags().StringVar(&slsBucketSize, "bucket-size", "day", "bucket size (hour, day, week, month, year)")
-	serverlessCmd.Flags().StringVar(&slsGrouping, "grouping", "endpointId", "grouping (endpointId, podId, gpuTypeId)")
+	serverlessCmd.Flags().StringVar(&slsGrouping, "grouping", "endpointId", "grouping (endpointId, podId, gpuId)")
 	serverlessCmd.Flags().StringVar(&slsEndpointID, "endpoint-id", "", "filter by endpoint id")
-	serverlessCmd.Flags().StringVar(&slsGpuTypeID, "gpu-type-id", "", "filter by gpu type id")
+	serverlessCmd.Flags().StringVar(&slsGpuTypeID, "gpu-id", "", "filter by gpu id")
 }
 
 func runServerlessBilling(cmd *cobra.Command, args []string) error {
@@ -41,11 +41,12 @@ func runServerlessBilling(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	grouping := normalizeGpuGrouping(slsGrouping)
 	opts := &api.BillingOptions{
 		StartTime:  slsStartTime,
 		EndTime:    slsEndTime,
 		BucketSize: slsBucketSize,
-		Grouping:   slsGrouping,
+		Grouping:   grouping,
 		EndpointID: slsEndpointID,
 		GpuTypeID:  slsGpuTypeID,
 	}

@@ -96,7 +96,7 @@ func pickCommunityGpuType(t *testing.T) string {
 	for _, gpu := range gpus {
 		community, _ := gpu["communityCloud"].(bool)
 		available, _ := gpu["available"].(bool)
-		id, _ := gpu["gpuTypeId"].(string)
+		id, _ := gpu["gpuId"].(string)
 		if community && available && strings.TrimSpace(id) != "" {
 			return id
 		}
@@ -256,7 +256,7 @@ func TestCLI_PodListYAML(t *testing.T) {
 
 func TestCLI_PodCreateRequiresTemplateOrImage(t *testing.T) {
 	// test that pod create fails without template or image
-	_, stderr, err := runCLI("pod", "create", "--gpu-type-id", "NVIDIA GeForce RTX 4090")
+	_, stderr, err := runCLI("pod", "create", "--gpu-id", "NVIDIA GeForce RTX 4090")
 	if err == nil {
 		t.Fatal("expected error when creating pod without template or image")
 	}
@@ -274,7 +274,7 @@ func TestCLI_PodCreateGlobalNetworkingRequiresSecureCloud(t *testing.T) {
 		"--cloud-type", "community",
 		"--data-center-ids", "US-MO-2",
 		"--image", "ubuntu:22.04",
-		"--gpu-type-id", "NVIDIA GeForce RTX 3090",
+		"--gpu-id", "NVIDIA GeForce RTX 3090",
 	)
 	if err == nil {
 		t.Fatal("expected error when using --global-networking with community cloud")
@@ -296,7 +296,7 @@ func TestCLI_PodCreateCommunityPublicIP(t *testing.T) {
 		"--cloud-type", "community",
 		"--public-ip",
 		"--image", "ubuntu:22.04",
-		"--gpu-type-id", gpuTypeID,
+		"--gpu-id", gpuTypeID,
 		"--name", name,
 	)
 	if err != nil {
@@ -353,7 +353,7 @@ func TestCLI_PodCreateFromTemplate(t *testing.T) {
 	// create a pod from template
 	stdout, stderr, err := runCLI("pod", "create",
 		"--template-id", "runpod-torch-v21",
-		"--gpu-type-id", "NVIDIA GeForce RTX 4090",
+		"--gpu-id", "NVIDIA GeForce RTX 4090",
 		"--name", "e2e-test-template-pod")
 	if err != nil {
 		t.Fatalf("failed to create pod from template: %v\nstderr: %s", err, stderr)
