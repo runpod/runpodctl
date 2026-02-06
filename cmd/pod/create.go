@@ -52,6 +52,7 @@ var (
 	createEnv               string
 	createCloudType         string
 	createDataCenterIDs     string
+	createSSH               bool
 )
 
 func init() {
@@ -70,6 +71,7 @@ func init() {
 	createCmd.Flags().StringVar(&createEnv, "env", "", "environment variables as json object")
 	createCmd.Flags().StringVar(&createCloudType, "cloud-type", "SECURE", "cloud type (SECURE or COMMUNITY)")
 	createCmd.Flags().StringVar(&createDataCenterIDs, "data-center-ids", "", "comma-separated list of data center ids")
+	createCmd.Flags().BoolVar(&createSSH, "ssh", true, "enable ssh on the pod")
 }
 
 func runCreate(cmd *cobra.Command, args []string) error {
@@ -123,10 +125,80 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	var (
+		result interface{}
+		err    error
+	)
+
+	if computeType == "CPU" {
+		// CPU pods use the REST API (GraphQL requires gpuTypeId)
+		result, err = createPodREST(computeType, gpuTypeID, cloudType, supportPublicIP)
+	} else {
+		// GPU pods use GraphQL (supports startSsh)
+		result, err = createPodGraphQL(gpuTypeID, cloudType, supportPublicIP)
+	}
+	if err != nil {
+		if createGlobalNetworking {
+			err = decorateGlobalNetworkingError(err, createDataCenterIDs)
+		}
+		output.Error(err)
+		return fmt.Errorf("failed to create pod: %w", err)
+	}
+
+	format := output.ParseFormat(cmd.Flag("output").Value.String())
+	return output.Print(result, &output.Config{Format: format})
+}
+
+func createPodGraphQL(gpuTypeID, cloudType string, supportPublicIP bool) (map[string]interface{}, error) {
+	gqlClient, err := api.NewGraphQLClient()
+	if err != nil {
+		return nil, err
+	}
+
+	req := &api.CreatePodGQLInput{
+		CloudType:         cloudType,
+		ContainerDiskInGb: createContainerDiskInGb,
+		GpuCount:          createGpuCount,
+		GpuTypeId:         gpuTypeID,
+		ImageName:         createImageName,
+		Name:              createName,
+		StartSsh:          createSSH,
+		SupportPublicIp:   supportPublicIP,
+		TemplateId:        createTemplateID,
+		VolumeInGb:        createVolumeInGb,
+		VolumeMountPath:   createVolumeMountPath,
+	}
+
+	if createPorts != "" {
+		req.Ports = createPorts
+	}
+
+	// GraphQL only supports a single dataCenterId
+	if createDataCenterIDs != "" {
+		ids := strings.Split(createDataCenterIDs, ",")
+		req.DataCenterId = strings.TrimSpace(ids[0])
+		if len(ids) > 1 {
+			fmt.Fprintln(os.Stderr, "note: only the first data center id is used; graphql api supports a single data center")
+		}
+	}
+
+	if createEnv != "" {
+		var envMap map[string]string
+		if err := json.Unmarshal([]byte(createEnv), &envMap); err != nil {
+			return nil, fmt.Errorf("invalid env json: %w", err)
+		}
+		for k, v := range envMap {
+			req.Env = append(req.Env, &api.PodEnvVar{Key: k, Value: v})
+		}
+	}
+
+	return gqlClient.CreatePod(req)
+}
+
+func createPodREST(computeType, gpuTypeID, cloudType string, supportPublicIP bool) (*api.Pod, error) {
 	client, err := api.NewClient()
 	if err != nil {
-		output.Error(err)
-		return err
+		return nil, err
 	}
 
 	req := &api.PodCreateRequest{
@@ -136,15 +208,11 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		ComputeType:       computeType,
 		GlobalNetworking:  createGlobalNetworking,
 		SupportPublicIp:   supportPublicIP,
-		GpuCount:          createGpuCount,
+		GpuCount:          0,
 		VolumeInGb:        createVolumeInGb,
 		ContainerDiskInGb: createContainerDiskInGb,
 		VolumeMountPath:   createVolumeMountPath,
 		CloudType:         cloudType,
-	}
-
-	if computeType == "CPU" {
-		req.GpuCount = 0
 	}
 
 	if gpuTypeID != "" {
@@ -162,22 +230,12 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	if createEnv != "" {
 		var env map[string]string
 		if err := json.Unmarshal([]byte(createEnv), &env); err != nil {
-			return fmt.Errorf("invalid env json: %w", err)
+			return nil, fmt.Errorf("invalid env json: %w", err)
 		}
 		req.Env = env
 	}
 
-	pod, err := client.CreatePod(req)
-	if err != nil {
-		if createGlobalNetworking {
-			err = decorateGlobalNetworkingError(err, createDataCenterIDs)
-		}
-		output.Error(err)
-		return fmt.Errorf("failed to create pod: %w", err)
-	}
-
-	format := output.ParseFormat(cmd.Flag("output").Value.String())
-	return output.Print(pod, &output.Config{Format: format})
+	return client.CreatePod(req)
 }
 
 func decorateGlobalNetworkingError(err error, dataCenterIDs string) error {

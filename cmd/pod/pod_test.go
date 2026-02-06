@@ -83,6 +83,13 @@ func TestCreateCmd_Flags(t *testing.T) {
 	if flags.Lookup("public-ip") == nil {
 		t.Error("expected --public-ip flag")
 	}
+	if flags.Lookup("ssh") == nil {
+		t.Error("expected --ssh flag")
+	}
+	sshFlag := flags.Lookup("ssh")
+	if sshFlag.DefValue != "true" {
+		t.Errorf("expected --ssh default to be true, got %s", sshFlag.DefValue)
+	}
 }
 
 func TestDeleteCmd_Aliases(t *testing.T) {

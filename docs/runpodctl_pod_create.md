@@ -42,6 +42,7 @@ runpodctl pod create [flags]
       --name string                pod name
       --ports string               comma-separated list of ports (e.g., '8888/http,22/tcp')
       --public-ip                  require public ip (community cloud only)
+      --ssh                        enable ssh on the pod (default true)
       --template-id string         template id (use 'runpodctl template search' to find templates)
       --volume-in-gb int           volume size in gb
       --volume-mount-path string   volume mount path (default "/workspace")

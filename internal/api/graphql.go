@@ -212,6 +212,89 @@ func (c *GraphQLClient) AddPublicSSHKey(key []byte) error {
 	return nil
 }
 
+// PodEnvVar is a key-value pair for pod environment variables (GraphQL format)
+type PodEnvVar struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// CreatePodGQLInput is the input for creating a pod via GraphQL
+type CreatePodGQLInput struct {
+	CloudType         string       `json:"cloudType,omitempty"`
+	ContainerDiskInGb int          `json:"containerDiskInGb"`
+	DataCenterId      string       `json:"dataCenterId,omitempty"`
+	Env               []*PodEnvVar `json:"env,omitempty"`
+	GpuCount          int          `json:"gpuCount"`
+	GpuTypeId         string       `json:"gpuTypeId,omitempty"`
+	ImageName         string       `json:"imageName,omitempty"`
+	Name              string       `json:"name,omitempty"`
+	Ports             string       `json:"ports,omitempty"`
+	StartSsh          bool         `json:"startSsh"`
+	SupportPublicIp   bool         `json:"supportPublicIp,omitempty"`
+	TemplateId        string       `json:"templateId,omitempty"`
+	VolumeInGb        int          `json:"volumeInGb,omitempty"`
+	VolumeMountPath   string       `json:"volumeMountPath,omitempty"`
+}
+
+// CreatePod creates a pod via GraphQL (podFindAndDeployOnDemand)
+func (c *GraphQLClient) CreatePod(input *CreatePodGQLInput) (map[string]interface{}, error) {
+	gqlInput := GraphQLInput{
+		Query: `
+		mutation createPod($input: PodFindAndDeployOnDemandInput!) {
+			podFindAndDeployOnDemand(input: $input) {
+				id
+				name
+				imageName
+				desiredStatus
+				costPerHr
+				containerDiskInGb
+				volumeInGb
+				volumeMountPath
+				gpuCount
+				memoryInGb
+				vcpuCount
+				ports
+				lastStatusChange
+				env
+				machine {
+					gpuDisplayName
+					location
+				}
+			}
+		}
+		`,
+		Variables: map[string]interface{}{"input": input},
+	}
+
+	body, err := c.Query(gqlInput)
+	if err != nil {
+		return nil, err
+	}
+
+	var data struct {
+		Data struct {
+			Pod map[string]interface{} `json:"podFindAndDeployOnDemand"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+
+	if err := json.Unmarshal(body, &data); err != nil {
+		return nil, err
+	}
+
+	if len(data.Errors) > 0 {
+		return nil, fmt.Errorf("%s", data.Errors[0].Message)
+	}
+
+	if data.Data.Pod == nil {
+		return nil, fmt.Errorf("pod creation returned nil response")
+	}
+
+	return data.Data.Pod, nil
+}
+
 // LegacyPod is the pod structure from GraphQL API (for backwards compatibility)
 type LegacyPod struct {
 	ID                string         `json:"id"`
