@@ -99,6 +99,11 @@ func init() {
 	wrapWithDeprecation(&createPodsCmd, "runpodctl create pods", "")
 	CreateCmd.AddCommand(&createPodsCmd)
 
+	// create model - legacy model creation
+	createModelCmd := *model.AddModelToRepoCmd
+	wrapWithDeprecation(&createModelCmd, "runpodctl create model", "runpodctl model add")
+	CreateCmd.AddCommand(&createModelCmd)
+
 	// remove pod - use the old RemovePodCmd
 	removePodCmd := *pod.RemovePodCmd
 	wrapWithDeprecation(&removePodCmd, "runpodctl remove pod", "runpodctl pod delete <id>")
@@ -108,6 +113,11 @@ func init() {
 	removePodsCmd := *pods.RemovePodsCmd
 	wrapWithDeprecation(&removePodsCmd, "runpodctl remove pods", "")
 	RemoveCmd.AddCommand(&removePodsCmd)
+
+	// remove model - legacy model removal
+	removeModelCmd := *model.RemoveModelCmd
+	wrapWithDeprecation(&removeModelCmd, "runpodctl remove model", "runpodctl model remove")
+	RemoveCmd.AddCommand(&removeModelCmd)
 
 	// start pod - use the old StartPodCmd
 	startPodCmd := *pod.StartPodCmd
