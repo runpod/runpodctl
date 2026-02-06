@@ -271,15 +271,10 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 }
 
 func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInput) error {
-	var modelVersionHash string
-
 	for _, file := range files {
 		input := *baseInput
 		input.FileName = file.RelativePath
 		input.FileSizeBytes = strconv.FormatInt(file.Size, 10)
-		if modelVersionHash != "" {
-			input.ModelVersionHash = modelVersionHash
-		}
 
 		result, err := api.CreateModelRepoUpload(&input)
 		if err != nil {
@@ -287,12 +282,6 @@ func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInp
 		}
 		if result.Upload == nil {
 			return fmt.Errorf("upload response missing upload session details for %s", file.RelativePath)
-		}
-		if modelVersionHash == "" {
-			if result.Version == nil || result.Version.Hash == "" {
-				return fmt.Errorf("upload response missing model version hash for %s", file.RelativePath)
-			}
-			modelVersionHash = result.Version.Hash
 		}
 
 		if err = completeModelUpload(result.Upload, file.AbsolutePath); err != nil {
