@@ -46,16 +46,29 @@ const (
 // slow. So we bump it up to 1m so that we do not fail erroneously.
 func setModelGraphQLTimeout(cmd *cobra.Command) {
 	timeoutFlag := cmd.InheritedFlags().Lookup(graphqlTimeoutFlagName)
-	if timeoutFlag == nil || timeoutFlag.Changed {
+	if timeoutFlag != nil {
+		if timeoutFlag.Changed {
+			return
+		}
+
+		if err := timeoutFlag.Value.Set(modelGraphQLTimeoutValue.String()); err != nil {
+			cobra.CheckErr(fmt.Errorf("unable to set graphql timeout: %w", err))
+		}
+
+		viper.Set(api.GraphQLTimeoutKey, modelGraphQLTimeoutValue)
+		fmt.Printf("--graphql-timeout not set; defaulting to %s for model creation operations\n", modelGraphQLTimeoutValue)
 		return
 	}
 
-	if err := timeoutFlag.Value.Set(modelGraphQLTimeoutValue.String()); err != nil {
-		cobra.CheckErr(fmt.Errorf("unable to set graphql timeout: %w", err))
+	// In the CLI-restructure flow, the inherited --graphql-timeout flag is removed.
+	// Preserve any explicit timeout already set in config/env, otherwise apply the
+	// safer model upload default.
+	if currentTimeout := viper.GetDuration(api.GraphQLTimeoutKey); currentTimeout > 0 {
+		return
 	}
 
 	viper.Set(api.GraphQLTimeoutKey, modelGraphQLTimeoutValue)
-	fmt.Printf("--graphql-timeout not set; defaulting to %s for model creation operations\n", modelGraphQLTimeoutValue)
+	fmt.Printf("defaulting graphql timeout to %s for model creation operations\n", modelGraphQLTimeoutValue)
 }
 
 type completedPart struct {
