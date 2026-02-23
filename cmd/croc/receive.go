@@ -37,10 +37,10 @@ func getRelays() ([]Relay, error) {
 var ReceiveCmd = &cobra.Command{
 	Use:   "receive [code]",
 	Args:  cobra.ExactArgs(1),
-	Short: "receive file(s), or folder",
-	Long:  "receive file(s), or folder from pod or any computer",
+	Short: "receive files or folders",
+	Long:  "receive files or folders from pod or any computer",
 	Run: func(cmd *cobra.Command, args []string) {
-		log := log.New(os.Stderr, "runpodctl-receive: ", 0)
+		log := log.New(os.Stderr, "runpod-receive: ", 0)
 		relays, err := getRelays()
 		if err != nil {
 			log.Fatal("There was an issue getting the relay list. Please try again.")
@@ -48,16 +48,16 @@ var ReceiveCmd = &cobra.Command{
 		sharedSecretCode := args[0]
 		split := strings.Split(sharedSecretCode, "-")
 		if len(split) < 2 {
-			log.Fatalf("Malformed code %q: expected at least 2 parts separated by dashes, but got %v. Please retry 'runpodctl send' to generate a valid code.", sharedSecretCode, len(split))
+			log.Fatalf("malformed code %q: expected at least 2 parts separated by dashes, but got %v. please retry 'runpodctl send' to generate a valid code.", sharedSecretCode, len(split))
 		}
 
 		relayIndex, err := strconv.Atoi(split[len(split)-1]) // relay index is the final split value
 		if err != nil {
-			log.Fatalf("Malformed relay, please retry 'runpodctl send' to generate a valid code.")
+			log.Fatalf("malformed relay, please retry 'runpodctl send' to generate a valid code.")
 		}
 
 		if relayIndex < 0 || relayIndex >= len(relays) {
-			log.Fatalf("Relay index %d not found; please retry 'runpodctl send' to generate a valid code.", relayIndex)
+			log.Fatalf("relay index %d not found; please retry 'runpodctl send' to generate a valid code.", relayIndex)
 		}
 		relay := relays[relayIndex]
 

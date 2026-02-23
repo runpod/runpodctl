@@ -1,0 +1,131 @@
+package legacy
+
+import (
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/runpod/runpodctl/cmd/cloud"
+	"github.com/runpod/runpodctl/cmd/model"
+	"github.com/runpod/runpodctl/cmd/pod"
+	"github.com/runpod/runpodctl/cmd/pods"
+	"github.com/spf13/cobra"
+)
+
+// These are hidden legacy commands that provide backwards compatibility
+// They show deprecation warnings but execute the same functionality
+
+func wrapWithDeprecation(cmd *cobra.Command, oldSyntax, newSyntax string) {
+	originalPreRun := cmd.PreRun
+	originalPreRunE := cmd.PreRunE
+
+	cmd.PreRun = nil
+	cmd.PreRunE = func(c *cobra.Command, args []string) error {
+		if strings.TrimSpace(newSyntax) == "" {
+			fmt.Fprintf(os.Stderr, "warning: '%s' is deprecated\n", oldSyntax)
+		} else {
+			fmt.Fprintf(os.Stderr, "warning: '%s' is deprecated, use '%s' instead\n", oldSyntax, newSyntax)
+		}
+		if originalPreRunE != nil {
+			return originalPreRunE(c, args)
+		}
+		if originalPreRun != nil {
+			originalPreRun(c, args)
+		}
+		return nil
+	}
+}
+
+// GetCmd is the legacy 'get' command
+var GetCmd = &cobra.Command{
+	Use:    "get",
+	Hidden: true,
+	Short:  "deprecated: use 'runpodctl <resource> list' or 'runpodctl <resource> get <id>'",
+}
+
+// CreateCmd is the legacy 'create' command
+var CreateCmd = &cobra.Command{
+	Use:    "create",
+	Hidden: true,
+	Short:  "deprecated: use 'runpodctl <resource> create'",
+}
+
+// RemoveCmd is the legacy 'remove' command
+var RemoveCmd = &cobra.Command{
+	Use:    "remove",
+	Hidden: true,
+	Short:  "deprecated: use 'runpodctl <resource> delete <id>'",
+}
+
+// StartCmd is the legacy 'start' command
+var StartCmd = &cobra.Command{
+	Use:    "start",
+	Hidden: true,
+	Short:  "deprecated: use 'runpodctl pod start <id>'",
+}
+
+// StopCmd is the legacy 'stop' command
+var StopCmd = &cobra.Command{
+	Use:    "stop",
+	Hidden: true,
+	Short:  "deprecated: use 'runpodctl pod stop <id>'",
+}
+
+func init() {
+	// Use the actual old commands but wrap them with deprecation warnings
+
+	// get cloud - legacy cloud listing
+	getCloudCmd := *cloud.GetCloudCmd
+	wrapWithDeprecation(&getCloudCmd, "runpodctl get cloud", "")
+	GetCmd.AddCommand(&getCloudCmd)
+
+	// get pod - use the old GetPodCmd which has --allfields support
+	getPodCmd := *pod.GetPodCmd // copy the command
+	wrapWithDeprecation(&getPodCmd, "runpodctl get pod", "runpodctl pod list")
+	GetCmd.AddCommand(&getPodCmd)
+
+	// get models - legacy model listing
+	getModelsCmd := *model.GetModelsCmd
+	wrapWithDeprecation(&getModelsCmd, "runpodctl get models", "runpodctl model list")
+	GetCmd.AddCommand(&getModelsCmd)
+
+	// create pod - use the old CreatePodCmd
+	createPodCmd := *pod.CreatePodCmd
+	wrapWithDeprecation(&createPodCmd, "runpodctl create pod", "runpodctl pod create")
+	CreateCmd.AddCommand(&createPodCmd)
+
+	// create pods - legacy multi-pod creation
+	createPodsCmd := *pods.CreatePodsCmd
+	wrapWithDeprecation(&createPodsCmd, "runpodctl create pods", "")
+	CreateCmd.AddCommand(&createPodsCmd)
+
+	// create model - legacy model creation
+	createModelCmd := *model.AddModelToRepoCmd
+	wrapWithDeprecation(&createModelCmd, "runpodctl create model", "runpodctl model add")
+	CreateCmd.AddCommand(&createModelCmd)
+
+	// remove pod - use the old RemovePodCmd
+	removePodCmd := *pod.RemovePodCmd
+	wrapWithDeprecation(&removePodCmd, "runpodctl remove pod", "runpodctl pod delete <id>")
+	RemoveCmd.AddCommand(&removePodCmd)
+
+	// remove pods - legacy multi-pod removal
+	removePodsCmd := *pods.RemovePodsCmd
+	wrapWithDeprecation(&removePodsCmd, "runpodctl remove pods", "")
+	RemoveCmd.AddCommand(&removePodsCmd)
+
+	// remove model - legacy model removal
+	removeModelCmd := *model.RemoveModelCmd
+	wrapWithDeprecation(&removeModelCmd, "runpodctl remove model", "runpodctl model remove")
+	RemoveCmd.AddCommand(&removeModelCmd)
+
+	// start pod - use the old StartPodCmd
+	startPodCmd := *pod.StartPodCmd
+	wrapWithDeprecation(&startPodCmd, "runpodctl start pod", "runpodctl pod start <id>")
+	StartCmd.AddCommand(&startPodCmd)
+
+	// stop pod - use the old StopPodCmd
+	stopPodCmd := *pod.StopPodCmd
+	wrapWithDeprecation(&stopPodCmd, "runpodctl stop pod", "runpodctl pod stop <id>")
+	StopCmd.AddCommand(&stopPodCmd)
+}

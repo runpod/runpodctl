@@ -56,7 +56,7 @@ Use a specific proxy when connecting to the remote host:
 
 var SCPHelp = &cobra.Command{
 	Use:   "scp-help",
-	Short: "help for using scp (secure copy over SSH)",
+	Short: "help for using scp (secure copy over ssh)",
 	Args:  cobra.NoArgs,
 	Run:   func(cmd *cobra.Command, args []string) { fmt.Println(scpHelp) },
 }

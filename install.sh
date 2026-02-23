@@ -120,7 +120,7 @@ download_url_constructor() {
 
 # ---------------------------- Download & Install ---------------------------- #
 download_and_install_cli() {
-    local cli_archive_file_name="runpod.tar.gz"
+    local cli_archive_file_name="runpodctl.tar.gz"
     if ! wget -q --progress=bar "$DOWNLOAD_URL" -O "$cli_archive_file_name"; then
         echo "Failed to download $cli_archive_file_name."
         exit 1

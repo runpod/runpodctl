@@ -1,19 +1,10 @@
 package main
 
-import (
-	"strings"
+import "github.com/runpod/runpodctl/cmd"
 
-	"github.com/runpod/runpodctl/cmd"
-)
-
-// Version is set at build time via ldflags (see makefile and .goreleaser.yml)
-// If not set, falls back to "dev"
-var Version string
+// Version is set at build time via ldflags
+var Version = "v2.0.0-beta.1"
 
 func main() {
-	version := Version
-	if version == "" {
-		version = "local-dev"
-	}
-	cmd.Execute(strings.TrimRight(version, "\r\n"))
+	cmd.Execute(Version)
 }

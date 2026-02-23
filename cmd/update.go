@@ -74,10 +74,10 @@ func GetJson(url string) (*GithubApiResponse, error) {
 
 var updateCmd = &cobra.Command{
 	Use:   "update",
-	Short: "update runpodctl",
-	Long:  "update runpodctl to the latest version",
+	Short: "update runpodctl cli",
+	Long:  "update runpodctl cli to the latest version",
 	Run: func(c *cobra.Command, args []string) {
-		//fetch newest github release
+		// fetch newest github release
 		githubApiUrl := "https://api.github.com/repos/runpod/runpodctl/releases/latest"
 		apiResp, err := GetJson(githubApiUrl)
 		if err != nil {
@@ -113,10 +113,10 @@ var updateCmd = &cobra.Command{
 			}
 			destPath := filepath.Join(exPath, destFilename)
 			if runtime.GOOS == "windows" {
-				fmt.Println("To get the newest version, run this command:")
+				fmt.Println("to get the newest version, run this command:")
 				fmt.Printf("wget https://github.com/runpod/runpodctl/releases/download/%s/%s -O runpodctl.exe\n", latestVersion, newBinaryName)
 			}
-			fmt.Printf("downloading runpod %s to %s\n", latestVersion, downloadPath)
+			fmt.Printf("downloading runpodctl %s to %s\n", latestVersion, downloadPath)
 			file, err := DownloadFile(downloadLink, downloadPath)
 			defer file.Close()
 			if err != nil {

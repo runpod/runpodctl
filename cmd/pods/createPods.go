@@ -10,23 +10,23 @@ import (
 )
 
 var (
- communityCloud bool
- containerDiskInGb int
- deployCost float32
- dockerArgs string
- env []string
- gpuCount int
- gpuTypeId string
- imageName string
- minMemoryInGb int
- minVcpuCount int
- name string
- podCount int
- ports []string
- secureCloud bool
- templateId string
- volumeInGb int
- volumeMountPath string
+	communityCloud    bool
+	containerDiskInGb int
+	deployCost        float32
+	dockerArgs        string
+	env               []string
+	gpuCount          int
+	gpuTypeId         string
+	imageName         string
+	minMemoryInGb     int
+	minVcpuCount      int
+	name              string
+	podCount          int
+	ports             []string
+	secureCloud       bool
+	templateId        string
+	volumeInGb        int
+	volumeMountPath   string
 )
 
 var CreatePodsCmd = &cobra.Command{
@@ -81,7 +81,7 @@ var CreatePodsCmd = &cobra.Command{
 				fmt.Printf(`pod "%s" created for $%.3f / hr`, pod["id"], pod["costPerHr"])
 				fmt.Println()
 			} else {
-				cobra.CheckErr(fmt.Errorf(`pod "%s" start failed; status is %s`, args[0], pod["desiredStatus"]))
+				cobra.CheckErr(fmt.Errorf(`pod %v start failed; status is %v`, pod["id"], pod["desiredStatus"]))
 			}
 		}
 	},

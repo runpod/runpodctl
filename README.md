@@ -1,143 +1,134 @@
 <div align="center">
 
-# RunPod CLI
+# runpodctl cli
 
-runpodctl is the CLI tool to automate / manage GPU pods for [runpod.io](https://runpod.io).
+runpodctl is the cli tool to manage gpu pods, serverless endpoints, and more on [runpod.io](https://runpod.io).
 
-_Note: All pods automatically come with runpodctl installed with a pod-scoped API key._
+_note: all pods automatically come with runpodctl installed with a pod-scoped api key._
 
 </div>
 
-## Table of Contents
+## table of contents
 
-- [RunPod CLI](#runpod-cli)
-  - [Table of Contents](#table-of-contents)
-  - [Get Started](#get-started)
-    - [Install](#install)
-      - [Linux/MacOS (WSL)](#linuxmacos-wsl)
-      - [MacOS](#macos)
-      - [Windows PowerShell](#windows-powershell)
-  - [Tutorial](#tutorial)
-  - [Transferring Data (file send/receive)](#transferring-data-file-sendreceive)
-    - [To send a file](#to-send-a-file)
-    - [To receive a file](#to-receive-a-file)
-    - [Using Google Drive](#using-google-drive)
-  - [Pod Commands](#pod-commands)
-  - [Acknowledgements](#acknowledgements)
+- [runpodctl cli](#runpodctl-cli)
+  - [table of contents](#table-of-contents)
+  - [get started](#get-started)
+    - [install](#install)
+      - [linux/macos (wsl)](#linuxmacos-wsl)
+      - [macos](#macos)
+      - [windows powershell](#windows-powershell)
+  - [quick start](#quick-start)
+  - [commands](#commands)
+    - [pod management](#pod-management)
+    - [serverless endpoints](#serverless-endpoints)
+    - [file transfer](#file-transfer)
+  - [output format](#output-format)
+  - [legacy commands](#legacy-commands)
+  - [acknowledgements](#acknowledgements)
 
-## Get Started
+## get started
 
-### Install
+### install
 
-#### Linux/MacOS (WSL)
+#### linux/macos (wsl)
 
 ```bash
-# Download and install via wget
 wget -qO- cli.runpod.net | sudo bash
 ```
 
-#### MacOS
+#### macos
 
 ```bash
-# Using homebrew
 brew install runpod/runpodctl/runpodctl
 ```
 
-#### Windows PowerShell
+#### windows powershell
 
 ```powershell
 wget https://github.com/runpod/runpodctl/releases/latest/download/runpodctl-windows-amd64.exe -O runpodctl.exe
 ```
 
-## Tutorial
-
-Please checkout this [video tutorial](https://www.youtube.com/watch?v=QN1vdGhjcRc) for a detailed walkthrough of runpodctl.
-
-**Video Chapters:**
-
-- [Installing the latest version of runpodctl](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=1384s)
-- [Uploading large datasets](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2068s)
-- [File transfers from PC to RunPod](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2106s)
-- [Downloading folders from RunPod](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2549s)
-- [Adding runpodctl to your environment path](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=2589s)
-- [Downloading model files](https://www.youtube.com/watch?v=QN1vdGhjcRc&t=4871s)
-
-## Transferring Data (file send/receive)
-
-**Note:** The `send` and `receive` commands do not require API keys due to the built-in security of one-time codes.
-
-Run the following on the computer that has the file you want to send
-
-### To send a file
+## quick start
 
 ```bash
+# configure api key
+runpodctl config --apiKey=your_api_key
+
+# list all pods
+runpodctl pod list
+
+# get a specific pod
+runpodctl pod get pod_id
+
+# create a pod
+runpodctl pod create --image=runpod/pytorch:latest --gpu-id=NVIDIA_A100
+
+# start/stop/delete a pod
+runpodctl pod start pod_id
+runpodctl pod stop pod_id
+runpodctl pod delete pod_id
+```
+
+## commands
+
+commands follow noun-verb pattern: `runpodctl <resource> <action>`
+
+### pod management
+
+```bash
+runpodctl pod list                    # list all pods
+runpodctl pod get <id>                # get pod details
+runpodctl pod create --image=<img>    # create a pod
+runpodctl pod update <id>             # update a pod
+runpodctl pod start <id>              # start a stopped pod
+runpodctl pod stop <id>               # stop a running pod
+runpodctl pod delete <id>             # delete a pod
+```
+
+### serverless endpoints
+
+```bash
+runpodctl serverless list             # list endpoints (alias: sls)
+runpodctl serverless get <id>         # get endpoint details
+runpodctl serverless create           # create endpoint
+runpodctl serverless update <id>      # update endpoint
+runpodctl serverless delete <id>      # delete endpoint
+```
+
+other resources: `template` (alias: `tpl`), `volume` (alias: `vol`), `registry` (alias: `reg`)
+
+### file transfer
+
+send and receive files without api key using croc:
+
+```bash
+# send a file
 runpodctl send data.txt
-```
+# output: code is: 8338-galileo-collect-fidel
 
-_Example output:_
-
-```bash
-Sending 'data.txt' (5 B)
-Code is: 8338-galileo-collect-fidel
-On the other computer run
-
+# receive on another computer
 runpodctl receive 8338-galileo-collect-fidel
 ```
 
-### To receive a file
+## output format
+
+default output is json (optimized for agents). use `--output` flag for alternatives:
 
 ```bash
-runpodctl receive 8338-galileo-collect-fidel
+runpodctl pod list                    # json (default)
+runpodctl pod list --output=table     # human-readable table
+runpodctl pod list --output=yaml      # yaml format
 ```
 
-_Example output:_
+## legacy commands
 
-```bash
-Receiving 'data.txt' (5 B)
+legacy commands are still supported but deprecated. please update your scripts:
 
-Receiving (<-149.36.0.243:8692)
-data.txt 100% |████████████████████| ( 5/ 5B, 0.040 kB/s)
-```
+`get pod`, `create pod`, `remove pod`, `start pod`, `stop pod`
 
-### Using Google Drive
-
-You can use the following links for google colab
-
-[Send](https://colab.research.google.com/drive/1UaODD9iGswnKF7SZfsvwHDGWWwLziOsr#scrollTo=2nlcIAY3gGLt)
-
-[Receive](https://colab.research.google.com/drive/1ot8pODgystx1D6_zvsALDSvjACBF1cj6#scrollTo=RF1bMqhBOpSZ)
-
-## Pod Commands
-
-Before using pod commands, configure the API key obtained from your [RunPod account](https://runpod.io/console/user/settings).
-
-```bash
-# configure API key
-runpodctl config --apiKey={key}
-
-# Get all pods
-runpodctl get pod
-
-# Get a pod
-runpodctl get pod {podId}
-
-# Start an ondemand pod.
-runpodctl start pod {podId}
-
-# Start a spot pod with bid.
-# The bid price you set is the price you will pay if not outbid:
-runpodctl start pod {podId} --bid=0.3
-
-# Stop a pod
-runpodctl stop pod {podId}
-```
-
-For a comprehensive list of commands, visit [RunPod CLI documentation](docs/runpodctl.md).
-
-## Acknowledgements
+## acknowledgements
 
 - [cobra](https://github.com/spf13/cobra)
 - [croc](https://github.com/schollz/croc)
 - [golang](https://go.dev/)
-- [nebula](https://github.com/slackhq/nebula)
 - [viper](https://github.com/spf13/viper)

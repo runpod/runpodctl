@@ -3,89 +3,193 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"strings"
-	"time"
 
-	"github.com/runpod/runpodctl/api"
+	"github.com/runpod/runpodctl/cmd/billing"
 	"github.com/runpod/runpodctl/cmd/config"
-	"github.com/runpod/runpodctl/cmd/croc"
+	"github.com/runpod/runpodctl/cmd/datacenter"
+	"github.com/runpod/runpodctl/cmd/doctor"
+	"github.com/runpod/runpodctl/cmd/gpu"
+	"github.com/runpod/runpodctl/cmd/legacy"
+	"github.com/runpod/runpodctl/cmd/model"
+	"github.com/runpod/runpodctl/cmd/pod"
+	"github.com/runpod/runpodctl/cmd/project"
+	"github.com/runpod/runpodctl/cmd/registry"
+	"github.com/runpod/runpodctl/cmd/serverless"
+	"github.com/runpod/runpodctl/cmd/template"
+	"github.com/runpod/runpodctl/cmd/transfer"
+	"github.com/runpod/runpodctl/cmd/user"
+	"github.com/runpod/runpodctl/cmd/volume"
+	"github.com/runpod/runpodctl/internal/api"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
-const graphqlTimeoutFlagName = "graphql-timeout"
-
 var version string
+var outputFormat string
 
-// Entrypoint for the CLI
+// rootCmd is the base command
 var rootCmd = &cobra.Command{
 	Use:   "runpodctl",
-	Short: "CLI for runpod.io",
-	Long:  "The RunPod CLI tool to manage resources on runpod.io and develop serverless applications.",
+	Short: "cli for runpod.io",
+	Long: `runpodctl - manage your ai system.
+
+getting started:
+  1. get your api key at https://www.runpod.io/console/user/settings
+  2. run: runpodctl doctor (will prompt for key and save it)
+  or: export RUNPOD_API_KEY=your-key
+
+resources:
+  pod            manage gpu pods
+  serverless     manage serverless endpoints (alias: sls)
+  template       manage templates (alias: tpl)
+  model          manage model repository
+  network-volume manage network volumes (alias: nv)
+  registry       manage container registry auth (alias: reg)
+
+info:
+  user           show account info and balance (alias: me)
+  gpu            list available gpu types
+  datacenter     list datacenters and availability (alias: dc)
+  billing        view billing history
+
+utilities:
+  doctor         diagnose and fix cli issues
+  ssh            manage ssh keys and connections
+  send/receive   transfer files to/from pods
+
+deprecated
+  get, create, remove, start, stop, exec, project, config, get models`,
 }
 
+// GetRootCmd returns the root command
 func GetRootCmd() *cobra.Command {
 	return rootCmd
 }
 
 func init() {
 	cobra.OnInitialize(initConfig)
+	// disable default completion command, we have our own
+	rootCmd.CompletionOptions.DisableDefaultCmd = true
 	registerCommands()
 }
 
 func registerCommands() {
-	viper.SetDefault(api.GraphQLTimeoutKey, 10*time.Second)
+	// Global flags
+	rootCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "json", "output format (json, yaml)")
 
-	rootCmd.AddCommand(config.ConfigCmd)
-	// RootCmd.AddCommand(connectCmd)
-	// RootCmd.AddCommand(copyCmd)
-	rootCmd.AddCommand(createCmd)
-	rootCmd.AddCommand(getCmd)
-	rootCmd.AddCommand(removeCmd)
-	rootCmd.AddCommand(startCmd)
-	rootCmd.AddCommand(stopCmd)
-	rootCmd.AddCommand(versionCmd)
-	rootCmd.AddCommand(projectCmd)
-	rootCmd.AddCommand(updateCmd)
+	// Core resource commands
+	rootCmd.AddCommand(pod.Cmd)
+	rootCmd.AddCommand(serverless.Cmd)
+	rootCmd.AddCommand(template.Cmd)
+	rootCmd.AddCommand(model.Cmd)
+	rootCmd.AddCommand(volume.Cmd)
+	rootCmd.AddCommand(registry.Cmd)
+
+	// Info commands
+	rootCmd.AddCommand(user.Cmd)
+	rootCmd.AddCommand(gpu.Cmd)
+	rootCmd.AddCommand(datacenter.Cmd)
+	rootCmd.AddCommand(billing.Cmd)
+
+	// Utility commands
 	rootCmd.AddCommand(sshCmd)
-
-	// Remote File Execution
+	rootCmd.AddCommand(doctor.Cmd)
+	rootCmd.AddCommand(transfer.SendCmd)
+	rootCmd.AddCommand(transfer.ReceiveCmd)
 	rootCmd.AddCommand(execCmd)
 
-	// file transfer via croc
-	rootCmd.AddCommand(croc.ReceiveCmd)
-	rootCmd.AddCommand(croc.SendCmd)
-	rootCmd.AddCommand(croc.SCPHelp)
+	// Project commands (hidden - deprecated, will be replaced)
+	projectCmd := &cobra.Command{
+		Use:    "project",
+		Short:  "manage serverless projects (deprecated)",
+		Long:   "create, develop, build, and deploy serverless projects",
+		Hidden: true,
+	}
+	projectCmd.AddCommand(project.NewProjectCmd)
+	projectCmd.AddCommand(project.StartProjectCmd)
+	projectCmd.AddCommand(project.DeployProjectCmd)
+	projectCmd.AddCommand(project.BuildProjectCmd)
+	rootCmd.AddCommand(projectCmd)
 
-	// Version
+	// Version command
+	rootCmd.AddCommand(versionCmd)
+
+	// Completion command (replaces default cobra completion)
+	rootCmd.AddCommand(completionCmd)
+
+	// Update command
+	rootCmd.AddCommand(updateCmd)
+
+	// Help command (lowercase description)
+	rootCmd.SetHelpCommand(newHelpCmd(rootCmd))
+
+	// Legacy commands (hidden, for backwards compatibility)
+	rootCmd.AddCommand(legacy.GetCmd)
+	rootCmd.AddCommand(legacy.CreateCmd)
+	rootCmd.AddCommand(legacy.RemoveCmd)
+	rootCmd.AddCommand(legacy.StartCmd)
+	rootCmd.AddCommand(legacy.StopCmd)
+
+	// Legacy config command (hidden, still works with --apiKey flag)
+	config.ConfigCmd.Hidden = true
+	config.ConfigCmd.Short = "deprecated: use 'runpodctl doctor'"
+	config.ConfigCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
+		fmt.Fprintln(os.Stderr, "warning: 'runpodctl config' is deprecated, use 'runpodctl doctor' instead")
+	}
+	rootCmd.AddCommand(config.ConfigCmd)
+
+	// Version flag
 	rootCmd.Version = version
-	rootCmd.Flags().BoolP("version", "v", false, "Print the version of runpodctl")
-	rootCmd.SetVersionTemplate(`{{printf "runpodctl %s\n" .Version}}`)
-
-	rootCmd.PersistentFlags().Duration(graphqlTimeoutFlagName, 10*time.Second, "GraphQL request timeout duration (e.g. 10s, 1m)")
-	viper.BindPFlag(api.GraphQLTimeoutKey, rootCmd.PersistentFlags().Lookup(graphqlTimeoutFlagName)) //nolint
+	rootCmd.Flags().BoolP("version", "v", false, "print the version of runpodctl")
+	rootCmd.SetVersionTemplate(`runpodctl {{ .Version }}
+`)
 }
 
-// Execute adds all child commands to the root command and sets flags appropriately.
-// This is called by main.main(). It only needs to happen once to the rootCmd.
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "print the version",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Printf("runpodctl %s\n", version)
+	},
+}
+
+func newHelpCmd(root *cobra.Command) *cobra.Command {
+	return &cobra.Command{
+		Use:   "help [command]",
+		Short: "help about any command",
+		Long:  "help about any command",
+		Args:  cobra.ArbitraryArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			target := root
+			if len(args) == 0 {
+				_ = target.Help()
+				return
+			}
+			c, _, err := target.Find(args)
+			if err != nil || c == nil {
+				fmt.Fprintf(os.Stderr, "unknown help topic %q\n", args)
+				_ = target.Help()
+				return
+			}
+			_ = c.Help()
+		},
+	}
+}
+
+// Execute runs the root command
 func Execute(ver string) {
-	sanitizedVersion := sanitizeVersion(ver)
-	version = sanitizedVersion
-	api.Version = sanitizedVersion
-	rootCmd.Version = sanitizedVersion
+	version = ver
+	api.Version = ver
+	rootCmd.Version = ver
 
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		fmt.Fprintf(os.Stderr, `{"error":"%s"}`+"\n", err.Error())
 		os.Exit(1)
 	}
 }
 
-func sanitizeVersion(ver string) string {
-	return strings.TrimRight(ver, "\r\n")
-}
-
-// initConfig reads in config file and ENV variables if set.
+// initConfig reads config file and ENV variables
 func initConfig() {
 	home, err := os.UserHomeDir()
 	cobra.CheckErr(err)
@@ -93,29 +197,23 @@ func initConfig() {
 	viper.AddConfigPath(configPath)
 	viper.SetConfigType("toml")
 	viper.SetConfigName("config.toml")
-	config.ConfigFile = configPath + "/config.toml"
 
-	viper.AutomaticEnv() // read in environment variables that match
+	viper.AutomaticEnv()
 
-	// If a config file is found, read it in.
 	if err := viper.ReadInConfig(); err == nil {
-		// fmt.Fprintln(os.Stderr, "Using config file:", viper.ConfigFileUsed())
+		// config loaded
 	} else {
-		// legacy: try to migrate old config to new location
+		// legacy: try to migrate old config
 		viper.SetConfigType("yaml")
 		viper.AddConfigPath(home)
 		viper.SetConfigName(".runpod.yaml")
 		if yamlReadErr := viper.ReadInConfig(); yamlReadErr == nil {
-			fmt.Println("Runpod config location has moved from ~/.runpod.yaml to ~/.runpod/config.toml")
-			fmt.Println("migrating your existing config to ~/.runpod/config.toml")
-		} else {
-			fmt.Println("Runpod config file not found, please run `runpodctl config` to create it")
+			fmt.Fprintln(os.Stderr, "migrating config from ~/.runpod.yaml to ~/.runpod/config.toml")
 		}
 		viper.SetConfigType("toml")
 		// make .runpod folder if not exists
 		err := os.MkdirAll(configPath, os.ModePerm)
 		cobra.CheckErr(err)
-		err = viper.WriteConfigAs(config.ConfigFile)
-		cobra.CheckErr(err)
+		viper.WriteConfigAs(configPath + "/config.toml") //nolint:errcheck
 	}
 }

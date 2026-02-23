@@ -165,8 +165,8 @@ var NewProjectCmd = &cobra.Command{
 	Use:     "create",
 	Aliases: []string{"new"},
 	Args:    cobra.ExactArgs(0),
-	Short:   "Creates a new project",
-	Long:    "Creates a new RunPod project folder on your local machine.",
+	Short:   "create a new project",
+	Long:    "create a new runpod project folder on your local machine.",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Print("Welcome to the RunPod Project Creator!\n--------------------------------------\n\n")
 
@@ -240,7 +240,7 @@ var NewProjectCmd = &cobra.Command{
 		// Create Project
 		createNewProject(projectName, cudaVersion, pythonVersion, modelType, modelName, initCurrentDir)
 		fmt.Printf("\nProject %s created successfully! \nNavigate to your project directory with `cd %s`\n\n", projectName, projectName)
-		fmt.Println("Tip: Run `runpodctl project dev` to start a development session for your project.")
+		fmt.Println("tip: run `runpodctl project dev` to start a development session for your project.")
 	},
 }
 
@@ -248,8 +248,8 @@ var StartProjectCmd = &cobra.Command{
 	Use:     "dev",
 	Aliases: []string{"start"},
 	Args:    cobra.ExactArgs(0),
-	Short:   "Start a development session for the current project",
-	Long:    "This command establishes a connection between your local development environment and your RunPod project environment, allowing for real-time synchronization of changes.",
+	Short:   "start a development session for the current project",
+	Long:    "this command establishes a connection between your local development environment and your runpod project environment, allowing for real-time synchronization of changes.",
 	Run: func(cmd *cobra.Command, args []string) {
 		// Check for the existence of 'runpod.toml' in the current directory
 		if _, err := os.Stat("runpod.toml"); os.IsNotExist(err) {
@@ -286,8 +286,8 @@ var StartProjectCmd = &cobra.Command{
 var DeployProjectCmd = &cobra.Command{
 	Use:   "deploy",
 	Args:  cobra.ExactArgs(0),
-	Short: "deploys your project as an endpoint",
-	Long:  "deploys a serverless endpoint for the RunPod project in the current folder",
+	Short: "deploy your project as an endpoint",
+	Long:  "deploy a serverless endpoint for the runpod project in the current folder",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Deploying project...")
 		networkVolumeId, err := selectNetworkVolume()
@@ -312,8 +312,8 @@ var DeployProjectCmd = &cobra.Command{
 var BuildProjectCmd = &cobra.Command{
 	Use:   "build",
 	Args:  cobra.ExactArgs(0),
-	Short: "builds Dockerfile for current project",
-	Long:  "builds a local Dockerfile for the project in the current folder. You can use this Dockerfile to build an image and deploy it to any API server.",
+	Short: "build a dockerfile for the current project",
+	Long:  "build a local dockerfile for the project in the current folder. you can use this dockerfile to build an image and deploy it to any api server.",
 	Run: func(cmd *cobra.Command, args []string) {
 		buildProjectDockerfile()
 		// config := loadProjectConfig()

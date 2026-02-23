@@ -2,11 +2,12 @@ package exec
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/runpod/runpodctl/cmd/project"
 )
 
-func PythonOverSSH(podID string, file string) error {
+func PythonOverSSH(podID string, file string, pythonCommand string) error {
 	sshConn, err := project.PodSSHConnection(podID)
 	if err != nil {
 		return fmt.Errorf("getting SSH connection: %w", err)
@@ -18,7 +19,11 @@ func PythonOverSSH(podID string, file string) error {
 	}
 
 	// Run the file on the pod
-	if err := sshConn.RunCommand("python3.11 /tmp/" + file); err != nil {
+	pythonCommand = strings.TrimSpace(pythonCommand)
+	if pythonCommand == "" {
+		pythonCommand = "python3"
+	}
+	if err := sshConn.RunCommand(pythonCommand + " /tmp/" + file); err != nil {
 		return fmt.Errorf("running Python command: %w", err)
 	}
 

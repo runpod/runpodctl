@@ -1,7 +1,6 @@
 package model
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -20,43 +19,58 @@ var (
 	getAll      bool
 )
 
+var listCmd = &cobra.Command{
+	Use:     "list",
+	Aliases: []string{"ls"},
+	Args:    cobra.ExactArgs(0),
+	Short:   "list models",
+	Long:    "list models in the runpod model repository",
+	Run:     runModelList,
+}
+
 var GetModelsCmd = &cobra.Command{
-	Use:    "models",
-	Args:   cobra.ExactArgs(0),
-	Short:  "internal command",
-	Long:   "",
-	Hidden: true,
-	Run: func(cmd *cobra.Command, args []string) {
-		input := &api.GetModelsInput{
-			Provider: getProvider,
-			Name:     getName,
-			All:      getAll,
-		}
-
-		models, err := api.GetModels(input)
-		if err != nil {
-			if errors.Is(err, api.ErrModelRepoNotImplemented) {
-				fmt.Println(api.ErrModelRepoNotImplemented.Error())
-				return
-			}
-
-			cobra.CheckErr(err)
-			return
-		}
-
-		if len(models) == 0 {
-			fmt.Println("no models found")
-			return
-		}
-
-		displayModels(models)
-	},
+	Use:     "models",
+	Aliases: []string{"model"},
+	Args:    cobra.ExactArgs(0),
+	Short:   "deprecated: use 'runpodctl model list'",
+	Hidden:  true,
+	Run:     runModelList,
 }
 
 func init() {
-	GetModelsCmd.Flags().StringVar(&getProvider, "provider", "", "")
-	GetModelsCmd.Flags().StringVar(&getName, "name", "", "")
-	GetModelsCmd.Flags().BoolVar(&getAll, "all", false, "")
+	bindModelListFlags(listCmd)
+	bindModelListFlags(GetModelsCmd)
+}
+
+func bindModelListFlags(cmd *cobra.Command) {
+	cmd.Flags().StringVar(&getProvider, "provider", "", "filter by provider")
+	cmd.Flags().StringVar(&getName, "name", "", "filter by model name")
+	cmd.Flags().BoolVar(&getAll, "all", false, "include all models (not just yours)")
+}
+
+func runModelList(cmd *cobra.Command, args []string) {
+	input := &api.GetModelsInput{
+		Provider: getProvider,
+		Name:     getName,
+		All:      getAll,
+	}
+
+	models, err := api.GetModels(input)
+	if err != nil {
+		if handleModelRepoError(err) {
+			return
+		}
+
+		cobra.CheckErr(err)
+		return
+	}
+
+	if len(models) == 0 {
+		fmt.Println("no models found")
+		return
+	}
+
+	displayModels(models)
 }
 
 func displayModels(models []*api.Model) {
