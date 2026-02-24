@@ -76,6 +76,11 @@ runpod/
 ## build commands
 
 ```bash
+# install globally (always do this after changes)
+go install .
+# also copy to /usr/local/bin so both paths are up to date:
+sudo cp ~/go/bin/runpodctl /usr/local/bin/runpodctl
+
 # local development build
 make local
 # output: bin/runpod
@@ -84,8 +89,11 @@ make local
 make release
 # outputs: bin/runpod-{os}-{arch}
 
-# run tests
+# run unit tests
 go test ./...
+
+# run all tests (unit + e2e) — always run after changes
+go test -tags e2e ./...
 ```
 
 ## command structure
@@ -158,6 +166,7 @@ graphql fallback in `internal/api/graphql.go` for features rest doesn't support 
 
 ## important notes
 
+- **keep the skill in sync** — whenever commands, flags, or behavior change, update the runpodctl skill at https://github.com/runpod/skills/tree/main/runpodctl
 - **never start/stop servers** — user handles that
 - file transfer (`send`/`receive`) works without api key
 - version is injected at build time via `-ldflags`
