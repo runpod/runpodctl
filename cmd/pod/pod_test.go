@@ -48,11 +48,21 @@ func TestListCmd_Flags(t *testing.T) {
 	if flags.Lookup("name") == nil {
 		t.Error("expected --name flag")
 	}
-	if flags.Lookup("include-machine") == nil {
-		t.Error("expected --include-machine flag")
+	if flags.Lookup("status") == nil {
+		t.Error("expected --status flag")
 	}
-	if flags.Lookup("include-network-volume") == nil {
-		t.Error("expected --include-network-volume flag")
+	if flags.Lookup("since") == nil {
+		t.Error("expected --since flag")
+	}
+	if flags.Lookup("created-after") == nil {
+		t.Error("expected --created-after flag")
+	}
+	if flags.Lookup("all") == nil {
+		t.Error("expected --all flag")
+	}
+	allFlag := flags.ShorthandLookup("a")
+	if allFlag == nil {
+		t.Error("expected -a shorthand for --all")
 	}
 }
 
