@@ -74,12 +74,6 @@ func (c *Client) ListPods(opts *PodListOptions) ([]Pod, error) {
 		if opts.Name != "" {
 			params.Set("name", opts.Name)
 		}
-		if opts.IncludeMachine {
-			params.Set("includeMachine", "true")
-		}
-		if opts.IncludeNetworkVolume {
-			params.Set("includeNetworkVolume", "true")
-		}
 		for _, gpuType := range opts.GpuTypeIDs {
 			params.Add("gpuTypeId", gpuType)
 		}
@@ -103,12 +97,10 @@ func (c *Client) ListPods(opts *PodListOptions) ([]Pod, error) {
 
 // PodListOptions are options for listing pods
 type PodListOptions struct {
-	ComputeType          string
-	GpuTypeIDs           []string
-	DataCenterIDs        []string
-	Name                 string
-	IncludeMachine       bool
-	IncludeNetworkVolume bool
+	ComputeType   string
+	GpuTypeIDs    []string
+	DataCenterIDs []string
+	Name          string
 }
 
 // GetPod returns a single pod by ID

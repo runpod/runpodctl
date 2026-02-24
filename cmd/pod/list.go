@@ -29,7 +29,7 @@ type podListOutput struct {
 	GpuCount      int         `json:"gpuCount"`
 	VolumeInGb    int         `json:"volumeInGb"`
 	CostPerHr     float64     `json:"costPerHr,omitempty"`
-	CreatedAt     interface{} `json:"createdAt,omitempty"`
+	CreatedAt     string      `json:"createdAt,omitempty"`
 }
 
 var (
@@ -90,7 +90,13 @@ func runList(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	statusFilter := strings.ToUpper(listStatus)
+	if listAll && listStatus != "" {
+		err := fmt.Errorf("--all and --status cannot be used together")
+		output.Error(err)
+		return err
+	}
+
+	statusFilter := listStatus
 	if statusFilter == "" && !listAll {
 		statusFilter = "RUNNING"
 	}
@@ -107,6 +113,12 @@ func runList(cmd *cobra.Command, args []string) error {
 			}
 		}
 
+		ct := parseCreatedAt(p.CreatedAt)
+		var createdAtStr string
+		if !ct.IsZero() {
+			createdAtStr = ct.UTC().Format(time.RFC3339)
+		}
+
 		items = append(items, podListOutput{
 			ID:            p.ID,
 			Name:          p.Name,
@@ -116,7 +128,7 @@ func runList(cmd *cobra.Command, args []string) error {
 			GpuCount:      p.GpuCount,
 			VolumeInGb:    p.VolumeInGb,
 			CostPerHr:     p.CostPerHr,
-			CreatedAt:     p.CreatedAt,
+			CreatedAt:     createdAtStr,
 		})
 	}
 
@@ -124,26 +136,27 @@ func runList(cmd *cobra.Command, args []string) error {
 	return output.Print(items, &output.Config{Format: format})
 }
 
-// parseDuration parses a duration string like "1h", "7d", "30d".
-// Supported suffixes: h (hours), d (days).
+// parseDuration parses a duration string like "30m", "1h", "1h30m", "7d".
+// It handles "d" (days) specially and falls back to time.ParseDuration for everything else.
 func parseDuration(s string) (time.Duration, error) {
-	if len(s) < 2 {
-		return 0, fmt.Errorf("invalid duration %q: too short", s)
-	}
-	suffix := s[len(s)-1]
-	numStr := s[:len(s)-1]
-	n, err := strconv.Atoi(numStr)
-	if err != nil {
-		return 0, fmt.Errorf("invalid duration %q: %w", s, err)
-	}
-	switch suffix {
-	case 'h':
-		return time.Duration(n) * time.Hour, nil
-	case 'd':
+	if strings.HasSuffix(s, "d") {
+		n, err := strconv.Atoi(strings.TrimSuffix(s, "d"))
+		if err != nil {
+			return 0, fmt.Errorf("invalid duration %q: %w", s, err)
+		}
+		if n <= 0 {
+			return 0, fmt.Errorf("invalid duration %q: must be positive", s)
+		}
 		return time.Duration(n) * 24 * time.Hour, nil
-	default:
-		return 0, fmt.Errorf("invalid duration %q: unsupported suffix %q (use h or d)", s, string(suffix))
 	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid duration %q: supported formats are e.g. 30m, 2h, 7d", s)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("invalid duration %q: must be positive", s)
+	}
+	return d, nil
 }
 
 // parseCreatedAt parses the createdAt field from the API response.

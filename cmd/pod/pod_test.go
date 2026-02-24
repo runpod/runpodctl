@@ -3,6 +3,7 @@ package pod
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -138,5 +139,109 @@ func TestPodCmd_Help(t *testing.T) {
 	}
 	if output == "" {
 		t.Error("expected help output")
+	}
+}
+
+func TestParseDuration(t *testing.T) {
+	tests := []struct {
+		input   string
+		want    time.Duration
+		wantErr bool
+	}{
+		// valid inputs
+		{input: "1h", want: time.Hour},
+		{input: "7d", want: 7 * 24 * time.Hour},
+		{input: "30m", want: 30 * time.Minute},
+		{input: "1h30m", want: time.Hour + 30*time.Minute},
+		{input: "2h", want: 2 * time.Hour},
+		{input: "1d", want: 24 * time.Hour},
+
+		// invalid inputs
+		{input: "-1d", wantErr: true},
+		{input: "0h", wantErr: true},
+		{input: "0d", wantErr: true},
+		{input: "abc", wantErr: true},
+		{input: "", wantErr: true},
+		{input: "-2h", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := parseDuration(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("parseDuration(%q) expected error, got %v", tt.input, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("parseDuration(%q) unexpected error: %v", tt.input, err)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("parseDuration(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseCreatedAt(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    interface{}
+		wantZero bool
+		wantTime time.Time
+	}{
+		{
+			name:     "RFC3339 string",
+			input:    "2025-06-15T10:30:00Z",
+			wantZero: false,
+			wantTime: time.Date(2025, 6, 15, 10, 30, 0, 0, time.UTC),
+		},
+		{
+			name:     "Unix timestamp string",
+			input:    "1750000000",
+			wantZero: false,
+			wantTime: time.Unix(1750000000, 0),
+		},
+		{
+			name:     "invalid string",
+			input:    "not-a-date",
+			wantZero: true,
+		},
+		{
+			name:     "nil value",
+			input:    nil,
+			wantZero: true,
+		},
+		{
+			name:     "non-string type (int)",
+			input:    12345,
+			wantZero: true,
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			wantZero: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseCreatedAt(tt.input)
+			if tt.wantZero {
+				if !got.IsZero() {
+					t.Errorf("parseCreatedAt(%v) = %v, want zero time", tt.input, got)
+				}
+				return
+			}
+			if got.IsZero() {
+				t.Errorf("parseCreatedAt(%v) returned zero time, want %v", tt.input, tt.wantTime)
+				return
+			}
+			if !got.Equal(tt.wantTime) {
+				t.Errorf("parseCreatedAt(%v) = %v, want %v", tt.input, got, tt.wantTime)
+			}
+		})
 	}
 }

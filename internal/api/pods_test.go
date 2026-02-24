@@ -45,9 +45,6 @@ func TestListPods_WithOptions(t *testing.T) {
 		if query.Get("computeType") != "GPU" {
 			t.Errorf("expected computeType=GPU")
 		}
-		if query.Get("includeMachine") != "true" {
-			t.Errorf("expected includeMachine=true")
-		}
 		json.NewEncoder(w).Encode([]Pod{})
 	}))
 	defer server.Close()
@@ -58,8 +55,7 @@ func TestListPods_WithOptions(t *testing.T) {
 	client.baseURL = server.URL
 
 	opts := &PodListOptions{
-		ComputeType:    "GPU",
-		IncludeMachine: true,
+		ComputeType: "GPU",
 	}
 	_, err := client.ListPods(opts)
 	if err != nil {

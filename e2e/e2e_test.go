@@ -61,15 +61,6 @@ func TestE2E_PodListWithOptions(t *testing.T) {
 		t.Fatalf("failed to create client: %v", err)
 	}
 
-	// test with include machine
-	pods, err := client.ListPods(&api.PodListOptions{
-		IncludeMachine: true,
-	})
-	if err != nil {
-		t.Fatalf("failed to list pods with machine info: %v", err)
-	}
-	t.Logf("found %d pods with machine info", len(pods))
-
 	// test with compute type filter
 	gpuPods, err := client.ListPods(&api.PodListOptions{
 		ComputeType: "GPU",
