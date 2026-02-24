@@ -90,6 +90,12 @@ func runList(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	if listSince != "" && listCreatedAfter != "" {
+		err := fmt.Errorf("--since and --created-after cannot be used together")
+		output.Error(err)
+		return err
+	}
+
 	if listAll && listStatus != "" {
 		err := fmt.Errorf("--all and --status cannot be used together")
 		output.Error(err)
