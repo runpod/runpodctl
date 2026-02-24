@@ -71,6 +71,8 @@ func init() {
 	cobra.OnInitialize(initConfig)
 	// disable default completion command, we have our own
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
+	// commands emit JSON errors via output.Error; silence Cobra's plain-text re-print
+	rootCmd.SilenceErrors = true
 	registerCommands()
 }
 
