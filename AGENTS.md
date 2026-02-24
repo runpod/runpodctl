@@ -76,12 +76,7 @@ runpod/
 ## build commands
 
 ```bash
-# install globally (always do this after changes)
-go install .
-# also copy to /usr/local/bin so both paths are up to date:
-sudo cp ~/go/bin/runpodctl /usr/local/bin/runpodctl
-
-# local development build
+# local development build (always do this after changes)
 make local
 # output: bin/runpod
 
@@ -92,7 +87,7 @@ make release
 # run unit tests
 go test ./...
 
-# run all tests (unit + e2e) — always run after changes
+# run e2e tests (requires RunPod API credentials)
 go test -tags e2e ./...
 ```
 
