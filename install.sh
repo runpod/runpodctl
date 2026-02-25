@@ -98,24 +98,24 @@ download_url_constructor() {
     local arch_type=$(uname -m)
 
     if [[ "$os_type" == "darwin" ]]; then
+        # macOS uses a universal binary (all architectures)
+        DOWNLOAD_URL="https://github.com/runpod/runpodctl/releases/download/${VERSION}/runpodctl-darwin-all.tar.gz"
+        return
+    elif [[ "$os_type" == "linux" ]]; then
         if [[ "$arch_type" == "x86_64" ]]; then
-            arch_type="amd64"  # For Intel-based Mac
-        elif [[ "$arch_type" == "arm64" ]]; then
-            arch_type="arm64"  # For ARM-based Mac (Apple Silicon)
+            arch_type="amd64"
+        elif [[ "$arch_type" == "aarch64" || "$arch_type" == "arm64" ]]; then
+            arch_type="arm64"
         else
-            echo "Unsupported macOS architecture: $arch_type"
+            echo "Unsupported Linux architecture: $arch_type"
             exit 1
         fi
-    elif [[ "$os_type" == "linux" ]]; then
-        arch_type="amd64"  # Assuming amd64 architecture for Linux
     else
         echo "Unsupported operating system: $os_type"
         exit 1
     fi
 
-    local version_without_v_prefix=${VERSION#v}
-
-    DOWNLOAD_URL="https://github.com/runpod/runpodctl/releases/download/${VERSION}/runpodctl_${version_without_v_prefix}_${os_type}_${arch_type}.tar.gz"
+    DOWNLOAD_URL="https://github.com/runpod/runpodctl/releases/download/${VERSION}/runpodctl-${os_type}-${arch_type}.tar.gz"
 }
 
 # ---------------------------- Download & Install ---------------------------- #
