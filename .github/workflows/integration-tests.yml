@@ -1,0 +1,69 @@
+name: Integration Test Matrix
+
+on:
+  push:
+    branches: [ main, feat-ci-tests, feat-install-noroot ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: integration-tests-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  test-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        user_mode: [root, non-root]
+    container:
+      image: alpine:latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install dependencies
+        run: |
+          apk add --no-cache bash wget grep sed tar git coreutils jq curl
+      - name: Setup Non-Root User and Workspace
+        if: matrix.user_mode == 'non-root'
+        run: |
+          adduser -D -u 1000 tester
+          mkdir -p /tmp/runpodctl-test
+          cp -r . /tmp/runpodctl-test/
+          chmod +x /tmp/runpodctl-test/tests/integration_suite.sh
+          chown -R tester:tester /tmp/runpodctl-test
+      - name: Run Unified Tests
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        run: |
+          chmod +x tests/integration_suite.sh
+          if [ "${{ matrix.user_mode }}" == "root" ]; then
+            ./tests/integration_suite.sh
+          else
+            su tester -c "cd /tmp/runpodctl-test && ./tests/integration_suite.sh"
+          fi
+      - name: Post-Run Cleanup (Emergency)
+        if: always()
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        run: |
+          # Try to find and kill any leaked pods if runpodctl was installed
+          RP=""
+          if [ -f "/usr/local/bin/runpodctl" ]; then
+            RP="/usr/local/bin/runpodctl"
+          elif [ -f "$HOME/.local/bin/runpodctl" ]; then
+            RP="$HOME/.local/bin/runpodctl"
+          elif [ -f "/home/tester/.local/bin/runpodctl" ]; then
+            RP="/home/tester/.local/bin/runpodctl"
+          fi
+          
+          if [ -n "$RP" ] && [ -n "$RUNPOD_API_KEY" ]; then
+            echo "Ensuring all CI resources are removed..."
+            $RP pod list --output json 2>/dev/null | jq -r '.[].id' | xargs -I {} $RP pod delete {} || true
+            $RP serverless list --output json 2>/dev/null | jq -r '.[].id' | xargs -I {} $RP serverless delete {} || true
+          fi
