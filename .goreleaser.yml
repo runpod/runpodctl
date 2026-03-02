@@ -56,8 +56,13 @@ homebrew_casks:
       owner: runpod
       name: homebrew-runpodctl
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+      branch: "runpodctl-{{ .Version }}"
       pull_request:
         enabled: true
+        base:
+          owner: runpod
+          name: homebrew-runpodctl
+          branch: main
     commit_author:
       name: runpod
       email: support@runpod.io
