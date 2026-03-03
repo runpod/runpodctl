@@ -162,7 +162,15 @@ func TestE2E_CLILifecycle_Pod(t *testing.T) {
 	t.Logf("Getting pod details...")
 	getOut, getErr := runCLI("pod", "get", podID, "--output", "json")
 	if getErr != nil {
-		t.Errorf("Failed to get pod: %v\nOutput: %s", getErr, getOut)
+		t.Fatalf("Failed to get pod: %v\nOutput: %s", getErr, getOut)
+	}
+
+	var pod map[string]interface{}
+	if err := json.Unmarshal([]byte(getOut), &pod); err != nil {
+		t.Fatalf("Failed to parse pod get output as JSON: %v\nOutput: %s", err, getOut)
+	}
+	if pod["id"] != podID {
+		t.Fatalf("Expected pod ID %s from get, got %v", podID, pod["id"])
 	}
 
 	// Update Pod
@@ -170,7 +178,20 @@ func TestE2E_CLILifecycle_Pod(t *testing.T) {
 	t.Logf("Updating pod name to %s...", newName)
 	updateOut, updateErr := runCLI("pod", "update", podID, "--name", newName)
 	if updateErr != nil {
-		t.Errorf("Failed to update pod: %v\nOutput: %s", updateErr, updateOut)
+		t.Fatalf("Failed to update pod: %v\nOutput: %s", updateErr, updateOut)
+	}
+
+	// Verify update
+	getOutUpdated, getErrUpdated := runCLI("pod", "get", podID, "--output", "json")
+	if getErrUpdated != nil {
+		t.Fatalf("Failed to get updated pod: %v\nOutput: %s", getErrUpdated, getOutUpdated)
+	}
+	var podUpdated map[string]interface{}
+	if err := json.Unmarshal([]byte(getOutUpdated), &podUpdated); err != nil {
+		t.Fatalf("Failed to parse updated pod get output as JSON: %v\nOutput: %s", err, getOutUpdated)
+	}
+	if podUpdated["name"] != newName {
+		t.Fatalf("Expected pod name %s after update, got %v", newName, podUpdated["name"])
 	}
 
 	// Stop Pod
@@ -188,77 +209,89 @@ func TestE2E_CLILifecycle_Pod(t *testing.T) {
 	}
 
 	// Test Croc File Transfer (Send/Receive)
-	t.Logf("Testing croc file transfer...")
-	testFileName := "ci-test-file.txt"
-	testFileContent := "v1.14.15-ci-test"
-	os.WriteFile(testFileName, []byte(testFileContent), 0644)
-	defer os.Remove(testFileName)
-
-	// Start send in background
-	// We use the binary directly here because runCLI blocks
-	var binaryPath string
-	for _, p := range []string{"runpodctl", "../runpodctl", os.ExpandEnv("$HOME/.local/bin/runpodctl"), "/usr/local/bin/runpodctl"} {
-		if _, err := exec.LookPath(p); err == nil {
-			binaryPath = p
-			break
+	enableCroc := os.Getenv("RUNPOD_E2E_TEST_CROC") != ""
+	if !enableCroc {
+		t.Logf("Skipping croc file transfer test: RUNPOD_E2E_TEST_CROC not set")
+	} else {
+		t.Logf("RUNPOD_E2E_TEST_CROC set; croc file transfer test is required")
+		t.Logf("Testing croc file transfer...")
+		testFileName := "ci-test-file.txt"
+		testFileContent := "v1.14.15-ci-test"
+		if err := os.WriteFile(testFileName, []byte(testFileContent), 0644); err != nil {
+			t.Fatalf("Failed to create croc test file %q: %v", testFileName, err)
 		}
-	}
+		defer os.Remove(testFileName)
 
-	if binaryPath != "" {
+		// Start send in background
+		// We use the binary directly here because runCLI blocks
+		var binaryPath string
+		for _, p := range []string{"runpodctl", "../runpodctl", os.ExpandEnv("$HOME/.local/bin/runpodctl"), "/usr/local/bin/runpodctl"} {
+			if _, err := exec.LookPath(p); err == nil {
+				binaryPath = p
+				break
+			}
+		}
+
+		if binaryPath == "" {
+			t.Fatalf("RUNPOD_E2E_TEST_CROC is set but runpodctl binary was not found in any of the expected paths")
+		}
+
 		sendCmd := exec.Command(binaryPath, "send", testFileName)
 		var sendOut bytes.Buffer
 		sendCmd.Stdout = &sendOut
 		sendCmd.Stderr = &sendOut
 		
-		err := sendCmd.Start()
-		if err == nil {
-			defer sendCmd.Process.Kill() // Ensure we don't leak the process
+		if err := sendCmd.Start(); err != nil {
+			t.Fatalf("Failed to start croc send command: %v", err)
+		}
+		defer sendCmd.Process.Kill() // Ensure we don't leak the process
 
-			// Poll for code
-			var crocCode string
-			for i := 0; i < 15; i++ {
-				outStr := sendOut.String()
-				// Basic extract: look for the format [word]-[word]-[word]-[number] or similar
-				// runpodctl prints "Code is: ..."
-				if strings.Contains(outStr, " ") {
-					lines := strings.Split(outStr, "\n")
-					for _, l := range lines {
-						if strings.HasPrefix(strings.TrimSpace(l), "Code") || len(strings.Split(l, "-")) >= 2 {
-							// just attempt to grab the last token
-							tokens := strings.Fields(l)
-							if len(tokens) > 0 {
-								possible := tokens[len(tokens)-1]
-								if strings.Contains(possible, "-") {
-									crocCode = possible
-									break
-								}
+		// Poll for code
+		var crocCode string
+		for i := 0; i < 15; i++ {
+			outStr := sendOut.String()
+			// Basic extract: look for the format [word]-[word]-[word]-[number] or similar
+			// runpodctl prints "Code is: ..."
+			if strings.Contains(outStr, " ") {
+				lines := strings.Split(outStr, "\n")
+				for _, l := range lines {
+					if strings.HasPrefix(strings.TrimSpace(l), "Code") || len(strings.Split(l, "-")) >= 2 {
+						// just attempt to grab the last token
+						tokens := strings.Fields(l)
+						if len(tokens) > 0 {
+							possible := tokens[len(tokens)-1]
+							if strings.Contains(possible, "-") {
+								crocCode = possible
+								break
 							}
 						}
 					}
 				}
-				if crocCode != "" {
-					break
-				}
-				time.Sleep(1 * time.Second)
 			}
-
 			if crocCode != "" {
-				t.Logf("Captured Croc Code: %s", crocCode)
-				// Test receive
-				pwd, _ := os.Getwd()
-				recvDir := filepath.Join(pwd, "recv_test")
-				os.MkdirAll(recvDir, 0755)
-				defer os.RemoveAll(recvDir)
-				
-				recvCmd := exec.Command(binaryPath, "receive", crocCode)
-				recvCmd.Dir = recvDir
-				recvErr := recvCmd.Run()
-				if recvErr != nil {
-					t.Logf("Warning: croc receive failed (expected if sender hasn't fully registered with relay): %v", recvErr)
-				}
-			} else {
-				t.Logf("Warning: Could not extract croc code in time. Send output: %s", sendOut.String())
+				break
 			}
+			time.Sleep(1 * time.Second)
+		}
+
+		if crocCode != "" {
+			t.Logf("Captured Croc Code: %s", crocCode)
+			// Test receive
+			pwd, _ := os.Getwd()
+			recvDir := filepath.Join(pwd, "recv_test")
+			if err := os.MkdirAll(recvDir, 0755); err != nil {
+				t.Fatalf("Failed to create croc receive directory %q: %v", recvDir, err)
+			}
+			defer os.RemoveAll(recvDir)
+			
+			recvCmd := exec.Command(binaryPath, "receive", crocCode)
+			recvCmd.Dir = recvDir
+			recvErr := recvCmd.Run()
+			if recvErr != nil {
+				t.Logf("Warning: croc receive failed (expected if sender hasn't fully registered with relay): %v", recvErr)
+			}
+		} else {
+			t.Fatalf("Could not extract croc code in time. Send output: %s", sendOut.String())
 		}
 	}
 }
@@ -325,19 +358,71 @@ func TestE2E_CLILifecycle_Serverless(t *testing.T) {
 
 	t.Logf("Endpoint is ready and propagated.")
 
-	// List
-	listOut, listErr := runCLI("serverless", "list", "--output", "json")
+	// List endpoints and assert the created endpoint exists
+	listOutRaw, listErr := runCLI("serverless", "list", "--output", "json")
 	if listErr != nil {
-		t.Errorf("Failed to list endpoints: %v\nOutput: %s", listErr, listOut)
-	} else if !strings.Contains(listOut, epID) {
-		t.Errorf("Endpoint ID %s not found in list output", epID)
+		t.Fatalf("Failed to list endpoints: %v\nOutput: %s", listErr, listOutRaw)
 	}
 
-	// Update
+	// We isolate the JSON array block robustly
+	listStart := strings.Index(listOutRaw, "[")
+	listEnd := strings.LastIndex(listOutRaw, "]")
+	if listStart == -1 || listEnd == -1 || listEnd < listStart {
+		t.Fatalf("Failed to find JSON block in serverless list output: %s", listOutRaw)
+	}
+	listOut := listOutRaw[listStart : listEnd+1]
+
+	type serverlessEndpoint struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+
+	var endpoints []serverlessEndpoint
+	if err := json.Unmarshal([]byte(listOut), &endpoints); err != nil {
+		t.Fatalf("Failed to parse serverless list output as JSON: %v\nOutput: %s", err, listOut)
+	}
+
+	var listedEp *serverlessEndpoint
+	for i := range endpoints {
+		if endpoints[i].ID == epID {
+			listedEp = &endpoints[i]
+			break
+		}
+	}
+	if listedEp == nil {
+		t.Fatalf("Endpoint ID %s not found in serverless list output", epID)
+	}
+
+	// Update endpoint name
 	newName := epName + "-updated"
 	t.Logf("Updating endpoint name to %s...", newName)
 	updateOut, updateErr := runCLI("serverless", "update", epID, "--name", newName)
 	if updateErr != nil {
-		t.Errorf("Failed to update serverless endpoint: %v\nOutput: %s", updateErr, updateOut)
+		t.Fatalf("Failed to update serverless endpoint: %v\nOutput: %s", updateErr, updateOut)
+	}
+
+	// Get endpoint and assert the name was updated
+	getOutRaw, getErr := runCLI("serverless", "get", epID, "--output", "json")
+	if getErr != nil {
+		t.Fatalf("Failed to get serverless endpoint: %v\nOutput: %s", getErr, getOutRaw)
+	}
+
+	getStart := strings.Index(getOutRaw, "{")
+	getEnd := strings.LastIndex(getOutRaw, "}")
+	if getStart == -1 || getEnd == -1 || getEnd < getStart {
+		t.Fatalf("Failed to find JSON block in serverless get output: %s", getOutRaw)
+	}
+	getOut := getOutRaw[getStart : getEnd+1]
+
+	var updatedEp serverlessEndpoint
+	if err := json.Unmarshal([]byte(getOut), &updatedEp); err != nil {
+		t.Fatalf("Failed to parse serverless get output as JSON: %v\nOutput: %s", err, getOut)
+	}
+
+	if updatedEp.ID != epID {
+		t.Fatalf("Expected endpoint ID %s from get, got %s", epID, updatedEp.ID)
+	}
+	if !strings.HasPrefix(updatedEp.Name, newName) {
+		t.Fatalf("Expected endpoint name starting with %s after update, got %s", newName, updatedEp.Name)
 	}
 }

@@ -108,12 +108,19 @@ check_system_requirements() {
 fetch_latest_version() {
     local version_url="https://api.github.com/repos/runpod/runpodctl/releases/latest"
     # Using grep/sed instead of jq for zero-dependency parsing
-    VERSION=$(wget -q -O- "$version_url" | grep '"tag_name":' | sed -E 's/.*"tag_name": "([^"]+)".*/\1/')
+    # - Restrict to the first matching tag_name line
+    # - Expect the canonical JSON indentation for the field
+    VERSION=$(wget -q -O- "$version_url" | grep -m1 '^  "tag_name":' | sed -E 's/^[^"]*"tag_name": "([^"]+)".*/\1/')
     
-    if [ -z "$VERSION" ]; then
-        echo "Failed to fetch the latest version of runpodctl."
-        exit 1
-    fi
+    # Ensure we got a plausible semantic version tag (e.g., v1.2.3)
+    case "$VERSION" in
+        v[0-9]*) ;; # Valid format
+        *)
+            echo "Failed to fetch a valid latest version of runpodctl (got: '${VERSION:-<empty>}')."
+            exit 1
+            ;;
+    esac
+
     echo "Latest version of runpodctl: $VERSION"
 }
 
