@@ -5,7 +5,7 @@
 # This script provides a unified approach to installing the RunPod CLI tool.
 #
 # Usage:
-#   wget -qO- cli.runpod.io | bash
+#   wget -qO- cli.runpod.net | bash
 #
 # Requirements:
 #   - Bash shell
