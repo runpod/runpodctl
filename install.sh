@@ -24,10 +24,10 @@ detect_install_dir() {
         INSTALL_DIR="/usr/local/bin"
     else
         # Tiered Path Discovery: Prefer directories already in PATH
-        local preferred_dirs=("$HOME/.local/bin" "$HOME/bin" "$HOME/.bin")
+        local preferred_dirs="$HOME/.local/bin $HOME/bin $HOME/.bin"
         INSTALL_DIR=""
 
-        for dir in "${preferred_dirs[@]}"; do
+        for dir in $preferred_dirs; do
             if [[ ":$PATH:" == *":$dir:"* ]] && ([ -d "$dir" ] && [ -w "$dir" ]); then
                 INSTALL_DIR="$dir"
                 break
@@ -36,7 +36,7 @@ detect_install_dir() {
 
         # If none found in PATH, check if they exist and are writable
         if [ -z "$INSTALL_DIR" ]; then
-            for dir in "${preferred_dirs[@]}"; do
+            for dir in $preferred_dirs; do
                 if [ -d "$dir" ] && [ -w "$dir" ]; then
                     INSTALL_DIR="$dir"
                     break
@@ -91,15 +91,15 @@ install_with_brew() {
 
 # ------------------------- Install Required Packages ------------------------ #
 check_system_requirements() {
-    local missing_pkgs=()
+    local missing_pkgs=""
     for cmd in wget tar grep sed; do
         if ! command -v "$cmd" >/dev/null 2>&1; then
-            missing_pkgs+=("$cmd")
+            missing_pkgs="$missing_pkgs $cmd"
         fi
     done
 
-    if [ ${#missing_pkgs[@]} -ne 0 ]; then
-        echo "Error: Missing required commands: ${missing_pkgs[*]}"
+    if [ -n "$missing_pkgs" ]; then
+        echo "Error: Missing required commands: $missing_pkgs"
         exit 1
     fi
 }
