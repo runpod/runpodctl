@@ -49,7 +49,7 @@ archives:
 release:
   prerelease: auto
 
-homebrew_casks:
+brews:
   - name: runpodctl
     homepage: "https://github.com/runpod/runpodctl"
     repository:
@@ -66,6 +66,8 @@ homebrew_casks:
     commit_author:
       name: runpod
       email: support@runpod.io
+    install: |
+      bin.install "runpodctl"
     ids: [default]
 
 checksum:
