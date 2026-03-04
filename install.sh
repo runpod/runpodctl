@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+# Author: FNGarvin
+# License: MIT
+# Year: 2026
+
 # Unified Installer for RunPod CLI Tool
 #
 # This script provides a unified approach to installing the RunPod CLI tool.
@@ -50,14 +54,27 @@ detect_install_dir() {
             mkdir -p "$INSTALL_DIR"
         fi
 
-        echo "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓"
-        echo "┃  USER-SPACE INSTALLATION DETECTED                          ┃"
-        echo "┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫"
-        echo "┃ Target: $INSTALL_DIR ┃"
-        echo "┃                                                            ┃"
-        echo "┃ To install for ALL USERS (requires root), please run:      ┃"
-        echo "┃ sudo bash <(wget -qO- cli.runpod.io) # or curl -sL         ┃"
-        echo "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛"
+        # High-visibility warning box
+        local width
+        width=$(tput cols 2>/dev/null || echo 80)
+        [ "$width" -gt 80 ] && width=80
+        local inner_width=$((width - 4))
+        
+        local line=""
+        local i=0
+        while [ $i -lt "$inner_width" ]; do
+            line="${line}━"
+            i=$((i + 1))
+        done
+
+        echo "┏━${line}━┓"
+        printf "┃ %-${inner_width}s ┃\n" "USER-SPACE INSTALLATION DETECTED"
+        echo "┣━${line}━┫"
+        printf "┃ %-${inner_width}s ┃\n" "Target: $INSTALL_DIR"
+        printf "┃ %-${inner_width}s ┃\n" ""
+        printf "┃ %-${inner_width}s ┃\n" "To install for ALL USERS (requires root), please run:"
+        printf "┃ %-${inner_width}s ┃\n" "sudo bash <(wget -qO- cli.runpod.io) # or curl -sL"
+        echo "┗━${line}━┛"
 
         # Check if INSTALL_DIR is in PATH
         if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
@@ -108,9 +125,8 @@ check_system_requirements() {
 fetch_latest_version() {
     local version_url="https://api.github.com/repos/runpod/runpodctl/releases/latest"
     # Using grep/sed instead of jq for zero-dependency parsing
-    # - Restrict to the first matching tag_name line
-    # - Expect the canonical JSON indentation for the field
-    VERSION=$(wget -q -O- "$version_url" | grep -m1 '^  "tag_name":' | sed -E 's/^[^"]*"tag_name": "([^"]+)".*/\1/')
+    # - Robust extraction that doesn't depend on indentation or whitespace
+    VERSION=$(wget -q -O- "$version_url" | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
     
     # Ensure we got a plausible semantic version tag (e.g., v1.2.3)
     case "$VERSION" in
@@ -206,6 +222,8 @@ download_and_install_cli() {
 
     if ! mv "$cli_file_name" "$INSTALL_DIR/"; then
         echo "Failed to move $cli_file_name to $INSTALL_DIR/."
+        echo "Removing extracted binary at '$(pwd)/$cli_file_name' to avoid leaving stray files behind."
+        rm -f "$cli_file_name"
         exit 1
     fi
     echo "runpodctl installed successfully to $INSTALL_DIR."
@@ -228,3 +246,5 @@ check_system_requirements
 fetch_latest_version
 download_url_constructor
 download_and_install_cli
+
+#EOF install.sh

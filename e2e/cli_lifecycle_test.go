@@ -1,5 +1,9 @@
 //go:build e2e
 
+// Author: FNGarvin
+// License: MIT
+// Year: 2026
+
 package e2e
 
 import (
@@ -37,13 +41,8 @@ func getEnvOrDefault(key, fallback string) string {
 	return fallback
 }
 
-// HELPER: execute the runpodctl binary
-func runCLI(args ...string) (string, error) {
-	// Find binary in path (assume it was installed or built locally)
-	// We'll prefer a local build or the installed binary
-	var binaryPath string
-	
-	// Fallbacks
+// findBinaryPath searches for the runpodctl binary in standard locations
+func findBinaryPath() (string, error) {
 	pathsToTry := []string{
 		"./runpodctl",
 		"../runpodctl",
@@ -54,32 +53,37 @@ func runCLI(args ...string) (string, error) {
 
 	for _, p := range pathsToTry {
 		if _, err := exec.LookPath(p); err == nil {
-			binaryPath = p
-			break
+			return p, nil
 		}
 	}
+	return "", fmt.Errorf("runpodctl binary not found in PATH or standard locations")
+}
 
-	if binaryPath == "" {
-		return "", fmt.Errorf("runpodctl binary not found in PATH or standard locations")
+// HELPER: execute the runpodctl binary
+func runE2ECmd(args ...string) (string, error) {
+	binaryPath, err := findBinaryPath()
+	if err != nil {
+		return "", err
 	}
 
 	// Sanitize the command echo to hide keys in arguments if any
-	cmdStr := fmt.Sprintf("%s %s", binaryPath, strings.Join(args, " "))
-	fmt.Printf("DEBUG: Executing: %s\n", redactSensitive(cmdStr))
+	// cmdStr := fmt.Sprintf("%s %s", binaryPath, strings.Join(args, " "))
+	// Using fmt.Printf here for immediate visibility in CI, but t.Logf is preferred within tests.
+	// We'll update calls to pass *testing.T where possible.
 
 	cmd := exec.Command(binaryPath, args...)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 
-	err := cmd.Run()
+	err = cmd.Run()
 	output := redactSensitive(out.String())
 	return output, err
 }
 
 func extractIDField(jsonOutput string) (string, error) {
 	var result map[string]interface{}
-	
+
 	start := strings.Index(jsonOutput, "{")
 	end := strings.LastIndex(jsonOutput, "}")
 
@@ -101,7 +105,6 @@ func extractIDField(jsonOutput string) (string, error) {
 	return id, nil
 }
 
-
 func TestE2E_CLILifecycle_Pod(t *testing.T) {
 	if os.Getenv("RUNPOD_API_KEY") == "" {
 		t.Skip("RUNPOD_API_KEY is not set, skipping integration test")
@@ -116,7 +119,7 @@ func TestE2E_CLILifecycle_Pod(t *testing.T) {
 	t.Logf("Creating pod %s with image %s", podName, podImage)
 
 	// Create Pod
-	out, err := runCLI(
+	out, err := runE2ECmd(
 		"pod", "create",
 		"--name", podName,
 		"--image", podImage,
@@ -124,7 +127,7 @@ func TestE2E_CLILifecycle_Pod(t *testing.T) {
 		"--compute-type", "CPU",
 		"--output", "json",
 	)
-	
+
 	if err != nil {
 		t.Fatalf("Failed to create pod: %v\nOutput: %s", err, out)
 	}
@@ -135,23 +138,23 @@ func TestE2E_CLILifecycle_Pod(t *testing.T) {
 	}
 	t.Logf("Created Pod ID: %s", podID)
 
-	// Defer cleanup to run even if test fails
-	defer func() {
+	// Register cleanup to run even if test fails
+	t.Cleanup(func() {
 		t.Logf("Cleaning up pod %s...", podID)
-		_, delErr := runCLI("pod", "delete", podID)
+		_, delErr := runE2ECmd("pod", "delete", podID)
 		if delErr != nil {
 			t.Logf("Warning: failed to delete pod %s in cleanup: %v", podID, delErr)
 		} else {
 			t.Logf("Successfully deleted pod %s", podID)
 		}
-	}()
+	})
 
 	// Wait for propagation
 	time.Sleep(5 * time.Second)
 
 	// List Pods and look for ours
 	t.Logf("Listing pods to verify presence...")
-	listOut, listErr := runCLI("pod", "list", "--output", "json")
+	listOut, listErr := runE2ECmd("pod", "list", "--output", "json")
 	if listErr != nil {
 		t.Errorf("Failed to list pods: %v\nOutput: %s", listErr, listOut)
 	} else if !strings.Contains(listOut, podID) {
@@ -160,7 +163,7 @@ func TestE2E_CLILifecycle_Pod(t *testing.T) {
 
 	// Get Pod
 	t.Logf("Getting pod details...")
-	getOut, getErr := runCLI("pod", "get", podID, "--output", "json")
+	getOut, getErr := runE2ECmd("pod", "get", podID, "--output", "json")
 	if getErr != nil {
 		t.Fatalf("Failed to get pod: %v\nOutput: %s", getErr, getOut)
 	}
@@ -176,13 +179,13 @@ func TestE2E_CLILifecycle_Pod(t *testing.T) {
 	// Update Pod
 	newName := podName + "-updated"
 	t.Logf("Updating pod name to %s...", newName)
-	updateOut, updateErr := runCLI("pod", "update", podID, "--name", newName)
+	updateOut, updateErr := runE2ECmd("pod", "update", podID, "--name", newName)
 	if updateErr != nil {
 		t.Fatalf("Failed to update pod: %v\nOutput: %s", updateErr, updateOut)
 	}
 
 	// Verify update
-	getOutUpdated, getErrUpdated := runCLI("pod", "get", podID, "--output", "json")
+	getOutUpdated, getErrUpdated := runE2ECmd("pod", "get", podID, "--output", "json")
 	if getErrUpdated != nil {
 		t.Fatalf("Failed to get updated pod: %v\nOutput: %s", getErrUpdated, getOutUpdated)
 	}
@@ -196,14 +199,14 @@ func TestE2E_CLILifecycle_Pod(t *testing.T) {
 
 	// Stop Pod
 	t.Logf("Stopping pod...")
-	stopOut, stopErr := runCLI("pod", "stop", podID)
+	stopOut, stopErr := runE2ECmd("pod", "stop", podID)
 	if stopErr != nil {
 		t.Errorf("Failed to stop pod: %v\nOutput: %s", stopErr, stopOut)
 	}
 
 	// Start Pod
 	t.Logf("Starting pod...")
-	startOut, startErr := runCLI("pod", "start", podID)
+	startOut, startErr := runE2ECmd("pod", "start", podID)
 	if startErr != nil {
 		t.Errorf("Failed to start pod: %v\nOutput: %s", startErr, startOut)
 	}
@@ -223,24 +226,16 @@ func TestE2E_CLILifecycle_Pod(t *testing.T) {
 		defer os.Remove(testFileName)
 
 		// Start send in background
-		// We use the binary directly here because runCLI blocks
-		var binaryPath string
-		for _, p := range []string{"runpodctl", "../runpodctl", os.ExpandEnv("$HOME/.local/bin/runpodctl"), "/usr/local/bin/runpodctl"} {
-			if _, err := exec.LookPath(p); err == nil {
-				binaryPath = p
-				break
-			}
-		}
-
-		if binaryPath == "" {
-			t.Fatalf("RUNPOD_E2E_TEST_CROC is set but runpodctl binary was not found in any of the expected paths")
+		binaryPath, err := findBinaryPath()
+		if err != nil {
+			t.Fatalf("RUNPOD_E2E_TEST_CROC is set but binary path lookup failed: %v", err)
 		}
 
 		sendCmd := exec.Command(binaryPath, "send", testFileName)
 		var sendOut bytes.Buffer
 		sendCmd.Stdout = &sendOut
 		sendCmd.Stderr = &sendOut
-		
+
 		if err := sendCmd.Start(); err != nil {
 			t.Fatalf("Failed to start croc send command: %v", err)
 		}
@@ -250,20 +245,16 @@ func TestE2E_CLILifecycle_Pod(t *testing.T) {
 		var crocCode string
 		for i := 0; i < 15; i++ {
 			outStr := sendOut.String()
-			// Basic extract: look for the format [word]-[word]-[word]-[number] or similar
-			// runpodctl prints "Code is: ..."
+			// Robust exact-match extraction: parse the exact instruction string
 			if strings.Contains(outStr, " ") {
 				lines := strings.Split(outStr, "\n")
 				for _, l := range lines {
-					if strings.HasPrefix(strings.TrimSpace(l), "Code") || len(strings.Split(l, "-")) >= 2 {
-						// just attempt to grab the last token
-						tokens := strings.Fields(l)
+					if idx := strings.Index(l, "runpodctl receive "); idx != -1 {
+						remainder := strings.TrimSpace(l[idx+len("runpodctl receive "):])
+						tokens := strings.Fields(remainder)
 						if len(tokens) > 0 {
-							possible := tokens[len(tokens)-1]
-							if strings.Contains(possible, "-") {
-								crocCode = possible
-								break
-							}
+							crocCode = tokens[0]
+							break
 						}
 					}
 				}
@@ -283,7 +274,7 @@ func TestE2E_CLILifecycle_Pod(t *testing.T) {
 				t.Fatalf("Failed to create croc receive directory %q: %v", recvDir, err)
 			}
 			defer os.RemoveAll(recvDir)
-			
+
 			recvCmd := exec.Command(binaryPath, "receive", crocCode)
 			recvCmd.Dir = recvDir
 			recvErr := recvCmd.Run()
@@ -302,20 +293,44 @@ func TestE2E_CLILifecycle_Serverless(t *testing.T) {
 	}
 
 	slsImage := getEnvOrDefault("RUNPOD_TEST_SERVERLESS_IMAGE", defaultServerlessImage)
-
 	epName := fmt.Sprintf("ci-test-ep-%d", time.Now().Unix())
 
-	t.Logf("Creating serverless endpoint %s with image %s", epName, slsImage)
+	// Step 1: Create a temporary template from the image
+	tplName := fmt.Sprintf("ci-test-tpl-%d", time.Now().Unix())
+	t.Logf("Creating temporary serverless template %s with image %s", tplName, slsImage)
 
-	// For Serverless, current CLI requires a template-id. 
-	// The user mentioned bwf8egptou/wvrr20un0l as their previous templates.
-	// We will use wvrr20un0l as a default if none provided.
-	slsTemplate := getEnvOrDefault("RUNPOD_TEST_SERVERLESS_TEMPLATE_ID", "wvrr20un0l")
+	tplOut, err := runE2ECmd(
+		"template", "create",
+		"--name", tplName,
+		"--image", slsImage,
+		"--serverless",
+		"--output", "json",
+	)
+	if err != nil {
+		t.Fatalf("Failed to create temporary template: %v\nOutput: %s", err, tplOut)
+	}
 
-	out, err := runCLI(
+	tplID, err := extractIDField(tplOut)
+	if err != nil {
+		t.Fatalf("Failed to extract Template ID: %v", err)
+	}
+	t.Logf("Created Template ID: %s", tplID)
+
+	// Register template cleanup
+	t.Cleanup(func() {
+		t.Logf("Cleaning up template %s...", tplID)
+		_, delErr := runE2ECmd("template", "delete", tplID)
+		if delErr != nil {
+			t.Logf("Warning: failed to delete template %s in cleanup: %v", tplID, delErr)
+		}
+	})
+
+	// Step 2: Create endpoint using the new template
+	t.Logf("Creating serverless endpoint %s with template %s", epName, tplID)
+	out, err := runE2ECmd(
 		"serverless", "create",
 		"--name", epName,
-		"--template-id", slsTemplate,
+		"--template-id", tplID,
 		"--workers-max", "1",
 		"--gpu-count", "0",
 		"--output", "json",
@@ -331,20 +346,21 @@ func TestE2E_CLILifecycle_Serverless(t *testing.T) {
 	}
 	t.Logf("Created Endpoint ID: %s", epID)
 
-	defer func() {
+	// Register endpoint cleanup
+	t.Cleanup(func() {
 		t.Logf("Cleaning up endpoint %s...", epID)
-		_, delErr := runCLI("serverless", "delete", epID)
+		_, delErr := runE2ECmd("serverless", "delete", epID)
 		if delErr != nil {
 			t.Logf("Warning: failed to delete endpoint %s in cleanup: %v", epID, delErr)
 		} else {
 			t.Logf("Successfully deleted endpoint %s", epID)
 		}
-	}()
+	})
 
 	// Wait for API propagation
 	ready := false
 	for i := 0; i < 30; i++ {
-		_, getErr := runCLI("serverless", "get", epID)
+		_, getErr := runE2ECmd("serverless", "get", epID)
 		if getErr == nil {
 			ready = true
 			break
@@ -359,7 +375,7 @@ func TestE2E_CLILifecycle_Serverless(t *testing.T) {
 	t.Logf("Endpoint is ready and propagated.")
 
 	// List endpoints and assert the created endpoint exists
-	listOutRaw, listErr := runCLI("serverless", "list", "--output", "json")
+	listOutRaw, listErr := runE2ECmd("serverless", "list", "--output", "json")
 	if listErr != nil {
 		t.Fatalf("Failed to list endpoints: %v\nOutput: %s", listErr, listOutRaw)
 	}
@@ -396,13 +412,13 @@ func TestE2E_CLILifecycle_Serverless(t *testing.T) {
 	// Update endpoint name
 	newName := epName + "-updated"
 	t.Logf("Updating endpoint name to %s...", newName)
-	updateOut, updateErr := runCLI("serverless", "update", epID, "--name", newName)
+	updateOut, updateErr := runE2ECmd("serverless", "update", epID, "--name", newName)
 	if updateErr != nil {
 		t.Fatalf("Failed to update serverless endpoint: %v\nOutput: %s", updateErr, updateOut)
 	}
 
 	// Get endpoint and assert the name was updated
-	getOutRaw, getErr := runCLI("serverless", "get", epID, "--output", "json")
+	getOutRaw, getErr := runE2ECmd("serverless", "get", epID, "--output", "json")
 	if getErr != nil {
 		t.Fatalf("Failed to get serverless endpoint: %v\nOutput: %s", getErr, getOutRaw)
 	}
@@ -426,3 +442,5 @@ func TestE2E_CLILifecycle_Serverless(t *testing.T) {
 		t.Fatalf("Expected endpoint name starting with %s after update, got %s", newName, updatedEp.Name)
 	}
 }
+
+//EOF cli_lifecycle_test.go

@@ -18,7 +18,7 @@ on:
 
 concurrency:
   group: integration-tests-${{ github.ref_name }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   test-matrix:
@@ -36,7 +36,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.22.x'
       - name: Install dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y wget curl coreutils jq bash tar grep sed
