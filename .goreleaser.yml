@@ -70,6 +70,25 @@ brews:
       bin.install "runpodctl"
     ids: [default]
 
+homebrew_casks:
+  - name: runpodctl
+    homepage: "https://github.com/runpod/runpodctl"
+    repository:
+      owner: runpod
+      name: homebrew-runpodctl
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+      branch: "runpodctl-cask-{{ .Version }}"
+      pull_request:
+        enabled: true
+        base:
+          owner: runpod
+          name: homebrew-runpodctl
+          branch: main
+    commit_author:
+      name: runpod
+      email: support@runpod.io
+    ids: [default]
+
 checksum:
   name_template: "checksums_{{ .Version }}_sha256.txt"
   algorithm: sha256
