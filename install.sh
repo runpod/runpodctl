@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
 
-# Author: FNGarvin
-# License: MIT
-# Year: 2026
-
 # Unified Installer for RunPod CLI Tool
 #
 # This script provides a unified approach to installing the RunPod CLI tool.
@@ -109,6 +105,7 @@ install_with_brew() {
 # ------------------------- Install Required Packages ------------------------ #
 check_system_requirements() {
     local missing_pkgs=""
+    # Essential tools for downloading and extracting
     for cmd in wget tar grep sed; do
         if ! command -v "$cmd" >/dev/null 2>&1; then
             missing_pkgs="$missing_pkgs $cmd"
@@ -189,12 +186,35 @@ try_brew_install() {
 
 # ---------------------------- Download & Install ---------------------------- #
 download_and_install_cli() {
+    # Define a unique name for the downloaded archive within our sandbox.
     local cli_archive_file_name="runpodctl.tar.gz"
     local success=false
 
+    # Create an isolated temporary directory for downloading and extracting the binary.
+    # Attempts to use 'mktemp' for a secure, unique path; falls back to a PID-based
+    # path in /tmp if 'mktemp' is unavailable.
+    local tmp_dir
+    if command -v mktemp >/dev/null 2>&1; then
+        # Handle variations between GNU and BSD (macOS) mktemp
+        tmp_dir=$(mktemp -d 2>/dev/null || mktemp -d -t 'runpodctl-XXXXXX')
+    else
+        tmp_dir="/tmp/runpodctl-install-$$"
+        mkdir -p "$tmp_dir"
+    fi
+    
+    # Register an EXIT trap to ensure the temporary directory is nuked regardless of script outcome.
+    trap 'rm -rf "$tmp_dir"' EXIT
+
+    # Determine if wget supports --show-progress (introduced in wget 1.16+)
+    local wget_progress_flag=""
+    if wget --help | grep -q 'show-progress'; then
+        # Use -q (quiet) + --show-progress + bar for a clean, non-spammy progress bar.
+        wget_progress_flag="-q --show-progress --progress=bar:force:noscroll"
+    fi
+
     for url in "${DOWNLOAD_URLS[@]}"; do
         echo "Attempting to download runpodctl from $url ..."
-        if wget --progress=bar "$url" -O "$cli_archive_file_name"; then
+        if wget $wget_progress_flag "$url" -O "$tmp_dir/$cli_archive_file_name"; then
             success=true
             break
         fi
@@ -206,24 +226,14 @@ download_and_install_cli() {
     fi
 
     local cli_file_name="runpodctl"
-    tar -xzf "$cli_archive_file_name" "$cli_file_name" || { echo "Failed to extract $cli_file_name."; exit 1; }
-    # Clean up the downloaded archive after successful extraction
-    rm -f "$cli_archive_file_name"
+    # Extract to the hermetic sandbox
+    tar -C "$tmp_dir" -xzf "$tmp_dir/$cli_archive_file_name" "$cli_file_name" || { echo "Failed to extract $cli_file_name."; exit 1; }
+    chmod +x "$tmp_dir/$cli_file_name"
 
-    chmod +x "$cli_file_name"
-
-    # Ensure the install directory is writable before attempting to move the binary
-    if [ ! -w "$INSTALL_DIR" ]; then
-        echo "Install directory '$INSTALL_DIR' is not writable. Please run with appropriate permissions or choose a different install directory."
-        # Clean up the extracted binary to avoid leaving stray files behind
-        rm -f "$cli_file_name"
-        exit 1
-    fi
-
-    if ! mv "$cli_file_name" "$INSTALL_DIR/"; then
+    # Relocate to the final destination using -f (force) to bypass any host-level aliases
+    # that might cause the script to hang waiting for user input.
+    if ! mv -f "$tmp_dir/$cli_file_name" "$INSTALL_DIR/"; then
         echo "Failed to move $cli_file_name to $INSTALL_DIR/."
-        echo "Removing extracted binary at '$(pwd)/$cli_file_name' to avoid leaving stray files behind."
-        rm -f "$cli_file_name"
         exit 1
     fi
     echo "runpodctl installed successfully to $INSTALL_DIR."

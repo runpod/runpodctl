@@ -1,15 +1,12 @@
 //go:build e2e
 
-// Author: FNGarvin
-// License: MIT
-// Year: 2026
-
 package e2e
 
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -68,8 +65,6 @@ func runE2ECmd(args ...string) (string, error) {
 
 	// Sanitize the command echo to hide keys in arguments if any
 	// cmdStr := fmt.Sprintf("%s %s", binaryPath, strings.Join(args, " "))
-	// Using fmt.Printf here for immediate visibility in CI, but t.Logf is preferred within tests.
-	// We'll update calls to pass *testing.T where possible.
 
 	cmd := exec.Command(binaryPath, args...)
 	var out bytes.Buffer
@@ -331,8 +326,10 @@ func TestE2E_CLILifecycle_Serverless(t *testing.T) {
 		"serverless", "create",
 		"--name", epName,
 		"--template-id", tplID,
+		"--workers-min", "1",
 		"--workers-max", "1",
 		"--gpu-count", "0",
+		"--compute-type", "CPU",
 		"--output", "json",
 	)
 
@@ -440,6 +437,93 @@ func TestE2E_CLILifecycle_Serverless(t *testing.T) {
 	}
 	if !strings.HasPrefix(updatedEp.Name, newName) {
 		t.Fatalf("Expected endpoint name starting with %s after update, got %s", newName, updatedEp.Name)
+	}
+
+	// --- DATA PLANE TEST ---
+	// Demonstrate functional image capability by submitting and polling a job
+	t.Logf("Submitting test job to endpoint %s...", epID)
+
+	apiKey := os.Getenv("RUNPOD_API_KEY")
+	submitURL := fmt.Sprintf("https://api.runpod.ai/v2/%s/run", epID)
+
+	payload := []byte(`{"input": {"test": "data"}}`)
+	req, err := http.NewRequest("POST", submitURL, bytes.NewBuffer(payload))
+	if err != nil {
+		t.Fatalf("Failed to create job request: %v", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("Failed to submit job: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var jobResp map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&jobResp); err != nil {
+		t.Fatalf("Failed to decode job response: %v", err)
+	}
+
+	jobIDStr, ok := jobResp["id"].(string)
+	if !ok || jobIDStr == "" {
+		t.Fatalf("Failed to get job ID from response: %v", jobResp)
+	}
+
+	t.Logf("Job submitted: %s. Polling for completion...", jobIDStr)
+
+	statusURL := fmt.Sprintf("https://api.runpod.ai/v2/%s/status/%s", epID, jobIDStr)
+	maxRetries := 60 // 5 minutes max (initial cold start of a brand new template can take a few minutes)
+	success := false
+
+	for i := 0; i < maxRetries; i++ {
+		req, err := http.NewRequest("GET", statusURL, nil)
+		if err != nil {
+			t.Fatalf("Failed to create status request: %v", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Logf("Warning: status request failed (retry %d): %v", i, err)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		var statusResp map[string]interface{}
+		err = json.NewDecoder(resp.Body).Decode(&statusResp)
+		resp.Body.Close()
+
+		if err != nil {
+			t.Logf("Warning: failed to decode status response (retry %d): %v", i, err)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		status, _ := statusResp["status"].(string)
+		t.Logf(".. Status: %s (%ds/%ds)", status, i*5, maxRetries*5)
+
+		if status == "COMPLETED" {
+			output, ok := statusResp["output"].(string)
+			if ok && strings.Contains(output, "FNGarvin-CI-ECHO") {
+				t.Logf("++ Serverless Data-Plane: SUCCESS (Expected hook marker 'FNGarvin-CI-ECHO' found in output: %v)", output)
+				success = true
+				break
+			} else {
+				t.Fatalf("!! Serverless Data-Plane: FAILED (Output did not contain expected echo: %v)", statusResp["output"])
+			}
+		} else if status == "FAILED" {
+			t.Fatalf("!! Job Failed: %v", statusResp["error"])
+		}
+
+		time.Sleep(5 * time.Second)
+	}
+
+	if !success {
+		t.Fatalf("!! Integration Suite Timed Out waiting for job completion.")
 	}
 }
 

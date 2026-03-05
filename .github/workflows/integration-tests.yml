@@ -36,40 +36,68 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22.x'
+          go-version: '1.25.7'
       - name: Install dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y wget curl coreutils jq bash tar grep sed
-      - name: Build runpodctl for Testing
+      - name: Setup User for Mode
         run: |
+          if [ "${{ matrix.user_mode }}" == "non-root" ]; then
+            # useradd is faster than the adduser Perl wrapper
+            sudo useradd -m -s /bin/bash tester
+            # Pre-create bin dir for the installer
+            sudo -u tester mkdir -p /home/tester/.local/bin
+            
+            # Optimization: git checkout-index is instant compared to cp -r .
+            # it exports tracked files without the bulky .git folder (fixes 50s bottleneck)
+            mkdir -p /tmp/runpodctl-test
+            git checkout-index -a -f --prefix=/tmp/runpodctl-test/
+            sudo chown -R tester:tester /tmp/runpodctl-test
+          fi
+      - name: Build and Install runpodctl
+        run: |
+          # 1. Build the local PR version (the "new" code)
           go build -o runpodctl main.go
           chmod +x runpodctl
-      - name: Setup Non-Root User and Workspace
-        if: matrix.user_mode == 'non-root'
-        run: |
-          sudo adduser --disabled-password --gecos "" tester
-          sudo mkdir -p /tmp/runpodctl-test
-          sudo cp -r . /tmp/runpodctl-test/
-          sudo chown -R tester:tester /tmp/runpodctl-test
-      - name: Run Unified Go E2E Tests
+          
+          # 2. Run installer as the correct user to validate PORTABILITY logic
+          if [ "${{ matrix.user_mode }}" == "root" ]; then
+            sudo bash install.sh
+          else
+            # Ensure the installer sees the tester's local bin
+            sudo -u tester env "PATH=$PATH:/home/tester/.local/bin" bash install.sh
+          fi
+
+          # 3. Overwrite with PR code so the tests below are testing the REAL changes
+          if [ "${{ matrix.user_mode }}" == "root" ]; then
+            sudo cp -f runpodctl /usr/local/bin/runpodctl
+            sudo chmod +x /usr/local/bin/runpodctl
+            mkdir -p ~/go/bin && cp runpodctl ~/go/bin/runpodctl
+          else
+            # Update the tester's binaries and satisfy upstream hardcoded paths
+            sudo cp -f runpodctl /home/tester/.local/bin/runpodctl
+            sudo -u tester mkdir -p /home/tester/go/bin
+            sudo cp runpodctl /home/tester/go/bin/runpodctl
+            sudo chown tester:tester /home/tester/.local/bin/runpodctl /home/tester/go/bin/runpodctl
+            sudo chmod +x /home/tester/.local/bin/runpodctl /home/tester/go/bin/runpodctl
+          fi
+      - name: Run Go E2E Tests
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           RUNPOD_TEST_POD_IMAGE: ${{ github.event.inputs.pod_image || 'docker.io/library/alpine' }}
           RUNPOD_TEST_SERVERLESS_IMAGE: ${{ github.event.inputs.serverless_image || 'fngarvin/ci-minimal-serverless@sha256:6a33a9bac95b8bc871725db9092af2922a7f1e3b63175248b2191b38be4e93a0' }}
         run: |
+          # Use -run to ONLY execute our safe tests, but ./e2e/... to ensure package compilation
+          TEST_PATTERN="^TestE2E_CLILifecycle"
+          
           if [ "${{ matrix.user_mode }}" == "root" ]; then
-            go test -tags e2e -v ./e2e/cli_lifecycle_test.go
+            go test -tags e2e -v -run "$TEST_PATTERN" ./e2e/...
           else
-            # Debug info
-            echo "Runner user: $(whoami)"
-            echo "Go path: $(which go)"
-            go version
-            
             # Execute the tests as the tester user, preserving path and env
             sudo -u tester env "PATH=$PATH" "RUNPOD_API_KEY=${{ secrets.RUNPOD_API_KEY }}" \
               "RUNPOD_TEST_POD_IMAGE=${{ github.event.inputs.pod_image || 'docker.io/library/alpine' }}" \
               "RUNPOD_TEST_SERVERLESS_IMAGE=${{ github.event.inputs.serverless_image || 'fngarvin/ci-minimal-serverless@sha256:6a33a9bac95b8bc871725db9092af2922a7f1e3b63175248b2191b38be4e93a0' }}" \
-              bash -c "cd /tmp/runpodctl-test && go test -tags e2e -v ./e2e/cli_lifecycle_test.go"
+              bash -c "cd /tmp/runpodctl-test && go test -tags e2e -v -run \"$TEST_PATTERN\" ./e2e/..."
           fi
       - name: Post-Run Cleanup (Emergency)
         if: always()
@@ -86,4 +114,5 @@ jobs:
             # Only delete pods named exactly starting with "ci-test-"
             $RP pod list --output json 2>/dev/null | jq -r '.[] | select(.name | startswith("ci-test-")) | .id' | xargs -r -I {} $RP pod delete {} || true
             $RP serverless list --output json 2>/dev/null | jq -r '.[] | select(.name | startswith("ci-test-")) | .id' | xargs -r -I {} $RP serverless delete {} || true
+            $RP template list --output json 2>/dev/null | jq -r '.[] | select(.name | startswith("ci-test-")) | .id' | xargs -r -I {} $RP template delete {} || true
           fi
