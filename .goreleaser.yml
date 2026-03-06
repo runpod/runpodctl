@@ -64,10 +64,6 @@ brews:
           owner: runpod
           name: homebrew-runpodctl
           branch: main
-        body: |
-          update homebrew formula to [v{{ .Version }}](https://github.com/runpod/runpodctl/releases/tag/{{ .Tag }}).
-
-          {{ .ReleaseNotes }}
     commit_author:
       name: runpod
       email: support@runpod.io
@@ -90,10 +86,6 @@ homebrew_casks:
           owner: runpod
           name: homebrew-runpodctl
           branch: main
-        body: |
-          update homebrew cask to [v{{ .Version }}](https://github.com/runpod/runpodctl/releases/tag/{{ .Tag }}).
-
-          {{ .ReleaseNotes }}
     commit_author:
       name: runpod
       email: support@runpod.io
