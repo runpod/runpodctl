@@ -10,6 +10,17 @@ builds:
     ldflags:
       - -s -w -X main.Version={{ .Version }}-{{ .ShortCommit }}
 
+  # standalone per-arch binaries so older runpodctl versions can self-update
+  # (the old update command expects raw binaries named runpodctl-{os}-{arch})
+  - id: legacy
+    binary: runpodctl
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    env: [CGO_ENABLED=0]
+    flags: [-mod=mod]
+    ldflags:
+      - -s -w -X main.Version={{ .Version }}-{{ .ShortCommit }}
+
   - id: linux_amd64_upx
     binary: runpodctl
     goos: [linux]
@@ -38,6 +49,12 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
+    name_template: "{{ .Binary }}-{{ .Os }}-{{ .Arch }}"
+
+  # raw binaries for backward compat with old runpodctl update command
+  - id: legacy
+    ids: [legacy]
+    formats: [binary]
     name_template: "{{ .Binary }}-{{ .Os }}-{{ .Arch }}"
 
   # UPX linux/amd64 artifact, also archived for internal Runpod use
