@@ -14,7 +14,7 @@ on:
       serverless_image:
         description: 'Image to test for Serverless lifecycle'
         required: false
-        default: 'fngarvin/ci-minimal-serverless@sha256:6a33a9bac95b8bc871725db9092af2922a7f1e3b63175248b2191b38be4e93a0'
+        default: 'alpine:latest'
 
 concurrency:
   group: integration-tests-${{ github.ref_name }}
@@ -85,7 +85,7 @@ jobs:
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           RUNPOD_TEST_POD_IMAGE: ${{ github.event.inputs.pod_image || 'docker.io/library/alpine' }}
-          RUNPOD_TEST_SERVERLESS_IMAGE: ${{ github.event.inputs.serverless_image || 'fngarvin/ci-minimal-serverless@sha256:6a33a9bac95b8bc871725db9092af2922a7f1e3b63175248b2191b38be4e93a0' }}
+          RUNPOD_TEST_SERVERLESS_IMAGE: ${{ github.event.inputs.serverless_image || 'alpine:latest' }}
         run: |
           # Use -run to ONLY execute our safe tests, but ./e2e/... to ensure package compilation
           TEST_PATTERN="^TestE2E_CLILifecycle"
@@ -96,7 +96,7 @@ jobs:
             # Execute the tests as the tester user, preserving path and env
             sudo -u tester env "PATH=$PATH" "RUNPOD_API_KEY=${{ secrets.RUNPOD_API_KEY }}" \
               "RUNPOD_TEST_POD_IMAGE=${{ github.event.inputs.pod_image || 'docker.io/library/alpine' }}" \
-              "RUNPOD_TEST_SERVERLESS_IMAGE=${{ github.event.inputs.serverless_image || 'fngarvin/ci-minimal-serverless@sha256:6a33a9bac95b8bc871725db9092af2922a7f1e3b63175248b2191b38be4e93a0' }}" \
+              "RUNPOD_TEST_SERVERLESS_IMAGE=${{ github.event.inputs.serverless_image || 'alpine:latest' }}" \
               bash -c "cd /tmp/runpodctl-test && go test -tags e2e -v -run \"$TEST_PATTERN\" ./e2e/..."
           fi
       - name: Post-Run Cleanup (Emergency)
