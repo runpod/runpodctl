@@ -26,7 +26,8 @@ var (
 	createGpuCount      int
 	createWorkersMin    int
 	createWorkersMax    int
-	createDataCenterIDs string
+	createDataCenterIDs    string
+	createNetworkVolumeID  string
 )
 
 func init() {
@@ -38,6 +39,7 @@ func init() {
 	createCmd.Flags().IntVar(&createWorkersMin, "workers-min", 0, "minimum number of workers")
 	createCmd.Flags().IntVar(&createWorkersMax, "workers-max", 3, "maximum number of workers")
 	createCmd.Flags().StringVar(&createDataCenterIDs, "data-center-ids", "", "comma-separated list of data center ids")
+	createCmd.Flags().StringVar(&createNetworkVolumeID, "network-volume-id", "", "network volume id to attach")
 
 	createCmd.MarkFlagRequired("template-id") //nolint:errcheck
 }
@@ -64,6 +66,10 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	}
 	if gpuTypeID != "" {
 		req.GpuTypeIDs = []string{gpuTypeID}
+	}
+
+	if createNetworkVolumeID != "" {
+		req.NetworkVolumeID = createNetworkVolumeID
 	}
 
 	if createDataCenterIDs != "" {

@@ -51,6 +51,7 @@ type PodCreateRequest struct {
 	Env               map[string]string `json:"env,omitempty"`
 	CloudType         string            `json:"cloudType,omitempty"`
 	DataCenterIDs     []string          `json:"dataCenterIds,omitempty"`
+	NetworkVolumeID   string            `json:"networkVolumeId,omitempty"`
 }
 
 // PodUpdateRequest is the request to update a pod

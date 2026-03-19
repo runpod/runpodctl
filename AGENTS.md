@@ -19,4 +19,5 @@ This document exists for non-obvious, error-prone shortcomings in the codebase, 
 - all text output must be lowercase and concise.
 - default output format is json (for agent consumption); never change this default.
 - e2e tests cost real money — always clean up resources with `t.Cleanup`.
+- always e2e test cli changes before considering work done: build the binary, run the new/changed commands against the live api (`RUNPOD_API_KEY` is in the env), and clean up any created resources immediately after verifying the response. this is non-negotiable.
 - keep the runpodctl skill in sync: https://github.com/runpod/skills/tree/main/runpodctl — update it whenever commands, flags, or behavior change.

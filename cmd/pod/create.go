@@ -53,6 +53,7 @@ var (
 	createCloudType         string
 	createDataCenterIDs     string
 	createSSH               bool
+	createNetworkVolumeID   string
 )
 
 func init() {
@@ -72,6 +73,7 @@ func init() {
 	createCmd.Flags().StringVar(&createCloudType, "cloud-type", "SECURE", "cloud type (SECURE or COMMUNITY)")
 	createCmd.Flags().StringVar(&createDataCenterIDs, "data-center-ids", "", "comma-separated list of data center ids")
 	createCmd.Flags().BoolVar(&createSSH, "ssh", true, "enable ssh on the pod")
+	createCmd.Flags().StringVar(&createNetworkVolumeID, "network-volume-id", "", "network volume id to attach")
 }
 
 func runCreate(cmd *cobra.Command, args []string) error {
@@ -169,6 +171,10 @@ func createPodGraphQL(gpuTypeID, cloudType string, supportPublicIP bool) (map[st
 		VolumeMountPath:   createVolumeMountPath,
 	}
 
+	if createNetworkVolumeID != "" {
+		req.NetworkVolumeId = createNetworkVolumeID
+	}
+
 	if createPorts != "" {
 		req.Ports = createPorts
 	}
@@ -217,6 +223,10 @@ func createPodREST(computeType, gpuTypeID, cloudType string, supportPublicIP boo
 
 	if gpuTypeID != "" {
 		req.GpuTypeIDs = []string{gpuTypeID}
+	}
+
+	if createNetworkVolumeID != "" {
+		req.NetworkVolumeID = createNetworkVolumeID
 	}
 
 	if createPorts != "" {
