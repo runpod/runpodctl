@@ -38,7 +38,8 @@ type EndpointCreateRequest struct {
 	GpuCount      int      `json:"gpuCount,omitempty"`
 	WorkersMin    int      `json:"workersMin,omitempty"`
 	WorkersMax    int      `json:"workersMax,omitempty"`
-	DataCenterIDs []string `json:"dataCenterIds,omitempty"`
+	DataCenterIDs    []string `json:"dataCenterIds,omitempty"`
+	NetworkVolumeID  string   `json:"networkVolumeId,omitempty"`
 }
 
 // EndpointUpdateRequest is the request to update an endpoint

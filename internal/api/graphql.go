@@ -234,6 +234,7 @@ type CreatePodGQLInput struct {
 	TemplateId        string       `json:"templateId,omitempty"`
 	VolumeInGb        int          `json:"volumeInGb,omitempty"`
 	VolumeMountPath   string       `json:"volumeMountPath,omitempty"`
+	NetworkVolumeId   string       `json:"networkVolumeId,omitempty"`
 }
 
 // CreatePod creates a pod via GraphQL (podFindAndDeployOnDemand)
