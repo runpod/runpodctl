@@ -32,6 +32,7 @@ type CreateEndpointInput struct {
 	ScalerValue     int    `json:"scalerValue"`
 	WorkersMin      int    `json:"workersMin"`
 	WorkersMax      int    `json:"workersMax"`
+	FlashBootType   string `json:"flashBootType"`
 }
 
 // there are many more fields in the result of the query but I just care about these for CLI port
