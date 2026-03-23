@@ -21,10 +21,10 @@ you can create a pod either from a template or by specifying an image directly.
 
 examples:
   # create from template (recommended)
-  runpodctl pod create --template-id runpod-torch-v21 --gpu-id "NVIDIA RTX 4090"
+  runpodctl pod create --template-id runpod-torch-v21 --gpu-id "NVIDIA GeForce RTX 4090"
 
   # create with custom image
-  runpodctl pod create --image runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04 --gpu-id "NVIDIA RTX 4090"
+  runpodctl pod create --image runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04 --gpu-id "NVIDIA GeForce RTX 4090"
 
   # create a cpu pod
   runpodctl pod create --compute-type cpu --image ubuntu:22.04
