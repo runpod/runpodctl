@@ -455,6 +455,296 @@ func TestCLI_PodCreateCPU(t *testing.T) {
 	}
 }
 
+// --- Hub tests ---
+
+func TestCLI_HubList(t *testing.T) {
+	stdout, stderr, err := runCLI("hub", "list")
+	if err != nil {
+		t.Fatalf("failed to run hub list: %v\nstderr: %s", err, stderr)
+	}
+
+	var listings []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &listings); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	if len(listings) == 0 {
+		t.Error("expected at least one hub listing")
+	}
+
+	t.Logf("found %d hub listings", len(listings))
+}
+
+func TestCLI_HubListTypeServerless(t *testing.T) {
+	stdout, stderr, err := runCLI("hub", "list", "--type", "SERVERLESS", "--limit", "5")
+	if err != nil {
+		t.Fatalf("failed to run hub list --type SERVERLESS: %v\nstderr: %s", err, stderr)
+	}
+
+	var listings []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &listings); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	for _, l := range listings {
+		lType, _ := l["type"].(string)
+		if lType != "SERVERLESS" {
+			t.Errorf("expected type SERVERLESS, got %q for %v", lType, l["repoName"])
+		}
+	}
+
+	if len(listings) == 0 {
+		t.Error("expected at least one serverless hub listing")
+	}
+	t.Logf("found %d serverless hub listings (limited to 5)", len(listings))
+}
+
+func TestCLI_HubListTypePod(t *testing.T) {
+	stdout, stderr, err := runCLI("hub", "list", "--type", "POD", "--limit", "5")
+	if err != nil {
+		t.Fatalf("failed to run hub list --type POD: %v\nstderr: %s", err, stderr)
+	}
+
+	var listings []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &listings); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	for _, l := range listings {
+		lType, _ := l["type"].(string)
+		if lType != "POD" {
+			t.Errorf("expected type POD, got %q for %v", lType, l["repoName"])
+		}
+	}
+
+	t.Logf("found %d pod hub listings (limited to 5)", len(listings))
+}
+
+func TestCLI_HubListPagination(t *testing.T) {
+	stdout1, _, err := runCLI("hub", "list", "--limit", "3")
+	if err != nil {
+		t.Skip("skipping pagination test - can't get first page")
+	}
+
+	stdout2, _, err := runCLI("hub", "list", "--limit", "3", "--offset", "3")
+	if err != nil {
+		t.Skip("skipping pagination test - can't get second page")
+	}
+
+	var page1, page2 []map[string]interface{}
+	json.Unmarshal([]byte(stdout1), &page1)
+	json.Unmarshal([]byte(stdout2), &page2)
+
+	if len(page1) == 0 || len(page2) == 0 {
+		t.Skip("skipping pagination test - not enough listings")
+	}
+
+	page2FirstID := page2[0]["id"]
+	for _, l := range page1 {
+		if l["id"] == page2FirstID {
+			t.Error("pagination not working - same listing on both pages")
+		}
+	}
+
+	t.Logf("pagination works: page1=%d listings, page2=%d listings", len(page1), len(page2))
+}
+
+func TestCLI_HubSearch(t *testing.T) {
+	stdout, stderr, err := runCLI("hub", "search", "vllm")
+	if err != nil {
+		t.Fatalf("failed to search hub: %v\nstderr: %s", err, stderr)
+	}
+
+	var listings []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &listings); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	if len(listings) == 0 {
+		t.Error("expected at least one result for 'vllm'")
+	}
+
+	// verify at least one result is the official vllm worker
+	found := false
+	for _, l := range listings {
+		repoName, _ := l["repoName"].(string)
+		if repoName == "worker-vllm" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected worker-vllm in search results")
+	}
+
+	t.Logf("found %d hub repos matching 'vllm'", len(listings))
+}
+
+func TestCLI_HubSearchNoResults(t *testing.T) {
+	stdout, stderr, err := runCLI("hub", "search", "zzz_nonexistent_repo_12345")
+	if err != nil {
+		t.Fatalf("failed to search hub: %v\nstderr: %s", err, stderr)
+	}
+
+	// should print "no hub repos found" to stdout (not JSON)
+	if !strings.Contains(stdout, "no hub repos found") {
+		t.Errorf("expected 'no hub repos found' message, got: %s", stdout)
+	}
+}
+
+func TestCLI_HubGetByID(t *testing.T) {
+	// first get a listing id from list
+	stdout, _, err := runCLI("hub", "list", "--limit", "1")
+	if err != nil {
+		t.Skip("skipping hub get test - can't list hub")
+	}
+
+	var listings []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &listings); err != nil || len(listings) == 0 {
+		t.Skip("skipping hub get test - no listings")
+	}
+
+	listingID := listings[0]["id"].(string)
+	stdout, stderr, err := runCLI("hub", "get", listingID)
+	if err != nil {
+		t.Fatalf("failed to get hub listing %s: %v\nstderr: %s", listingID, err, stderr)
+	}
+
+	var listing map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &listing); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	if listing["id"] != listingID {
+		t.Errorf("expected listing id %s, got %v", listingID, listing["id"])
+	}
+
+	// get should include listedRelease
+	if listing["listedRelease"] == nil {
+		t.Error("expected listedRelease in get response")
+	}
+
+	t.Logf("got hub listing: %v (type=%v)", listing["title"], listing["type"])
+}
+
+func TestCLI_HubGetByOwnerName(t *testing.T) {
+	stdout, stderr, err := runCLI("hub", "get", "runpod-workers/worker-vllm")
+	if err != nil {
+		t.Fatalf("failed to get hub listing by owner/name: %v\nstderr: %s", err, stderr)
+	}
+
+	var listing map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &listing); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	if listing["repoOwner"] != "runpod-workers" {
+		t.Errorf("expected repoOwner 'runpod-workers', got %v", listing["repoOwner"])
+	}
+	if listing["repoName"] != "worker-vllm" {
+		t.Errorf("expected repoName 'worker-vllm', got %v", listing["repoName"])
+	}
+
+	t.Logf("got hub listing by owner/name: %v", listing["title"])
+}
+
+func TestCLI_HubGetBuildImage(t *testing.T) {
+	// verify build.imageName is returned in get response
+	stdout, stderr, err := runCLI("hub", "get", "runpod-workers/worker-vllm")
+	if err != nil {
+		t.Fatalf("failed to get hub listing: %v\nstderr: %s", err, stderr)
+	}
+
+	var listing map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &listing); err != nil {
+		t.Fatalf("output is not valid json: %v", err)
+	}
+
+	release, ok := listing["listedRelease"].(map[string]interface{})
+	if !ok || release == nil {
+		t.Fatal("expected listedRelease in response")
+	}
+
+	build, ok := release["build"].(map[string]interface{})
+	if !ok || build == nil {
+		t.Fatal("expected build in listedRelease")
+	}
+
+	imageName, ok := build["imageName"].(string)
+	if !ok || imageName == "" {
+		t.Fatal("expected imageName in build")
+	}
+
+	t.Logf("build image: %s", imageName)
+}
+
+// --- Serverless create from hub ---
+
+func TestCLI_ServerlessCreateRequiresTemplateOrHub(t *testing.T) {
+	_, stderr, err := runCLI("serverless", "create", "--gpu-id", "NVIDIA GeForce RTX 4090")
+	if err == nil {
+		t.Fatal("expected error when creating serverless without template or hub")
+	}
+	if !strings.Contains(stderr, "either --template-id or --hub-id is required") {
+		t.Errorf("expected helpful error, got: %s", stderr)
+	}
+}
+
+func TestCLI_ServerlessCreateMutuallyExclusive(t *testing.T) {
+	_, stderr, err := runCLI("serverless", "create", "--template-id", "x", "--hub-id", "y")
+	if err == nil {
+		t.Fatal("expected error when both --template-id and --hub-id are provided")
+	}
+	if !strings.Contains(stderr, "mutually exclusive") {
+		t.Errorf("expected mutually exclusive error, got: %s", stderr)
+	}
+}
+
+func TestCLI_ServerlessCreateFromHub(t *testing.T) {
+	// create a serverless endpoint from the vllm hub listing
+	name := "e2e-test-hub-" + time.Now().Format("20060102150405")
+	stdout, stderr, err := runCLI("serverless", "create",
+		"--hub-id", "cm8h09d9n000008jvh2rqdsmb", // vllm listing
+		"--name", name,
+		"--workers-max", "1",
+	)
+	if err != nil {
+		t.Fatalf("failed to create serverless endpoint from hub: %v\nstderr: %s", err, stderr)
+	}
+
+	var endpoint map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &endpoint); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	endpointID, ok := endpoint["id"].(string)
+	if !ok || strings.TrimSpace(endpointID) == "" {
+		t.Fatal("expected endpoint id in response")
+	}
+
+	// cleanup immediately
+	t.Cleanup(func() {
+		_, _, err := runCLI("serverless", "delete", endpointID)
+		if err != nil {
+			t.Logf("warning: failed to delete test endpoint %s: %v", endpointID, err)
+		} else {
+			t.Logf("cleaned up endpoint %s", endpointID)
+		}
+	})
+
+	if endpoint["name"] != name {
+		t.Errorf("expected name %q, got %v", name, endpoint["name"])
+	}
+
+	// verify gpu ids were pulled from hub config
+	gpuIDs, _ := endpoint["gpuIds"].(string)
+	if gpuIDs == "" {
+		t.Error("expected gpuIds from hub config")
+	}
+
+	t.Logf("created endpoint %s from hub (gpuIds=%s)", endpointID, gpuIDs)
+}
+
 func TestCLI_EndpointList(t *testing.T) {
 	stdout, stderr, err := runCLI("serverless", "list")
 	if err != nil {
@@ -1439,6 +1729,9 @@ func TestCLI_HelpCoverage(t *testing.T) {
 		{"project", "dev"},
 		{"project", "build"},
 		{"project", "deploy"},
+		{"hub", "list"},
+		{"hub", "search"},
+		{"hub", "get"},
 		{"serverless", "create"},
 		{"serverless", "update"},
 		{"serverless", "delete"},
