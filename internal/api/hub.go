@@ -45,6 +45,7 @@ type HubRelease struct {
 	ReleasedAt string    `json:"releasedAt"`
 	UpdatedAt  string    `json:"updatedAt"`
 	Build      *GitBuild `json:"build,omitempty"`
+	Tests      string    `json:"tests,omitempty"`
 }
 
 // GitBuild represents a build from a hub release
@@ -210,6 +211,7 @@ const listingFullFields = `
 		build {
 			imageName
 		}
+		tests
 	}
 `
 
