@@ -41,6 +41,7 @@ var (
 	createImageName         string
 	createTemplateID        string
 	createComputeType       string
+	createMinCudaVersion    string
 	createGpuTypeID         string
 	createGpuCount          int
 	createVolumeInGb        int
@@ -61,6 +62,7 @@ func init() {
 	createCmd.Flags().StringVar(&createTemplateID, "template-id", "", "template id (use 'runpodctl template search' to find templates)")
 	createCmd.Flags().StringVar(&createImageName, "image", "", "docker image name (required if no template)")
 	createCmd.Flags().StringVar(&createComputeType, "compute-type", "GPU", "compute type (GPU or CPU)")
+	createCmd.Flags().StringVar(&createMinCudaVersion, "min-cuda-version", "", "minimum cuda version required for gpu pod placement")
 	createCmd.Flags().StringVar(&createGpuTypeID, "gpu-id", "", "gpu id (from 'runpodctl gpu list')")
 	createCmd.Flags().IntVar(&createGpuCount, "gpu-count", 1, "number of gpus")
 	createCmd.Flags().IntVar(&createVolumeInGb, "volume-in-gb", 0, "volume size in gb")
@@ -99,6 +101,9 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	if computeType == "CPU" && gpuTypeID != "" {
 		return fmt.Errorf("--gpu-id is not supported for compute type CPU")
+	}
+	if computeType == "CPU" && strings.TrimSpace(createMinCudaVersion) != "" {
+		return fmt.Errorf("--min-cuda-version is only supported for compute type GPU")
 	}
 
 	cloudType := strings.ToUpper(strings.TrimSpace(createCloudType))
@@ -157,12 +162,22 @@ func createPodGraphQL(gpuTypeID, cloudType string, supportPublicIP bool) (map[st
 		return nil, err
 	}
 
+	req, err := buildCreatePodGQLRequest(gpuTypeID, cloudType, supportPublicIP)
+	if err != nil {
+		return nil, err
+	}
+
+	return gqlClient.CreatePod(req)
+}
+
+func buildCreatePodGQLRequest(gpuTypeID, cloudType string, supportPublicIP bool) (*api.CreatePodGQLInput, error) {
 	req := &api.CreatePodGQLInput{
 		CloudType:         cloudType,
 		ContainerDiskInGb: createContainerDiskInGb,
 		GpuCount:          createGpuCount,
 		GpuTypeId:         gpuTypeID,
 		ImageName:         createImageName,
+		MinCudaVersion:    strings.TrimSpace(createMinCudaVersion),
 		Name:              createName,
 		StartSsh:          createSSH,
 		SupportPublicIp:   supportPublicIP,
@@ -198,7 +213,7 @@ func createPodGraphQL(gpuTypeID, cloudType string, supportPublicIP bool) (map[st
 		}
 	}
 
-	return gqlClient.CreatePod(req)
+	return req, nil
 }
 
 func createPodREST(computeType, gpuTypeID, cloudType string, supportPublicIP bool) (*api.Pod, error) {

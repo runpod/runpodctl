@@ -227,6 +227,7 @@ type CreatePodGQLInput struct {
 	GpuCount          int          `json:"gpuCount"`
 	GpuTypeId         string       `json:"gpuTypeId,omitempty"`
 	ImageName         string       `json:"imageName,omitempty"`
+	MinCudaVersion    string       `json:"minCudaVersion,omitempty"`
 	Name              string       `json:"name,omitempty"`
 	Ports             string       `json:"ports,omitempty"`
 	StartSsh          bool         `json:"startSsh"`
