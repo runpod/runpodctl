@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/spf13/viper"
 )
 
 func TestListEndpoints(t *testing.T) {
@@ -121,6 +123,46 @@ func TestUpdateEndpoint(t *testing.T) {
 	}
 	if endpoint.WorkersMax != 5 {
 		t.Errorf("expected 5, got %d", endpoint.WorkersMax)
+	}
+}
+
+func TestUpdateEndpointTemplate(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		vars, _ := body["variables"].(map[string]interface{})
+		input, _ := vars["input"].(map[string]interface{})
+		if input["endpointId"] != "ep-123" {
+			t.Fatalf("expected endpoint id ep-123, got %#v", input["endpointId"])
+		}
+		if input["templateId"] != "tpl-456" {
+			t.Fatalf("expected template id tpl-456, got %#v", input["templateId"])
+		}
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": map[string]interface{}{
+				"updateEndpointTemplate": map[string]interface{}{
+					"id":         "ep-123",
+					"templateId": "tpl-456",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+	viper.Set("apiUrl", server.URL)
+	t.Cleanup(func() {
+		viper.Set("apiUrl", "")
+	})
+
+	client, _ := NewClient()
+
+	if err := client.UpdateEndpointTemplate("ep-123", "tpl-456"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
