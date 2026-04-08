@@ -1,19 +1,21 @@
-## runpodctl ssh list-keys
+## runpodctl ssh remove-key
 
-list all ssh keys
+remove an ssh key
 
 ### Synopsis
 
-list all ssh keys associated with your account
+remove an ssh key from your account
 
 ```
-runpodctl ssh list-keys [flags]
+runpodctl ssh remove-key [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for list-keys
+      --fingerprint string   fingerprint of the key to remove
+  -h, --help                 help for remove-key
+      --name string          name of the key to remove
 ```
 
 ### Options inherited from parent commands

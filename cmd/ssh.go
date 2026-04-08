@@ -35,6 +35,19 @@ var sshAddKeyCmd = &cobra.Command{
 	RunE:  runSSHAddKey,
 }
 
+var sshRemoveKeyCmd = &cobra.Command{
+	Use:   "remove-key",
+	Short: "remove an ssh key",
+	Long:  "remove an ssh key from your account",
+	PreRunE: func(cmd *cobra.Command, args []string) error {
+		if sshKeyName == "" && sshKeyFingerprint == "" {
+			return fmt.Errorf("either --fingerprint or --name must be provided")
+		}
+		return nil
+	},
+	RunE: runSSHRemoveKey,
+}
+
 var sshInfoCmd = &cobra.Command{
 	Use:   "info <pod-id>",
 	Short: "show ssh info for a pod",
@@ -54,19 +67,24 @@ var sshConnectCmd = &cobra.Command{
 }
 
 var (
-	sshKeyFile string
-	sshKey     string
-	sshVerbose bool
+	sshKeyFile        string
+	sshKey            string
+	sshKeyName        string
+	sshKeyFingerprint string
+	sshVerbose        bool
 )
 
 func init() {
 	sshCmd.AddCommand(sshListKeysCmd)
 	sshCmd.AddCommand(sshAddKeyCmd)
+	sshCmd.AddCommand(sshRemoveKeyCmd)
 	sshCmd.AddCommand(sshInfoCmd)
 	sshCmd.AddCommand(sshConnectCmd)
 
 	sshAddKeyCmd.Flags().StringVar(&sshKey, "key", "", "the public key to add")
 	sshAddKeyCmd.Flags().StringVar(&sshKeyFile, "key-file", "", "file containing the public key")
+	sshRemoveKeyCmd.Flags().StringVar(&sshKeyFingerprint, "fingerprint", "", "fingerprint of the key to remove")
+	sshRemoveKeyCmd.Flags().StringVar(&sshKeyName, "name", "", "name of the key to remove")
 
 	sshInfoCmd.Flags().BoolVarP(&sshVerbose, "verbose", "v", false, "include pod id and name in output")
 	sshConnectCmd.Flags().BoolVarP(&sshVerbose, "verbose", "v", false, "include pod id and name in output")
@@ -128,6 +146,22 @@ func runSSHAddKey(cmd *cobra.Command, args []string) error {
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
 	return output.Print(map[string]interface{}{"added": true}, &output.Config{Format: format})
+}
+
+func runSSHRemoveKey(cmd *cobra.Command, args []string) error {
+	client, err := api.NewGraphQLClient()
+	if err != nil {
+		output.Error(err)
+		return err
+	}
+
+	if err := client.RemovePublicSSHKey(sshKeyName, sshKeyFingerprint); err != nil {
+		output.Error(err)
+		return fmt.Errorf("failed to remove ssh key: %w", err)
+	}
+
+	format := output.ParseFormat(cmd.Flag("output").Value.String())
+	return output.Print(map[string]interface{}{"removed": true}, &output.Config{Format: format})
 }
 
 func runSSHInfo(cmd *cobra.Command, args []string) error {
