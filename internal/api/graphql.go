@@ -220,6 +220,7 @@ type PodEnvVar struct {
 
 // CreatePodGQLInput is the input for creating a pod via GraphQL
 type CreatePodGQLInput struct {
+	BidPerGpu         float32      `json:"bidPerGpu,omitempty"`
 	CloudType         string       `json:"cloudType,omitempty"`
 	ContainerDiskInGb int          `json:"containerDiskInGb"`
 	DataCenterId      string       `json:"dataCenterId,omitempty"`
@@ -291,6 +292,65 @@ func (c *GraphQLClient) CreatePod(input *CreatePodGQLInput) (map[string]interfac
 
 	if data.Data.Pod == nil {
 		return nil, fmt.Errorf("pod creation returned nil response")
+	}
+
+	return data.Data.Pod, nil
+}
+
+// CreateSpotPod creates a spot pod via GraphQL (podRentInterruptable).
+func (c *GraphQLClient) CreateSpotPod(input *CreatePodGQLInput) (map[string]interface{}, error) {
+	gqlInput := GraphQLInput{
+		Query: `
+		mutation createSpotPod($input: PodRentInterruptableInput!) {
+			podRentInterruptable(input: $input) {
+				id
+				name
+				imageName
+				desiredStatus
+				costPerHr
+				containerDiskInGb
+				volumeInGb
+				volumeMountPath
+				gpuCount
+				memoryInGb
+				vcpuCount
+				ports
+				lastStatusChange
+				env
+				machine {
+					gpuDisplayName
+					location
+				}
+			}
+		}
+		`,
+		Variables: map[string]interface{}{"input": input},
+	}
+
+	body, err := c.Query(gqlInput)
+	if err != nil {
+		return nil, err
+	}
+
+	var data struct {
+		Data struct {
+			Pod map[string]interface{} `json:"podRentInterruptable"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+
+	if err := json.Unmarshal(body, &data); err != nil {
+		return nil, err
+	}
+
+	if len(data.Errors) > 0 {
+		return nil, fmt.Errorf("%s", data.Errors[0].Message)
+	}
+
+	if data.Data.Pod == nil {
+		return nil, fmt.Errorf("spot pod creation returned nil response")
 	}
 
 	return data.Data.Pod, nil

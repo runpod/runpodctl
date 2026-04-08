@@ -41,6 +41,7 @@ var (
 	createImageName         string
 	createTemplateID        string
 	createComputeType       string
+	createBidPerGPU         float32
 	createGpuTypeID         string
 	createGpuCount          int
 	createVolumeInGb        int
@@ -61,6 +62,7 @@ func init() {
 	createCmd.Flags().StringVar(&createTemplateID, "template-id", "", "template id (use 'runpodctl template search' to find templates)")
 	createCmd.Flags().StringVar(&createImageName, "image", "", "docker image name (required if no template)")
 	createCmd.Flags().StringVar(&createComputeType, "compute-type", "GPU", "compute type (GPU or CPU)")
+	createCmd.Flags().Float32Var(&createBidPerGPU, "bid-per-gpu", 0, "bid per gpu for spot pod creation")
 	createCmd.Flags().StringVar(&createGpuTypeID, "gpu-id", "", "gpu id (from 'runpodctl gpu list')")
 	createCmd.Flags().IntVar(&createGpuCount, "gpu-count", 1, "number of gpus")
 	createCmd.Flags().IntVar(&createVolumeInGb, "volume-in-gb", 0, "volume size in gb")
@@ -99,6 +101,12 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	if computeType == "CPU" && gpuTypeID != "" {
 		return fmt.Errorf("--gpu-id is not supported for compute type CPU")
+	}
+	if computeType == "CPU" && createBidPerGPU > 0 {
+		return fmt.Errorf("--bid-per-gpu is only supported for compute type GPU")
+	}
+	if createBidPerGPU < 0 {
+		return fmt.Errorf("--bid-per-gpu must be greater than 0")
 	}
 
 	cloudType := strings.ToUpper(strings.TrimSpace(createCloudType))
@@ -196,6 +204,11 @@ func createPodGraphQL(gpuTypeID, cloudType string, supportPublicIP bool) (map[st
 		for k, v := range envMap {
 			req.Env = append(req.Env, &api.PodEnvVar{Key: k, Value: v})
 		}
+	}
+
+	if createBidPerGPU > 0 {
+		req.BidPerGpu = createBidPerGPU
+		return gqlClient.CreateSpotPod(req)
 	}
 
 	return gqlClient.CreatePod(req)
