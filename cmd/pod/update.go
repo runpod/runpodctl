@@ -69,11 +69,16 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		req.Ports = strings.Split(updatePorts, ",")
 	}
 	if updateEnv != "" {
-		var env map[string]string
-		if err := json.Unmarshal([]byte(updateEnv), &env); err != nil {
+		env, err := parseUpdateEnv(updateEnv)
+		if err != nil {
 			return fmt.Errorf("invalid env json: %w", err)
 		}
-		req.Env = env
+		pod, err := client.GetPod(podID, false, false)
+		if err != nil {
+			output.Error(err)
+			return fmt.Errorf("failed to get existing pod env: %w", err)
+		}
+		req.Env = mergeEnvMaps(pod.Env, env)
 	}
 
 	pod, err := client.UpdatePod(podID, req)
@@ -84,4 +89,27 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
 	return output.Print(pod, &output.Config{Format: format})
+}
+
+func parseUpdateEnv(raw string) (map[string]string, error) {
+	var env map[string]string
+	if err := json.Unmarshal([]byte(raw), &env); err != nil {
+		return nil, err
+	}
+	return env, nil
+}
+
+func mergeEnvMaps(existing, updates map[string]string) map[string]string {
+	if len(existing) == 0 && len(updates) == 0 {
+		return nil
+	}
+
+	merged := make(map[string]string, len(existing)+len(updates))
+	for k, v := range existing {
+		merged[k] = v
+	}
+	for k, v := range updates {
+		merged[k] = v
+	}
+	return merged
 }
