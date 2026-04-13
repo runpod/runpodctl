@@ -71,7 +71,7 @@ func init() {
 	createCmd.Flags().StringVar(&createScalerType, "scaler-type", "", "autoscaler type (QUEUE_DELAY or REQUEST_COUNT)")
 	createCmd.Flags().IntVar(&createScalerValue, "scaler-value", -1, "autoscaler threshold value")
 	createCmd.Flags().IntVar(&createIdleTimeout, "idle-timeout", -1, "seconds before idle worker scales down (1-3600)")
-	createCmd.Flags().BoolVar(&createFlashBoot, "flash-boot", true, "enable flash boot")
+	createCmd.Flags().BoolVar(&createFlashBoot, "flashboot", true, "enable flashboot")
 	createCmd.Flags().IntVar(&createExecutionTimeout, "execution-timeout", -1, "max seconds per request")
 	createCmd.Flags().StringVar(&createNetworkVolumeIDs, "network-volume-ids", "", "comma-separated network volume ids for multi-region")
 }
@@ -264,13 +264,13 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create endpoint: %w", err)
 	}
 
-	// REST create ignores flashboot=false, so patch immediately after create
+	// rest create ignores flashboot=false, so patch immediately after create
 	if !createFlashBoot {
 		fb := false
 		_, err := client.UpdateEndpoint(endpoint.ID, &api.EndpointUpdateRequest{Flashboot: &fb})
 		if err != nil {
 			output.Error(err)
-			return fmt.Errorf("endpoint created but failed to disable flash boot: %w", err)
+			return fmt.Errorf("endpoint created but failed to disable flashboot: %w", err)
 		}
 		endpoint.Flashboot = &fb
 	}
