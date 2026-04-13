@@ -166,6 +166,33 @@ func TestUpdateEndpointTemplate(t *testing.T) {
 	}
 }
 
+func TestUpdateEndpointTemplate_GraphQLError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"errors": []map[string]interface{}{
+				{"message": "template not found"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+	viper.Set("apiUrl", server.URL)
+	t.Cleanup(func() {
+		viper.Set("apiUrl", "")
+	})
+
+	client, _ := NewClient()
+
+	err := client.UpdateEndpointTemplate("ep-123", "tpl-456")
+	if err == nil {
+		t.Fatal("expected graphql error")
+	}
+	if err.Error() != "graphql error: template not found" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestDeleteEndpoint(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete {

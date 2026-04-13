@@ -127,7 +127,7 @@ type TemplateUpdateRequest struct {
 	Ports             []string          `json:"ports,omitempty"`
 	Env               map[string]string `json:"env,omitempty"`
 	Readme            string            `json:"readme,omitempty"`
-	ContainerDiskInGb int               `json:"containerDiskInGb,omitempty"`
+	ContainerDiskInGb *int              `json:"containerDiskInGb,omitempty"`
 }
 
 // ListTemplates returns templates (user's own via REST API)

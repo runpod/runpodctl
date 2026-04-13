@@ -2,6 +2,7 @@ package serverless
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/runpod/runpodctl/internal/api"
@@ -43,7 +44,6 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	client, err := api.NewClient()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
@@ -84,21 +84,21 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	if hasRESTUpdate {
 		if _, err := client.UpdateEndpoint(endpointID, req); err != nil {
-			output.Error(err)
 			return fmt.Errorf("failed to update endpoint: %w", err)
 		}
 	}
 
 	if updateTemplateID != "" {
 		if err := client.UpdateEndpointTemplate(endpointID, updateTemplateID); err != nil {
-			output.Error(err)
+			if hasRESTUpdate {
+				fmt.Fprintln(os.Stderr, "warning: endpoint rest fields were updated, but template swap failed")
+			}
 			return fmt.Errorf("failed to update endpoint template: %w", err)
 		}
 	}
 
 	endpoint, err := client.GetEndpoint(endpointID, false, false)
 	if err != nil {
-		output.Error(err)
 		return fmt.Errorf("failed to get updated endpoint: %w", err)
 	}
 
