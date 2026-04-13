@@ -68,6 +68,13 @@ func TestSSHConnect_Hidden(t *testing.T) {
 }
 
 func TestSSHRemoveKey_RequiresIdentifier(t *testing.T) {
+	origName := sshKeyName
+	origFingerprint := sshKeyFingerprint
+	t.Cleanup(func() {
+		sshKeyName = origName
+		sshKeyFingerprint = origFingerprint
+	})
+
 	sshKeyName = ""
 	sshKeyFingerprint = ""
 	if err := sshRemoveKeyCmd.PreRunE(sshRemoveKeyCmd, nil); err == nil {

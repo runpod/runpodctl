@@ -151,12 +151,10 @@ func runSSHAddKey(cmd *cobra.Command, args []string) error {
 func runSSHRemoveKey(cmd *cobra.Command, args []string) error {
 	client, err := api.NewGraphQLClient()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
 	if err := client.RemovePublicSSHKey(sshKeyName, sshKeyFingerprint); err != nil {
-		output.Error(err)
 		return fmt.Errorf("failed to remove ssh key: %w", err)
 	}
 
