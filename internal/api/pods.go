@@ -52,6 +52,8 @@ type PodCreateRequest struct {
 	CloudType         string            `json:"cloudType,omitempty"`
 	DataCenterIDs     []string          `json:"dataCenterIds,omitempty"`
 	NetworkVolumeID   string            `json:"networkVolumeId,omitempty"`
+	MinCudaVersion    string            `json:"minCudaVersion,omitempty"`
+	DockerArgs        string            `json:"dockerArgs,omitempty"`
 }
 
 // PodUpdateRequest is the request to update a pod
