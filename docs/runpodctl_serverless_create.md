@@ -25,7 +25,7 @@ runpodctl serverless create [flags]
       --name string                 endpoint name
       --network-volume-id string    network volume id to attach
       --network-volume-ids string   comma-separated network volume ids for multi-region
-      --scaler-type string          autoscaler type (QUEUE_DELAY or REQUEST_COUNT)
+      --scale-by string             autoscale strategy: delay or requests
       --scaler-value int            autoscaler threshold value (default -1)
       --template-id string          template id (required)
       --workers-max int             maximum number of workers (default 3)
