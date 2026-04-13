@@ -1,6 +1,6 @@
 module github.com/runpod/runpodctl
 
-go 1.25.8
+go 1.25.9
 
 require (
 	github.com/denisbrodbeck/machineid v1.0.1
