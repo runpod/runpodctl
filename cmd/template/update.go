@@ -42,7 +42,6 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	client, err := api.NewClient()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
@@ -68,12 +67,11 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		req.Readme = updateReadme
 	}
 	if updateContainerDiskInGb >= 0 {
-		req.ContainerDiskInGb = updateContainerDiskInGb
+		req.ContainerDiskInGb = &updateContainerDiskInGb
 	}
 
 	template, err := client.UpdateTemplate(templateID, req)
 	if err != nil {
-		output.Error(err)
 		return fmt.Errorf("failed to update template: %w", err)
 	}
 

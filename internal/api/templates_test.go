@@ -7,6 +7,10 @@ import (
 	"testing"
 )
 
+func intPtr(v int) *int {
+	return &v
+}
+
 func TestListTemplates(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/templates" {
@@ -112,13 +116,13 @@ func TestUpdateTemplate(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if req.ContainerDiskInGb != 40 {
-			t.Fatalf("expected containerDiskInGb 40, got %d", req.ContainerDiskInGb)
+		if req.ContainerDiskInGb == nil || *req.ContainerDiskInGb != 40 {
+			t.Fatalf("expected containerDiskInGb 40, got %#v", req.ContainerDiskInGb)
 		}
 
 		json.NewEncoder(w).Encode(Template{
 			ID:                "tpl-123",
-			ContainerDiskInGb: req.ContainerDiskInGb,
+			ContainerDiskInGb: *req.ContainerDiskInGb,
 		})
 	}))
 	defer server.Close()
@@ -129,13 +133,49 @@ func TestUpdateTemplate(t *testing.T) {
 	client.baseURL = server.URL
 
 	template, err := client.UpdateTemplate("tpl-123", &TemplateUpdateRequest{
-		ContainerDiskInGb: 40,
+		ContainerDiskInGb: intPtr(40),
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if template.ContainerDiskInGb != 40 {
 		t.Errorf("expected 40, got %d", template.ContainerDiskInGb)
+	}
+}
+
+func TestUpdateTemplate_AllowsZeroContainerDisk(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req TemplateUpdateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req.ContainerDiskInGb == nil {
+			t.Fatal("expected containerDiskInGb to be present")
+		}
+		if *req.ContainerDiskInGb != 0 {
+			t.Fatalf("expected containerDiskInGb 0, got %d", *req.ContainerDiskInGb)
+		}
+
+		json.NewEncoder(w).Encode(Template{
+			ID:                "tpl-123",
+			ContainerDiskInGb: *req.ContainerDiskInGb,
+		})
+	}))
+	defer server.Close()
+
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+
+	client, _ := NewClient()
+	client.baseURL = server.URL
+
+	template, err := client.UpdateTemplate("tpl-123", &TemplateUpdateRequest{
+		ContainerDiskInGb: intPtr(0),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if template.ContainerDiskInGb != 0 {
+		t.Errorf("expected 0, got %d", template.ContainerDiskInGb)
 	}
 }
 
