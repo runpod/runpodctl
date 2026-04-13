@@ -16,7 +16,7 @@ runpodctl serverless create [flags]
       --compute-type string         compute type (GPU or CPU) (default "GPU")
       --data-center-ids string      comma-separated list of data center ids
       --execution-timeout int       max seconds per request (default -1)
-      --flash-boot                  enable flash boot (default true)
+      --flashboot                   enable flashboot (default true)
       --gpu-count int               number of gpus per worker (default 1)
       --gpu-id string               gpu id (from 'runpodctl gpu list')
   -h, --help                        help for create
