@@ -35,17 +35,24 @@ examples:
 }
 
 var (
-	createName            string
-	createTemplateID      string
-	createHubID           string
-	createComputeType     string
-	createGpuTypeID       string
-	createGpuCount        int
-	createWorkersMin      int
-	createWorkersMax      int
-	createDataCenterIDs   string
-	createNetworkVolumeID string
-	createEnvVars         []string
+	createName             string
+	createTemplateID       string
+	createHubID            string
+	createComputeType      string
+	createGpuTypeID        string
+	createGpuCount         int
+	createWorkersMin       int
+	createWorkersMax       int
+	createDataCenterIDs    string
+	createNetworkVolumeID  string
+	createEnvVars          []string
+	createMinCudaVersion   string
+	createScalerType       string
+	createScalerValue      int
+	createIdleTimeout      int
+	createFlashBoot        bool
+	createExecutionTimeout int
+	createNetworkVolumeIDs string
 )
 
 func init() {
@@ -60,6 +67,13 @@ func init() {
 	createCmd.Flags().StringVar(&createDataCenterIDs, "data-center-ids", "", "comma-separated list of data center ids")
 	createCmd.Flags().StringVar(&createNetworkVolumeID, "network-volume-id", "", "network volume id to attach")
 	createCmd.Flags().StringSliceVar(&createEnvVars, "env", nil, "env vars in KEY=VALUE format; overrides hub defaults (repeatable)")
+	createCmd.Flags().StringVar(&createMinCudaVersion, "min-cuda-version", "", "minimum cuda version (e.g., 12.6)")
+	createCmd.Flags().StringVar(&createScalerType, "scaler-type", "", "autoscaler type (QUEUE_DELAY or REQUEST_COUNT)")
+	createCmd.Flags().IntVar(&createScalerValue, "scaler-value", -1, "autoscaler threshold value")
+	createCmd.Flags().IntVar(&createIdleTimeout, "idle-timeout", -1, "seconds before idle worker scales down (1-3600)")
+	createCmd.Flags().BoolVar(&createFlashBoot, "flash-boot", true, "enable flash boot")
+	createCmd.Flags().IntVar(&createExecutionTimeout, "execution-timeout", -1, "max seconds per request")
+	createCmd.Flags().StringVar(&createNetworkVolumeIDs, "network-volume-ids", "", "comma-separated network volume ids for multi-region")
 }
 
 func runCreate(cmd *cobra.Command, args []string) error {
@@ -211,10 +225,54 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		req.DataCenterIDs = strings.Split(createDataCenterIDs, ",")
 	}
 
+	if createMinCudaVersion != "" {
+		req.MinCudaVersion = createMinCudaVersion
+	}
+
+	if createScalerType != "" {
+		scalerType := strings.ToUpper(strings.TrimSpace(createScalerType))
+		switch scalerType {
+		case "QUEUE_DELAY", "REQUEST_COUNT":
+			req.ScalerType = scalerType
+		default:
+			return fmt.Errorf("invalid --scaler-type %q (use QUEUE_DELAY or REQUEST_COUNT)", createScalerType)
+		}
+	}
+
+	if createScalerValue >= 0 {
+		req.ScalerValue = createScalerValue
+	}
+
+	if createIdleTimeout >= 0 {
+		if createIdleTimeout < 1 || createIdleTimeout > 3600 {
+			return fmt.Errorf("--idle-timeout must be between 1 and 3600 seconds")
+		}
+		req.IdleTimeout = createIdleTimeout
+	}
+
+	if createExecutionTimeout >= 0 {
+		req.ExecutionTimeoutMs = createExecutionTimeout * 1000
+	}
+
+	if createNetworkVolumeIDs != "" {
+		req.NetworkVolumeIDs = strings.Split(createNetworkVolumeIDs, ",")
+	}
+
 	endpoint, err := client.CreateEndpoint(req)
 	if err != nil {
 		output.Error(err)
 		return fmt.Errorf("failed to create endpoint: %w", err)
+	}
+
+	// REST create ignores flashboot=false, so patch immediately after create
+	if !createFlashBoot {
+		fb := false
+		_, err := client.UpdateEndpoint(endpoint.ID, &api.EndpointUpdateRequest{Flashboot: &fb})
+		if err != nil {
+			output.Error(err)
+			return fmt.Errorf("endpoint created but failed to disable flash boot: %w", err)
+		}
+		endpoint.Flashboot = &fb
 	}
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())

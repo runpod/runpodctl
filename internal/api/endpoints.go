@@ -8,20 +8,23 @@ import (
 
 // Endpoint represents a serverless endpoint
 type Endpoint struct {
-	ID              string                 `json:"id"`
-	Name            string                 `json:"name"`
-	TemplateID      string                 `json:"templateId,omitempty"`
-	GpuIDs          string                 `json:"gpuIds,omitempty"`
-	NetworkVolumeID string                 `json:"networkVolumeId,omitempty"`
-	Locations       string                 `json:"locations,omitempty"`
-	IdleTimeout     int                    `json:"idleTimeout,omitempty"`
-	ScalerType      string                 `json:"scalerType,omitempty"`
-	ScalerValue     int                    `json:"scalerValue,omitempty"`
-	WorkersMin      int                    `json:"workersMin,omitempty"`
-	WorkersMax      int                    `json:"workersMax,omitempty"`
-	GpuCount        int                    `json:"gpuCount,omitempty"`
-	Template        map[string]interface{} `json:"template,omitempty"`
-	Workers         []interface{}          `json:"workers,omitempty"`
+	ID                 string                 `json:"id"`
+	Name               string                 `json:"name"`
+	TemplateID         string                 `json:"templateId,omitempty"`
+	GpuIDs             string                 `json:"gpuIds,omitempty"`
+	NetworkVolumeID    string                 `json:"networkVolumeId,omitempty"`
+	Locations          string                 `json:"locations,omitempty"`
+	IdleTimeout        int                    `json:"idleTimeout,omitempty"`
+	ScalerType         string                 `json:"scalerType,omitempty"`
+	ScalerValue        int                    `json:"scalerValue,omitempty"`
+	WorkersMin         int                    `json:"workersMin,omitempty"`
+	WorkersMax         int                    `json:"workersMax,omitempty"`
+	GpuCount           int                    `json:"gpuCount,omitempty"`
+	MinCudaVersion     string                 `json:"minCudaVersion,omitempty"`
+	Flashboot          *bool                  `json:"flashboot,omitempty"`
+	ExecutionTimeoutMs int                    `json:"executionTimeoutMs,omitempty"`
+	Template           map[string]interface{} `json:"template,omitempty"`
+	Workers            []interface{}          `json:"workers,omitempty"`
 }
 
 // EndpointListResponse is the response from listing endpoints
@@ -31,16 +34,23 @@ type EndpointListResponse struct {
 
 // EndpointCreateRequest is the request to create an endpoint
 type EndpointCreateRequest struct {
-	Name            string   `json:"name,omitempty"`
-	TemplateID      string   `json:"templateId,omitempty"`
-	HubReleaseID    string   `json:"hubReleaseId,omitempty"`
-	ComputeType     string   `json:"computeType,omitempty"`
-	GpuTypeIDs      []string `json:"gpuTypeIds,omitempty"`
-	GpuCount        int      `json:"gpuCount,omitempty"`
-	WorkersMin      int      `json:"workersMin,omitempty"`
-	WorkersMax      int      `json:"workersMax,omitempty"`
-	DataCenterIDs   []string `json:"dataCenterIds,omitempty"`
-	NetworkVolumeID string   `json:"networkVolumeId,omitempty"`
+	Name               string   `json:"name,omitempty"`
+	TemplateID         string   `json:"templateId,omitempty"`
+	HubReleaseID       string   `json:"hubReleaseId,omitempty"`
+	ComputeType        string   `json:"computeType,omitempty"`
+	GpuTypeIDs         []string `json:"gpuTypeIds,omitempty"`
+	GpuCount           int      `json:"gpuCount,omitempty"`
+	WorkersMin         int      `json:"workersMin,omitempty"`
+	WorkersMax         int      `json:"workersMax,omitempty"`
+	DataCenterIDs      []string `json:"dataCenterIds,omitempty"`
+	NetworkVolumeID    string   `json:"networkVolumeId,omitempty"`
+	MinCudaVersion     string   `json:"minCudaVersion,omitempty"`
+	ScalerType         string   `json:"scalerType,omitempty"`
+	ScalerValue        int      `json:"scalerValue,omitempty"`
+	IdleTimeout        int      `json:"idleTimeout,omitempty"`
+	Flashboot          *bool    `json:"flashboot,omitempty"`
+	ExecutionTimeoutMs int      `json:"executionTimeoutMs,omitempty"`
+	NetworkVolumeIDs   []string `json:"networkVolumeIds,omitempty"`
 }
 
 // EndpointUpdateRequest is the request to update an endpoint
@@ -51,6 +61,7 @@ type EndpointUpdateRequest struct {
 	IdleTimeout int    `json:"idleTimeout,omitempty"`
 	ScalerType  string `json:"scalerType,omitempty"`
 	ScalerValue int    `json:"scalerValue,omitempty"`
+	Flashboot   *bool  `json:"flashboot,omitempty"`
 }
 
 // EndpointListOptions are options for listing endpoints
