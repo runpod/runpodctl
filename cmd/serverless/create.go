@@ -47,7 +47,7 @@ var (
 	createNetworkVolumeID  string
 	createEnvVars          []string
 	createMinCudaVersion   string
-	createScalerType       string
+	createScaleBy          string
 	createScalerValue      int
 	createIdleTimeout      int
 	createFlashBoot        bool
@@ -68,7 +68,7 @@ func init() {
 	createCmd.Flags().StringVar(&createNetworkVolumeID, "network-volume-id", "", "network volume id to attach")
 	createCmd.Flags().StringSliceVar(&createEnvVars, "env", nil, "env vars in KEY=VALUE format; overrides hub defaults (repeatable)")
 	createCmd.Flags().StringVar(&createMinCudaVersion, "min-cuda-version", "", "minimum cuda version (e.g., 12.6)")
-	createCmd.Flags().StringVar(&createScalerType, "scaler-type", "", "autoscaler type (QUEUE_DELAY or REQUEST_COUNT)")
+	createCmd.Flags().StringVar(&createScaleBy, "scale-by", "", "autoscale strategy: delay or requests")
 	createCmd.Flags().IntVar(&createScalerValue, "scaler-value", -1, "autoscaler threshold value")
 	createCmd.Flags().IntVar(&createIdleTimeout, "idle-timeout", -1, "seconds before idle worker scales down (1-3600)")
 	createCmd.Flags().BoolVar(&createFlashBoot, "flashboot", true, "enable flashboot")
@@ -229,13 +229,14 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		req.MinCudaVersion = createMinCudaVersion
 	}
 
-	if createScalerType != "" {
-		scalerType := strings.ToUpper(strings.TrimSpace(createScalerType))
-		switch scalerType {
-		case "QUEUE_DELAY", "REQUEST_COUNT":
-			req.ScalerType = scalerType
+	if createScaleBy != "" {
+		switch strings.ToLower(strings.TrimSpace(createScaleBy)) {
+		case "delay":
+			req.ScalerType = "QUEUE_DELAY"
+		case "requests":
+			req.ScalerType = "REQUEST_COUNT"
 		default:
-			return fmt.Errorf("invalid --scaler-type %q (use QUEUE_DELAY or REQUEST_COUNT)", createScalerType)
+			return fmt.Errorf("invalid --scale-by %q (use delay or requests)", createScaleBy)
 		}
 	}
 

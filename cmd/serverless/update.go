@@ -2,6 +2,7 @@ package serverless
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/runpod/runpodctl/internal/api"
 	"github.com/runpod/runpodctl/internal/output"
@@ -22,7 +23,7 @@ var (
 	updateWorkersMin  int
 	updateWorkersMax  int
 	updateIdleTimeout int
-	updateScalerType  string
+	updateScaleBy     string
 	updateScalerValue int
 )
 
@@ -31,7 +32,7 @@ func init() {
 	updateCmd.Flags().IntVar(&updateWorkersMin, "workers-min", -1, "new minimum number of workers")
 	updateCmd.Flags().IntVar(&updateWorkersMax, "workers-max", -1, "new maximum number of workers")
 	updateCmd.Flags().IntVar(&updateIdleTimeout, "idle-timeout", -1, "new idle timeout in seconds")
-	updateCmd.Flags().StringVar(&updateScalerType, "scaler-type", "", "scaler type (QUEUE_DELAY or REQUEST_COUNT)")
+	updateCmd.Flags().StringVar(&updateScaleBy, "scale-by", "", "autoscale strategy: delay or requests")
 	updateCmd.Flags().IntVar(&updateScalerValue, "scaler-value", -1, "scaler value")
 }
 
@@ -58,8 +59,15 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	if updateIdleTimeout >= 0 {
 		req.IdleTimeout = updateIdleTimeout
 	}
-	if updateScalerType != "" {
-		req.ScalerType = updateScalerType
+	if updateScaleBy != "" {
+		switch strings.ToLower(strings.TrimSpace(updateScaleBy)) {
+		case "delay":
+			req.ScalerType = "QUEUE_DELAY"
+		case "requests":
+			req.ScalerType = "REQUEST_COUNT"
+		default:
+			return fmt.Errorf("invalid --scale-by %q (use delay or requests)", updateScaleBy)
+		}
 	}
 	if updateScalerValue >= 0 {
 		req.ScalerValue = updateScalerValue

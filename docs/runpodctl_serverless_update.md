@@ -13,13 +13,13 @@ runpodctl serverless update <endpoint-id> [flags]
 ### Options
 
 ```
-  -h, --help                 help for update
-      --idle-timeout int     new idle timeout in seconds (default -1)
-      --name string          new endpoint name
-      --scaler-type string   scaler type (QUEUE_DELAY or REQUEST_COUNT)
-      --scaler-value int     scaler value (default -1)
-      --workers-max int      new maximum number of workers (default -1)
-      --workers-min int      new minimum number of workers (default -1)
+  -h, --help               help for update
+      --idle-timeout int   new idle timeout in seconds (default -1)
+      --name string        new endpoint name
+      --scale-by string    autoscale strategy: delay or requests
+      --scaler-value int   scaler value (default -1)
+      --workers-max int    new maximum number of workers (default -1)
+      --workers-min int    new minimum number of workers (default -1)
 ```
 
 ### Options inherited from parent commands
