@@ -42,7 +42,7 @@ func init() {
 	listCmd.Flags().IntVar(&listLimit, "limit", 10, "max number of results to return")
 	listCmd.Flags().IntVar(&listOffset, "offset", 0, "offset for pagination")
 	listCmd.Flags().StringVar(&listOwner, "owner", "", "filter by repo owner")
-	listCmd.Flags().StringVar(&listType, "type", "", "filter by type: POD or SERVERLESS")
+	listCmd.Flags().StringVar(&listType, "type", "", "filter by type: POD or SERVERLESS (applied client-side; --limit may return fewer results)")
 }
 
 func runList(cmd *cobra.Command, args []string) error {

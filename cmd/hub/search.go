@@ -39,7 +39,7 @@ func init() {
 	searchCmd.Flags().IntVar(&searchLimit, "limit", 10, "max number of results to return")
 	searchCmd.Flags().IntVar(&searchOffset, "offset", 0, "offset for pagination")
 	searchCmd.Flags().StringVar(&searchOwner, "owner", "", "filter by repo owner")
-	searchCmd.Flags().StringVar(&searchType, "type", "", "filter by type: POD or SERVERLESS")
+	searchCmd.Flags().StringVar(&searchType, "type", "", "filter by type: POD or SERVERLESS (applied client-side; --limit may return fewer results)")
 }
 
 func runSearch(cmd *cobra.Command, args []string) error {

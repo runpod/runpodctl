@@ -701,10 +701,24 @@ func TestCLI_ServerlessCreateMutuallyExclusive(t *testing.T) {
 }
 
 func TestCLI_ServerlessCreateFromHub(t *testing.T) {
+	// resolve the vllm hub listing id dynamically
+	lookupOut, lookupErr, lookupE := runCLI("hub", "get", "runpod-workers/worker-vllm")
+	if lookupE != nil {
+		t.Fatalf("failed to resolve vllm hub listing: %v\nstderr: %s", lookupE, lookupErr)
+	}
+	var hubListing map[string]interface{}
+	if err := json.Unmarshal([]byte(lookupOut), &hubListing); err != nil {
+		t.Fatalf("failed to parse hub listing: %v\noutput: %s", err, lookupOut)
+	}
+	hubID, ok := hubListing["id"].(string)
+	if !ok || hubID == "" {
+		t.Fatal("expected id in hub listing response")
+	}
+
 	// create a serverless endpoint from the vllm hub listing
 	name := "e2e-test-hub-" + time.Now().Format("20060102150405")
 	stdout, stderr, err := runCLI("serverless", "create",
-		"--hub-id", "cm8h09d9n000008jvh2rqdsmb", // vllm listing
+		"--hub-id", hubID,
 		"--name", name,
 		"--workers-max", "1",
 	)
