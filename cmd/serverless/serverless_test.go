@@ -82,8 +82,8 @@ func TestUpdateCmd_Flags(t *testing.T) {
 	if flags.Lookup("idle-timeout") == nil {
 		t.Error("expected --idle-timeout flag")
 	}
-	if flags.Lookup("scaler-type") == nil {
-		t.Error("expected --scaler-type flag")
+	if flags.Lookup("scale-by") == nil {
+		t.Error("expected --scale-by flag")
 	}
 }
 
