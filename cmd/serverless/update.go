@@ -24,7 +24,7 @@ var (
 	updateWorkersMax  int
 	updateIdleTimeout int
 	updateScaleBy     string
-	updateScalerValue int
+	updateScaleThreshold int
 )
 
 func init() {
@@ -32,8 +32,8 @@ func init() {
 	updateCmd.Flags().IntVar(&updateWorkersMin, "workers-min", -1, "new minimum number of workers")
 	updateCmd.Flags().IntVar(&updateWorkersMax, "workers-max", -1, "new maximum number of workers")
 	updateCmd.Flags().IntVar(&updateIdleTimeout, "idle-timeout", -1, "new idle timeout in seconds")
-	updateCmd.Flags().StringVar(&updateScaleBy, "scale-by", "", "autoscale strategy: delay or requests")
-	updateCmd.Flags().IntVar(&updateScalerValue, "scaler-value", -1, "scaler value")
+	updateCmd.Flags().StringVar(&updateScaleBy, "scale-by", "", "autoscale strategy: delay (seconds of queue wait) or requests (pending request count)")
+	updateCmd.Flags().IntVar(&updateScaleThreshold, "scale-threshold", -1, "trigger point for autoscaler (delay: seconds, requests: count)")
 }
 
 func runUpdate(cmd *cobra.Command, args []string) error {
@@ -69,8 +69,8 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("invalid --scale-by %q (use delay or requests)", updateScaleBy)
 		}
 	}
-	if updateScalerValue >= 0 {
-		req.ScalerValue = updateScalerValue
+	if updateScaleThreshold >= 0 {
+		req.ScalerValue = updateScaleThreshold
 	}
 
 	endpoint, err := client.UpdateEndpoint(endpointID, req)
