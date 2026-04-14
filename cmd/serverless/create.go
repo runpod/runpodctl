@@ -30,7 +30,7 @@ var (
 	createNetworkVolumeID  string
 	createMinCudaVersion   string
 	createScaleBy          string
-	createScalerValue      int
+	createScaleThreshold   int
 	createIdleTimeout      int
 	createFlashBoot        bool
 	createExecutionTimeout int
@@ -48,10 +48,10 @@ func init() {
 	createCmd.Flags().StringVar(&createDataCenterIDs, "data-center-ids", "", "comma-separated list of data center ids")
 	createCmd.Flags().StringVar(&createNetworkVolumeID, "network-volume-id", "", "network volume id to attach")
 	createCmd.Flags().StringVar(&createMinCudaVersion, "min-cuda-version", "", "minimum cuda version (e.g., 12.6)")
-	createCmd.Flags().StringVar(&createScaleBy, "scale-by", "", "autoscale strategy: delay or requests")
-	createCmd.Flags().IntVar(&createScalerValue, "scaler-value", -1, "autoscaler threshold value")
+	createCmd.Flags().StringVar(&createScaleBy, "scale-by", "", "autoscale strategy: delay (seconds of queue wait) or requests (pending request count)")
+	createCmd.Flags().IntVar(&createScaleThreshold, "scale-threshold", -1, "trigger point for autoscaler (delay: seconds, requests: count)")
 	createCmd.Flags().IntVar(&createIdleTimeout, "idle-timeout", -1, "seconds before idle worker scales down (1-3600)")
-	createCmd.Flags().BoolVar(&createFlashBoot, "flashboot", true, "enable flashboot")
+	createCmd.Flags().BoolVar(&createFlashBoot, "flash-boot", true, "enable flash boot")
 	createCmd.Flags().IntVar(&createExecutionTimeout, "execution-timeout", -1, "max seconds per request")
 	createCmd.Flags().StringVar(&createNetworkVolumeIDs, "network-volume-ids", "", "comma-separated network volume ids for multi-region")
 
@@ -105,8 +105,8 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if createScalerValue >= 0 {
-		req.ScalerValue = createScalerValue
+	if createScaleThreshold >= 0 {
+		req.ScalerValue = createScaleThreshold
 	}
 
 	if createIdleTimeout >= 0 {
