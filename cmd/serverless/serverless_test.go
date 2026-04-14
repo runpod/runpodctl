@@ -85,6 +85,9 @@ func TestUpdateCmd_Flags(t *testing.T) {
 	if flags.Lookup("scale-by") == nil {
 		t.Error("expected --scale-by flag")
 	}
+	if flags.Lookup("scale-threshold") == nil {
+		t.Error("expected --scale-threshold flag")
+	}
 }
 
 func TestDeleteCmd_Aliases(t *testing.T) {
