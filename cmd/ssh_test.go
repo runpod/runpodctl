@@ -48,8 +48,47 @@ func TestSSHCmd_HasInfoCommand(t *testing.T) {
 	}
 }
 
+func TestSSHCmd_HasRemoveKeyCommand(t *testing.T) {
+	found := false
+	for _, cmd := range sshCmd.Commands() {
+		if cmd.Use == "remove-key" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected ssh remove-key command to exist")
+	}
+}
+
 func TestSSHConnect_Hidden(t *testing.T) {
 	if !sshConnectCmd.Hidden {
 		t.Error("expected ssh connect to be hidden")
+	}
+}
+
+func TestSSHRemoveKey_RequiresIdentifier(t *testing.T) {
+	origName := sshKeyName
+	origFingerprint := sshKeyFingerprint
+	t.Cleanup(func() {
+		sshKeyName = origName
+		sshKeyFingerprint = origFingerprint
+	})
+
+	sshKeyName = ""
+	sshKeyFingerprint = ""
+	if err := sshRemoveKeyCmd.PreRunE(sshRemoveKeyCmd, nil); err == nil {
+		t.Error("expected ssh remove-key to require an identifier")
+	}
+
+	sshKeyName = "temp-key"
+	if err := sshRemoveKeyCmd.PreRunE(sshRemoveKeyCmd, nil); err != nil {
+		t.Errorf("unexpected error for name: %v", err)
+	}
+
+	sshKeyName = ""
+	sshKeyFingerprint = "SHA256:test"
+	if err := sshRemoveKeyCmd.PreRunE(sshRemoveKeyCmd, nil); err != nil {
+		t.Errorf("unexpected error for fingerprint: %v", err)
 	}
 }
