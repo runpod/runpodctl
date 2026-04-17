@@ -7,6 +7,10 @@ import (
 	"testing"
 )
 
+func intPtr(v int) *int {
+	return &v
+}
+
 func TestListTemplates(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/templates" {
@@ -65,9 +69,11 @@ func TestCreateTemplate(t *testing.T) {
 		var req TemplateCreateRequest
 		json.NewDecoder(r.Body).Decode(&req)
 		json.NewEncoder(w).Encode(Template{
-			ID:        "new-tpl-id",
-			Name:      req.Name,
-			ImageName: req.ImageName,
+			ID:                "new-tpl-id",
+			Name:              req.Name,
+			ImageName:         req.ImageName,
+			VolumeMountPath:   req.VolumeMountPath,
+			ContainerDiskInGb: req.ContainerDiskInGb,
 		})
 	}))
 	defer server.Close()
@@ -78,14 +84,98 @@ func TestCreateTemplate(t *testing.T) {
 	client.baseURL = server.URL
 
 	template, err := client.CreateTemplate(&TemplateCreateRequest{
-		Name:      "test-template",
-		ImageName: "runpod/pytorch",
+		Name:              "test-template",
+		ImageName:         "runpod/pytorch",
+		VolumeMountPath:   "/models",
+		ContainerDiskInGb: 30,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if template.ID != "new-tpl-id" {
 		t.Errorf("expected new-tpl-id, got %s", template.ID)
+	}
+	if template.VolumeMountPath != "/models" {
+		t.Errorf("expected /models, got %s", template.VolumeMountPath)
+	}
+	if template.ContainerDiskInGb != 30 {
+		t.Errorf("expected 30, got %d", template.ContainerDiskInGb)
+	}
+}
+
+func TestUpdateTemplate(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			t.Errorf("expected PATCH, got %s", r.Method)
+		}
+		if r.URL.Path != "/templates/tpl-123" {
+			t.Errorf("expected /templates/tpl-123, got %s", r.URL.Path)
+		}
+
+		var req TemplateUpdateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req.ContainerDiskInGb == nil || *req.ContainerDiskInGb != 40 {
+			t.Fatalf("expected containerDiskInGb 40, got %#v", req.ContainerDiskInGb)
+		}
+
+		json.NewEncoder(w).Encode(Template{
+			ID:                "tpl-123",
+			ContainerDiskInGb: *req.ContainerDiskInGb,
+		})
+	}))
+	defer server.Close()
+
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+
+	client, _ := NewClient()
+	client.baseURL = server.URL
+
+	template, err := client.UpdateTemplate("tpl-123", &TemplateUpdateRequest{
+		ContainerDiskInGb: intPtr(40),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if template.ContainerDiskInGb != 40 {
+		t.Errorf("expected 40, got %d", template.ContainerDiskInGb)
+	}
+}
+
+func TestUpdateTemplate_AllowsZeroContainerDisk(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req TemplateUpdateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req.ContainerDiskInGb == nil {
+			t.Fatal("expected containerDiskInGb to be present")
+		}
+		if *req.ContainerDiskInGb != 0 {
+			t.Fatalf("expected containerDiskInGb 0, got %d", *req.ContainerDiskInGb)
+		}
+
+		json.NewEncoder(w).Encode(Template{
+			ID:                "tpl-123",
+			ContainerDiskInGb: *req.ContainerDiskInGb,
+		})
+	}))
+	defer server.Close()
+
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+
+	client, _ := NewClient()
+	client.baseURL = server.URL
+
+	template, err := client.UpdateTemplate("tpl-123", &TemplateUpdateRequest{
+		ContainerDiskInGb: intPtr(0),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if template.ContainerDiskInGb != 0 {
+		t.Errorf("expected 0, got %d", template.ContainerDiskInGb)
 	}
 }
 
