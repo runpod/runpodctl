@@ -31,16 +31,16 @@ type EndpointListResponse struct {
 
 // EndpointCreateRequest is the request to create an endpoint
 type EndpointCreateRequest struct {
-	Name          string   `json:"name,omitempty"`
-	TemplateID    string   `json:"templateId,omitempty"`
-	HubReleaseID  string   `json:"hubReleaseId,omitempty"`
-	ComputeType   string   `json:"computeType,omitempty"`
-	GpuTypeIDs    []string `json:"gpuTypeIds,omitempty"`
-	GpuCount      int      `json:"gpuCount,omitempty"`
-	WorkersMin    int      `json:"workersMin,omitempty"`
-	WorkersMax    int      `json:"workersMax,omitempty"`
-	DataCenterIDs    []string `json:"dataCenterIds,omitempty"`
-	NetworkVolumeID  string   `json:"networkVolumeId,omitempty"`
+	Name            string   `json:"name,omitempty"`
+	TemplateID      string   `json:"templateId,omitempty"`
+	HubReleaseID    string   `json:"hubReleaseId,omitempty"`
+	ComputeType     string   `json:"computeType,omitempty"`
+	GpuTypeIDs      []string `json:"gpuTypeIds,omitempty"`
+	GpuCount        int      `json:"gpuCount,omitempty"`
+	WorkersMin      int      `json:"workersMin,omitempty"`
+	WorkersMax      int      `json:"workersMax,omitempty"`
+	DataCenterIDs   []string `json:"dataCenterIds,omitempty"`
+	NetworkVolumeID string   `json:"networkVolumeId,omitempty"`
 }
 
 // EndpointUpdateRequest is the request to update an endpoint
@@ -146,25 +146,25 @@ func (c *Client) DeleteEndpoint(endpointID string) error {
 // EndpointCreateGQLInput is the input for creating an endpoint via GraphQL
 // Used when hubReleaseId is needed (REST API doesn't support it)
 type EndpointCreateGQLInput struct {
-	Name            string                    `json:"name"`
-	HubReleaseID    string                    `json:"hubReleaseId,omitempty"`
-	TemplateID      string                    `json:"templateId,omitempty"`
-	Template        *EndpointTemplateInput    `json:"template,omitempty"`
-	GpuIDs          string                    `json:"gpuIds,omitempty"`
-	GpuCount        int                       `json:"gpuCount,omitempty"`
-	WorkersMin      int                       `json:"workersMin,omitempty"`
-	WorkersMax      int                       `json:"workersMax,omitempty"`
-	Locations       string                    `json:"locations,omitempty"`
-	NetworkVolumeID string                    `json:"networkVolumeId,omitempty"`
+	Name            string                 `json:"name"`
+	HubReleaseID    string                 `json:"hubReleaseId,omitempty"`
+	TemplateID      string                 `json:"templateId,omitempty"`
+	Template        *EndpointTemplateInput `json:"template,omitempty"`
+	GpuIDs          string                 `json:"gpuIds,omitempty"`
+	GpuCount        int                    `json:"gpuCount,omitempty"`
+	WorkersMin      int                    `json:"workersMin,omitempty"`
+	WorkersMax      int                    `json:"workersMax,omitempty"`
+	Locations       string                 `json:"locations,omitempty"`
+	NetworkVolumeID string                 `json:"networkVolumeId,omitempty"`
 }
 
 // EndpointTemplateInput is the inline template for endpoint creation via GraphQL
 type EndpointTemplateInput struct {
-	Name              string        `json:"name"`
-	ImageName         string        `json:"imageName,omitempty"`
-	ContainerDiskInGb int           `json:"containerDiskInGb"`
-	DockerArgs        string        `json:"dockerArgs"`
-	Env               []*PodEnvVar  `json:"env"`
+	Name              string       `json:"name"`
+	ImageName         string       `json:"imageName,omitempty"`
+	ContainerDiskInGb int          `json:"containerDiskInGb"`
+	DockerArgs        string       `json:"dockerArgs"`
+	Env               []*PodEnvVar `json:"env"`
 }
 
 // CreateEndpointGQL creates an endpoint via GraphQL (saveEndpoint mutation)

@@ -26,13 +26,13 @@ examples:
 }
 
 var (
-	listCategory  string
-	listOrderBy   string
-	listOrderDir  string
-	listLimit     int
-	listOffset    int
-	listOwner     string
-	listType      string
+	listCategory string
+	listOrderBy  string
+	listOrderDir string
+	listLimit    int
+	listOffset   int
+	listOwner    string
+	listType     string
 )
 
 func init() {

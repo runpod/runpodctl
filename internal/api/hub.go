@@ -63,8 +63,8 @@ type HubReleaseConfig struct {
 
 // HubReleaseConfigEnv is an env var entry in the hub release config
 type HubReleaseConfigEnv struct {
-	Key   string                      `json:"key"`
-	Input *HubReleaseConfigEnvInput   `json:"input,omitempty"`
+	Key   string                    `json:"key"`
+	Input *HubReleaseConfigEnvInput `json:"input,omitempty"`
 }
 
 // HubReleaseConfigEnvInput describes the env var input metadata

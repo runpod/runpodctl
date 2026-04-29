@@ -29,22 +29,22 @@ examples:
 
   # override or add env vars (hub defaults are included automatically)
   runpodctl serverless create --hub-id <id> --env MODEL_NAME=my-model --env MAX_TOKENS=4096`,
-	Args:  cobra.NoArgs,
-	RunE:  runCreate,
+	Args: cobra.NoArgs,
+	RunE: runCreate,
 }
 
 var (
-	createName             string
-	createTemplateID       string
-	createHubID            string
-	createComputeType      string
-	createGpuTypeID        string
-	createGpuCount         int
-	createWorkersMin       int
-	createWorkersMax       int
-	createDataCenterIDs    string
-	createNetworkVolumeID  string
-	createEnvVars          []string
+	createName            string
+	createTemplateID      string
+	createHubID           string
+	createComputeType     string
+	createGpuTypeID       string
+	createGpuCount        int
+	createWorkersMin      int
+	createWorkersMax      int
+	createDataCenterIDs   string
+	createNetworkVolumeID string
+	createEnvVars         []string
 )
 
 func init() {
