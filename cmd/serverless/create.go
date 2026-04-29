@@ -25,7 +25,10 @@ examples:
 
   # create from a hub repo
   runpodctl hub search vllm                         # find the hub id
-  runpodctl serverless create --hub-id <id> --gpu-id "NVIDIA GeForce RTX 4090"`,
+  runpodctl serverless create --hub-id <id> --gpu-id "NVIDIA GeForce RTX 4090"
+
+  # override or add env vars (hub defaults are included automatically)
+  runpodctl serverless create --hub-id <id> --env MODEL_NAME=my-model --env MAX_TOKENS=4096`,
 	Args:  cobra.NoArgs,
 	RunE:  runCreate,
 }
@@ -41,6 +44,7 @@ var (
 	createWorkersMax       int
 	createDataCenterIDs    string
 	createNetworkVolumeID  string
+	createEnvVars          []string
 )
 
 func init() {
@@ -54,7 +58,7 @@ func init() {
 	createCmd.Flags().IntVar(&createWorkersMax, "workers-max", 3, "maximum number of workers")
 	createCmd.Flags().StringVar(&createDataCenterIDs, "data-center-ids", "", "comma-separated list of data center ids")
 	createCmd.Flags().StringVar(&createNetworkVolumeID, "network-volume-id", "", "network volume id to attach")
-
+	createCmd.Flags().StringSliceVar(&createEnvVars, "env", nil, "env vars in KEY=VALUE format; overrides hub defaults (repeatable)")
 }
 
 func runCreate(cmd *cobra.Command, args []string) error {
@@ -117,6 +121,36 @@ func runCreate(cmd *cobra.Command, args []string) error {
 			}
 		}
 
+		// translate hub release env config into pod env vars
+		envMap := make(map[string]string, len(hubConfig.Env))
+		envOrder := make([]string, 0, len(hubConfig.Env))
+		for _, e := range hubConfig.Env {
+			val := ""
+			if e.Input != nil && e.Input.Default != nil {
+				val = fmt.Sprintf("%v", e.Input.Default)
+			}
+			envMap[e.Key] = val
+			envOrder = append(envOrder, e.Key)
+		}
+
+		// apply user --env overrides (take precedence over hub defaults)
+		for _, kv := range createEnvVars {
+			parts := strings.SplitN(kv, "=", 2)
+			if len(parts) != 2 {
+				return fmt.Errorf("invalid --env format %q; expected KEY=VALUE", kv)
+			}
+			key, val := parts[0], parts[1]
+			if _, exists := envMap[key]; !exists {
+				envOrder = append(envOrder, key)
+			}
+			envMap[key] = val
+		}
+
+		envVars := make([]*api.PodEnvVar, 0, len(envMap))
+		for _, key := range envOrder {
+			envVars = append(envVars, &api.PodEnvVar{Key: key, Value: envMap[key]})
+		}
+
 		endpointName := createName
 		if endpointName == "" {
 			endpointName = listing.Title
@@ -133,7 +167,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 				ImageName:         imageName,
 				ContainerDiskInGb: containerDisk,
 				DockerArgs:        "",
-				Env:               []*api.PodEnvVar{},
+				Env:               envVars,
 			},
 			GpuCount:   createGpuCount,
 			WorkersMin: createWorkersMin,
