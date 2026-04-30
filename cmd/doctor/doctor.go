@@ -179,7 +179,7 @@ func checkSSHKey() checkResult {
 	// generate if not found
 	if publicKey == nil {
 		fmt.Fprintln(os.Stderr, "generating ssh key...")
-		publicKey, err = ssh.GenerateSSHKeyPair("RunPod-Key-Go")
+		publicKey, err = ssh.GenerateSSHKeyPair(ssh.DefaultKeyName)
 		if err != nil {
 			result.Status = "fail"
 			result.Error = fmt.Sprintf("failed to generate ssh key: %v", err)
