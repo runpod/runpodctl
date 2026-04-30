@@ -996,9 +996,9 @@ func TestCLI_TemplateSearchOpenclawStack(t *testing.T) {
 			isRunpod, _ := tpl["isRunpod"].(bool)
 			t.Logf("found openclaw-stack template: id=%s, isRunpod=%v", id, isRunpod)
 
-			// verify it's an official RunPod template
+			// verify it's an official Runpod template
 			if !isRunpod {
-				t.Error("expected openclaw-stack to be an official RunPod template")
+				t.Error("expected openclaw-stack to be an official Runpod template")
 			}
 			break
 		}
