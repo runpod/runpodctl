@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/runpod/runpodctl/api"
+	sshpkg "github.com/runpod/runpodctl/cmd/ssh"
 
 	"github.com/fatih/color"
 	"golang.org/x/crypto/ssh"
@@ -254,12 +255,11 @@ func scanAndPrint(pipe io.Reader, color *color.Color, podID string, showPodIdPre
 }
 
 func PodSSHConnection(podId string) (*SSHConnection, error) {
-	homeDir, err := os.UserHomeDir()
+	sshKeyPath, err := sshpkg.ResolvePrivateKeyPath()
 	if err != nil {
-		return nil, fmt.Errorf("getting user home directory: %w", err)
+		return nil, fmt.Errorf("resolving ssh key path: %w", err)
 	}
 
-	sshKeyPath := filepath.Join(homeDir, ".runpod", "ssh", "RunPod-Key-Go")
 	privateKeyBytes, err := os.ReadFile(sshKeyPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading private SSH key from %s: %w", sshKeyPath, err)
