@@ -18,6 +18,7 @@ var createCmd = &cobra.Command{
 	Long: `create a new serverless endpoint.
 
 requires either --template-id or --hub-id.
+--hub-id accepts both SERVERLESS and POD hub listings.
 
 examples:
   # create from a template
@@ -50,7 +51,7 @@ var (
 func init() {
 	createCmd.Flags().StringVar(&createName, "name", "", "endpoint name")
 	createCmd.Flags().StringVar(&createTemplateID, "template-id", "", "template id (required if no --hub-id)")
-	createCmd.Flags().StringVar(&createHubID, "hub-id", "", "hub listing id (alternative to --template-id)")
+	createCmd.Flags().StringVar(&createHubID, "hub-id", "", "hub listing id; accepts both SERVERLESS and POD types (alternative to --template-id)")
 	createCmd.Flags().StringVar(&createComputeType, "compute-type", "GPU", "compute type (GPU or CPU)")
 	createCmd.Flags().StringVar(&createGpuTypeID, "gpu-id", "", "gpu id (from 'runpodctl gpu list')")
 	createCmd.Flags().IntVar(&createGpuCount, "gpu-count", 1, "number of gpus per worker")
