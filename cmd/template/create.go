@@ -62,9 +62,13 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		ImageName:         createImageName,
 		IsServerless:      createIsServerless,
 		ContainerDiskInGb: createContainerDiskInGb,
-		VolumeInGb:        createVolumeInGb,
-		VolumeMountPath:   createVolumeMountPath,
 		Readme:            createReadme,
+	}
+
+	// serverless templates do not support volume fields
+	if !createIsServerless {
+		req.VolumeInGb = createVolumeInGb
+		req.VolumeMountPath = createVolumeMountPath
 	}
 
 	if createPorts != "" {

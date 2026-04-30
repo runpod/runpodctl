@@ -168,7 +168,7 @@ var NewProjectCmd = &cobra.Command{
 	Short:   "create a new project",
 	Long:    "create a new runpod project folder on your local machine.",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Print("Welcome to the RunPod Project Creator!\n--------------------------------------\n\n")
+		fmt.Print("Welcome to the Runpod Project Creator!\n--------------------------------------\n\n")
 
 		// Project Name
 		if projectName == "" {

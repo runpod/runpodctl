@@ -31,15 +31,16 @@ type EndpointListResponse struct {
 
 // EndpointCreateRequest is the request to create an endpoint
 type EndpointCreateRequest struct {
-	Name          string   `json:"name,omitempty"`
-	TemplateID    string   `json:"templateId"`
-	ComputeType   string   `json:"computeType,omitempty"`
-	GpuTypeIDs    []string `json:"gpuTypeIds,omitempty"`
-	GpuCount      int      `json:"gpuCount,omitempty"`
-	WorkersMin    int      `json:"workersMin,omitempty"`
-	WorkersMax    int      `json:"workersMax,omitempty"`
-	DataCenterIDs    []string `json:"dataCenterIds,omitempty"`
-	NetworkVolumeID  string   `json:"networkVolumeId,omitempty"`
+	Name            string   `json:"name,omitempty"`
+	TemplateID      string   `json:"templateId,omitempty"`
+	HubReleaseID    string   `json:"hubReleaseId,omitempty"`
+	ComputeType     string   `json:"computeType,omitempty"`
+	GpuTypeIDs      []string `json:"gpuTypeIds,omitempty"`
+	GpuCount        int      `json:"gpuCount,omitempty"`
+	WorkersMin      int      `json:"workersMin,omitempty"`
+	WorkersMax      int      `json:"workersMax,omitempty"`
+	DataCenterIDs   []string `json:"dataCenterIds,omitempty"`
+	NetworkVolumeID string   `json:"networkVolumeId,omitempty"`
 }
 
 // EndpointUpdateRequest is the request to update an endpoint
@@ -140,4 +141,81 @@ func (c *Client) UpdateEndpoint(endpointID string, req *EndpointUpdateRequest) (
 func (c *Client) DeleteEndpoint(endpointID string) error {
 	_, err := c.Delete("/endpoints/" + endpointID)
 	return err
+}
+
+// EndpointCreateGQLInput is the input for creating an endpoint via GraphQL
+// Used when hubReleaseId is needed (REST API doesn't support it)
+type EndpointCreateGQLInput struct {
+	Name            string                 `json:"name"`
+	HubReleaseID    string                 `json:"hubReleaseId,omitempty"`
+	TemplateID      string                 `json:"templateId,omitempty"`
+	Template        *EndpointTemplateInput `json:"template,omitempty"`
+	GpuIDs          string                 `json:"gpuIds,omitempty"`
+	GpuCount        int                    `json:"gpuCount,omitempty"`
+	WorkersMin      int                    `json:"workersMin,omitempty"`
+	WorkersMax      int                    `json:"workersMax,omitempty"`
+	Locations       string                 `json:"locations,omitempty"`
+	NetworkVolumeID string                 `json:"networkVolumeId,omitempty"`
+}
+
+// EndpointTemplateInput is the inline template for endpoint creation via GraphQL
+type EndpointTemplateInput struct {
+	Name              string       `json:"name"`
+	ImageName         string       `json:"imageName,omitempty"`
+	ContainerDiskInGb int          `json:"containerDiskInGb"`
+	DockerArgs        string       `json:"dockerArgs"`
+	Env               []*PodEnvVar `json:"env"`
+}
+
+// CreateEndpointGQL creates an endpoint via GraphQL (saveEndpoint mutation)
+func (c *Client) CreateEndpointGQL(req *EndpointCreateGQLInput) (*Endpoint, error) {
+	query := `
+		mutation SaveEndpoint($input: EndpointInput!) {
+			saveEndpoint(input: $input) {
+				id
+				name
+				gpuIds
+				networkVolumeId
+				locations
+				idleTimeout
+				scalerType
+				scalerValue
+				workersMin
+				workersMax
+				gpuCount
+			}
+		}
+	`
+
+	variables := map[string]interface{}{
+		"input": req,
+	}
+
+	data, err := c.graphqlRequest(query, variables)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		Data struct {
+			SaveEndpoint *Endpoint `json:"saveEndpoint"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if len(resp.Errors) > 0 {
+		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+	}
+
+	if resp.Data.SaveEndpoint == nil {
+		return nil, fmt.Errorf("endpoint creation returned nil response")
+	}
+
+	return resp.Data.SaveEndpoint, nil
 }

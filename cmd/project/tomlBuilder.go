@@ -9,7 +9,7 @@ import (
 )
 
 func generateProjectToml(projectFolder, filename, projectName, cudaVersion, pythonVersion string) {
-	template := `# RunPod Project Configuration
+	template := `# Runpod Project Configuration
 
 name = "%s"
 
@@ -55,7 +55,7 @@ container_disk_size_gb = 100
 # POD_INACTIVITY_TIMEOUT - Number of seconds before terminating the pod after a session ends. End a session with 'CTRL+C'.
 #                        - You only pay for the pod until it terminates.
 #
-# RUNPOD_DEBUG_LEVEL     - Log level for RunPod. Set to 'debug' for detailed logs.
+# RUNPOD_DEBUG_LEVEL     - Log level for Runpod. Set to 'debug' for detailed logs.
 #
 # UVICORN_LOG_LEVEL      - Log level for Uvicorn. Set to 'warning' for minimal logs.
 

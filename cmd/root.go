@@ -9,6 +9,7 @@ import (
 	"github.com/runpod/runpodctl/cmd/datacenter"
 	"github.com/runpod/runpodctl/cmd/doctor"
 	"github.com/runpod/runpodctl/cmd/gpu"
+	"github.com/runpod/runpodctl/cmd/hub"
 	"github.com/runpod/runpodctl/cmd/legacy"
 	"github.com/runpod/runpodctl/cmd/model"
 	"github.com/runpod/runpodctl/cmd/pod"
@@ -43,6 +44,7 @@ resources:
   pod            manage gpu pods
   serverless     manage serverless endpoints (alias: sls)
   template       manage templates (alias: tpl)
+  hub            browse the runpod hub
   model          manage model repository
   network-volume manage network volumes (alias: nv)
   registry       manage container registry auth (alias: reg)
@@ -87,6 +89,7 @@ func registerCommands() {
 	rootCmd.AddCommand(model.Cmd)
 	rootCmd.AddCommand(volume.Cmd)
 	rootCmd.AddCommand(registry.Cmd)
+	rootCmd.AddCommand(hub.Cmd)
 
 	// Info commands
 	rootCmd.AddCommand(user.Cmd)
