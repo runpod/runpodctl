@@ -90,6 +90,11 @@ type modelFile struct {
 
 // TODO: replace the manual completion call with github.com/aws/aws-sdk-go-v2/service/s3's
 // CompleteMultipartUpload to rely on the SDK for payload formatting and signing logic.
+var (
+	createModelRepoUpload   = api.CreateModelRepoUpload
+	completeModelRepoUpload = api.CompleteModelRepoUpload
+	completeModelUploadFile = completeModelUpload
+)
 
 var addCmd = &cobra.Command{
 	Use:   "add",
@@ -284,20 +289,31 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 }
 
 func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInput) error {
-	for _, file := range files {
+	var modelVersionUUID string
+
+	for i, file := range files {
 		input := *baseInput
 		input.FileName = file.RelativePath
 		input.FileSizeBytes = strconv.FormatInt(file.Size, 10)
+		input.ModelVersionUUID = modelVersionUUID
 
-		result, err := api.CreateModelRepoUpload(&input)
+		result, err := createModelRepoUpload(&input)
 		if err != nil {
 			return fmt.Errorf("create upload for %s: %w", file.RelativePath, err)
 		}
 		if result.Upload == nil {
 			return fmt.Errorf("upload response missing upload session details for %s", file.RelativePath)
 		}
+		if modelVersionUUID == "" {
+			if result.Version != nil {
+				modelVersionUUID = strings.TrimSpace(result.Version.UUID)
+			}
+			if modelVersionUUID == "" && i < len(files)-1 {
+				return fmt.Errorf("upload response missing model version uuid for %s", file.RelativePath)
+			}
+		}
 
-		if err = completeModelUpload(result.Upload, file.AbsolutePath); err != nil {
+		if err = completeModelUploadFile(result.Upload, file.AbsolutePath); err != nil {
 			return fmt.Errorf("upload %s: %w", file.RelativePath, err)
 		}
 
@@ -305,7 +321,7 @@ func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInp
 			return fmt.Errorf("upload %s: missing session identifier for completion", file.RelativePath)
 		}
 
-		completion, err := api.CompleteModelRepoUpload(result.Upload.SessionID)
+		completion, err := completeModelRepoUpload(result.Upload.SessionID)
 		if err != nil {
 			return fmt.Errorf("complete upload session for %s: %w", file.RelativePath, err)
 		}

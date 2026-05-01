@@ -38,6 +38,7 @@ type ModelUser struct {
 
 // ModelVersion represents a specific version of a model stored in the repository.
 type ModelVersion struct {
+	UUID        string                 `json:"uuid,omitempty"`
 	Hash        string                 `json:"hash,omitempty"`
 	VersionHash string                 `json:"versionHash,omitempty"`
 	Status      string                 `json:"status,omitempty"`
@@ -199,6 +200,7 @@ type RemoveModelInput struct {
 // CreateModelRepoUploadInput defines the payload used to start a multipart upload for a model version.
 type CreateModelRepoUploadInput struct {
 	Name                string                 `json:"name,omitempty"`
+	ModelVersionUUID    string                 `json:"modelVersionUuid,omitempty"`
 	FileName            string                 `json:"fileName"`
 	FileSizeBytes       string                 `json:"fileSizeBytes"`
 	PartSizeBytes       string                 `json:"partSizeBytes,omitempty"`
@@ -647,6 +649,7 @@ func CreateModelRepoUpload(input *CreateModelRepoUploadInput) (*ModelRepoMutatio
 	addString("contentType", input.ContentType)
 	addString("credentialType", input.CredentialType)
 	addString("credentialReference", input.CredentialReference)
+	addString("modelVersionUuid", input.ModelVersionUUID)
 
 	if len(input.Metadata) > 0 {
 		payload["metadata"] = input.Metadata
@@ -688,6 +691,7 @@ func CreateModelRepoUpload(input *CreateModelRepoUploadInput) (*ModelRepoMutatio
                                         updatedAt
                                 }
                                 version {
+                                        uuid
                                         hash
                                         status
                                         metadata
