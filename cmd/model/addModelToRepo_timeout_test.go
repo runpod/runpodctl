@@ -74,3 +74,62 @@ func TestSetModelGraphQLTimeoutSkipsWhenInheritedFlagChanged(t *testing.T) {
 		t.Fatalf("expected graphql timeout to remain unset, got %s", got)
 	}
 }
+
+func TestUploadModelFilesUsesModelVersionUUIDAfterFirstFile(t *testing.T) {
+	oldCreateModelRepoUpload := createModelRepoUpload
+	oldCompleteModelUploadFile := completeModelUploadFile
+	oldCompleteModelRepoUpload := completeModelRepoUpload
+	t.Cleanup(func() {
+		createModelRepoUpload = oldCreateModelRepoUpload
+		completeModelUploadFile = oldCompleteModelUploadFile
+		completeModelRepoUpload = oldCompleteModelRepoUpload
+	})
+
+	files := []modelFile{
+		{AbsolutePath: "/tmp/a.bin", RelativePath: "a.bin", Size: 1},
+		{AbsolutePath: "/tmp/b.bin", RelativePath: "b.bin", Size: 2},
+		{AbsolutePath: "/tmp/c.bin", RelativePath: "c.bin", Size: 3},
+	}
+
+	var calls []api.CreateModelRepoUploadInput
+	createModelRepoUpload = func(input *api.CreateModelRepoUploadInput) (*api.ModelRepoMutationResult, error) {
+		calls = append(calls, *input)
+		return &api.ModelRepoMutationResult{
+			Success: true,
+			Version: &api.ModelVersion{
+				UUID: "version-uuid",
+				Hash: "version-hash",
+			},
+			Upload: &api.ModelRepoUpload{
+				SessionID: "session-" + input.FileName,
+				Key:       "key-" + input.FileName,
+			},
+		}, nil
+	}
+	completeModelUploadFile = func(upload *api.ModelRepoUpload, artifactPath string) error {
+		return nil
+	}
+	completeModelRepoUpload = func(sessionID string) (*api.CompleteModelRepoUploadResult, error) {
+		return &api.CompleteModelRepoUploadResult{
+			SessionID: sessionID,
+			Status:    "completed",
+		}, nil
+	}
+
+	err := uploadModelFiles(files, &api.CreateModelRepoUploadInput{Name: "test-model"})
+	if err != nil {
+		t.Fatalf("uploadModelFiles returned error: %v", err)
+	}
+
+	if len(calls) != len(files) {
+		t.Fatalf("expected %d createModelRepoUpload calls, got %d", len(files), len(calls))
+	}
+	if calls[0].ModelVersionUUID != "" {
+		t.Fatalf("expected first upload call to omit modelVersionUuid, got %q", calls[0].ModelVersionUUID)
+	}
+	for i := 1; i < len(calls); i++ {
+		if calls[i].ModelVersionUUID != "version-uuid" {
+			t.Fatalf("expected call %d to use modelVersionUuid %q, got %q", i, "version-uuid", calls[i].ModelVersionUUID)
+		}
+	}
+}
