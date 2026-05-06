@@ -235,6 +235,13 @@ type CreatePodGQLInput struct {
 	VolumeInGb        int          `json:"volumeInGb,omitempty"`
 	VolumeMountPath   string       `json:"volumeMountPath,omitempty"`
 	NetworkVolumeId   string       `json:"networkVolumeId,omitempty"`
+	MinCudaVersion         string       `json:"minCudaVersion,omitempty"`
+	DockerArgs             string       `json:"dockerArgs,omitempty"`
+	ContainerRegistryAuthId string     `json:"containerRegistryAuthId,omitempty"`
+	CountryCode            string       `json:"countryCode,omitempty"`
+	StopAfter              string       `json:"stopAfter,omitempty"`
+	TerminateAfter         string       `json:"terminateAfter,omitempty"`
+	Compliance             []string     `json:"compliance,omitempty"`
 }
 
 // CreatePod creates a pod via GraphQL (podFindAndDeployOnDemand)
