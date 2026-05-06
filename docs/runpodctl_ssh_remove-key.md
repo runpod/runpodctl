@@ -1,21 +1,21 @@
-## runpodctl ssh add-key
+## runpodctl ssh remove-key
 
-add an ssh key
+remove an ssh key
 
 ### Synopsis
 
-add an ssh key to your account
+remove an ssh key from your account
 
 ```
-runpodctl ssh add-key [flags]
+runpodctl ssh remove-key [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help              help for add-key
-      --key string        the public key to add
-      --key-file string   file containing the public key
+      --fingerprint string   fingerprint of the key to remove
+  -h, --help                 help for remove-key
+      --name string          name of the key to remove
 ```
 
 ### Options inherited from parent commands
