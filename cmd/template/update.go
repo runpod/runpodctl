@@ -20,11 +20,12 @@ var updateCmd = &cobra.Command{
 }
 
 var (
-	updateName      string
-	updateImageName string
-	updatePorts     string
-	updateEnv       string
-	updateReadme    string
+	updateName              string
+	updateImageName         string
+	updatePorts             string
+	updateEnv               string
+	updateReadme            string
+	updateContainerDiskInGb int
 )
 
 func init() {
@@ -33,6 +34,7 @@ func init() {
 	updateCmd.Flags().StringVar(&updatePorts, "ports", "", "new comma-separated list of ports")
 	updateCmd.Flags().StringVar(&updateEnv, "env", "", "new environment variables as json object")
 	updateCmd.Flags().StringVar(&updateReadme, "readme", "", "new readme content")
+	updateCmd.Flags().IntVar(&updateContainerDiskInGb, "container-disk-in-gb", -1, "new container disk size in gb")
 }
 
 func runUpdate(cmd *cobra.Command, args []string) error {
@@ -40,7 +42,6 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	client, err := api.NewClient()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
@@ -65,10 +66,12 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	if updateReadme != "" {
 		req.Readme = updateReadme
 	}
+	if updateContainerDiskInGb >= 0 {
+		req.ContainerDiskInGb = &updateContainerDiskInGb
+	}
 
 	template, err := client.UpdateTemplate(templateID, req)
 	if err != nil {
-		output.Error(err)
 		return fmt.Errorf("failed to update template: %w", err)
 	}
 

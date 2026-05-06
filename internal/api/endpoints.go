@@ -32,7 +32,7 @@ type EndpointListResponse struct {
 // EndpointCreateRequest is the request to create an endpoint
 type EndpointCreateRequest struct {
 	Name            string   `json:"name,omitempty"`
-	TemplateID      string   `json:"templateId,omitempty"`
+	TemplateID      string   `json:"templateId"`
 	HubReleaseID    string   `json:"hubReleaseId,omitempty"`
 	ComputeType     string   `json:"computeType,omitempty"`
 	GpuTypeIDs      []string `json:"gpuTypeIds,omitempty"`
@@ -135,6 +135,46 @@ func (c *Client) UpdateEndpoint(endpointID string, req *EndpointUpdateRequest) (
 	}
 
 	return &endpoint, nil
+}
+
+// UpdateEndpointTemplate updates the template attached to an endpoint via GraphQL.
+func (c *Client) UpdateEndpointTemplate(endpointID, templateID string) error {
+	query := `
+		mutation Mutation($input: UpdateEndpointTemplateInput) {
+			updateEndpointTemplate(input: $input) {
+			  id
+			  templateId
+			}
+		  }
+	`
+
+	variables := map[string]interface{}{
+		"input": map[string]interface{}{
+			"endpointId": endpointID,
+			"templateId": templateID,
+		},
+	}
+
+	data, err := c.graphqlRequest(query, variables)
+	if err != nil {
+		return err
+	}
+
+	var resp struct {
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if len(resp.Errors) > 0 {
+		return fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+	}
+
+	return nil
 }
 
 // DeleteEndpoint deletes an endpoint

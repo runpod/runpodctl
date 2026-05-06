@@ -122,11 +122,12 @@ type TemplateCreateRequest struct {
 
 // TemplateUpdateRequest is the request to update a template
 type TemplateUpdateRequest struct {
-	Name      string            `json:"name,omitempty"`
-	ImageName string            `json:"imageName,omitempty"`
-	Ports     []string          `json:"ports,omitempty"`
-	Env       map[string]string `json:"env,omitempty"`
-	Readme    string            `json:"readme,omitempty"`
+	Name              string            `json:"name,omitempty"`
+	ImageName         string            `json:"imageName,omitempty"`
+	Ports             []string          `json:"ports,omitempty"`
+	Env               map[string]string `json:"env,omitempty"`
+	Readme            string            `json:"readme,omitempty"`
+	ContainerDiskInGb *int              `json:"containerDiskInGb,omitempty"`
 }
 
 // ListTemplates returns templates (user's own via REST API)
