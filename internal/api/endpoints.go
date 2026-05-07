@@ -23,6 +23,7 @@ type Endpoint struct {
 	MinCudaVersion     string                 `json:"minCudaVersion,omitempty"`
 	Flashboot          *bool                  `json:"flashboot,omitempty"`
 	ExecutionTimeoutMs int                    `json:"executionTimeoutMs,omitempty"`
+	ModelReferences    []string               `json:"modelReferences,omitempty"`
 	Template           map[string]interface{} `json:"template,omitempty"`
 	Workers            []interface{}          `json:"workers,omitempty"`
 }
@@ -197,7 +198,7 @@ func (c *Client) DeleteEndpoint(endpointID string) error {
 // EndpointCreateGQLInput is the input for creating an endpoint via GraphQL
 // Used when hubReleaseId is needed (REST API doesn't support it)
 type EndpointCreateGQLInput struct {
-	Name            string                 `json:"name"`
+	Name            string                 `json:"name,omitempty"`
 	HubReleaseID    string                 `json:"hubReleaseId,omitempty"`
 	TemplateID      string                 `json:"templateId,omitempty"`
 	Template        *EndpointTemplateInput `json:"template,omitempty"`
@@ -207,6 +208,7 @@ type EndpointCreateGQLInput struct {
 	WorkersMax      int                    `json:"workersMax,omitempty"`
 	Locations       string                 `json:"locations,omitempty"`
 	NetworkVolumeID string                 `json:"networkVolumeId,omitempty"`
+	ModelReferences []string               `json:"modelReferences,omitempty"`
 }
 
 // EndpointTemplateInput is the inline template for endpoint creation via GraphQL
@@ -225,6 +227,7 @@ func (c *Client) CreateEndpointGQL(req *EndpointCreateGQLInput) (*Endpoint, erro
 			saveEndpoint(input: $input) {
 				id
 				name
+				templateId
 				gpuIds
 				networkVolumeId
 				locations
@@ -234,6 +237,7 @@ func (c *Client) CreateEndpointGQL(req *EndpointCreateGQLInput) (*Endpoint, erro
 				workersMin
 				workersMax
 				gpuCount
+				modelReferences
 			}
 		}
 	`
