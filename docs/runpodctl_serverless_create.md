@@ -13,6 +13,9 @@ examples:
   # create from a template
   runpodctl serverless create --template-id <id> --gpu-id "NVIDIA GeForce RTX 4090"
 
+  # create from a template and attach a model
+  runpodctl serverless create --template-id <id> --gpu-id ADA_24 --model-reference https://local/...
+
   # create from a hub repo
   runpodctl hub search vllm                         # find the hub id
   runpodctl serverless create --hub-id <id> --gpu-id "NVIDIA GeForce RTX 4090"
@@ -34,6 +37,7 @@ runpodctl serverless create [flags]
       --gpu-id string              gpu id (from 'runpodctl gpu list')
   -h, --help                       help for create
       --hub-id string              hub listing id; accepts both SERVERLESS and POD types (alternative to --template-id)
+      --model-reference stringArray   model reference to attach to the endpoint (repeatable)
       --name string                endpoint name
       --network-volume-id string   network volume id to attach
       --template-id string         template id (required if no --hub-id)

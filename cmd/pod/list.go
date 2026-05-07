@@ -21,15 +21,15 @@ var listCmd = &cobra.Command{
 }
 
 type podListOutput struct {
-	ID            string      `json:"id"`
-	Name          string      `json:"name"`
-	DesiredStatus string      `json:"desiredStatus"`
-	ImageName     string      `json:"imageName"`
-	GpuID         string      `json:"gpuId,omitempty"`
-	GpuCount      int         `json:"gpuCount"`
-	VolumeInGb    int         `json:"volumeInGb"`
-	CostPerHr     float64     `json:"costPerHr,omitempty"`
-	CreatedAt     string      `json:"createdAt,omitempty"`
+	ID            string  `json:"id"`
+	Name          string  `json:"name"`
+	DesiredStatus string  `json:"desiredStatus"`
+	ImageName     string  `json:"imageName"`
+	GpuID         string  `json:"gpuId,omitempty"`
+	GpuCount      int     `json:"gpuCount"`
+	VolumeInGb    int     `json:"volumeInGb"`
+	CostPerHr     float64 `json:"costPerHr,omitempty"`
+	CreatedAt     string  `json:"createdAt,omitempty"`
 }
 
 var (
