@@ -24,6 +24,9 @@ examples:
   # create from a template
   runpodctl serverless create --template-id <id> --gpu-id "NVIDIA GeForce RTX 4090"
 
+  # create from a template and attach a model
+  runpodctl serverless create --template-id <id> --gpu-id ADA_24 --model-reference https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct:main
+
   # create from a hub repo
   runpodctl hub search vllm                         # find the hub id
   runpodctl serverless create --hub-id <id> --gpu-id "NVIDIA GeForce RTX 4090"
@@ -53,6 +56,7 @@ var (
 	createFlashBoot        bool
 	createExecutionTimeout int
 	createNetworkVolumeIDs string
+	createModelReferences  []string
 )
 
 func init() {
@@ -74,6 +78,7 @@ func init() {
 	createCmd.Flags().BoolVar(&createFlashBoot, "flash-boot", true, "enable flash boot")
 	createCmd.Flags().IntVar(&createExecutionTimeout, "execution-timeout", -1, "max seconds per request")
 	createCmd.Flags().StringVar(&createNetworkVolumeIDs, "network-volume-ids", "", "comma-separated network volume ids for multi-region")
+	createCmd.Flags().StringArrayVar(&createModelReferences, "model-reference", nil, "model reference to attach to the endpoint (repeatable)")
 }
 
 func runCreate(cmd *cobra.Command, args []string) error {
@@ -82,6 +87,13 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	}
 	if createTemplateID != "" && createHubID != "" {
 		return fmt.Errorf("--template-id and --hub-id are mutually exclusive; use one or the other")
+	}
+	if createHubID != "" && len(createModelReferences) > 0 {
+		return fmt.Errorf("--model-reference is only supported with --template-id")
+	}
+	computeType := strings.ToUpper(strings.TrimSpace(createComputeType))
+	if len(createModelReferences) > 0 && computeType != "" && computeType != "GPU" {
+		return fmt.Errorf("--model-reference is only supported with --compute-type GPU")
 	}
 
 	client, err := api.NewClient()
@@ -93,7 +105,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	req := &api.EndpointCreateRequest{
 		Name:        createName,
 		TemplateID:  createTemplateID,
-		ComputeType: strings.ToUpper(strings.TrimSpace(createComputeType)),
+		ComputeType: computeType,
 		GpuCount:    createGpuCount,
 		WorkersMin:  createWorkersMin,
 		WorkersMax:  createWorkersMax,
@@ -259,6 +271,18 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		req.NetworkVolumeIDs = strings.Split(createNetworkVolumeIDs, ",")
 	}
 
+	if len(createModelReferences) > 0 {
+		gqlReq := buildTemplateEndpointGQLInput(req, gpuTypeID, createDataCenterIDs, createModelReferences)
+		endpoint, err := client.CreateEndpointGQL(gqlReq)
+		if err != nil {
+			output.Error(err)
+			return fmt.Errorf("failed to create endpoint: %w", err)
+		}
+
+		format := output.ParseFormat(cmd.Flag("output").Value.String())
+		return output.Print(endpoint, &output.Config{Format: format})
+	}
+
 	endpoint, err := client.CreateEndpoint(req)
 	if err != nil {
 		output.Error(err)
@@ -278,6 +302,21 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
 	return output.Print(endpoint, &output.Config{Format: format})
+}
+
+func buildTemplateEndpointGQLInput(req *api.EndpointCreateRequest, gpuTypeID, locations string, modelReferences []string) *api.EndpointCreateGQLInput {
+	// saveEndpoint derives GPU by default when instanceIds is omitted; computeType is not part of EndpointInput.
+	return &api.EndpointCreateGQLInput{
+		Name:            req.Name,
+		TemplateID:      req.TemplateID,
+		GpuIDs:          gpuTypeID,
+		GpuCount:        req.GpuCount,
+		WorkersMin:      req.WorkersMin,
+		WorkersMax:      req.WorkersMax,
+		Locations:       locations,
+		NetworkVolumeID: req.NetworkVolumeID,
+		ModelReferences: modelReferences,
+	}
 }
 
 func randomString(n int) string {
