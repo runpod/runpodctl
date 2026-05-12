@@ -76,12 +76,13 @@ func runModelList(cmd *cobra.Command, args []string) {
 func displayModels(models []*api.Model) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
 
-	fmt.Fprintln(w, "ID\tProvider\tName\tOwner\tStatus\tCreated At\tUpdated At")
-	fmt.Fprintln(w, "--\t--------\t----\t-----\t------\t----------\t----------")
+	fmt.Fprintln(w, "ID\tVersion Hash\tProvider\tName\tOwner\tStatus\tCreated At\tUpdated At")
+	fmt.Fprintln(w, "--\t------------\t--------\t----\t-----\t------\t----------\t----------")
 
 	for _, model := range models {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			valueOrDash(model.ID),
+			valueOrDash(modelVersionHash(model)),
 			valueOrDash(model.Provider),
 			valueOrDash(model.Name),
 			valueOrDash(model.Owner),
@@ -93,6 +94,20 @@ func displayModels(models []*api.Model) {
 	if err := w.Flush(); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to render models table: %v\n", err)
 	}
+}
+
+func modelVersionHash(model *api.Model) string {
+	if model == nil {
+		return ""
+	}
+
+	for _, version := range model.Versions {
+		if version != nil && strings.TrimSpace(version.Hash) != "" {
+			return version.Hash
+		}
+	}
+
+	return ""
 }
 
 func valueOrDash(value string) string {
