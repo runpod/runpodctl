@@ -54,6 +54,13 @@ var (
 	createDataCenterIDs     string
 	createSSH               bool
 	createNetworkVolumeID   string
+	createMinCudaVersion    string
+	createDockerArgs        string
+	createRegistryAuthID    string
+	createCountryCode       string
+	createStopAfter         string
+	createTerminateAfter    string
+	createCompliance        string
 )
 
 func init() {
@@ -74,6 +81,13 @@ func init() {
 	createCmd.Flags().StringVar(&createDataCenterIDs, "data-center-ids", "", "comma-separated list of data center ids")
 	createCmd.Flags().BoolVar(&createSSH, "ssh", true, "enable ssh on the pod")
 	createCmd.Flags().StringVar(&createNetworkVolumeID, "network-volume-id", "", "network volume id to attach")
+	createCmd.Flags().StringVar(&createMinCudaVersion, "min-cuda-version", "", "minimum cuda version (e.g., 12.6)")
+	createCmd.Flags().StringVar(&createDockerArgs, "docker-args", "", "docker cmd arguments")
+	createCmd.Flags().StringVar(&createRegistryAuthID, "registry-auth-id", "", "container registry auth id (from 'runpodctl registry list')")
+	createCmd.Flags().StringVar(&createCountryCode, "country-code", "", "limit pod to a specific country (e.g., US, DE)")
+	createCmd.Flags().StringVar(&createStopAfter, "stop-after", "", "auto-stop datetime (e.g., 2026-04-15T00:00:00Z)")
+	createCmd.Flags().StringVar(&createTerminateAfter, "terminate-after", "", "auto-terminate datetime (e.g., 2026-04-15T00:00:00Z)")
+	createCmd.Flags().StringVar(&createCompliance, "compliance", "", "comma-separated compliance requirements (e.g., HIPAA,SOC_2_TYPE_2)")
 }
 
 func runCreate(cmd *cobra.Command, args []string) error {
@@ -188,6 +202,34 @@ func createPodGraphQL(gpuTypeID, cloudType string, supportPublicIP bool) (map[st
 		}
 	}
 
+	if createMinCudaVersion != "" {
+		req.MinCudaVersion = createMinCudaVersion
+	}
+
+	if createDockerArgs != "" {
+		req.DockerArgs = createDockerArgs
+	}
+
+	if createRegistryAuthID != "" {
+		req.ContainerRegistryAuthId = createRegistryAuthID
+	}
+
+	if createCountryCode != "" {
+		req.CountryCode = createCountryCode
+	}
+
+	if createStopAfter != "" {
+		req.StopAfter = createStopAfter
+	}
+
+	if createTerminateAfter != "" {
+		req.TerminateAfter = createTerminateAfter
+	}
+
+	if createCompliance != "" {
+		req.Compliance = strings.Split(createCompliance, ",")
+	}
+
 	if createEnv != "" {
 		var envMap map[string]string
 		if err := json.Unmarshal([]byte(createEnv), &envMap); err != nil {
@@ -235,6 +277,14 @@ func createPodREST(computeType, gpuTypeID, cloudType string, supportPublicIP boo
 
 	if createDataCenterIDs != "" {
 		req.DataCenterIDs = strings.Split(createDataCenterIDs, ",")
+	}
+
+	if createMinCudaVersion != "" {
+		req.MinCudaVersion = createMinCudaVersion
+	}
+
+	if createDockerArgs != "" {
+		req.DockerArgs = createDockerArgs
 	}
 
 	if createEnv != "" {
