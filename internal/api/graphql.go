@@ -212,6 +212,88 @@ func (c *GraphQLClient) AddPublicSSHKey(key []byte) error {
 	return nil
 }
 
+// RemovePublicSSHKey removes a single SSH key via GraphQL by rewriting pubKey.
+func (c *GraphQLClient) RemovePublicSSHKey(name, fingerprint string) error {
+	rawKeys, existingKeys, err := c.GetPublicSSHKeys()
+	if err != nil {
+		return fmt.Errorf("failed to get existing SSH keys: %w", err)
+	}
+
+	matchCount := 0
+	for _, key := range existingKeys {
+		if sshKeyMatches(key, name, fingerprint) {
+			matchCount++
+		}
+	}
+
+	switch {
+	case matchCount == 0:
+		return fmt.Errorf("ssh key not found")
+	case name != "" && fingerprint == "" && matchCount > 1:
+		return fmt.Errorf("multiple ssh keys found with name %q; use --fingerprint", name)
+	}
+
+	var kept []string
+	for _, keyString := range splitSSHKeyBlock(rawKeys) {
+		pubKey, nameValue, _, _, err := ssh.ParseAuthorizedKey([]byte(keyString))
+		if err != nil {
+			kept = append(kept, keyString)
+			continue
+		}
+
+		key := SSHKey{
+			Name:        nameValue,
+			Type:        pubKey.Type(),
+			Key:         strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pubKey))),
+			Fingerprint: ssh.FingerprintSHA256(pubKey),
+		}
+		if sshKeyMatches(key, name, fingerprint) {
+			continue
+		}
+
+		kept = append(kept, strings.TrimSpace(keyString))
+	}
+
+	input := GraphQLInput{
+		Query: `
+		mutation Mutation($input: UpdateUserSettingsInput) {
+			updateUserSettings(input: $input) {
+			  id
+			}
+		  }
+		`,
+		Variables: map[string]interface{}{"input": map[string]interface{}{"pubKey": strings.Join(kept, "\n\n")}},
+	}
+
+	if _, err = c.Query(input); err != nil {
+		return fmt.Errorf("failed to update SSH keys: %w", err)
+	}
+
+	return nil
+}
+
+func splitSSHKeyBlock(rawKeys string) []string {
+	var keys []string
+	for _, keyString := range strings.Split(rawKeys, "\n") {
+		trimmed := strings.TrimSpace(keyString)
+		if trimmed == "" {
+			continue
+		}
+		keys = append(keys, trimmed)
+	}
+	return keys
+}
+
+func sshKeyMatches(key SSHKey, name, fingerprint string) bool {
+	if fingerprint != "" && key.Fingerprint != fingerprint {
+		return false
+	}
+	if name != "" && key.Name != name {
+		return false
+	}
+	return name != "" || fingerprint != ""
+}
+
 // PodEnvVar is a key-value pair for pod environment variables (GraphQL format)
 type PodEnvVar struct {
 	Key   string `json:"key"`
