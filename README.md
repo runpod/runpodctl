@@ -17,6 +17,7 @@ _note: all pods automatically come with runpodctl installed with a pod-scoped ap
       - [linux/macos (wsl)](#linuxmacos-wsl)
       - [macos](#macos)
       - [windows powershell](#windows-powershell)
+      - [conda, mamba, pixi (conda-forge)](#conda-mamba-pixi-conda-forge)
   - [quick start](#quick-start)
   - [commands](#commands)
     - [pod management](#pod-management)
@@ -46,6 +47,21 @@ brew install runpod/runpodctl/runpodctl
 
 ```powershell
 wget https://github.com/runpod/runpodctl/releases/latest/download/runpodctl-windows-amd64.exe -O runpodctl.exe
+```
+
+#### conda, mamba, pixi (conda-forge)
+
+runpodctl is available on [conda-forge](https://anaconda.org/conda-forge/runpodctl).
+
+```bash
+# conda
+conda install conda-forge::runpodctl
+
+# mamba
+mamba install conda-forge::runpodctl
+
+# pixi (user-global install)
+pixi global install runpodctl
 ```
 
 ## quick start
