@@ -99,12 +99,12 @@ func confirmAddKey() bool {
 }
 
 func promptKeyName() string {
-	fmt.Print("Please enter a name for this key (default 'RunPod-Key'): ")
+	fmt.Printf("Please enter a name for this key (default '%s'): ", DefaultKeyName)
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Scan()
 	keyName := scanner.Text()
 	if keyName == "" {
-		return "RunPod-Key"
+		return DefaultKeyName
 	}
 	return strings.ReplaceAll(keyName, " ", "-")
 }

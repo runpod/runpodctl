@@ -190,12 +190,12 @@ func confirmAddKey() bool {
 }
 
 func promptKeyName() string {
-	fmt.Fprint(os.Stderr, "please enter a name for this key (default 'RunPod-Key-Go'): ")
+	fmt.Fprintf(os.Stderr, "please enter a name for this key (default '%s'): ", ssh.DefaultKeyName)
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Scan()
 	keyName := scanner.Text()
 	if keyName == "" {
-		return "RunPod-Key-Go"
+		return ssh.DefaultKeyName
 	}
 	return strings.ReplaceAll(keyName, " ", "-")
 }

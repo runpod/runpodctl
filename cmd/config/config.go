@@ -65,7 +65,7 @@ func getOrCreateSSHKey() ([]byte, error) {
 
 	if publicKey == nil {
 		fmt.Println("No existing local SSH key found, generating a new one.")
-		publicKey, err = ssh.GenerateSSHKeyPair("RunPod-Key-Go")
+		publicKey, err = ssh.GenerateSSHKeyPair(ssh.DefaultKeyName)
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate SSH key: %w", err)
 		}

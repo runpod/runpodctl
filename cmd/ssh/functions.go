@@ -13,6 +13,13 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+const (
+	// DefaultKeyName is the name used for newly generated ssh keys.
+	DefaultKeyName = "runpodctl-ssh-key"
+	// LegacyKeyName is the previous default, kept for backwards compatibility.
+	LegacyKeyName = "RunPod-Key-Go"
+)
+
 // GenerateSSHKeyPair generates an RSA key pair and saves the private key to a file in the user's home directory.
 func GenerateSSHKeyPair(keyName string) ([]byte, error) {
 	homeDir, err := os.UserHomeDir()
@@ -70,21 +77,51 @@ func GetLocalSSHKey() ([]byte, error) {
 		return nil, fmt.Errorf("failed to get user home directory: %w", err)
 	}
 
-	keyPath := filepath.Join(homeDir, ".runpod", "ssh", "RunPod-Key-Go.pub")
+	sshDir := filepath.Join(homeDir, ".runpod", "ssh")
 
-	publicKey, err := os.ReadFile(keyPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil // No existing key found
+	// check new name first, then fall back to legacy name
+	for _, name := range []string{DefaultKeyName, LegacyKeyName} {
+		keyPath := filepath.Join(sshDir, name+".pub")
+		publicKey, err := os.ReadFile(keyPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("failed to read existing public key: %w", err)
 		}
-		return nil, fmt.Errorf("failed to read existing public key: %w", err)
+
+		// Validate the key format
+		_, _, _, _, err = ssh.ParseAuthorizedKey(publicKey)
+		if err != nil {
+			return nil, fmt.Errorf("invalid public key format: %w", err)
+		}
+
+		return publicKey, nil
 	}
 
-	// Validate the key format
-	_, _, _, _, err = ssh.ParseAuthorizedKey(publicKey)
+	return nil, nil // no existing key found
+}
+
+// ResolvePrivateKeyPath returns the path to the private key, checking the
+// current default name first and falling back to the legacy name.
+// If neither exists on disk the new default path is returned.
+func ResolvePrivateKeyPath() (string, error) {
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return nil, fmt.Errorf("invalid public key format: %w", err)
+		return "", fmt.Errorf("failed to get user home directory: %w", err)
 	}
 
-	return publicKey, nil
+	sshDir := filepath.Join(homeDir, ".runpod", "ssh")
+
+	newPath := filepath.Join(sshDir, DefaultKeyName)
+	if _, err := os.Stat(newPath); err == nil {
+		return newPath, nil
+	}
+
+	legacyPath := filepath.Join(sshDir, LegacyKeyName)
+	if _, err := os.Stat(legacyPath); err == nil {
+		return legacyPath, nil
+	}
+
+	return newPath, nil // default even if not yet created
 }

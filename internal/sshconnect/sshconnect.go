@@ -10,7 +10,8 @@ import (
 )
 
 const (
-	defaultKeyName = "RunPod-Key-Go"
+	defaultKeyName = "runpodctl-ssh-key"
+	legacyKeyName  = "RunPod-Key-Go"
 )
 
 // KeyInfo describes the local ssh key and account match status.
@@ -122,11 +123,18 @@ func defaultKeyPath() (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	keyPath := filepath.Join(homeDir, ".runpod", "ssh", defaultKeyName)
-	if _, err := os.Stat(keyPath); err == nil {
-		return keyPath, true
+	sshDir := filepath.Join(homeDir, ".runpod", "ssh")
+
+	// check new name first, then fall back to legacy name
+	newPath := filepath.Join(sshDir, defaultKeyName)
+	if _, err := os.Stat(newPath); err == nil {
+		return newPath, true
 	}
-	return keyPath, false
+	legacyPath := filepath.Join(sshDir, legacyKeyName)
+	if _, err := os.Stat(legacyPath); err == nil {
+		return legacyPath, true
+	}
+	return newPath, false
 }
 
 func readPublicKeyFingerprint(path string) (string, error) {
