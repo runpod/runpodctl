@@ -243,7 +243,10 @@ func (c *Client) ListAllTemplates(opts *TemplateListOptions) ([]Template, error)
 
 	// Apply pagination
 	if opts != nil {
-		if opts.Offset > 0 && opts.Offset < len(allTemplates) {
+		if opts.Offset > 0 {
+			if opts.Offset >= len(allTemplates) {
+				return []Template{}, nil
+			}
 			allTemplates = allTemplates[opts.Offset:]
 		}
 		if opts.Limit > 0 && opts.Limit < len(allTemplates) {
