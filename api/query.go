@@ -58,6 +58,9 @@ func Query(input Input) (res *http.Response, err error) {
 
 	sanitizedVersion := strings.TrimRight(Version, "\r\n")
 	userAgent := "RunPod-CLI/" + sanitizedVersion + " (" + runtime.GOOS + "; " + runtime.GOARCH + ")"
+	if os.Getenv("CLAUDECODE") == "1" {
+		userAgent += " (via claude-code)"
+	}
 
 	req.Header.Add("Content-Type", "application/json")
 	req.Header.Set("User-Agent", userAgent)

@@ -14,6 +14,16 @@ import (
 	"github.com/spf13/viper"
 )
 
+// buildUserAgent constructs the User-Agent string, appending coding agent
+// source tags when the corresponding environment variables are set.
+func buildUserAgent() string {
+	ua := fmt.Sprintf("runpod-cli/%s (%s; %s)", Version, runtime.GOOS, runtime.GOARCH)
+	if os.Getenv("CLAUDECODE") == "1" {
+		ua += " (via claude-code)"
+	}
+	return ua
+}
+
 const (
 	DefaultBaseURL = "https://rest.runpod.io/v1"
 	DefaultTimeout = 30 * time.Second
@@ -52,13 +62,11 @@ func NewClient() (*Client, error) {
 		timeout = DefaultTimeout
 	}
 
-	userAgent := fmt.Sprintf("runpod-cli/%s (%s; %s)", Version, runtime.GOOS, runtime.GOARCH)
-
 	return &Client{
 		baseURL:    baseURL,
 		apiKey:     apiKey,
 		httpClient: &http.Client{Timeout: timeout},
-		userAgent:  userAgent,
+		userAgent:  buildUserAgent(),
 	}, nil
 }
 

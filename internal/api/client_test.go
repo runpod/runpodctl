@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -142,6 +143,25 @@ func TestClient_ErrorResponse(t *testing.T) {
 	_, err = client.Get("/notfound", nil)
 	if err == nil {
 		t.Error("expected error for 404 response")
+	}
+}
+
+func TestBuildUserAgent_Default(t *testing.T) {
+	t.Setenv("CLAUDECODE", "")
+	ua := buildUserAgent()
+	if strings.Contains(ua, "via claude-code") {
+		t.Errorf("expected no agent tag, got %s", ua)
+	}
+	if !strings.HasPrefix(ua, "runpod-cli/") {
+		t.Errorf("expected runpod-cli/ prefix, got %s", ua)
+	}
+}
+
+func TestBuildUserAgent_ClaudeCode(t *testing.T) {
+	t.Setenv("CLAUDECODE", "1")
+	ua := buildUserAgent()
+	if !strings.Contains(ua, "(via claude-code)") {
+		t.Errorf("expected claude-code agent tag, got %s", ua)
 	}
 }
 

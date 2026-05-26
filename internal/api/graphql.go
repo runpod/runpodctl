@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"runtime"
 	"strings"
 	"time"
 
@@ -56,13 +55,11 @@ func NewGraphQLClient() (*GraphQLClient, error) {
 		timeout = 30 * time.Second
 	}
 
-	userAgent := fmt.Sprintf("runpod-cli/%s (%s; %s)", Version, runtime.GOOS, runtime.GOARCH)
-
 	return &GraphQLClient{
 		url:        apiURL,
 		apiKey:     apiKey,
 		httpClient: &http.Client{Timeout: timeout},
-		userAgent:  userAgent,
+		userAgent:  buildUserAgent(),
 	}, nil
 }
 
