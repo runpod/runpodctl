@@ -581,6 +581,7 @@ func deployProject(networkVolumeId string) (endpointId string, err error) {
 	flashBootType := "FLASHBOOT"
 	idleTimeout := 5
 	endpointConfig, ok := config.Get("endpoint").(*toml.Tree)
+	var modelRefs []string
 	if ok {
 		if min, ok := endpointConfig.Get("active_workers").(int64); ok {
 			minWorkers = int(min)
@@ -597,6 +598,13 @@ func deployProject(networkVolumeId string) (endpointId string, err error) {
 		if idle, ok := endpointConfig.Get("idle_timeout").(int64); ok {
 			idleTimeout = int(idle)
 		}
+		if refs, ok := endpointConfig.Get("model_refs").([]interface{}); ok {
+			for _, r := range refs {
+				if str, ok := r.(string); ok {
+					modelRefs = append(modelRefs, str)
+				}
+			}
+		}
 	}
 	if err != nil {
 		deployedEndpointId, err = api.CreateEndpoint(&api.CreateEndpointInput{
@@ -610,6 +618,7 @@ func deployProject(networkVolumeId string) (endpointId string, err error) {
 			WorkersMin:      minWorkers,
 			WorkersMax:      maxWorkers,
 			FlashBootType:   flashBootType,
+			ModelReferences: modelRefs,
 		})
 		if err != nil {
 			fmt.Println("error making endpoint")

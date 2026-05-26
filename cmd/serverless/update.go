@@ -14,19 +14,34 @@ import (
 var updateCmd = &cobra.Command{
 	Use:   "update <endpoint-id>",
 	Short: "update an endpoint",
-	Long:  "update an existing serverless endpoint",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runUpdate,
+	Long: `update an existing serverless endpoint.
+
+examples:
+  # rename an endpoint
+  runpodctl serverless update <id> --name my-endpoint
+
+  # set model references (replaces existing)
+  runpodctl serverless update <id> --model-reference https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct:main
+
+  # attach multiple models
+  runpodctl serverless update <id> --model-reference <ref-a> --model-reference <ref-b>
+
+  # clear all model references
+  runpodctl serverless update <id> --clear-models`,
+	Args: cobra.ExactArgs(1),
+	RunE: runUpdate,
 }
 
 var (
-	updateName        string
-	updateTemplateID  string
-	updateWorkersMin  int
-	updateWorkersMax  int
-	updateIdleTimeout int
-	updateScaleBy     string
+	updateName           string
+	updateTemplateID     string
+	updateWorkersMin     int
+	updateWorkersMax     int
+	updateIdleTimeout    int
+	updateScaleBy        string
 	updateScaleThreshold int
+	updateModelRefs      []string
+	updateClearModels    bool
 )
 
 func init() {
@@ -37,10 +52,16 @@ func init() {
 	updateCmd.Flags().IntVar(&updateIdleTimeout, "idle-timeout", -1, "new idle timeout in seconds")
 	updateCmd.Flags().StringVar(&updateScaleBy, "scale-by", "", "autoscale strategy: delay (seconds of queue wait) or requests (pending request count)")
 	updateCmd.Flags().IntVar(&updateScaleThreshold, "scale-threshold", -1, "trigger point for autoscaler (delay: seconds, requests: count)")
+	updateCmd.Flags().StringArrayVar(&updateModelRefs, "model-reference", nil, "model reference to cache on the endpoint (repeatable); replaces existing model references")
+	updateCmd.Flags().BoolVar(&updateClearModels, "clear-models", false, "remove all model references from the endpoint")
 }
 
 func runUpdate(cmd *cobra.Command, args []string) error {
 	endpointID := args[0]
+
+	if updateClearModels && len(updateModelRefs) > 0 {
+		return fmt.Errorf("--clear-models and --model-reference are mutually exclusive")
+	}
 
 	client, err := api.NewClient()
 	if err != nil {
@@ -94,6 +115,16 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 				fmt.Fprintln(os.Stderr, "warning: endpoint rest fields were updated, but template swap failed")
 			}
 			return fmt.Errorf("failed to update endpoint template: %w", err)
+		}
+	}
+
+	if len(updateModelRefs) > 0 || updateClearModels {
+		var refs []string
+		if !updateClearModels {
+			refs = updateModelRefs
+		}
+		if _, err := client.UpdateEndpointModels(endpointID, refs); err != nil {
+			return fmt.Errorf("failed to update model references: %w", err)
 		}
 	}
 

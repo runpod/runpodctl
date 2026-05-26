@@ -291,6 +291,99 @@ func TestUpdateEndpointTemplate_GraphQLError(t *testing.T) {
 	}
 }
 
+func TestUpdateEndpointModels_RoundTripsConfig(t *testing.T) {
+	oldAPIURL := viper.GetString("apiUrl")
+	t.Cleanup(func() { viper.Set("apiUrl", oldAPIURL) })
+
+	var gqlInput map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/endpoints/"):
+			// REST read: return wire shape with custom config and a bare-string networkVolumeId.
+			w.Write([]byte(`{
+				"id": "ep-abc",
+				"name": "my-ep",
+				"templateId": "tpl-1",
+				"gpuIds": "ADA_24",
+				"workersMin": 1,
+				"workersMax": 5,
+				"idleTimeout": 42,
+				"scalerType": "REQUEST_COUNT",
+				"scalerValue": 9,
+				"networkVolumeId": "vol-9",
+				"networkVolumeIds": ["vol-9"]
+			}`))
+		case r.Method == http.MethodPost:
+			// GraphQL saveEndpoint call.
+			var body struct {
+				Variables struct {
+					Input map[string]interface{} `json:"input"`
+				} `json:"variables"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode gql body: %v", err)
+			}
+			gqlInput = body.Variables.Input
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": map[string]interface{}{
+					"saveEndpoint": map[string]interface{}{
+						"id":   "ep-abc",
+						"name": "my-ep",
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+	viper.Set("apiUrl", server.URL)
+
+	client, _ := NewClient()
+	client.baseURL = server.URL
+
+	_, err := client.UpdateEndpointModels("ep-abc", []string{"https://huggingface.co/org/model:main"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// All existing config fields must be present in the mutation input.
+	checks := map[string]interface{}{
+		"id":           "ep-abc",
+		"name":         "my-ep",
+		"templateId":   "tpl-1",
+		"gpuIds":       "ADA_24",
+		"workersMax":   float64(5),
+		"idleTimeout":  float64(42),
+		"scalerType":   "REQUEST_COUNT",
+		"scalerValue":  float64(9),
+	}
+	for field, want := range checks {
+		if got := gqlInput[field]; got != want {
+			t.Errorf("input.%s = %v, want %v", field, got, want)
+		}
+	}
+
+	// modelReferences must carry the new value, not the old one.
+	refs, _ := gqlInput["modelReferences"].([]interface{})
+	if len(refs) != 1 || refs[0] != "https://huggingface.co/org/model:main" {
+		t.Errorf("unexpected modelReferences: %v", gqlInput["modelReferences"])
+	}
+
+	// networkVolumeIds must be passed as objects, not bare strings.
+	nvids, _ := gqlInput["networkVolumeIds"].([]interface{})
+	if len(nvids) != 1 {
+		t.Fatalf("expected 1 networkVolumeId, got %v", gqlInput["networkVolumeIds"])
+	}
+	nvobj, _ := nvids[0].(map[string]interface{})
+	if nvobj["networkVolumeId"] != "vol-9" {
+		t.Errorf("expected networkVolumeId vol-9, got %v", nvobj)
+	}
+}
+
 func TestDeleteEndpoint(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete {

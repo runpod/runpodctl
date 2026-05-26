@@ -188,6 +188,106 @@ func (c *Client) DeleteEndpoint(endpointID string) error {
 	return err
 }
 
+// UpdateEndpointModels sets the model references on an existing endpoint via
+// saveEndpoint. The full current config is round-tripped so that only
+// modelReferences changes — saveEndpoint is a full replace and omitting fields
+// would reset them to server defaults. Pass nil or an empty slice to clear all
+// model references.
+func (c *Client) UpdateEndpointModels(endpointID string, modelRefs []string) (*Endpoint, error) {
+	endpoint, err := c.GetEndpoint(endpointID, false, false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch endpoint: %w", err)
+	}
+
+	if modelRefs == nil {
+		modelRefs = []string{}
+	}
+
+	// saveEndpoint expects networkVolumeIds as [{networkVolumeId}] objects; the
+	// REST read shape uses bare id strings which UnmarshalJSON normalises into
+	// EndpointNetworkVolume — convert to the GraphQL write shape here.
+	nvIDs := make([]NetworkVolumeIDInput, len(endpoint.NetworkVolumeIDs))
+	for i, nv := range endpoint.NetworkVolumeIDs {
+		nvIDs[i] = NetworkVolumeIDInput{NetworkVolumeID: nv.NetworkVolumeID}
+	}
+
+	query := `
+		mutation SaveEndpoint($input: EndpointInput!) {
+			saveEndpoint(input: $input) {
+				id
+				name
+				templateId
+				gpuIds
+				gpuCount
+				instanceIds
+				workersMin
+				workersMax
+				locations
+				networkVolumeId
+				networkVolumeIds { networkVolumeId }
+				idleTimeout
+				scalerType
+				scalerValue
+				executionTimeoutMs
+				minCudaVersion
+				flashBootType
+				modelReferences
+			}
+		}
+	`
+
+	variables := map[string]interface{}{
+		"input": map[string]interface{}{
+			"id":                 endpointID,
+			"name":               endpoint.Name,
+			"templateId":         endpoint.TemplateID,
+			"gpuIds":             endpoint.GpuIDs,
+			"gpuCount":           endpoint.GpuCount,
+			"instanceIds":        endpoint.InstanceIDs,
+			"workersMin":         endpoint.WorkersMin,
+			"workersMax":         endpoint.WorkersMax,
+			"locations":          endpoint.Locations,
+			"networkVolumeId":    endpoint.NetworkVolumeID,
+			"networkVolumeIds":   nvIDs,
+			"idleTimeout":        endpoint.IdleTimeout,
+			"scalerType":         endpoint.ScalerType,
+			"scalerValue":        endpoint.ScalerValue,
+			"executionTimeoutMs": endpoint.ExecutionTimeoutMs,
+			"minCudaVersion":     endpoint.MinCudaVersion,
+			"flashBootType":      endpoint.FlashBootType,
+			"modelReferences":    modelRefs,
+		},
+	}
+
+	data, err := c.graphqlRequest(query, variables)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		Data struct {
+			SaveEndpoint *Endpoint `json:"saveEndpoint"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if len(resp.Errors) > 0 {
+		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+	}
+
+	if resp.Data.SaveEndpoint == nil {
+		return nil, fmt.Errorf("update returned nil response")
+	}
+
+	return resp.Data.SaveEndpoint, nil
+}
+
 // NetworkVolumeIDInput is a single multi-region network volume entry for the
 // graphql saveEndpoint mutation (rest uses a flat []string instead).
 type NetworkVolumeIDInput struct {
