@@ -77,6 +77,11 @@ active_workers = 0
 max_workers = 3
 flashboot = true
 
+# model_refs - List of model references to cache on the endpoint workers.
+#              Format: "owner/model-name" or "owner/model-name:branch".
+#              Example: ["runpod/stable-diffusion-v1-5", "meta-llama/Llama-2-7b-chat-hf"]
+# model_refs = []
+
 [runtime]
 # python_version    - Python version to use for the project.
 #

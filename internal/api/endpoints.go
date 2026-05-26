@@ -169,6 +169,67 @@ func (c *Client) DeleteEndpoint(endpointID string) error {
 	return err
 }
 
+// UpdateEndpointModels sets the model references on an existing endpoint via
+// saveEndpoint. The server requires the endpoint name alongside the id, so the
+// current endpoint is fetched first. Pass nil or an empty slice to clear all
+// model references.
+func (c *Client) UpdateEndpointModels(endpointID string, modelRefs []string) (*Endpoint, error) {
+	endpoint, err := c.GetEndpoint(endpointID, false, false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch endpoint: %w", err)
+	}
+
+	if modelRefs == nil {
+		modelRefs = []string{}
+	}
+
+	query := `
+		mutation SaveEndpoint($input: EndpointInput!) {
+			saveEndpoint(input: $input) {
+				id
+				name
+				modelReferences
+			}
+		}
+	`
+
+	variables := map[string]interface{}{
+		"input": map[string]interface{}{
+			"id":              endpointID,
+			"name":            endpoint.Name,
+			"modelReferences": modelRefs,
+		},
+	}
+
+	data, err := c.graphqlRequest(query, variables)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		Data struct {
+			SaveEndpoint *Endpoint `json:"saveEndpoint"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if len(resp.Errors) > 0 {
+		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+	}
+
+	if resp.Data.SaveEndpoint == nil {
+		return nil, fmt.Errorf("update returned nil response")
+	}
+
+	return resp.Data.SaveEndpoint, nil
+}
+
 // NetworkVolumeIDInput is a single multi-region network volume entry for the
 // graphql saveEndpoint mutation (rest uses a flat []string instead).
 type NetworkVolumeIDInput struct {
