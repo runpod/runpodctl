@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/runpod/runpodctl/api"
+	"github.com/runpod/runpodctl/internal/output"
 
 	"github.com/spf13/cobra"
 )
@@ -66,19 +67,6 @@ func runRemoveModel(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	fmt.Println("model removal requested")
-
-	if result != nil && result.Model != nil && len(result.Model.Versions) > 0 {
-		fmt.Println("affected versions:")
-		for _, version := range result.Model.Versions {
-			if version == nil {
-				continue
-			}
-			hash := version.Hash
-			if hash == "" {
-				hash = version.VersionHash
-			}
-			fmt.Printf("- %s (%s)\n", hash, version.Status)
-		}
-	}
+	format := output.ParseFormat(cmd.Flag("output").Value.String())
+	cobra.CheckErr(output.Print(result, &output.Config{Format: format}))
 }

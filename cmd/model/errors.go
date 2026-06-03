@@ -2,10 +2,10 @@ package model
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/runpod/runpodctl/api"
+	"github.com/runpod/runpodctl/internal/output"
 )
 
 func handleModelRepoError(err error) bool {
@@ -13,11 +13,11 @@ func handleModelRepoError(err error) bool {
 		return false
 	}
 	if errors.Is(err, api.ErrModelRepoNotImplemented) {
-		fmt.Println(api.ErrModelRepoNotImplemented.Error())
+		output.Error(api.ErrModelRepoNotImplemented)
 		return true
 	}
 	if strings.Contains(err.Error(), "Model Repo feature is not enabled for this user") {
-		fmt.Println(err.Error())
+		output.Error(err)
 		return true
 	}
 	return false
