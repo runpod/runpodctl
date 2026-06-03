@@ -24,8 +24,8 @@ runpodctl model add [flags]
       --model-path string             directory containing model files to upload
       --model-status string           initial model status
       --name string                   model name
+      --owner string                  model owner namespace (user or team owner id)
       --part-size string              multipart upload part size in bytes
-      --version-status string         initial model version status
 ```
 
 ### Options inherited from parent commands

@@ -2,7 +2,6 @@ package model
 
 import (
 	"bytes"
-	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -16,17 +15,18 @@ import (
 	"time"
 
 	"github.com/runpod/runpodctl/api"
+	"github.com/runpod/runpodctl/internal/output"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
 var (
+	addModelOwner               string
 	addModelName                string
 	addModelCredentialReference string
 	addModelCredentialType      string
 	addModelStatus              string
-	addModelVersionStatus       string
 	addModelCreateUpload        bool
 	addModelFileName            string
 	addModelFileSize            string
@@ -56,7 +56,7 @@ func setModelGraphQLTimeout(cmd *cobra.Command) {
 		}
 
 		viper.Set(api.GraphQLTimeoutKey, modelGraphQLTimeoutValue)
-		fmt.Printf("--graphql-timeout not set; defaulting to %s for model creation operations\n", modelGraphQLTimeoutValue)
+		fmt.Fprintf(os.Stderr, "--graphql-timeout not set; defaulting to %s for model creation operations\n", modelGraphQLTimeoutValue)
 		return
 	}
 
@@ -68,7 +68,7 @@ func setModelGraphQLTimeout(cmd *cobra.Command) {
 	}
 
 	viper.Set(api.GraphQLTimeoutKey, modelGraphQLTimeoutValue)
-	fmt.Printf("defaulting graphql timeout to %s for model creation operations\n", modelGraphQLTimeoutValue)
+	fmt.Fprintf(os.Stderr, "defaulting graphql timeout to %s for model creation operations\n", modelGraphQLTimeoutValue)
 }
 
 type completedPart struct {
@@ -86,6 +86,19 @@ type modelFile struct {
 	AbsolutePath string
 	RelativePath string
 	Size         int64
+}
+
+type uploadedModelFile struct {
+	RelativePath string `json:"relativePath"`
+	Key          string `json:"key"`
+	SessionID    string `json:"sessionId"`
+	Status       string `json:"status"`
+}
+
+type modelAddOutput struct {
+	Model         *api.Model           `json:"model,omitempty"`
+	Upload        *api.ModelRepoUpload `json:"upload,omitempty"`
+	UploadedFiles []uploadedModelFile  `json:"uploadedFiles,omitempty"`
 }
 
 // TODO: replace the manual completion call with github.com/aws/aws-sdk-go-v2/service/s3's
@@ -121,10 +134,10 @@ func init() {
 }
 
 func bindAddModelFlags(cmd *cobra.Command) {
+	cmd.Flags().StringVar(&addModelOwner, "owner", "", "model owner namespace (user or team owner id)")
 	cmd.Flags().StringVar(&addModelName, "name", "", "model name")
 	cmd.Flags().StringVar(&addModelCredentialReference, "credential-reference", "", "credential reference (if required)")
 	cmd.Flags().StringVar(&addModelCredentialType, "credential-type", "", "credential type (if required)")
-	cmd.Flags().StringVar(&addModelVersionStatus, "version-status", "", "initial model version status")
 	cmd.Flags().StringVar(&addModelStatus, "model-status", "", "initial model status")
 	cmd.Flags().BoolVar(&addModelCreateUpload, "create-upload", false, "create an upload session")
 	cmd.Flags().StringVar(&addModelFileName, "file-name", "", "file name for upload")
@@ -169,11 +182,11 @@ func runAddModel(cmd *cobra.Command, args []string) {
 	}
 
 	input := &api.AddModelToRepoInput{
+		Owner:               addModelOwner,
 		Name:                addModelName,
 		CredentialReference: addModelCredentialReference,
 		CredentialType:      addModelCredentialType,
 		ModelStatus:         addModelStatus,
-		VersionStatus:       addModelVersionStatus,
 		Metadata:            metadata,
 	}
 
@@ -187,16 +200,14 @@ func runAddModel(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	if model != nil {
-		fmt.Printf("model %q registered with Model Repo (id: %s)\n", model.Name, model.ID)
-	}
-
 	shouldCreateUpload := addModelCreateUpload || addModelFileName != "" || addModelFileSize != "" || addModelPartSize != "" || addModelContentType != "" || len(addModelMetadata) > 0
 	if !shouldCreateUpload {
+		printModelAddOutput(cmd, modelAddOutput{Model: model})
 		return
 	}
 
 	uploadInput := &api.CreateModelRepoUploadInput{
+		Owner:               addModelOwner,
 		PartSizeBytes:       addModelPartSize,
 		ContentType:         addModelContentType,
 		CredentialReference: addModelCredentialReference,
@@ -207,8 +218,9 @@ func runAddModel(cmd *cobra.Command, args []string) {
 	uploadInput.Name = addModelName
 
 	if len(modelFiles) > 0 {
-		err := uploadModelFiles(modelFiles, uploadInput)
+		uploadedFiles, err := uploadModelFiles(modelFiles, uploadInput)
 		cobra.CheckErr(err)
+		printModelAddOutput(cmd, modelAddOutput{Model: model, UploadedFiles: uploadedFiles})
 		return
 	}
 
@@ -229,9 +241,7 @@ func runAddModel(cmd *cobra.Command, args []string) {
 		cobra.CheckErr(fmt.Errorf("upload response missing upload session details"))
 	}
 
-	uploadJSON, err := json.MarshalIndent(result.Upload, "", "  ")
-	cobra.CheckErr(err)
-	fmt.Printf("multipart upload session created:\n%s\n", string(uploadJSON))
+	printModelAddOutput(cmd, modelAddOutput{Model: model, Upload: result.Upload})
 }
 
 func collectModelFiles(dir string) ([]modelFile, error) {
@@ -288,8 +298,9 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 	return files, nil
 }
 
-func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInput) error {
+func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInput) ([]uploadedModelFile, error) {
 	var modelVersionUUID string
+	uploadedFiles := make([]uploadedModelFile, 0, len(files))
 
 	for i, file := range files {
 		input := *baseInput
@@ -299,47 +310,57 @@ func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInp
 
 		result, err := createModelRepoUpload(&input)
 		if err != nil {
-			return fmt.Errorf("create upload for %s: %w", file.RelativePath, err)
+			return nil, fmt.Errorf("create upload for %s: %w", file.RelativePath, err)
 		}
 		if result.Upload == nil {
-			return fmt.Errorf("upload response missing upload session details for %s", file.RelativePath)
+			return nil, fmt.Errorf("upload response missing upload session details for %s", file.RelativePath)
 		}
 		if modelVersionUUID == "" {
 			if result.Version != nil {
 				modelVersionUUID = strings.TrimSpace(result.Version.UUID)
 			}
 			if modelVersionUUID == "" && i < len(files)-1 {
-				return fmt.Errorf("upload response missing model version uuid for %s", file.RelativePath)
+				return nil, fmt.Errorf("upload response missing model version uuid for %s", file.RelativePath)
 			}
 		}
 
 		if err = completeModelUploadFile(result.Upload, file.AbsolutePath); err != nil {
-			return fmt.Errorf("upload %s: %w", file.RelativePath, err)
+			return nil, fmt.Errorf("upload %s: %w", file.RelativePath, err)
 		}
 
 		if result.Upload.SessionID == "" {
-			return fmt.Errorf("upload %s: missing session identifier for completion", file.RelativePath)
+			return nil, fmt.Errorf("upload %s: missing session identifier for completion", file.RelativePath)
 		}
 
-		completion, err := completeModelRepoUpload(result.Upload.SessionID)
-		if err != nil {
-			return fmt.Errorf("complete upload session for %s: %w", file.RelativePath, err)
-		}
-
-		fmt.Printf("model artifact %q uploaded to %s (session %s status: %s)\n", file.RelativePath, result.Upload.Key, completion.SessionID, completion.Status)
+		uploadedFiles = append(uploadedFiles, uploadedModelFile{
+			RelativePath: file.RelativePath,
+			Key:          result.Upload.Key,
+			SessionID:    result.Upload.SessionID,
+		})
 	}
 
-	return nil
+	for i := range uploadedFiles {
+		completion, err := completeModelRepoUpload(uploadedFiles[i].SessionID)
+		if err != nil {
+			return nil, fmt.Errorf("complete upload session for %s: %w", uploadedFiles[i].RelativePath, err)
+		}
+
+		uploadedFiles[i].SessionID = completion.SessionID
+		uploadedFiles[i].Status = completion.Status
+	}
+
+	return uploadedFiles, nil
+}
+
+func printModelAddOutput(cmd *cobra.Command, result modelAddOutput) {
+	format := output.ParseFormat(cmd.Flag("output").Value.String())
+	cobra.CheckErr(output.Print(result, &output.Config{Format: format}))
 }
 
 func completeModelUpload(upload *api.ModelRepoUpload, artifactPath string) error {
 	if upload == nil {
 		return fmt.Errorf("upload details are required")
 	}
-	if len(upload.Parts) == 0 {
-		return fmt.Errorf("upload does not contain any parts")
-	}
-
 	file, err := os.Open(artifactPath)
 	if err != nil {
 		return fmt.Errorf("open artifact: %w", err)
@@ -349,6 +370,18 @@ func completeModelUpload(upload *api.ModelRepoUpload, artifactPath string) error
 	fileInfo, err := file.Stat()
 	if err != nil {
 		return fmt.Errorf("stat artifact: %w", err)
+	}
+
+	totalSize := fileInfo.Size()
+	if totalSize == 0 {
+		if len(upload.Parts) > 0 {
+			return fmt.Errorf("zero-byte upload should not contain any parts")
+		}
+		return nil
+	}
+
+	if len(upload.Parts) == 0 {
+		return fmt.Errorf("upload does not contain any parts")
 	}
 
 	parts := make([]*api.ModelRepoUploadPart, len(upload.Parts))
@@ -362,7 +395,6 @@ func completeModelUpload(upload *api.ModelRepoUpload, artifactPath string) error
 		return fmt.Errorf("invalid part size %d", partSize)
 	}
 
-	totalSize := fileInfo.Size()
 	var offset int64
 	completed := make([]completedPart, 0, len(parts))
 

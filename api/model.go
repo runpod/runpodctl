@@ -170,11 +170,11 @@ type ModelVersionStatusMutationResult struct {
 
 // AddModelToRepoInput captures the information required to upload a model to the repository.
 type AddModelToRepoInput struct {
+	Owner               string                 `json:"owner,omitempty"`
 	Name                string                 `json:"name"`
 	CredentialType      string                 `json:"credentialType,omitempty"`
 	CredentialReference string                 `json:"credentialReference,omitempty"`
 	ModelStatus         string                 `json:"modelStatus,omitempty"`
-	VersionStatus       string                 `json:"versionStatus,omitempty"`
 	Metadata            map[string]interface{} `json:"metadata,omitempty"`
 }
 
@@ -182,7 +182,6 @@ type AddModelToRepoInput struct {
 type GetModelsInput struct {
 	Provider string `json:"provider,omitempty"`
 	Name     string `json:"name,omitempty"`
-	All      bool   `json:"-"`
 }
 
 // GetModelInput captures the identifiers needed to retrieve a single model.
@@ -199,6 +198,7 @@ type RemoveModelInput struct {
 
 // CreateModelRepoUploadInput defines the payload used to start a multipart upload for a model version.
 type CreateModelRepoUploadInput struct {
+	Owner               string                 `json:"owner,omitempty"`
 	Name                string                 `json:"name,omitempty"`
 	ModelVersionUUID    string                 `json:"modelVersionUuid,omitempty"`
 	FileName            string                 `json:"fileName"`
@@ -233,10 +233,10 @@ func AddModelToRepo(input *AddModelToRepoInput) (*Model, error) {
 		payload[key] = value
 	}
 
+	addString("owner", input.Owner)
 	addString("credentialType", input.CredentialType)
 	addString("credentialReference", input.CredentialReference)
 	addString("modelStatus", input.ModelStatus)
-	addString("versionStatus", input.VersionStatus)
 
 	if len(input.Metadata) > 0 {
 		payload["metadata"] = input.Metadata
@@ -252,10 +252,11 @@ func AddModelToRepo(input *AddModelToRepoInput) (*Model, error) {
                         addModelToRepo(input: $input) {
                                 success
                                 message
-                                model {
-                                        id
-                                        name
-                                        provider
+	                                model {
+	                                        id
+	                                        owner
+	                                        name
+	                                        provider
                                         status
                                         createdAt
                                         updatedAt
@@ -326,19 +327,12 @@ func AddModelToRepo(input *AddModelToRepoInput) (*Model, error) {
 
 // GetModels retrieves models that match the provided filters from the repository.
 func GetModels(input *GetModelsInput) ([]*Model, error) {
-	queryName := "myModels"
-	fieldName := "myModels"
-	if input != nil && input.All {
-		queryName = "models"
-		fieldName = "models"
-	}
-
 	gqlInput := Input{
-		Query: fmt.Sprintf(`
-query %s {
-%s {
-        id
-        owner
+		Query: `
+	query myModels {
+	myModels {
+	        id
+	        owner
         provider
         name
         status
@@ -358,9 +352,9 @@ query %s {
                 createdAt
                 updatedAt
         }
-}
-}
-`, queryName, fieldName),
+	}
+	}
+	`,
 		Variables: nil,
 	}
 
@@ -381,7 +375,6 @@ query %s {
 	var data struct {
 		Data *struct {
 			MyModels []*Model `json:"myModels"`
-			Models   []*Model `json:"models"`
 		} `json:"data"`
 		Errors []*GraphQLError `json:"errors"`
 	}
@@ -395,16 +388,10 @@ query %s {
 		return nil, fmt.Errorf("data is nil: %s", string(rawData))
 	}
 
-	var models []*Model
-	switch fieldName {
-	case "models":
-		models = data.Data.Models
-	default:
-		models = data.Data.MyModels
-	}
+	models := data.Data.MyModels
 
 	if models == nil {
-		return nil, fmt.Errorf("data is nil: %s", string(rawData))
+		models = []*Model{}
 	}
 	if input != nil {
 		if input.Provider != "" {
@@ -645,6 +632,7 @@ func CreateModelRepoUpload(input *CreateModelRepoUploadInput) (*ModelRepoMutatio
 		payload[key] = value
 	}
 
+	addString("owner", input.Owner)
 	addString("partSizeBytes", input.PartSizeBytes)
 	addString("contentType", input.ContentType)
 	addString("credentialType", input.CredentialType)
@@ -683,10 +671,11 @@ func CreateModelRepoUpload(input *CreateModelRepoUploadInput) (*ModelRepoMutatio
                                         completeUrl
                                         abortUrl
                                 }
-                                model {
-                                        id
-                                        name
-                                        provider
+	                                model {
+	                                        id
+	                                        owner
+	                                        name
+	                                        provider
                                         status
                                         updatedAt
                                 }

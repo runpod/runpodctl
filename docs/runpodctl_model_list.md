@@ -13,7 +13,6 @@ runpodctl model list [flags]
 ### Options
 
 ```
-      --all               include all models (not just yours)
   -h, --help              help for list
       --name string       filter by model name
       --provider string   filter by provider

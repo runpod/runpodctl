@@ -20,6 +20,7 @@ type Input struct {
 }
 
 const GraphQLTimeoutKey = "graphqlTimeout"
+const DefaultGraphQLURL = "https://api.runpod.io/graphql"
 
 func Query(input Input) (res *http.Response, err error) {
 	if input.Variables == nil {
@@ -31,9 +32,12 @@ func Query(input Input) (res *http.Response, err error) {
 		return nil, err
 	}
 
-	apiUrl := os.Getenv("RUNPOD_API_URL")
+	apiUrl := os.Getenv("RUNPOD_GRAPHQL_URL")
 	if apiUrl == "" {
 		apiUrl = viper.GetString("apiUrl")
+	}
+	if apiUrl == "" {
+		apiUrl = DefaultGraphQLURL
 	}
 
 	apiKey := os.Getenv("RUNPOD_API_KEY")

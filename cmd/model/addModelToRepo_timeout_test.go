@@ -1,6 +1,8 @@
 package model
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -106,17 +108,24 @@ func TestUploadModelFilesUsesModelVersionUUIDAfterFirstFile(t *testing.T) {
 			},
 		}, nil
 	}
+	var events []string
+	var uploadedArtifacts []string
 	completeModelUploadFile = func(upload *api.ModelRepoUpload, artifactPath string) error {
+		events = append(events, "upload:"+artifactPath)
+		uploadedArtifacts = append(uploadedArtifacts, artifactPath)
 		return nil
 	}
+	var completedSessions []string
 	completeModelRepoUpload = func(sessionID string) (*api.CompleteModelRepoUploadResult, error) {
+		events = append(events, "complete:"+sessionID)
+		completedSessions = append(completedSessions, sessionID)
 		return &api.CompleteModelRepoUploadResult{
 			SessionID: sessionID,
 			Status:    "completed",
 		}, nil
 	}
 
-	err := uploadModelFiles(files, &api.CreateModelRepoUploadInput{Name: "test-model"})
+	uploadedFiles, err := uploadModelFiles(files, &api.CreateModelRepoUploadInput{Name: "test-model"})
 	if err != nil {
 		t.Fatalf("uploadModelFiles returned error: %v", err)
 	}
@@ -131,5 +140,61 @@ func TestUploadModelFilesUsesModelVersionUUIDAfterFirstFile(t *testing.T) {
 		if calls[i].ModelVersionUUID != "version-uuid" {
 			t.Fatalf("expected call %d to use modelVersionUuid %q, got %q", i, "version-uuid", calls[i].ModelVersionUUID)
 		}
+	}
+	if len(uploadedArtifacts) != len(files) {
+		t.Fatalf("expected %d uploaded artifacts, got %d", len(files), len(uploadedArtifacts))
+	}
+	for i, file := range files {
+		if uploadedArtifacts[i] != file.AbsolutePath {
+			t.Fatalf("expected uploaded artifact %d to be %q, got %q", i, file.AbsolutePath, uploadedArtifacts[i])
+		}
+	}
+	expectedCompletedSessions := []string{"session-a.bin", "session-b.bin", "session-c.bin"}
+	if len(completedSessions) != len(expectedCompletedSessions) {
+		t.Fatalf("expected %d completed sessions, got %d", len(expectedCompletedSessions), len(completedSessions))
+	}
+	for i, expected := range expectedCompletedSessions {
+		if completedSessions[i] != expected {
+			t.Fatalf("expected completed session %d to be %q, got %q", i, expected, completedSessions[i])
+		}
+	}
+	if len(uploadedFiles) != len(expectedCompletedSessions) {
+		t.Fatalf("expected %d uploaded files, got %d", len(expectedCompletedSessions), len(uploadedFiles))
+	}
+	for i, expected := range expectedCompletedSessions {
+		if uploadedFiles[i].SessionID != expected {
+			t.Fatalf("expected uploaded file session %d to be %q, got %q", i, expected, uploadedFiles[i].SessionID)
+		}
+		if uploadedFiles[i].Status != "completed" {
+			t.Fatalf("expected uploaded file status %d to be completed, got %q", i, uploadedFiles[i].Status)
+		}
+	}
+	expectedEvents := []string{
+		"upload:/tmp/a.bin",
+		"upload:/tmp/b.bin",
+		"upload:/tmp/c.bin",
+		"complete:session-a.bin",
+		"complete:session-b.bin",
+		"complete:session-c.bin",
+	}
+	if len(events) != len(expectedEvents) {
+		t.Fatalf("expected %d upload/completion events, got %d", len(expectedEvents), len(events))
+	}
+	for i, expected := range expectedEvents {
+		if events[i] != expected {
+			t.Fatalf("expected event %d to be %q, got %q", i, expected, events[i])
+		}
+	}
+}
+
+func TestCompleteModelUploadAllowsZeroByteFileWithNoParts(t *testing.T) {
+	artifactPath := filepath.Join(t.TempDir(), "empty.bin")
+	if err := os.WriteFile(artifactPath, nil, 0600); err != nil {
+		t.Fatalf("write empty artifact: %v", err)
+	}
+
+	err := completeModelUpload(&api.ModelRepoUpload{}, artifactPath)
+	if err != nil {
+		t.Fatalf("expected zero-byte upload with no parts to succeed, got %v", err)
 	}
 }
