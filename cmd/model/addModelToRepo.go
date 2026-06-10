@@ -207,7 +207,7 @@ func runAddModel(cmd *cobra.Command, args []string) {
 	uploadInput.Name = addModelName
 
 	if len(modelFiles) > 0 {
-		err := uploadModelFiles(modelFiles, uploadInput)
+		err = uploadModelFiles(modelFiles, uploadInput)
 		cobra.CheckErr(err)
 		return
 	}
@@ -400,7 +400,7 @@ func completeModelUpload(upload *api.ModelRepoUpload, artifactPath string) error
 				err = fmt.Errorf("upload part %d missing ETag", part.PartNumber)
 				return
 			}
-			completed = append(completed, completedPart{PartNumber: part.PartNumber, ETag: fmt.Sprintf("\"%s\"", etag)})
+			completed = append(completed, completedPart{PartNumber: part.PartNumber, ETag: fmt.Sprintf("%q", etag)})
 		}()
 		if err != nil {
 			return err

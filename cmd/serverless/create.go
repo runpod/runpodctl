@@ -3,7 +3,7 @@ package serverless
 import (
 	"encoding/json"
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"strings"
 
 	"github.com/runpod/runpodctl/internal/api"
@@ -183,7 +183,6 @@ func runCreate(cmd *cobra.Command, args []string) error {
 			endpointName = listing.Title
 		}
 
-		//nolint:gosec
 		templateName := fmt.Sprintf("%s__template__%s", endpointName, randomString(7))
 
 		gqlReq := &api.EndpointCreateGQLInput{
@@ -273,14 +272,14 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	if len(createModelReferences) > 0 {
 		gqlReq := buildTemplateEndpointGQLInput(req, gpuTypeID, createDataCenterIDs, createModelReferences)
-		endpoint, err := client.CreateEndpointGQL(gqlReq)
-		if err != nil {
-			output.Error(err)
-			return fmt.Errorf("failed to create endpoint: %w", err)
+		gqlEndpoint, gqlErr := client.CreateEndpointGQL(gqlReq)
+		if gqlErr != nil {
+			output.Error(gqlErr)
+			return fmt.Errorf("failed to create endpoint: %w", gqlErr)
 		}
 
 		format := output.ParseFormat(cmd.Flag("output").Value.String())
-		return output.Print(endpoint, &output.Config{Format: format})
+		return output.Print(gqlEndpoint, &output.Config{Format: format})
 	}
 
 	endpoint, err := client.CreateEndpoint(req)
@@ -319,11 +318,16 @@ func buildTemplateEndpointGQLInput(req *api.EndpointCreateRequest, gpuTypeID, lo
 	}
 }
 
+// randomString returns an n-character lowercase-alphanumeric suffix.
+// The suffix is used only to disambiguate generated template names; it is not
+// a token, secret, or anything an attacker benefits from predicting. gosec
+// G404 flags math/rand/v2 generically, so the directive below is a deliberate
+// suppression rather than a missed crypto/rand call.
 func randomString(n int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, n)
-	for i := range b {
-		b[i] = letters[rand.Intn(len(letters))] //nolint:gosec
+	for i := range n {
+		b[i] = letters[rand.IntN(len(letters))] //nolint:gosec // non-crypto: template-name uniqueness suffix, not a token
 	}
 	return string(b)
 }
