@@ -23,6 +23,23 @@ func TestModelVersionHash(t *testing.T) {
 			want: "hash-1",
 		},
 		{
+			name: "skips nil version entries",
+			model: &api.Model{Versions: []*api.ModelVersion{
+				nil,
+				{Hash: "hash-after-nil"},
+			}},
+			want: "hash-after-nil",
+		},
+		{
+			name: "all hashes blank or whitespace",
+			model: &api.Model{Versions: []*api.ModelVersion{
+				{Hash: ""},
+				{Hash: "   "},
+				{Hash: "\t\n"},
+			}},
+			want: "",
+		},
+		{
 			name:  "no versions",
 			model: &api.Model{},
 			want:  "",

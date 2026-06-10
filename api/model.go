@@ -291,7 +291,7 @@ func AddModelToRepo(input *AddModelToRepoInput) (*Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	if res.StatusCode != 200 {
+	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
 	}
 
@@ -368,7 +368,7 @@ func GetModels(input *GetModelsInput) ([]*Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	if res.StatusCode != 200 {
+	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
 	}
 
@@ -479,7 +479,7 @@ func GetModel(input *GetModelInput) (*Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	if res.StatusCode != 200 {
+	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
 	}
 
@@ -567,7 +567,7 @@ func RemoveModel(input *RemoveModelInput) (*ModelRepoMutationResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	if res.StatusCode != 200 {
+	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
 	}
 
@@ -703,7 +703,7 @@ func CreateModelRepoUpload(input *CreateModelRepoUploadInput) (*ModelRepoMutatio
 	if err != nil {
 		return nil, err
 	}
-	if res.StatusCode != 200 {
+	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
 	}
 
@@ -852,7 +852,7 @@ func UpdateModelVersionStatus(hash, status string) (*ModelVersion, error) {
 	if err != nil {
 		return nil, err
 	}
-	if res.StatusCode != 200 {
+	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
 	}
 
