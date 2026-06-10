@@ -77,7 +77,7 @@ runpodctl pod list
 runpodctl pod get pod_id
 
 # create a pod
-runpodctl pod create --image=runpod/pytorch:latest --gpu-id=NVIDIA_A100
+runpodctl pod create --image=runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04 --gpu-id=NVIDIA_A100
 
 # start/stop/delete a pod
 runpodctl pod start pod_id
