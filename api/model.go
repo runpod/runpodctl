@@ -404,7 +404,7 @@ query %s {
 	}
 
 	if models == nil {
-		return nil, fmt.Errorf("data is nil: %s", string(rawData))
+		models = []*Model{}
 	}
 	if input != nil {
 		if input.Provider != "" {

@@ -13,10 +13,20 @@ func TestSetModelGraphQLTimeoutWithoutInheritedFlag(t *testing.T) {
 	viper.Reset()
 
 	cmd := &cobra.Command{Use: "add"}
-	setModelGraphQLTimeout(cmd)
+	// CLAUDE.md: informational output must not corrupt stdout for JSON
+	// consumers — the "defaulting graphql timeout" notice must land on stderr.
+	stdout, stderr := captureStdStreams(t, func() {
+		setModelGraphQLTimeout(cmd)
+	})
 
 	if got := viper.GetDuration(api.GraphQLTimeoutKey); got != modelGraphQLTimeoutValue {
 		t.Fatalf("expected graphql timeout %s, got %s", modelGraphQLTimeoutValue, got)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout must remain empty, got %q", stdout)
+	}
+	if stderr == "" {
+		t.Fatal("expected timeout-default notice on stderr, got empty")
 	}
 }
 

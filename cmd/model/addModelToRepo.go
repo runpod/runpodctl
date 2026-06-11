@@ -56,7 +56,7 @@ func setModelGraphQLTimeout(cmd *cobra.Command) {
 		}
 
 		viper.Set(api.GraphQLTimeoutKey, modelGraphQLTimeoutValue)
-		fmt.Printf("--graphql-timeout not set; defaulting to %s for model creation operations\n", modelGraphQLTimeoutValue)
+		fmt.Fprintf(os.Stderr, "--graphql-timeout not set; defaulting to %s for model creation operations\n", modelGraphQLTimeoutValue)
 		return
 	}
 
@@ -68,7 +68,7 @@ func setModelGraphQLTimeout(cmd *cobra.Command) {
 	}
 
 	viper.Set(api.GraphQLTimeoutKey, modelGraphQLTimeoutValue)
-	fmt.Printf("defaulting graphql timeout to %s for model creation operations\n", modelGraphQLTimeoutValue)
+	fmt.Fprintf(os.Stderr, "defaulting graphql timeout to %s for model creation operations\n", modelGraphQLTimeoutValue)
 }
 
 type completedPart struct {
