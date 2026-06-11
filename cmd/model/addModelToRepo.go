@@ -432,7 +432,7 @@ func completeModelUpload(upload *api.ModelRepoUpload, artifactPath string) error
 				err = fmt.Errorf("upload part %d missing ETag", part.PartNumber)
 				return
 			}
-			completed = append(completed, completedPart{PartNumber: part.PartNumber, ETag: fmt.Sprintf("\"%s\"", etag)})
+			completed = append(completed, completedPart{PartNumber: part.PartNumber, ETag: fmt.Sprintf("%q", etag)})
 		}()
 		if err != nil {
 			return err
