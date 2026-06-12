@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -162,6 +163,79 @@ func (c *Client) ListGpuTypes(includeUnavailable bool) ([]GpuTypeWithAvailabilit
 func betterStock(a, b string) bool {
 	order := map[string]int{"High": 3, "Medium": 2, "Low": 1, "": 0}
 	return order[a] > order[b]
+}
+
+// ServerlessGpuPool is a serverless gpu pool. saveEndpoint's gpuIds field
+// accepts pool ids (e.g. "ADA_24"), not the gpu type ids (e.g. "NVIDIA A40")
+// that 'gpu list' and --gpu-id use, so we map between them with this.
+type ServerlessGpuPool struct {
+	ID         string   `json:"id"`
+	GpuTypeIDs []string `json:"gpuTypeIds"`
+}
+
+// ListServerlessGpuPools returns the serverless gpu pools and their member
+// gpu type ids.
+func (c *Client) ListServerlessGpuPools() ([]ServerlessGpuPool, error) {
+	query := `
+		query {
+			serverlessGpuPools {
+				id
+				gpuTypeIds
+			}
+		}
+	`
+
+	data, err := c.graphqlRequest(query, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		Data struct {
+			ServerlessGpuPools []ServerlessGpuPool `json:"serverlessGpuPools"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if len(resp.Errors) > 0 {
+		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+	}
+
+	return resp.Data.ServerlessGpuPools, nil
+}
+
+// ResolveServerlessGpuPoolID maps a --gpu-id value to a serverless gpu pool id.
+// it accepts either a pool id (returned as-is) or a gpu type id (translated to
+// its pool id), so --gpu-id stays consistent with 'gpu list'.
+func (c *Client) ResolveServerlessGpuPoolID(gpuID string) (string, error) {
+	pools, err := c.ListServerlessGpuPools()
+	if err != nil {
+		return "", err
+	}
+
+	poolIDs := make([]string, 0, len(pools))
+	for _, p := range pools {
+		poolIDs = append(poolIDs, p.ID)
+		// already a pool id
+		if strings.EqualFold(p.ID, gpuID) {
+			return p.ID, nil
+		}
+	}
+	for _, p := range pools {
+		for _, t := range p.GpuTypeIDs {
+			if strings.EqualFold(t, gpuID) {
+				return p.ID, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("unknown gpu id %q; use a gpu id from 'runpodctl gpu list' or a pool id (one of: %s)", gpuID, strings.Join(poolIDs, ", "))
 }
 
 // ListDataCenters returns all data centers with GPU availability
