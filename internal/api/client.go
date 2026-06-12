@@ -11,15 +11,16 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/runpod/runpodctl/internal/agent"
 	"github.com/spf13/viper"
 )
 
-// buildUserAgent constructs the User-Agent string, appending coding agent
-// source tags when the corresponding environment variables are set.
+// buildUserAgent constructs the User-Agent string, appending a coding agent
+// source tag when the CLI is driven by a recognized AI agent.
 func buildUserAgent() string {
 	ua := fmt.Sprintf("runpod-cli/%s (%s; %s)", Version, runtime.GOOS, runtime.GOARCH)
-	if os.Getenv("CLAUDECODE") == "1" {
-		ua += " (via claude-code)"
+	if a := agent.Detect(); a != "" {
+		ua += " (via " + a + ")"
 	}
 	return ua
 }

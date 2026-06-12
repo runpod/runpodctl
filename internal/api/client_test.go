@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/runpod/runpodctl/internal/agent"
 )
 
 func TestNewClient_NoAPIKey(t *testing.T) {
@@ -147,9 +149,11 @@ func TestClient_ErrorResponse(t *testing.T) {
 }
 
 func TestBuildUserAgent_Default(t *testing.T) {
-	t.Setenv("CLAUDECODE", "")
+	for _, env := range agent.KnownEnvVars() {
+		t.Setenv(env, "")
+	}
 	ua := buildUserAgent()
-	if strings.Contains(ua, "via claude-code") {
+	if strings.Contains(ua, "(via ") {
 		t.Errorf("expected no agent tag, got %s", ua)
 	}
 	if !strings.HasPrefix(ua, "runpod-cli/") {
@@ -158,10 +162,24 @@ func TestBuildUserAgent_Default(t *testing.T) {
 }
 
 func TestBuildUserAgent_ClaudeCode(t *testing.T) {
+	for _, env := range agent.KnownEnvVars() {
+		t.Setenv(env, "")
+	}
 	t.Setenv("CLAUDECODE", "1")
 	ua := buildUserAgent()
 	if !strings.Contains(ua, "(via claude-code)") {
 		t.Errorf("expected claude-code agent tag, got %s", ua)
+	}
+}
+
+func TestBuildUserAgent_Codex(t *testing.T) {
+	for _, env := range agent.KnownEnvVars() {
+		t.Setenv(env, "")
+	}
+	t.Setenv("CODEX_SANDBOX", "seatbelt")
+	ua := buildUserAgent()
+	if !strings.Contains(ua, "(via codex)") {
+		t.Errorf("expected codex agent tag, got %s", ua)
 	}
 }
 
