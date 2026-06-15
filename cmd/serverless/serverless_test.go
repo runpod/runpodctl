@@ -80,36 +80,47 @@ func TestCreateCmd_Flags(t *testing.T) {
 	}
 }
 
-// snapshotCreateFlags restores all serverless-create globals after a test that
-// mutates them, so the package-level state doesn't leak between tests.
+// snapshotCreateFlags restores every serverless-create global after a test that
+// mutates them, so package-level state doesn't leak between tests, then sets a
+// known-good baseline. individual tests override only what they exercise.
 func snapshotCreateFlags(t *testing.T) {
 	t.Helper()
 	old := struct {
 		name, templateID, hubID, computeType, gpuID, instanceID string
 		dataCenterIDs, networkVolumeID, networkVolumeIDs        string
-		modelReferences                                         []string
+		minCudaVersion, scaleBy                                 string
+		gpuCount, workersMin, workersMax                        int
+		scaleThreshold, idleTimeout, executionTimeout           int
+		flashBoot                                               bool
+		envVars, modelReferences                                []string
 	}{
 		createName, createTemplateID, createHubID, createComputeType, createGpuTypeID, createInstanceID,
 		createDataCenterIDs, createNetworkVolumeID, createNetworkVolumeIDs,
-		createModelReferences,
+		createMinCudaVersion, createScaleBy,
+		createGpuCount, createWorkersMin, createWorkersMax,
+		createScaleThreshold, createIdleTimeout, createExecutionTimeout,
+		createFlashBoot,
+		createEnvVars, createModelReferences,
 	}
 	t.Cleanup(func() {
-		createName = old.name
-		createTemplateID = old.templateID
-		createHubID = old.hubID
-		createComputeType = old.computeType
-		createGpuTypeID = old.gpuID
-		createInstanceID = old.instanceID
-		createDataCenterIDs = old.dataCenterIDs
-		createNetworkVolumeID = old.networkVolumeID
-		createNetworkVolumeIDs = old.networkVolumeIDs
-		createModelReferences = old.modelReferences
+		createName, createTemplateID, createHubID = old.name, old.templateID, old.hubID
+		createComputeType, createGpuTypeID, createInstanceID = old.computeType, old.gpuID, old.instanceID
+		createDataCenterIDs, createNetworkVolumeID, createNetworkVolumeIDs = old.dataCenterIDs, old.networkVolumeID, old.networkVolumeIDs
+		createMinCudaVersion, createScaleBy = old.minCudaVersion, old.scaleBy
+		createGpuCount, createWorkersMin, createWorkersMax = old.gpuCount, old.workersMin, old.workersMax
+		createScaleThreshold, createIdleTimeout, createExecutionTimeout = old.scaleThreshold, old.idleTimeout, old.executionTimeout
+		createFlashBoot = old.flashBoot
+		createEnvVars, createModelReferences = old.envVars, old.modelReferences
 	})
-	// known-good baseline; individual tests override what they exercise.
+	// known-good baseline matching the flag defaults; tests override per case.
 	createName, createTemplateID, createHubID = "", "tpl-123", ""
 	createComputeType, createGpuTypeID, createInstanceID = "GPU", "", ""
 	createDataCenterIDs, createNetworkVolumeID, createNetworkVolumeIDs = "", "", ""
-	createModelReferences = nil
+	createMinCudaVersion, createScaleBy = "", ""
+	createGpuCount, createWorkersMin, createWorkersMax = 1, 0, 3
+	createScaleThreshold, createIdleTimeout, createExecutionTimeout = -1, -1, -1
+	createFlashBoot = true
+	createEnvVars, createModelReferences = nil, nil
 }
 
 // these validations all run before any api client/network call, so they're
@@ -153,6 +164,16 @@ func TestCreateCmd_Validations(t *testing.T) {
 			name:    "cpu with model reference",
 			setup:   func() { createComputeType = "CPU"; createModelReferences = []string{"https://x/y:z"} },
 			wantErr: "--model-reference is only supported with --compute-type GPU",
+		},
+		{
+			name:    "name too short",
+			setup:   func() { createName = "ab" },
+			wantErr: "--name must be at least 3 characters",
+		},
+		{
+			name:    "scale-threshold below 1",
+			setup:   func() { createScaleThreshold = 0 },
+			wantErr: "--scale-threshold must be at least 1",
 		},
 	}
 

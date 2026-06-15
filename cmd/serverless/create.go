@@ -3,7 +3,7 @@ package serverless
 import (
 	"encoding/json"
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"strings"
 
 	"github.com/runpod/runpodctl/internal/api"
@@ -97,6 +97,13 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	if createTemplateID != "" && createHubID != "" {
 		return fmt.Errorf("--template-id and --hub-id are mutually exclusive; use one or the other")
 	}
+	if name := strings.TrimSpace(createName); name != "" && len(name) < 3 {
+		return fmt.Errorf("--name must be at least 3 characters")
+	}
+	if createScaleThreshold >= 0 && createScaleThreshold < 1 {
+		// the server rejects a scaler value below 1; catch it with a clear message.
+		return fmt.Errorf("--scale-threshold must be at least 1")
+	}
 
 	computeType := strings.ToUpper(strings.TrimSpace(createComputeType))
 	if computeType == "" {
@@ -145,7 +152,17 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		if instanceID == "" {
 			instanceID = defaultCPUInstanceID
 		}
+		if !isCPUInstanceID(instanceID) {
+			return fmt.Errorf("invalid --instance-id %q; expected a cpu flavor id like cpu3g-4-16", instanceID)
+		}
 		input.InstanceIDs = []string{instanceID}
+		// gpu-only flags have no effect on cpu; tell the user instead of dropping silently.
+		if createMinCudaVersion != "" {
+			fmt.Fprintln(cmd.ErrOrStderr(), "note: --min-cuda-version has no effect with --compute-type cpu; ignoring")
+		}
+		if cmd.Flags().Changed("gpu-count") {
+			fmt.Fprintln(cmd.ErrOrStderr(), "note: --gpu-count has no effect with --compute-type cpu; ignoring")
+		}
 	} else {
 		input.GpuCount = createGpuCount
 		if gpuTypeID != "" {
@@ -185,6 +202,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	if createExecutionTimeout >= 0 {
+		// 0 is allowed (server treats it as "no per-request limit").
 		input.ExecutionTimeoutMs = createExecutionTimeout * 1000
 	}
 
@@ -297,11 +315,23 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		}
 
 		// fall back to the hub release's gpu pool ids when none were provided.
+		// route through the resolver too, in case the hub config stores gpu type
+		// ids rather than pool ids (pool ids pass through unchanged).
 		if computeType == "GPU" && input.GpuIDs == "" && hubConfig.GpuIDs != "" {
-			input.GpuIDs = hubConfig.GpuIDs
+			poolID, err := client.ResolveServerlessGpuPoolID(hubConfig.GpuIDs)
+			if err != nil {
+				output.Error(err)
+				return err
+			}
+			input.GpuIDs = poolID
 		}
 	} else {
 		input.TemplateID = createTemplateID
+		// --env only feeds an inline template (hub path); a referenced template's
+		// env is fixed, so saveEndpoint ignores it. don't drop it silently.
+		if len(createEnvVars) > 0 {
+			fmt.Fprintln(cmd.ErrOrStderr(), "note: --env has no effect with --template-id (env is defined by the template); ignoring")
+		}
 	}
 
 	// saveEndpoint requires a name (min 3 chars); generate one when not given.
@@ -321,11 +351,20 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	return output.Print(endpoint, &output.Config{Format: format})
 }
 
+// randomString builds a short lowercase suffix for generated endpoint/template
+// names. it's display-only uniqueness, not a secret, so math/rand/v2 is fine.
 func randomString(n int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, n)
-	for i := range b {
-		b[i] = letters[rand.Intn(len(letters))] //nolint:gosec
+	for i := range n {
+		b[i] = letters[rand.IntN(len(letters))]
 	}
 	return string(b)
+}
+
+// isCPUInstanceID does a light client-side sanity check on a cpu flavor id so an
+// obvious typo gives a clear error instead of an opaque graphql one. cpu flavor
+// ids look like "<flavor>-<vcpu>-<ram>", e.g. cpu3g-4-16.
+func isCPUInstanceID(id string) bool {
+	return strings.HasPrefix(id, "cpu") && strings.Count(id, "-") >= 2
 }

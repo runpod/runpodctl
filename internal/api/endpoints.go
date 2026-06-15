@@ -24,6 +24,8 @@ type Endpoint struct {
 	GpuCount           int                     `json:"gpuCount,omitempty"`
 	MinCudaVersion     string                  `json:"minCudaVersion,omitempty"`
 	Flashboot          *bool                   `json:"flashboot,omitempty"`
+	FlashBootType      string                  `json:"flashBootType,omitempty"`
+	ComputeType        string                  `json:"computeType,omitempty"`
 	ExecutionTimeoutMs int                     `json:"executionTimeoutMs,omitempty"`
 	ModelReferences    []string                `json:"modelReferences,omitempty"`
 	Template           map[string]interface{}  `json:"template,omitempty"`
@@ -217,6 +219,7 @@ func (c *Client) CreateEndpointGQL(req *EndpointCreateGQLInput) (*Endpoint, erro
 				templateId
 				gpuIds
 				instanceIds
+				computeType
 				networkVolumeId
 				networkVolumeIds {
 					networkVolumeId
@@ -229,6 +232,9 @@ func (c *Client) CreateEndpointGQL(req *EndpointCreateGQLInput) (*Endpoint, erro
 				workersMin
 				workersMax
 				gpuCount
+				minCudaVersion
+				executionTimeoutMs
+				flashBootType
 				modelReferences
 			}
 		}

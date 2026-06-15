@@ -210,32 +210,57 @@ func (c *Client) ListServerlessGpuPools() ([]ServerlessGpuPool, error) {
 	return resp.Data.ServerlessGpuPools, nil
 }
 
-// ResolveServerlessGpuPoolID maps a --gpu-id value to a serverless gpu pool id.
-// it accepts either a pool id (returned as-is) or a gpu type id (translated to
-// its pool id), so --gpu-id stays consistent with 'gpu list'.
+// ResolveServerlessGpuPoolID maps a --gpu-id value to the gpu pool id(s) that
+// saveEndpoint expects. it accepts a pool id (returned as-is), a gpu type id
+// (translated to its pool id), or a comma-separated mix of those (e.g. a hub
+// config's gpu list). if the pools query is unavailable it falls back to the
+// input unchanged so an already-correct pool id still works (the server
+// validates either way).
 func (c *Client) ResolveServerlessGpuPoolID(gpuID string) (string, error) {
 	pools, err := c.ListServerlessGpuPools()
 	if err != nil {
-		return "", err
+		return gpuID, nil
 	}
 
 	poolIDs := make([]string, 0, len(pools))
 	for _, p := range pools {
 		poolIDs = append(poolIDs, p.ID)
-		// already a pool id
-		if strings.EqualFold(p.ID, gpuID) {
-			return p.ID, nil
-		}
 	}
-	for _, p := range pools {
-		for _, t := range p.GpuTypeIDs {
-			if strings.EqualFold(t, gpuID) {
-				return p.ID, nil
+
+	resolveOne := func(id string) (string, bool) {
+		for _, p := range pools {
+			if strings.EqualFold(p.ID, id) {
+				return p.ID, true
 			}
+		}
+		for _, p := range pools {
+			for _, t := range p.GpuTypeIDs {
+				if strings.EqualFold(t, id) {
+					return p.ID, true
+				}
+			}
+		}
+		return "", false
+	}
+
+	seen := make(map[string]bool)
+	resolved := make([]string, 0)
+	for _, tok := range strings.Split(gpuID, ",") {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+		poolID, ok := resolveOne(tok)
+		if !ok {
+			return "", fmt.Errorf("unknown gpu id %q; use a gpu id from 'runpodctl gpu list' or a pool id (one of: %s)", tok, strings.Join(poolIDs, ", "))
+		}
+		if !seen[poolID] {
+			seen[poolID] = true
+			resolved = append(resolved, poolID)
 		}
 	}
 
-	return "", fmt.Errorf("unknown gpu id %q; use a gpu id from 'runpodctl gpu list' or a pool id (one of: %s)", gpuID, strings.Join(poolIDs, ", "))
+	return strings.Join(resolved, ","), nil
 }
 
 // ListDataCenters returns all data centers with GPU availability
