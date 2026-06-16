@@ -1,6 +1,9 @@
 package agent
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func clearAll(t *testing.T) {
 	t.Helper()
@@ -72,5 +75,36 @@ func TestDetect_SpecificBeatsStandard(t *testing.T) {
 	t.Setenv("CLAUDECODE", "1")
 	if got := Detect(); got != "claude-code" {
 		t.Errorf("expected claude-code to take priority, got %q", got)
+	}
+}
+
+func TestDetect_BareAgentNotHonored(t *testing.T) {
+	clearAll(t)
+	t.Setenv("AGENT", "ssh-agent-or-ci-runner")
+	if got := Detect(); got != "" {
+		t.Errorf("expected bare AGENT to be ignored, got %q", got)
+	}
+}
+
+func TestDetect_SanitizesStandardValue(t *testing.T) {
+	cases := map[string]string{
+		"my harness\r\nX-Injected: 1": "myharnessX-Injected1",
+		"  trimmed-agent  ":           "trimmed-agent",
+		"!@#$%":                       "",
+	}
+	for in, want := range cases {
+		t.Run(want, func(t *testing.T) {
+			clearAll(t)
+			t.Setenv("AI_AGENT", in)
+			if got := Detect(); got != want {
+				t.Errorf("AI_AGENT=%q: expected %q, got %q", in, want, got)
+			}
+		})
+	}
+}
+
+func TestSanitize_CapsLength(t *testing.T) {
+	if got := sanitize(strings.Repeat("a", 100)); len(got) != 64 {
+		t.Errorf("expected 64-rune cap, got %d", len(got))
 	}
 }

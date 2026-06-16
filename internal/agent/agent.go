@@ -7,7 +7,10 @@
 // https://github.com/huggingface/huggingface.js/blob/main/packages/tasks/src/agent-harnesses.ts
 package agent
 
-import "os"
+import (
+	"os"
+	"strings"
+)
 
 // harness maps an agent identifier to the environment variables that identify
 // it. Detection matches if ANY of the listed variables is set to a non-empty
@@ -45,11 +48,13 @@ var harnesses = []harness{
 }
 
 // standardEnvVars are generic variables any tool can set to identify itself.
-// When set, the value is used directly as the agent id.
-var standardEnvVars = []string{"AI_AGENT", "AGENT"}
+// When set, the value is sanitized and used as the agent id. Only AI_AGENT is
+// honored: a bare AGENT is too common in unrelated environments (CI runners,
+// shell setups) and would attribute traffic to arbitrary values.
+var standardEnvVars = []string{"AI_AGENT"}
 
 // KnownEnvVars returns every environment variable the registry inspects,
-// including the standard AI_AGENT/AGENT signals. Useful for tests that need to
+// including the standard AI_AGENT signal. Useful for tests that need to
 // isolate detection from the ambient environment.
 func KnownEnvVars() []string {
 	var vars []string
@@ -61,7 +66,7 @@ func KnownEnvVars() []string {
 
 // Detect returns the identifier of the AI coding agent driving the CLI, or an
 // empty string if none is detected. Specific harness markers take priority
-// over the generic AI_AGENT/AGENT signal.
+// over the generic AI_AGENT signal.
 func Detect() string {
 	for _, h := range harnesses {
 		for _, env := range h.envVars {
@@ -71,9 +76,28 @@ func Detect() string {
 		}
 	}
 	for _, env := range standardEnvVars {
-		if v := os.Getenv(env); v != "" {
+		if v := sanitize(os.Getenv(env)); v != "" {
 			return v
 		}
 	}
 	return ""
+}
+
+// sanitize trims the value and keeps only User-Agent-safe characters
+// ([A-Za-z0-9._-]), capped at 64 runes, so an arbitrary env value can't
+// produce a malformed header.
+func sanitize(v string) string {
+	v = strings.TrimSpace(v)
+	var b strings.Builder
+	for _, r := range v {
+		if b.Len() >= 64 {
+			break
+		}
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
