@@ -12,6 +12,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// defaultCPUInstanceID is the cpu flavor used when --compute-type CPU is set
+// without an explicit --instance-id. matches the hub deploy default server-side.
+const defaultCPUInstanceID = "cpu3g-4-16"
+
 var createCmd = &cobra.Command{
 	Use:   "create",
 	Short: "create a new endpoint",
@@ -25,7 +29,10 @@ examples:
   runpodctl serverless create --template-id <id> --gpu-id "NVIDIA GeForce RTX 4090"
 
   # create from a template and attach a model
-  runpodctl serverless create --template-id <id> --gpu-id ADA_24 --model-reference https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct:main
+  runpodctl serverless create --template-id <id> --gpu-id "NVIDIA GeForce RTX 4090" --model-reference https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct:main
+
+  # create a cpu endpoint
+  runpodctl serverless create --template-id <id> --compute-type CPU
 
   # create from a hub repo
   runpodctl hub search vllm                         # find the hub id
@@ -44,6 +51,7 @@ var (
 	createComputeType      string
 	createGpuTypeID        string
 	createGpuCount         int
+	createInstanceID       string
 	createWorkersMin       int
 	createWorkersMax       int
 	createDataCenterIDs    string
@@ -66,6 +74,7 @@ func init() {
 	createCmd.Flags().StringVar(&createComputeType, "compute-type", "GPU", "compute type (GPU or CPU)")
 	createCmd.Flags().StringVar(&createGpuTypeID, "gpu-id", "", "gpu id (from 'runpodctl gpu list')")
 	createCmd.Flags().IntVar(&createGpuCount, "gpu-count", 1, "number of gpus per worker")
+	createCmd.Flags().StringVar(&createInstanceID, "instance-id", "", "cpu instance id for --compute-type CPU (e.g. cpu3g-4-16)")
 	createCmd.Flags().IntVar(&createWorkersMin, "workers-min", 0, "minimum number of workers")
 	createCmd.Flags().IntVar(&createWorkersMax, "workers-max", 3, "maximum number of workers")
 	createCmd.Flags().StringVar(&createDataCenterIDs, "data-center-ids", "", "comma-separated list of data center ids")
@@ -88,12 +97,42 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	if createTemplateID != "" && createHubID != "" {
 		return fmt.Errorf("--template-id and --hub-id are mutually exclusive; use one or the other")
 	}
-	if createHubID != "" && len(createModelReferences) > 0 {
+	if name := strings.TrimSpace(createName); name != "" && len(name) < 3 {
+		return fmt.Errorf("--name must be at least 3 characters")
+	}
+	if createScaleThreshold >= 0 && createScaleThreshold < 1 {
+		// the server rejects a scaler value below 1; catch it with a clear message.
+		return fmt.Errorf("--scale-threshold must be at least 1")
+	}
+
+	computeType := strings.ToUpper(strings.TrimSpace(createComputeType))
+	if computeType == "" {
+		computeType = "GPU"
+	}
+	if computeType != "GPU" && computeType != "CPU" {
+		return fmt.Errorf("invalid --compute-type %q (use GPU or CPU)", createComputeType)
+	}
+
+	gpuTypeID := strings.TrimSpace(createGpuTypeID)
+	if strings.Contains(gpuTypeID, ",") {
+		return fmt.Errorf("only one gpu id is supported; use --gpu-count for multiple gpus of the same type")
+	}
+	if computeType == "CPU" && gpuTypeID != "" {
+		return fmt.Errorf("--gpu-id must be empty when --compute-type is CPU")
+	}
+	if computeType == "GPU" && strings.TrimSpace(createInstanceID) != "" {
+		return fmt.Errorf("--instance-id is only supported with --compute-type CPU")
+	}
+
+	if len(createModelReferences) > 0 && createHubID != "" {
 		return fmt.Errorf("--model-reference is only supported with --template-id")
 	}
-	computeType := strings.ToUpper(strings.TrimSpace(createComputeType))
-	if len(createModelReferences) > 0 && computeType != "" && computeType != "GPU" {
+	if len(createModelReferences) > 0 && computeType != "GPU" {
 		return fmt.Errorf("--model-reference is only supported with --compute-type GPU")
+	}
+
+	if createNetworkVolumeID != "" && createNetworkVolumeIDs != "" {
+		return fmt.Errorf("--network-volume-id and --network-volume-ids are mutually exclusive")
 	}
 
 	client, err := api.NewClient()
@@ -102,21 +141,102 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	req := &api.EndpointCreateRequest{
-		Name:        createName,
-		TemplateID:  createTemplateID,
-		ComputeType: computeType,
-		GpuCount:    createGpuCount,
-		WorkersMin:  createWorkersMin,
-		WorkersMax:  createWorkersMax,
+	input := &api.EndpointCreateGQLInput{
+		WorkersMin: createWorkersMin,
+		WorkersMax: createWorkersMax,
 	}
 
-	gpuTypeID := strings.TrimSpace(createGpuTypeID)
-	if strings.Contains(gpuTypeID, ",") {
-		return fmt.Errorf("only one gpu id is supported; use --gpu-count for multiple gpus of the same type")
+	// compute type: gpu uses a gpu pool id, cpu uses an instance id.
+	if computeType == "CPU" {
+		instanceID := strings.TrimSpace(createInstanceID)
+		if instanceID == "" {
+			instanceID = defaultCPUInstanceID
+		}
+		if !isCPUInstanceID(instanceID) {
+			return fmt.Errorf("invalid --instance-id %q; expected a cpu flavor id like cpu3g-4-16", instanceID)
+		}
+		input.InstanceIDs = []string{instanceID}
+		// gpu-only flags have no effect on cpu; tell the user instead of dropping silently.
+		if createMinCudaVersion != "" {
+			fmt.Fprintln(cmd.ErrOrStderr(), "note: --min-cuda-version has no effect with --compute-type cpu; ignoring")
+		}
+		if cmd.Flags().Changed("gpu-count") {
+			fmt.Fprintln(cmd.ErrOrStderr(), "note: --gpu-count has no effect with --compute-type cpu; ignoring")
+		}
+	} else {
+		input.GpuCount = createGpuCount
+		if gpuTypeID != "" {
+			// saveEndpoint wants a gpu pool id, not a gpu type id; translate.
+			poolID, err := client.ResolveServerlessGpuPoolID(gpuTypeID)
+			if err != nil {
+				output.Error(err)
+				return err
+			}
+			input.GpuIDs = poolID
+		}
+		if createMinCudaVersion != "" {
+			input.MinCudaVersion = createMinCudaVersion
+		}
 	}
 
-	// hub-id path: resolve listing, create via graphql (REST api doesn't support hubReleaseId)
+	if createScaleBy != "" {
+		switch strings.ToLower(strings.TrimSpace(createScaleBy)) {
+		case "delay":
+			input.ScalerType = "QUEUE_DELAY"
+		case "requests":
+			input.ScalerType = "REQUEST_COUNT"
+		default:
+			return fmt.Errorf("invalid --scale-by %q (use delay or requests)", createScaleBy)
+		}
+	}
+
+	if createScaleThreshold >= 0 {
+		input.ScalerValue = createScaleThreshold
+	}
+
+	if createIdleTimeout >= 0 {
+		if createIdleTimeout < 1 || createIdleTimeout > 3600 {
+			return fmt.Errorf("--idle-timeout must be between 1 and 3600 seconds")
+		}
+		input.IdleTimeout = createIdleTimeout
+	}
+
+	if createExecutionTimeout >= 0 {
+		// 0 is allowed (server treats it as "no per-request limit").
+		input.ExecutionTimeoutMs = createExecutionTimeout * 1000
+	}
+
+	// flash boot maps to the flashBootType enum (off|flashboot); always set so
+	// --flash-boot=false is honored (rest required a follow-up patch for this).
+	if createFlashBoot {
+		input.FlashBootType = "FLASHBOOT"
+	} else {
+		input.FlashBootType = "OFF"
+	}
+
+	if createDataCenterIDs != "" {
+		input.Locations = createDataCenterIDs
+	}
+
+	if createNetworkVolumeID != "" {
+		input.NetworkVolumeID = createNetworkVolumeID
+	}
+	if createNetworkVolumeIDs != "" {
+		for _, id := range strings.Split(createNetworkVolumeIDs, ",") {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				input.NetworkVolumeIDs = append(input.NetworkVolumeIDs, api.NetworkVolumeIDInput{NetworkVolumeID: id})
+			}
+		}
+	}
+
+	if len(createModelReferences) > 0 {
+		input.ModelReferences = createModelReferences
+	}
+
+	endpointName := createName
+
+	// hub-id path: resolve listing, attach release + inline template (same as web ui).
 	if createHubID != "" {
 		listing, err := client.GetListing(createHubID)
 		if err != nil {
@@ -178,156 +298,73 @@ func runCreate(cmd *cobra.Command, args []string) error {
 			envVars = append(envVars, &api.PodEnvVar{Key: key, Value: envMap[key]})
 		}
 
-		endpointName := createName
 		if endpointName == "" {
 			endpointName = listing.Title
 		}
 
+		//nolint:gosec
 		templateName := fmt.Sprintf("%s__template__%s", endpointName, randomString(7))
 
-		gqlReq := &api.EndpointCreateGQLInput{
-			Name:         endpointName,
-			HubReleaseID: release.ID,
-			Template: &api.EndpointTemplateInput{
-				Name:              templateName,
-				ImageName:         imageName,
-				ContainerDiskInGb: containerDisk,
-				DockerArgs:        "",
-				Env:               envVars,
-			},
-			GpuCount:   createGpuCount,
-			WorkersMin: createWorkersMin,
-			WorkersMax: createWorkersMax,
+		input.HubReleaseID = release.ID
+		input.Template = &api.EndpointTemplateInput{
+			Name:              templateName,
+			ImageName:         imageName,
+			ContainerDiskInGb: containerDisk,
+			DockerArgs:        "",
+			Env:               envVars,
 		}
 
-		// use gpu ids from hub config if not explicitly provided
-		if gpuTypeID != "" {
-			gqlReq.GpuIDs = gpuTypeID
-		} else if hubConfig.GpuIDs != "" {
-			gqlReq.GpuIDs = hubConfig.GpuIDs
+		// fall back to the hub release's gpu pool ids when none were provided.
+		// route through the resolver too, in case the hub config stores gpu type
+		// ids rather than pool ids (pool ids pass through unchanged).
+		if computeType == "GPU" && input.GpuIDs == "" && hubConfig.GpuIDs != "" {
+			poolID, err := client.ResolveServerlessGpuPoolID(hubConfig.GpuIDs)
+			if err != nil {
+				output.Error(err)
+				return err
+			}
+			input.GpuIDs = poolID
 		}
-		if createNetworkVolumeID != "" {
-			gqlReq.NetworkVolumeID = createNetworkVolumeID
-		}
-		if createDataCenterIDs != "" {
-			gqlReq.Locations = createDataCenterIDs
-		}
-
-		endpoint, err := client.CreateEndpointGQL(gqlReq)
-		if err != nil {
-			output.Error(err)
-			return fmt.Errorf("failed to create endpoint: %w", err)
-		}
-
-		format := output.ParseFormat(cmd.Flag("output").Value.String())
-		return output.Print(endpoint, &output.Config{Format: format})
-	}
-
-	// template-id path: create via REST
-	if gpuTypeID != "" {
-		req.GpuTypeIDs = []string{gpuTypeID}
-	}
-
-	if createNetworkVolumeID != "" {
-		req.NetworkVolumeID = createNetworkVolumeID
-	}
-
-	if createDataCenterIDs != "" {
-		req.DataCenterIDs = strings.Split(createDataCenterIDs, ",")
-	}
-
-	if createMinCudaVersion != "" {
-		req.MinCudaVersion = createMinCudaVersion
-	}
-
-	if createScaleBy != "" {
-		switch strings.ToLower(strings.TrimSpace(createScaleBy)) {
-		case "delay":
-			req.ScalerType = "QUEUE_DELAY"
-		case "requests":
-			req.ScalerType = "REQUEST_COUNT"
-		default:
-			return fmt.Errorf("invalid --scale-by %q (use delay or requests)", createScaleBy)
+	} else {
+		input.TemplateID = createTemplateID
+		// --env only feeds an inline template (hub path); a referenced template's
+		// env is fixed, so saveEndpoint ignores it. don't drop it silently.
+		if len(createEnvVars) > 0 {
+			fmt.Fprintln(cmd.ErrOrStderr(), "note: --env has no effect with --template-id (env is defined by the template); ignoring")
 		}
 	}
 
-	if createScaleThreshold >= 0 {
-		req.ScalerValue = createScaleThreshold
+	// saveEndpoint requires a name (min 3 chars); generate one when not given.
+	if endpointName == "" {
+		//nolint:gosec
+		endpointName = fmt.Sprintf("endpoint-%s", randomString(8))
 	}
+	input.Name = endpointName
 
-	if createIdleTimeout >= 0 {
-		if createIdleTimeout < 1 || createIdleTimeout > 3600 {
-			return fmt.Errorf("--idle-timeout must be between 1 and 3600 seconds")
-		}
-		req.IdleTimeout = createIdleTimeout
-	}
-
-	if createExecutionTimeout >= 0 {
-		req.ExecutionTimeoutMs = createExecutionTimeout * 1000
-	}
-
-	if createNetworkVolumeIDs != "" {
-		req.NetworkVolumeIDs = strings.Split(createNetworkVolumeIDs, ",")
-	}
-
-	if len(createModelReferences) > 0 {
-		gqlReq := buildTemplateEndpointGQLInput(req, gpuTypeID, createDataCenterIDs, createModelReferences)
-		gqlEndpoint, gqlErr := client.CreateEndpointGQL(gqlReq)
-		if gqlErr != nil {
-			output.Error(gqlErr)
-			return fmt.Errorf("failed to create endpoint: %w", gqlErr)
-		}
-
-		format := output.ParseFormat(cmd.Flag("output").Value.String())
-		return output.Print(gqlEndpoint, &output.Config{Format: format})
-	}
-
-	endpoint, err := client.CreateEndpoint(req)
+	endpoint, err := client.CreateEndpointGQL(input)
 	if err != nil {
 		output.Error(err)
 		return fmt.Errorf("failed to create endpoint: %w", err)
-	}
-
-	// rest create ignores flashboot=false, so patch immediately after create
-	if !createFlashBoot {
-		fb := false
-		_, err := client.UpdateEndpoint(endpoint.ID, &api.EndpointUpdateRequest{Flashboot: &fb})
-		if err != nil {
-			output.Error(err)
-			return fmt.Errorf("endpoint created but failed to disable flashboot: %w", err)
-		}
-		endpoint.Flashboot = &fb
 	}
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
 	return output.Print(endpoint, &output.Config{Format: format})
 }
 
-func buildTemplateEndpointGQLInput(req *api.EndpointCreateRequest, gpuTypeID, locations string, modelReferences []string) *api.EndpointCreateGQLInput {
-	// saveEndpoint derives GPU by default when instanceIds is omitted; computeType is not part of EndpointInput.
-	return &api.EndpointCreateGQLInput{
-		Name:            req.Name,
-		TemplateID:      req.TemplateID,
-		GpuIDs:          gpuTypeID,
-		GpuCount:        req.GpuCount,
-		WorkersMin:      req.WorkersMin,
-		WorkersMax:      req.WorkersMax,
-		Locations:       locations,
-		NetworkVolumeID: req.NetworkVolumeID,
-		ModelReferences: modelReferences,
-	}
-}
-
-// randomString returns an n-character lowercase-alphanumeric suffix.
-// The suffix is used only to disambiguate generated template names; it is not
-// a token, secret, or anything an attacker benefits from predicting. gosec
-// G404 flags math/rand/v2 generically, so the directive below is a deliberate
-// suppression rather than a missed crypto/rand call.
+// randomString builds a short lowercase suffix for generated endpoint/template
+// names. it's display-only uniqueness, not a secret, so math/rand/v2 is fine.
 func randomString(n int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, n)
 	for i := range n {
-		b[i] = letters[rand.IntN(len(letters))] //nolint:gosec // non-crypto: template-name uniqueness suffix, not a token
+		b[i] = letters[rand.IntN(len(letters))]
 	}
 	return string(b)
+}
+
+// isCPUInstanceID does a light client-side sanity check on a cpu flavor id so an
+// obvious typo gives a clear error instead of an opaque graphql one. cpu flavor
+// ids look like "<flavor>-<vcpu>-<ram>", e.g. cpu3g-4-16.
+func isCPUInstanceID(id string) bool {
+	return strings.HasPrefix(id, "cpu") && strings.Count(id, "-") >= 2
 }

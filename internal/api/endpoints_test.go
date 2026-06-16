@@ -64,47 +64,31 @@ func TestGetEndpoint(t *testing.T) {
 	}
 }
 
-func TestCreateEndpoint(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Errorf("expected POST, got %s", r.Method)
-		}
-		var req EndpointCreateRequest
-		json.NewDecoder(r.Body).Decode(&req)
-		json.NewEncoder(w).Encode(Endpoint{
-			ID:         "new-ep-id",
-			Name:       req.Name,
-			TemplateID: req.TemplateID,
-		})
-	}))
-	defer server.Close()
-
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-
-	client, _ := NewClient()
-	client.baseURL = server.URL
-
-	endpoint, err := client.CreateEndpoint(&EndpointCreateRequest{
-		Name:       "test-endpoint",
-		TemplateID: "tpl-123",
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if endpoint.ID != "new-ep-id" {
-		t.Errorf("expected new-ep-id, got %s", endpoint.ID)
-	}
-}
-
-func TestEndpointCreateGQLInputOmitsEmptyName(t *testing.T) {
+func TestEndpointCreateGQLInputSerialization(t *testing.T) {
 	data, err := json.Marshal(EndpointCreateGQLInput{
-		TemplateID: "tpl-123",
+		Name:             "ep",
+		TemplateID:       "tpl-123",
+		InstanceIDs:      []string{"cpu3g-4-16"},
+		NetworkVolumeIDs: []NetworkVolumeIDInput{{NetworkVolumeID: "vol-1"}},
+		FlashBootType:    "OFF",
 	})
 	if err != nil {
 		t.Fatalf("failed to marshal request: %v", err)
 	}
-	if strings.Contains(string(data), `"name"`) {
-		t.Fatalf("expected empty name to be omitted, got %s", data)
+	s := string(data)
+	// saveEndpoint requires name (String!), so it must always be present.
+	if !strings.Contains(s, `"name":"ep"`) {
+		t.Fatalf("expected name to be present, got %s", s)
+	}
+	if !strings.Contains(s, `"instanceIds":["cpu3g-4-16"]`) {
+		t.Fatalf("expected instanceIds, got %s", s)
+	}
+	// multi-region volumes serialize as an array of {networkVolumeId} objects.
+	if !strings.Contains(s, `"networkVolumeIds":[{"networkVolumeId":"vol-1"}]`) {
+		t.Fatalf("expected networkVolumeIds objects, got %s", s)
+	}
+	if !strings.Contains(s, `"flashBootType":"OFF"`) {
+		t.Fatalf("expected flashBootType, got %s", s)
 	}
 }
 

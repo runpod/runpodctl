@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -162,6 +163,104 @@ func (c *Client) ListGpuTypes(includeUnavailable bool) ([]GpuTypeWithAvailabilit
 func betterStock(a, b string) bool {
 	order := map[string]int{"High": 3, "Medium": 2, "Low": 1, "": 0}
 	return order[a] > order[b]
+}
+
+// ServerlessGpuPool is a serverless gpu pool. saveEndpoint's gpuIds field
+// accepts pool ids (e.g. "ADA_24"), not the gpu type ids (e.g. "NVIDIA A40")
+// that 'gpu list' and --gpu-id use, so we map between them with this.
+type ServerlessGpuPool struct {
+	ID         string   `json:"id"`
+	GpuTypeIDs []string `json:"gpuTypeIds"`
+}
+
+// ListServerlessGpuPools returns the serverless gpu pools and their member
+// gpu type ids.
+func (c *Client) ListServerlessGpuPools() ([]ServerlessGpuPool, error) {
+	query := `
+		query {
+			serverlessGpuPools {
+				id
+				gpuTypeIds
+			}
+		}
+	`
+
+	data, err := c.graphqlRequest(query, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		Data struct {
+			ServerlessGpuPools []ServerlessGpuPool `json:"serverlessGpuPools"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if len(resp.Errors) > 0 {
+		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+	}
+
+	return resp.Data.ServerlessGpuPools, nil
+}
+
+// ResolveServerlessGpuPoolID maps a --gpu-id value to the gpu pool id(s) that
+// saveEndpoint expects. it accepts a pool id (returned as-is), a gpu type id
+// (translated to its pool id), or a comma-separated mix of those (e.g. a hub
+// config's gpu list). if the pools query is unavailable it falls back to the
+// input unchanged so an already-correct pool id still works (the server
+// validates either way).
+func (c *Client) ResolveServerlessGpuPoolID(gpuID string) (string, error) {
+	pools, err := c.ListServerlessGpuPools()
+	if err != nil {
+		return gpuID, nil
+	}
+
+	poolIDs := make([]string, 0, len(pools))
+	for _, p := range pools {
+		poolIDs = append(poolIDs, p.ID)
+	}
+
+	resolveOne := func(id string) (string, bool) {
+		for _, p := range pools {
+			if strings.EqualFold(p.ID, id) {
+				return p.ID, true
+			}
+		}
+		for _, p := range pools {
+			for _, t := range p.GpuTypeIDs {
+				if strings.EqualFold(t, id) {
+					return p.ID, true
+				}
+			}
+		}
+		return "", false
+	}
+
+	seen := make(map[string]bool)
+	resolved := make([]string, 0)
+	for _, tok := range strings.Split(gpuID, ",") {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+		poolID, ok := resolveOne(tok)
+		if !ok {
+			return "", fmt.Errorf("unknown gpu id %q; use a gpu id from 'runpodctl gpu list' or a pool id (one of: %s)", tok, strings.Join(poolIDs, ", "))
+		}
+		if !seen[poolID] {
+			seen[poolID] = true
+			resolved = append(resolved, poolID)
+		}
+	}
+
+	return strings.Join(resolved, ","), nil
 }
 
 // ListDataCenters returns all data centers with GPU availability

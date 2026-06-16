@@ -5,8 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/runpod/runpodctl/internal/api"
-
 	"github.com/spf13/cobra"
 )
 
@@ -71,307 +69,124 @@ func TestCreateCmd_Flags(t *testing.T) {
 	if flags.Lookup("model-reference") == nil {
 		t.Error("expected --model-reference flag")
 	}
+	if flags.Lookup("compute-type") == nil {
+		t.Error("expected --compute-type flag")
+	}
+	if flags.Lookup("instance-id") == nil {
+		t.Error("expected --instance-id flag")
+	}
+	if flags.Lookup("network-volume-ids") == nil {
+		t.Error("expected --network-volume-ids flag")
+	}
 }
 
-func TestCreateCmd_RejectsHubWithModelReference(t *testing.T) {
-	oldTemplateID := createTemplateID
-	oldHubID := createHubID
-	oldModelReferences := createModelReferences
+// snapshotCreateFlags restores every serverless-create global after a test that
+// mutates them, so package-level state doesn't leak between tests, then sets a
+// known-good baseline. individual tests override only what they exercise.
+func snapshotCreateFlags(t *testing.T) {
+	t.Helper()
+	old := struct {
+		name, templateID, hubID, computeType, gpuID, instanceID string
+		dataCenterIDs, networkVolumeID, networkVolumeIDs        string
+		minCudaVersion, scaleBy                                 string
+		gpuCount, workersMin, workersMax                        int
+		scaleThreshold, idleTimeout, executionTimeout           int
+		flashBoot                                               bool
+		envVars, modelReferences                                []string
+	}{
+		createName, createTemplateID, createHubID, createComputeType, createGpuTypeID, createInstanceID,
+		createDataCenterIDs, createNetworkVolumeID, createNetworkVolumeIDs,
+		createMinCudaVersion, createScaleBy,
+		createGpuCount, createWorkersMin, createWorkersMax,
+		createScaleThreshold, createIdleTimeout, createExecutionTimeout,
+		createFlashBoot,
+		createEnvVars, createModelReferences,
+	}
 	t.Cleanup(func() {
-		createTemplateID = oldTemplateID
-		createHubID = oldHubID
-		createModelReferences = oldModelReferences
+		createName, createTemplateID, createHubID = old.name, old.templateID, old.hubID
+		createComputeType, createGpuTypeID, createInstanceID = old.computeType, old.gpuID, old.instanceID
+		createDataCenterIDs, createNetworkVolumeID, createNetworkVolumeIDs = old.dataCenterIDs, old.networkVolumeID, old.networkVolumeIDs
+		createMinCudaVersion, createScaleBy = old.minCudaVersion, old.scaleBy
+		createGpuCount, createWorkersMin, createWorkersMax = old.gpuCount, old.workersMin, old.workersMax
+		createScaleThreshold, createIdleTimeout, createExecutionTimeout = old.scaleThreshold, old.idleTimeout, old.executionTimeout
+		createFlashBoot = old.flashBoot
+		createEnvVars, createModelReferences = old.envVars, old.modelReferences
 	})
-
-	createTemplateID = ""
-	createHubID = "hub-123"
-	createModelReferences = []string{"https://local/user/model:hash"}
-
-	err := runCreate(&cobra.Command{}, nil)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !strings.Contains(err.Error(), "--model-reference is only supported with --template-id") {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	// known-good baseline matching the flag defaults; tests override per case.
+	createName, createTemplateID, createHubID = "", "tpl-123", ""
+	createComputeType, createGpuTypeID, createInstanceID = "GPU", "", ""
+	createDataCenterIDs, createNetworkVolumeID, createNetworkVolumeIDs = "", "", ""
+	createMinCudaVersion, createScaleBy = "", ""
+	createGpuCount, createWorkersMin, createWorkersMax = 1, 0, 3
+	createScaleThreshold, createIdleTimeout, createExecutionTimeout = -1, -1, -1
+	createFlashBoot = true
+	createEnvVars, createModelReferences = nil, nil
 }
 
-func TestCreateCmd_RejectsCPUWithModelReference(t *testing.T) {
-	oldTemplateID := createTemplateID
-	oldHubID := createHubID
-	oldComputeType := createComputeType
-	oldModelReferences := createModelReferences
-	t.Cleanup(func() {
-		createTemplateID = oldTemplateID
-		createHubID = oldHubID
-		createComputeType = oldComputeType
-		createModelReferences = oldModelReferences
-	})
-
-	createTemplateID = "tpl-123"
-	createHubID = ""
-	createComputeType = "CPU"
-	createModelReferences = []string{"https://local/user/model:hash"}
-
-	err := runCreate(&cobra.Command{}, nil)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !strings.Contains(err.Error(), "--model-reference is only supported with --compute-type GPU") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-// TestCreateCmd_FlagValidation exercises runCreate's flag-validation guards
-// (the only logic that runs before the API client is constructed). Each row
-// must fail with a specific error before any network call is attempted.
-func TestCreateCmd_FlagValidation(t *testing.T) {
-	type fields struct {
-		templateID      string
-		hubID           string
-		computeType     string
-		modelReferences []string
-	}
-
-	tests := []struct {
-		name       string
-		fields     fields
-		wantErrSub string
+// these validations all run before any api client/network call, so they're
+// safe to exercise without hitting the live api.
+func TestCreateCmd_Validations(t *testing.T) {
+	cases := []struct {
+		name    string
+		setup   func()
+		wantErr string
 	}{
 		{
-			name: "negative: template and hub both set",
-			fields: fields{
-				templateID: "tpl-1",
-				hubID:      "hub-1",
-			},
-			wantErrSub: "mutually exclusive",
+			name:    "invalid compute type",
+			setup:   func() { createComputeType = "TPU" },
+			wantErr: "invalid --compute-type",
 		},
 		{
-			name: "negative: hub + model-reference",
-			fields: fields{
-				hubID:           "hub-1",
-				modelReferences: []string{"hf://m"},
-			},
-			wantErrSub: "--model-reference is only supported with --template-id",
+			name:    "cpu with gpu-id",
+			setup:   func() { createComputeType = "CPU"; createGpuTypeID = "NVIDIA A40" },
+			wantErr: "--gpu-id must be empty when --compute-type is CPU",
 		},
 		{
-			name: "negative: CPU + model-reference (lowercase)",
-			fields: fields{
-				templateID:      "tpl-1",
-				computeType:     "cpu",
-				modelReferences: []string{"hf://m"},
-			},
-			wantErrSub: "--model-reference is only supported with --compute-type GPU",
+			name:    "gpu with instance-id",
+			setup:   func() { createComputeType = "GPU"; createInstanceID = "cpu3g-4-16" },
+			wantErr: "--instance-id is only supported with --compute-type CPU",
 		},
 		{
-			name: "boundary: whitespace-only compute-type is treated as unspecified",
-			fields: fields{
-				templateID:      "tpl-1",
-				computeType:     "   ",
-				modelReferences: []string{"hf://m"},
-			},
-			// "" / whitespace passes the compute-type guard; the test should NOT
-			// fail on the compute-type message. It WILL fail later when the API
-			// client is constructed without RUNPOD_API_KEY in env, so we assert
-			// the error is not the compute-type guard's message.
-			wantErrSub: "",
+			name:    "both network volume flags",
+			setup:   func() { createNetworkVolumeID = "vol-1"; createNetworkVolumeIDs = "vol-2,vol-3" },
+			wantErr: "--network-volume-id and --network-volume-ids are mutually exclusive",
 		},
 		{
-			name: "corner: explicit GPU + model-reference passes validation",
-			fields: fields{
-				templateID:      "tpl-1",
-				computeType:     "GPU",
-				modelReferences: []string{"hf://m"},
+			name: "hub with model reference",
+			setup: func() {
+				createTemplateID = ""
+				createHubID = "hub-1"
+				createModelReferences = []string{"https://x/y:z"}
 			},
-			wantErrSub: "",
+			wantErr: "--model-reference is only supported with --template-id",
 		},
 		{
-			name: "corner: mixed-case GPU normalises to GPU",
-			fields: fields{
-				templateID:      "tpl-1",
-				computeType:     "gPu",
-				modelReferences: []string{"hf://m"},
-			},
-			wantErrSub: "",
+			name:    "cpu with model reference",
+			setup:   func() { createComputeType = "CPU"; createModelReferences = []string{"https://x/y:z"} },
+			wantErr: "--model-reference is only supported with --compute-type GPU",
+		},
+		{
+			name:    "name too short",
+			setup:   func() { createName = "ab" },
+			wantErr: "--name must be at least 3 characters",
+		},
+		{
+			name:    "scale-threshold below 1",
+			setup:   func() { createScaleThreshold = 0 },
+			wantErr: "--scale-threshold must be at least 1",
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			oldTemplateID := createTemplateID
-			oldHubID := createHubID
-			oldComputeType := createComputeType
-			oldModelReferences := createModelReferences
-			t.Cleanup(func() {
-				createTemplateID = oldTemplateID
-				createHubID = oldHubID
-				createComputeType = oldComputeType
-				createModelReferences = oldModelReferences
-			})
-
-			createTemplateID = tt.fields.templateID
-			createHubID = tt.fields.hubID
-			createComputeType = tt.fields.computeType
-			createModelReferences = tt.fields.modelReferences
-
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshotCreateFlags(t)
+			tc.setup()
 			err := runCreate(&cobra.Command{}, nil)
-
-			if tt.wantErrSub != "" {
-				if err == nil {
-					t.Fatalf("expected error containing %q, got nil", tt.wantErrSub)
-				}
-				if !strings.Contains(err.Error(), tt.wantErrSub) {
-					t.Fatalf("expected error containing %q, got %v", tt.wantErrSub, err)
-				}
-				return
+			if err == nil {
+				t.Fatal("expected error")
 			}
-
-			// rows with wantErrSub == "" should pass the guard layer; any error
-			// returned must come from a *later* layer (e.g. api.NewClient or the
-			// API call), not from the guard itself. Asserting absence of the
-			// guard-layer substrings keeps the test resilient to env differences.
-			if err != nil {
-				for _, guardMsg := range []string{
-					"mutually exclusive",
-					"--model-reference is only supported with --template-id",
-					"--model-reference is only supported with --compute-type GPU",
-				} {
-					if strings.Contains(err.Error(), guardMsg) {
-						t.Fatalf("guard %q tripped unexpectedly: %v", guardMsg, err)
-					}
-				}
-			}
-		})
-	}
-}
-
-func TestBuildTemplateEndpointGQLInput(t *testing.T) {
-	tests := []struct {
-		name            string
-		req             *api.EndpointCreateRequest
-		gpuTypeID       string
-		locations       string
-		modelReferences []string
-		want            api.EndpointCreateGQLInput
-	}{
-		{
-			name: "positive: all fields populated",
-			req: &api.EndpointCreateRequest{
-				Name:            "test-endpoint",
-				TemplateID:      "tpl-123",
-				GpuCount:        2,
-				WorkersMin:      1,
-				WorkersMax:      3,
-				NetworkVolumeID: "vol-123",
-			},
-			gpuTypeID:       "ADA_24",
-			locations:       "US-KS-2",
-			modelReferences: []string{"https://local/user/model:hash"},
-			want: api.EndpointCreateGQLInput{
-				Name:            "test-endpoint",
-				TemplateID:      "tpl-123",
-				GpuIDs:          "ADA_24",
-				GpuCount:        2,
-				WorkersMin:      1,
-				WorkersMax:      3,
-				Locations:       "US-KS-2",
-				NetworkVolumeID: "vol-123",
-				ModelReferences: []string{"https://local/user/model:hash"},
-			},
-		},
-		{
-			name: "boundary: zero workers and zero gpu count",
-			req: &api.EndpointCreateRequest{
-				Name:       "ep",
-				TemplateID: "tpl-z",
-			},
-			gpuTypeID:       "L40",
-			locations:       "",
-			modelReferences: []string{"hf://m"},
-			want: api.EndpointCreateGQLInput{
-				Name:            "ep",
-				TemplateID:      "tpl-z",
-				GpuIDs:          "L40",
-				ModelReferences: []string{"hf://m"},
-			},
-		},
-		{
-			name: "corner: multiple model references preserved in order",
-			req: &api.EndpointCreateRequest{
-				TemplateID: "tpl-multi",
-			},
-			gpuTypeID: "A100",
-			modelReferences: []string{
-				"hf://a:v1",
-				"hf://b:v2",
-				"hf://c:v3",
-			},
-			want: api.EndpointCreateGQLInput{
-				TemplateID:      "tpl-multi",
-				GpuIDs:          "A100",
-				ModelReferences: []string{"hf://a:v1", "hf://b:v2", "hf://c:v3"},
-			},
-		},
-		{
-			name:            "corner: empty input + nil model refs",
-			req:             &api.EndpointCreateRequest{},
-			gpuTypeID:       "",
-			locations:       "",
-			modelReferences: nil,
-			want:            api.EndpointCreateGQLInput{},
-		},
-		{
-			name: "negative: name omitted is empty (server auto-generates)",
-			req: &api.EndpointCreateRequest{
-				TemplateID: "tpl-noname",
-			},
-			gpuTypeID:       "RTX4090",
-			modelReferences: []string{"hf://m"},
-			want: api.EndpointCreateGQLInput{
-				TemplateID:      "tpl-noname",
-				GpuIDs:          "RTX4090",
-				ModelReferences: []string{"hf://m"},
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := buildTemplateEndpointGQLInput(tt.req, tt.gpuTypeID, tt.locations, tt.modelReferences)
-			if got == nil {
-				t.Fatal("expected non-nil result")
-			}
-			if got.Name != tt.want.Name {
-				t.Errorf("Name = %q, want %q", got.Name, tt.want.Name)
-			}
-			if got.TemplateID != tt.want.TemplateID {
-				t.Errorf("TemplateID = %q, want %q", got.TemplateID, tt.want.TemplateID)
-			}
-			if got.GpuIDs != tt.want.GpuIDs {
-				t.Errorf("GpuIDs = %q, want %q", got.GpuIDs, tt.want.GpuIDs)
-			}
-			if got.GpuCount != tt.want.GpuCount {
-				t.Errorf("GpuCount = %d, want %d", got.GpuCount, tt.want.GpuCount)
-			}
-			if got.WorkersMin != tt.want.WorkersMin {
-				t.Errorf("WorkersMin = %d, want %d", got.WorkersMin, tt.want.WorkersMin)
-			}
-			if got.WorkersMax != tt.want.WorkersMax {
-				t.Errorf("WorkersMax = %d, want %d", got.WorkersMax, tt.want.WorkersMax)
-			}
-			if got.Locations != tt.want.Locations {
-				t.Errorf("Locations = %q, want %q", got.Locations, tt.want.Locations)
-			}
-			if got.NetworkVolumeID != tt.want.NetworkVolumeID {
-				t.Errorf("NetworkVolumeID = %q, want %q", got.NetworkVolumeID, tt.want.NetworkVolumeID)
-			}
-			if len(got.ModelReferences) != len(tt.want.ModelReferences) {
-				t.Fatalf("ModelReferences len = %d, want %d (%#v)", len(got.ModelReferences), len(tt.want.ModelReferences), got.ModelReferences)
-			}
-			for i := range got.ModelReferences {
-				if got.ModelReferences[i] != tt.want.ModelReferences[i] {
-					t.Errorf("ModelReferences[%d] = %q, want %q", i, got.ModelReferences[i], tt.want.ModelReferences[i])
-				}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got: %v", tc.wantErr, err)
 			}
 		})
 	}

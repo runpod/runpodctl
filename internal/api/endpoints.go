@@ -8,50 +8,39 @@ import (
 
 // Endpoint represents a serverless endpoint
 type Endpoint struct {
-	ID                 string                 `json:"id"`
-	Name               string                 `json:"name"`
-	TemplateID         string                 `json:"templateId,omitempty"`
-	GpuIDs             string                 `json:"gpuIds,omitempty"`
-	NetworkVolumeID    string                 `json:"networkVolumeId,omitempty"`
-	Locations          string                 `json:"locations,omitempty"`
-	IdleTimeout        int                    `json:"idleTimeout,omitempty"`
-	ScalerType         string                 `json:"scalerType,omitempty"`
-	ScalerValue        int                    `json:"scalerValue,omitempty"`
-	WorkersMin         int                    `json:"workersMin,omitempty"`
-	WorkersMax         int                    `json:"workersMax,omitempty"`
-	GpuCount           int                    `json:"gpuCount,omitempty"`
-	MinCudaVersion     string                 `json:"minCudaVersion,omitempty"`
-	Flashboot          *bool                  `json:"flashboot,omitempty"`
-	ExecutionTimeoutMs int                    `json:"executionTimeoutMs,omitempty"`
-	ModelReferences    []string               `json:"modelReferences,omitempty"`
-	Template           map[string]interface{} `json:"template,omitempty"`
-	Workers            []interface{}          `json:"workers,omitempty"`
+	ID                 string                  `json:"id"`
+	Name               string                  `json:"name"`
+	TemplateID         string                  `json:"templateId,omitempty"`
+	GpuIDs             string                  `json:"gpuIds,omitempty"`
+	InstanceIDs        []string                `json:"instanceIds,omitempty"`
+	NetworkVolumeID    string                  `json:"networkVolumeId,omitempty"`
+	NetworkVolumeIDs   []EndpointNetworkVolume `json:"networkVolumeIds,omitempty"`
+	Locations          string                  `json:"locations,omitempty"`
+	IdleTimeout        int                     `json:"idleTimeout,omitempty"`
+	ScalerType         string                  `json:"scalerType,omitempty"`
+	ScalerValue        int                     `json:"scalerValue,omitempty"`
+	WorkersMin         int                     `json:"workersMin,omitempty"`
+	WorkersMax         int                     `json:"workersMax,omitempty"`
+	GpuCount           int                     `json:"gpuCount,omitempty"`
+	MinCudaVersion     string                  `json:"minCudaVersion,omitempty"`
+	Flashboot          *bool                   `json:"flashboot,omitempty"`
+	FlashBootType      string                  `json:"flashBootType,omitempty"`
+	ComputeType        string                  `json:"computeType,omitempty"`
+	ExecutionTimeoutMs int                     `json:"executionTimeoutMs,omitempty"`
+	ModelReferences    []string                `json:"modelReferences,omitempty"`
+	Template           map[string]interface{}  `json:"template,omitempty"`
+	Workers            []interface{}           `json:"workers,omitempty"`
+}
+
+// EndpointNetworkVolume is a multi-region network volume attached to an endpoint.
+type EndpointNetworkVolume struct {
+	NetworkVolumeID string `json:"networkVolumeId"`
+	DataCenterID    string `json:"dataCenterId,omitempty"`
 }
 
 // EndpointListResponse is the response from listing endpoints
 type EndpointListResponse struct {
 	Endpoints []Endpoint `json:"endpoints"`
-}
-
-// EndpointCreateRequest is the request to create an endpoint
-type EndpointCreateRequest struct {
-	Name               string   `json:"name,omitempty"`
-	TemplateID         string   `json:"templateId"`
-	HubReleaseID       string   `json:"hubReleaseId,omitempty"`
-	ComputeType        string   `json:"computeType,omitempty"`
-	GpuTypeIDs         []string `json:"gpuTypeIds,omitempty"`
-	GpuCount           int      `json:"gpuCount,omitempty"`
-	WorkersMin         int      `json:"workersMin,omitempty"`
-	WorkersMax         int      `json:"workersMax,omitempty"`
-	DataCenterIDs      []string `json:"dataCenterIds,omitempty"`
-	NetworkVolumeID    string   `json:"networkVolumeId,omitempty"`
-	MinCudaVersion     string   `json:"minCudaVersion,omitempty"`
-	ScalerType         string   `json:"scalerType,omitempty"`
-	ScalerValue        int      `json:"scalerValue,omitempty"`
-	IdleTimeout        int      `json:"idleTimeout,omitempty"`
-	Flashboot          *bool    `json:"flashboot,omitempty"`
-	ExecutionTimeoutMs int      `json:"executionTimeoutMs,omitempty"`
-	NetworkVolumeIDs   []string `json:"networkVolumeIds,omitempty"`
 }
 
 // EndpointUpdateRequest is the request to update an endpoint
@@ -107,21 +96,6 @@ func (c *Client) GetEndpoint(endpointID string, includeTemplate, includeWorkers 
 	}
 
 	data, err := c.Get("/endpoints/"+endpointID, params)
-	if err != nil {
-		return nil, err
-	}
-
-	var endpoint Endpoint
-	if err := json.Unmarshal(data, &endpoint); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return &endpoint, nil
-}
-
-// CreateEndpoint creates a new endpoint
-func (c *Client) CreateEndpoint(req *EndpointCreateRequest) (*Endpoint, error) {
-	data, err := c.Post("/endpoints", req)
 	if err != nil {
 		return nil, err
 	}
@@ -195,20 +169,35 @@ func (c *Client) DeleteEndpoint(endpointID string) error {
 	return err
 }
 
-// EndpointCreateGQLInput is the input for creating an endpoint via GraphQL
-// Used when hubReleaseId is needed (REST API doesn't support it)
+// NetworkVolumeIDInput is a single multi-region network volume entry for the
+// graphql saveEndpoint mutation (rest uses a flat []string instead).
+type NetworkVolumeIDInput struct {
+	NetworkVolumeID string `json:"networkVolumeId"`
+}
+
+// EndpointCreateGQLInput is the input for creating an endpoint via the graphql
+// saveEndpoint mutation. all serverless creates go through this path, so every
+// cli flag maps to a field here (the web console uses the same mutation).
 type EndpointCreateGQLInput struct {
-	Name            string                 `json:"name,omitempty"`
-	HubReleaseID    string                 `json:"hubReleaseId,omitempty"`
-	TemplateID      string                 `json:"templateId,omitempty"`
-	Template        *EndpointTemplateInput `json:"template,omitempty"`
-	GpuIDs          string                 `json:"gpuIds,omitempty"`
-	GpuCount        int                    `json:"gpuCount,omitempty"`
-	WorkersMin      int                    `json:"workersMin,omitempty"`
-	WorkersMax      int                    `json:"workersMax,omitempty"`
-	Locations       string                 `json:"locations,omitempty"`
-	NetworkVolumeID string                 `json:"networkVolumeId,omitempty"`
-	ModelReferences []string               `json:"modelReferences,omitempty"`
+	Name               string                 `json:"name"`
+	HubReleaseID       string                 `json:"hubReleaseId,omitempty"`
+	TemplateID         string                 `json:"templateId,omitempty"`
+	Template           *EndpointTemplateInput `json:"template,omitempty"`
+	GpuIDs             string                 `json:"gpuIds,omitempty"`
+	GpuCount           int                    `json:"gpuCount,omitempty"`
+	InstanceIDs        []string               `json:"instanceIds,omitempty"`
+	WorkersMin         int                    `json:"workersMin,omitempty"`
+	WorkersMax         int                    `json:"workersMax,omitempty"`
+	Locations          string                 `json:"locations,omitempty"`
+	NetworkVolumeID    string                 `json:"networkVolumeId,omitempty"`
+	NetworkVolumeIDs   []NetworkVolumeIDInput `json:"networkVolumeIds,omitempty"`
+	IdleTimeout        int                    `json:"idleTimeout,omitempty"`
+	ScalerType         string                 `json:"scalerType,omitempty"`
+	ScalerValue        int                    `json:"scalerValue,omitempty"`
+	ExecutionTimeoutMs int                    `json:"executionTimeoutMs,omitempty"`
+	MinCudaVersion     string                 `json:"minCudaVersion,omitempty"`
+	FlashBootType      string                 `json:"flashBootType,omitempty"`
+	ModelReferences    []string               `json:"modelReferences,omitempty"`
 }
 
 // EndpointTemplateInput is the inline template for endpoint creation via GraphQL
@@ -229,7 +218,13 @@ func (c *Client) CreateEndpointGQL(req *EndpointCreateGQLInput) (*Endpoint, erro
 				name
 				templateId
 				gpuIds
+				instanceIds
+				computeType
 				networkVolumeId
+				networkVolumeIds {
+					networkVolumeId
+					dataCenterId
+				}
 				locations
 				idleTimeout
 				scalerType
@@ -237,6 +232,9 @@ func (c *Client) CreateEndpointGQL(req *EndpointCreateGQLInput) (*Endpoint, erro
 				workersMin
 				workersMax
 				gpuCount
+				minCudaVersion
+				executionTimeoutMs
+				flashBootType
 				modelReferences
 			}
 		}

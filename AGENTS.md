@@ -13,6 +13,9 @@ This document exists for non-obvious, error-prone shortcomings in the codebase, 
 - api accepts `gpuTypeIds` arrays, but the cli is intentionally singular (`--gpu-id`); multi-id fallback must be an explicit new flag.
 - pod creation uses graphql (`podFindAndDeployOnDemand`) because the rest api rejects `startSsh` — do not move pod create to rest without confirming `startSsh` support.
 - graphql `dataCenterId` is singular; rest uses `dataCenterIds` (plural). graphql `ports` is a comma-separated string; rest uses `[]string`. graphql `env` returns `["KEY=VALUE"]`; rest uses `map[string]string`.
+- serverless create is graphql-only (`saveEndpoint`); the rest `/endpoints` create path is intentionally unused so model references + multi-region volumes + all flags work on one path. do not reintroduce rest routing.
+- `saveEndpoint.gpuIds` wants gpu *pool* ids (e.g. `ADA_24`), not the gpu *type* ids (e.g. `NVIDIA A40`) that `gpu list` / `--gpu-id` use; translate via `serverlessGpuPools` (`ResolveServerlessGpuPoolID`). pod create uses type ids directly — different identifier space.
+- `saveEndpoint` has no `computeType`: cpu is selected by sending `instanceIds` like `cpu3g-4-16` (gpu is the default when instanceIds is empty). `name` is required (`String!`, min 3) and is never auto-generated server-side — generate one client-side. flashboot is the `flashBootType` enum (`OFF`/`FLASHBOOT`), not a bool. multi-region volumes are `networkVolumeIds: [{networkVolumeId}]`, not a flat string array.
 
 ## constraints
 
