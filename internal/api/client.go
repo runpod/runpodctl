@@ -18,11 +18,7 @@ import (
 // buildUserAgent constructs the User-Agent string, appending a coding agent
 // source tag when the CLI is driven by a recognized AI agent.
 func buildUserAgent() string {
-	ua := fmt.Sprintf("runpod-cli/%s (%s; %s)", Version, runtime.GOOS, runtime.GOARCH)
-	if a := agent.Detect(); a != "" {
-		ua += " (via " + a + ")"
-	}
-	return ua
+	return fmt.Sprintf("runpod-cli/%s (%s; %s)", Version, runtime.GOOS, runtime.GOARCH) + agent.Suffix()
 }
 
 const (

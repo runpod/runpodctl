@@ -103,6 +103,17 @@ func TestDetect_SanitizesStandardValue(t *testing.T) {
 	}
 }
 
+func TestSuffix(t *testing.T) {
+	clearAll(t)
+	if got := Suffix(); got != "" {
+		t.Errorf("expected empty suffix, got %q", got)
+	}
+	t.Setenv("CLAUDECODE", "1")
+	if got := Suffix(); got != " (via claude-code)" {
+		t.Errorf("expected \" (via claude-code)\", got %q", got)
+	}
+}
+
 func TestSanitize_CapsLength(t *testing.T) {
 	if got := sanitize(strings.Repeat("a", 100)); len(got) != 64 {
 		t.Errorf("expected 64-rune cap, got %d", len(got))

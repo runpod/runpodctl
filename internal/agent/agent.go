@@ -64,6 +64,16 @@ func KnownEnvVars() []string {
 	return append(vars, standardEnvVars...)
 }
 
+// Suffix returns the " (via <id>)" User-Agent fragment for the detected agent,
+// or an empty string when none is detected. Centralizing the fragment here
+// keeps the tag format identical across every client's User-Agent.
+func Suffix() string {
+	if a := Detect(); a != "" {
+		return " (via " + a + ")"
+	}
+	return ""
+}
+
 // Detect returns the identifier of the AI coding agent driving the CLI, or an
 // empty string if none is detected. Specific harness markers take priority
 // over the generic AI_AGENT signal.
