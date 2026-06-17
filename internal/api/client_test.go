@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/runpod/runpodctl/internal/agent"
 )
 
 func TestNewClient_NoAPIKey(t *testing.T) {
@@ -142,6 +145,41 @@ func TestClient_ErrorResponse(t *testing.T) {
 	_, err = client.Get("/notfound", nil)
 	if err == nil {
 		t.Error("expected error for 404 response")
+	}
+}
+
+func TestBuildUserAgent_Default(t *testing.T) {
+	for _, env := range agent.KnownEnvVars() {
+		t.Setenv(env, "")
+	}
+	ua := buildUserAgent()
+	if strings.Contains(ua, "(via ") {
+		t.Errorf("expected no agent tag, got %s", ua)
+	}
+	if !strings.HasPrefix(ua, "runpod-cli/") {
+		t.Errorf("expected runpod-cli/ prefix, got %s", ua)
+	}
+}
+
+func TestBuildUserAgent_ClaudeCode(t *testing.T) {
+	for _, env := range agent.KnownEnvVars() {
+		t.Setenv(env, "")
+	}
+	t.Setenv("CLAUDECODE", "1")
+	ua := buildUserAgent()
+	if !strings.Contains(ua, "(via claude-code)") {
+		t.Errorf("expected claude-code agent tag, got %s", ua)
+	}
+}
+
+func TestBuildUserAgent_Codex(t *testing.T) {
+	for _, env := range agent.KnownEnvVars() {
+		t.Setenv(env, "")
+	}
+	t.Setenv("CODEX_SANDBOX", "seatbelt")
+	ua := buildUserAgent()
+	if !strings.Contains(ua, "(via codex)") {
+		t.Errorf("expected codex agent tag, got %s", ua)
 	}
 }
 

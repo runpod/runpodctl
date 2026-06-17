@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/runpod/runpodctl/internal/agent"
 	"github.com/spf13/viper"
 )
 
@@ -57,7 +58,7 @@ func Query(input Input) (res *http.Response, err error) {
 	}
 
 	sanitizedVersion := strings.TrimRight(Version, "\r\n")
-	userAgent := "RunPod-CLI/" + sanitizedVersion + " (" + runtime.GOOS + "; " + runtime.GOARCH + ")"
+	userAgent := "RunPod-CLI/" + sanitizedVersion + " (" + runtime.GOOS + "; " + runtime.GOARCH + ")" + agent.Suffix()
 
 	req.Header.Add("Content-Type", "application/json")
 	req.Header.Set("User-Agent", userAgent)

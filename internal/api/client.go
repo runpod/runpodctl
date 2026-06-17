@@ -11,8 +11,15 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/runpod/runpodctl/internal/agent"
 	"github.com/spf13/viper"
 )
+
+// buildUserAgent constructs the User-Agent string, appending a coding agent
+// source tag when the CLI is driven by a recognized AI agent.
+func buildUserAgent() string {
+	return fmt.Sprintf("runpod-cli/%s (%s; %s)", Version, runtime.GOOS, runtime.GOARCH) + agent.Suffix()
+}
 
 const (
 	DefaultBaseURL = "https://rest.runpod.io/v1"
@@ -52,13 +59,11 @@ func NewClient() (*Client, error) {
 		timeout = DefaultTimeout
 	}
 
-	userAgent := fmt.Sprintf("runpod-cli/%s (%s; %s)", Version, runtime.GOOS, runtime.GOARCH)
-
 	return &Client{
 		baseURL:    baseURL,
 		apiKey:     apiKey,
 		httpClient: &http.Client{Timeout: timeout},
-		userAgent:  userAgent,
+		userAgent:  buildUserAgent(),
 	}, nil
 }
 
