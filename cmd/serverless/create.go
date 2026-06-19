@@ -38,6 +38,9 @@ examples:
   runpodctl hub search vllm                         # find the hub id
   runpodctl serverless create --hub-id <id> --gpu-id "NVIDIA GeForce RTX 4090"
 
+  # create from a hub repo and attach a model
+  runpodctl serverless create --hub-id <id> --gpu-id "NVIDIA GeForce RTX 4090" --model-reference https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct:main
+
   # override or add env vars (hub defaults are included automatically)
   runpodctl serverless create --hub-id <id> --env MODEL_NAME=my-model --env MAX_TOKENS=4096`,
 	Args: cobra.NoArgs,
@@ -124,9 +127,6 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--instance-id is only supported with --compute-type CPU")
 	}
 
-	if len(createModelReferences) > 0 && createHubID != "" {
-		return fmt.Errorf("--model-reference is only supported with --template-id")
-	}
 	if len(createModelReferences) > 0 && computeType != "GPU" {
 		return fmt.Errorf("--model-reference is only supported with --compute-type GPU")
 	}

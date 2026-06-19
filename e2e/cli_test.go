@@ -759,6 +759,74 @@ func TestCLI_ServerlessCreateFromHub(t *testing.T) {
 	t.Logf("created endpoint %s from hub (gpuIds=%s)", endpointID, gpuIDs)
 }
 
+func TestCLI_ServerlessCreateFromHubWithModel(t *testing.T) {
+	// resolve the vllm hub listing id dynamically
+	lookupOut, lookupErr, lookupE := runCLI("hub", "get", "runpod-workers/worker-vllm")
+	if lookupE != nil {
+		t.Fatalf("failed to resolve vllm hub listing: %v\nstderr: %s", lookupE, lookupErr)
+	}
+	var hubListing map[string]interface{}
+	if err := json.Unmarshal([]byte(lookupOut), &hubListing); err != nil {
+		t.Fatalf("failed to parse hub listing: %v\noutput: %s", err, lookupOut)
+	}
+	hubID, ok := hubListing["id"].(string)
+	if !ok || hubID == "" {
+		t.Fatal("expected id in hub listing response")
+	}
+
+	// attach a model on a hub deploy (small model keeps the test cheap/fast).
+	// saveEndpoint supports hubReleaseId + inline template + modelReferences
+	// together, so this path mirrors the --template-id one.
+	const modelRef = "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct:main"
+	name := "e2e-test-hub-model-" + time.Now().Format("20060102150405")
+	stdout, stderr, err := runCLI("serverless", "create",
+		"--hub-id", hubID,
+		"--name", name,
+		"--gpu-id", "NVIDIA GeForce RTX 4090",
+		"--workers-min", "0",
+		"--workers-max", "1",
+		"--model-reference", modelRef,
+	)
+	if err != nil {
+		t.Fatalf("failed to create serverless endpoint from hub with model: %v\nstderr: %s", err, stderr)
+	}
+
+	var endpoint map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &endpoint); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	endpointID, ok := endpoint["id"].(string)
+	if !ok || strings.TrimSpace(endpointID) == "" {
+		t.Fatal("expected endpoint id in response")
+	}
+
+	// cleanup immediately
+	t.Cleanup(func() {
+		_, _, err := runCLI("serverless", "delete", endpointID)
+		if err != nil {
+			t.Logf("warning: failed to delete test endpoint %s: %v", endpointID, err)
+		} else {
+			t.Logf("cleaned up endpoint %s", endpointID)
+		}
+	})
+
+	// the model must be attached and the :main ref resolved to a commit sha.
+	refs, ok := endpoint["modelReferences"].([]interface{})
+	if !ok || len(refs) != 1 {
+		t.Fatalf("expected one modelReferences entry, got: %v", endpoint["modelReferences"])
+	}
+	resolved, _ := refs[0].(string)
+	if !strings.HasPrefix(resolved, "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct:") {
+		t.Errorf("unexpected model reference: %q", resolved)
+	}
+	if strings.HasSuffix(resolved, ":main") {
+		t.Errorf("expected :main to resolve to a commit sha, got: %q", resolved)
+	}
+
+	t.Logf("created endpoint %s from hub with model %s", endpointID, resolved)
+}
+
 func TestCLI_EndpointList(t *testing.T) {
 	stdout, stderr, err := runCLI("serverless", "list")
 	if err != nil {
