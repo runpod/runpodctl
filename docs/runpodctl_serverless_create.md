@@ -23,6 +23,9 @@ examples:
   runpodctl hub search vllm                         # find the hub id
   runpodctl serverless create --hub-id <id> --gpu-id "NVIDIA GeForce RTX 4090"
 
+  # create from a hub repo and attach a model
+  runpodctl serverless create --hub-id <id> --gpu-id "NVIDIA GeForce RTX 4090" --model-reference https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct:main
+
   # override or add env vars (hub defaults are included automatically)
   runpodctl serverless create --hub-id <id> --env MODEL_NAME=my-model --env MAX_TOKENS=4096
 
@@ -45,7 +48,7 @@ runpodctl serverless create [flags]
       --idle-timeout int              seconds before idle worker scales down (1-3600) (default -1)
       --instance-id string            cpu instance id for --compute-type CPU (e.g. cpu3g-4-16)
       --min-cuda-version string       minimum cuda version (e.g., 12.6)
-      --model-reference stringArray   model reference to attach to the endpoint (repeatable)
+      --model-reference stringArray   hugging face model url with a ref to cache on the endpoint, e.g. https://huggingface.co/<org>/<model>:main; works with --template-id or --hub-id, gpu only (repeatable)
       --name string                   endpoint name
       --network-volume-id string      network volume id to attach
       --network-volume-ids string     comma-separated network volume ids for multi-region
