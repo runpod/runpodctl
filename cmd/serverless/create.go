@@ -90,7 +90,7 @@ func init() {
 	createCmd.Flags().BoolVar(&createFlashBoot, "flash-boot", true, "enable flash boot")
 	createCmd.Flags().IntVar(&createExecutionTimeout, "execution-timeout", -1, "max seconds per request")
 	createCmd.Flags().StringVar(&createNetworkVolumeIDs, "network-volume-ids", "", "comma-separated network volume ids for multi-region")
-	createCmd.Flags().StringArrayVar(&createModelReferences, "model-reference", nil, "model reference to attach to the endpoint (repeatable)")
+	createCmd.Flags().StringArrayVar(&createModelReferences, "model-reference", nil, "hugging face model url with a ref to cache on the endpoint, e.g. https://huggingface.co/<org>/<model>:main; works with --template-id or --hub-id, gpu only (repeatable)")
 }
 
 func runCreate(cmd *cobra.Command, args []string) error {
