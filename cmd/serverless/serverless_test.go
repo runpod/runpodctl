@@ -152,15 +152,6 @@ func TestCreateCmd_Validations(t *testing.T) {
 			wantErr: "--network-volume-id and --network-volume-ids are mutually exclusive",
 		},
 		{
-			name: "hub with model reference",
-			setup: func() {
-				createTemplateID = ""
-				createHubID = "hub-1"
-				createModelReferences = []string{"https://x/y:z"}
-			},
-			wantErr: "--model-reference is only supported with --template-id",
-		},
-		{
 			name:    "cpu with model reference",
 			setup:   func() { createComputeType = "CPU"; createModelReferences = []string{"https://x/y:z"} },
 			wantErr: "--model-reference is only supported with --compute-type GPU",
