@@ -15,10 +15,14 @@ func TestListEndpoints(t *testing.T) {
 		if r.URL.Path != "/endpoints" {
 			t.Errorf("expected /endpoints, got %s", r.URL.Path)
 		}
-		json.NewEncoder(w).Encode([]Endpoint{
-			{ID: "ep-1", Name: "endpoint-1"},
-			{ID: "ep-2", Name: "endpoint-2"},
-		})
+		// serve the raw rest wire shape, not a re-encoded Endpoint struct, so
+		// the test exercises the real api format (networkVolumeIds as bare id
+		// strings) — a struct round-trip would emit the object shape instead
+		// and hide read/write divergences.
+		w.Write([]byte(`[
+			{"id":"ep-1","name":"endpoint-1","networkVolumeIds":["vol-1"]},
+			{"id":"ep-2","name":"endpoint-2"}
+		]`))
 	}))
 	defer server.Close()
 
@@ -33,6 +37,9 @@ func TestListEndpoints(t *testing.T) {
 	}
 	if len(endpoints) != 2 {
 		t.Errorf("expected 2 endpoints, got %d", len(endpoints))
+	}
+	if len(endpoints[0].NetworkVolumeIDs) != 1 || endpoints[0].NetworkVolumeIDs[0].NetworkVolumeID != "vol-1" {
+		t.Errorf("expected vol-1 on first endpoint, got %+v", endpoints[0].NetworkVolumeIDs)
 	}
 }
 
@@ -61,12 +68,16 @@ func TestGetEndpoint(t *testing.T) {
 		if r.URL.Path != "/endpoints/ep-123" {
 			t.Errorf("expected /endpoints/ep-123, got %s", r.URL.Path)
 		}
-		json.NewEncoder(w).Encode(Endpoint{
-			ID:         "ep-123",
-			Name:       "my-endpoint",
-			WorkersMin: 0,
-			WorkersMax: 3,
-		})
+		// raw rest wire shape, including a network volume returned as a bare id
+		// string — this is what regressed serverless get in production.
+		w.Write([]byte(`{
+			"id":"ep-123",
+			"name":"my-endpoint",
+			"workersMin":0,
+			"workersMax":3,
+			"networkVolumeId":"vol-9",
+			"networkVolumeIds":["vol-9"]
+		}`))
 	}))
 	defer server.Close()
 
@@ -81,6 +92,9 @@ func TestGetEndpoint(t *testing.T) {
 	}
 	if endpoint.ID != "ep-123" {
 		t.Errorf("expected ep-123, got %s", endpoint.ID)
+	}
+	if len(endpoint.NetworkVolumeIDs) != 1 || endpoint.NetworkVolumeIDs[0].NetworkVolumeID != "vol-9" {
+		t.Errorf("expected vol-9, got %+v", endpoint.NetworkVolumeIDs)
 	}
 }
 
