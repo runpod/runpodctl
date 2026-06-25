@@ -33,12 +33,13 @@ type CreateEndpointInput struct {
 	WorkersMin      int    `json:"workersMin"`
 	WorkersMax      int    `json:"workersMax"`
 	FlashBootType   string `json:"flashBootType"`
+	ModelReferences []string `json:"modelReferences"`
 }
 
 // there are many more fields in the result of the query but I just care about these for CLI port
 type Endpoint struct {
 	Name string `json:"name"`
-	Id   string
+	Id   string `json:"id"`
 }
 type EndpointOut struct {
 	Data   *EndpointData   `json:"data"`
@@ -225,6 +226,53 @@ func UpdateEndpointTemplate(endpointId string, templateId string) (err error) {
 	return
 }
 
+func UpdateEndpointModel(endpointId string, endpointName string, modelReferences []string) (err error) {
+	input := Input{
+		Query: `
+		mutation saveEndpoint($input: EndpointInput!) {
+			saveEndpoint(input: $input) {
+			  id
+			  modelReferences
+			}
+		  }
+		`,
+		Variables: map[string]interface{}{"input": map[string]interface{}{
+			"id":              endpointId,
+			"name":            endpointName,
+			"modelReferences": modelReferences,
+		}},
+	}
+	res, err := Query(input)
+	if err != nil {
+		return
+	}
+	defer res.Body.Close()
+	rawData, err := io.ReadAll(res.Body)
+	if err != nil {
+		return
+	}
+	if res.StatusCode != 200 {
+		err = fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
+		return
+	}
+	data := make(map[string]interface{})
+	if err = json.Unmarshal(rawData, &data); err != nil {
+		return
+	}
+	gqlErrors, ok := data["errors"].([]interface{})
+	if ok && len(gqlErrors) > 0 {
+		firstErr, _ := gqlErrors[0].(map[string]interface{})
+		err = errors.New(firstErr["message"].(string))
+		return
+	}
+	gqldata, ok := data["data"].(map[string]interface{})
+	if !ok || gqldata == nil {
+		err = fmt.Errorf("data is nil: %s", string(rawData))
+		return
+	}
+	return
+}
+
 func GetEndpoints() (endpoints []*Endpoint, err error) {
 	input := Input{
 		Query: `
@@ -248,6 +296,7 @@ func GetEndpoints() (endpoints []*Endpoint, err error) {
 				workersMin
 				workersStandby
 				gpuCount
+				modelReferences
 				env {
 				  key
 				  value
