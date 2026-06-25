@@ -36,6 +36,26 @@ func TestListEndpoints(t *testing.T) {
 	}
 }
 
+func TestEndpointNetworkVolumeIDsUnmarshal(t *testing.T) {
+	// rest read shape: bare id strings.
+	var strShape Endpoint
+	if err := json.Unmarshal([]byte(`{"id":"ep-1","networkVolumeIds":["vol-1","vol-2"]}`), &strShape); err != nil {
+		t.Fatalf("failed to unmarshal string shape: %v", err)
+	}
+	if len(strShape.NetworkVolumeIDs) != 2 || strShape.NetworkVolumeIDs[0].NetworkVolumeID != "vol-1" {
+		t.Fatalf("unexpected string-shape parse: %+v", strShape.NetworkVolumeIDs)
+	}
+
+	// graphql write shape: objects.
+	var objShape Endpoint
+	if err := json.Unmarshal([]byte(`{"id":"ep-2","networkVolumeIds":[{"networkVolumeId":"vol-3","dataCenterId":"US-GA-1"}]}`), &objShape); err != nil {
+		t.Fatalf("failed to unmarshal object shape: %v", err)
+	}
+	if len(objShape.NetworkVolumeIDs) != 1 || objShape.NetworkVolumeIDs[0].NetworkVolumeID != "vol-3" || objShape.NetworkVolumeIDs[0].DataCenterID != "US-GA-1" {
+		t.Fatalf("unexpected object-shape parse: %+v", objShape.NetworkVolumeIDs)
+	}
+}
+
 func TestGetEndpoint(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/endpoints/ep-123" {
