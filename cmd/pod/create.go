@@ -141,10 +141,17 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// the server inherits containerDiskInGb from the template when the field is absent,
+	// so zero it out (omitempty drops it) unless the caller explicitly set it.
 	if !cmd.Flags().Changed("container-disk-in-gb") {
 		createContainerDiskInGb = 0
 	}
 
+	// two template fields the server does NOT propagate automatically:
+	//   - volumeInGb: server always uses the value in the request (0 = no volume), ignoring the template.
+	//   - env: server merges template env on top of request env, with template values winning for
+	//     duplicate keys. fix both by fetching the template and applying the correct values client-side
+	//     before the create request is sent.
 	if createTemplateID != "" {
 		wantVolumeInherit := !cmd.Flags().Changed("volume-in-gb")
 		wantEnvMerge := cmd.Flags().Changed("env")
