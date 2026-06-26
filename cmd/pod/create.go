@@ -141,6 +141,10 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	if !cmd.Flags().Changed("container-disk-in-gb") {
+		createContainerDiskInGb = 0
+	}
+
 	var (
 		result interface{}
 		err    error
