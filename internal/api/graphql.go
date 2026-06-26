@@ -300,7 +300,7 @@ type PodEnvVar struct {
 // CreatePodGQLInput is the input for creating a pod via GraphQL
 type CreatePodGQLInput struct {
 	CloudType         string       `json:"cloudType,omitempty"`
-	ContainerDiskInGb int          `json:"containerDiskInGb"`
+	ContainerDiskInGb int          `json:"containerDiskInGb,omitempty"`
 	DataCenterId      string       `json:"dataCenterId,omitempty"`
 	Env               []*PodEnvVar `json:"env,omitempty"`
 	GpuCount          int          `json:"gpuCount"`
