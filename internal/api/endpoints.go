@@ -38,6 +38,24 @@ type EndpointNetworkVolume struct {
 	DataCenterID    string `json:"dataCenterId,omitempty"`
 }
 
+// EndpointNetworkVolume accepts both the REST list item shape (string) and the
+// GraphQL list item shape (object) for multi-region endpoint volumes.
+func (v *EndpointNetworkVolume) UnmarshalJSON(data []byte) error {
+	var id string
+	if err := json.Unmarshal(data, &id); err == nil {
+		*v = EndpointNetworkVolume{NetworkVolumeID: id}
+		return nil
+	}
+
+	type endpointNetworkVolume EndpointNetworkVolume
+	var volume endpointNetworkVolume
+	if err := json.Unmarshal(data, &volume); err != nil {
+		return err
+	}
+	*v = EndpointNetworkVolume(volume)
+	return nil
+}
+
 // EndpointListResponse is the response from listing endpoints
 type EndpointListResponse struct {
 	Endpoints []Endpoint `json:"endpoints"`

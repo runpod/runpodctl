@@ -36,6 +36,39 @@ func TestListEndpoints(t *testing.T) {
 	}
 }
 
+func TestListEndpointsAcceptsStringNetworkVolumeIDs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/endpoints" {
+			t.Errorf("expected /endpoints, got %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[
+			{"id":"ep-1","name":"endpoint-1","networkVolumeIds":["vol-1","vol-2"]},
+			{"id":"ep-2","name":"endpoint-2","networkVolumeIds":[{"networkVolumeId":"vol-3","dataCenterId":"us-1"}]}
+		]`))
+	}))
+	defer server.Close()
+
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+
+	client, _ := NewClient()
+	client.baseURL = server.URL
+
+	endpoints, err := client.ListEndpoints(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := endpoints[0].NetworkVolumeIDs[0].NetworkVolumeID; got != "vol-1" {
+		t.Fatalf("expected vol-1, got %s", got)
+	}
+	if got := endpoints[0].NetworkVolumeIDs[1].NetworkVolumeID; got != "vol-2" {
+		t.Fatalf("expected vol-2, got %s", got)
+	}
+	if got := endpoints[1].NetworkVolumeIDs[0].DataCenterID; got != "us-1" {
+		t.Fatalf("expected us-1, got %s", got)
+	}
+}
+
 func TestGetEndpoint(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/endpoints/ep-123" {
