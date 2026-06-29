@@ -38,6 +38,25 @@ type EndpointNetworkVolume struct {
 	DataCenterID    string `json:"dataCenterId,omitempty"`
 }
 
+// UnmarshalJSON tolerates both shapes of networkVolumeIds: the rest read
+// endpoint returns bare id strings (["vol-1"]) while the graphql saveEndpoint
+// write path uses objects ([{"networkVolumeId":"vol-1"}]).
+func (v *EndpointNetworkVolume) UnmarshalJSON(data []byte) error {
+	var id string
+	if err := json.Unmarshal(data, &id); err == nil {
+		v.NetworkVolumeID = id
+		return nil
+	}
+
+	type alias EndpointNetworkVolume
+	var obj alias
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return err
+	}
+	*v = EndpointNetworkVolume(obj)
+	return nil
+}
+
 // EndpointListResponse is the response from listing endpoints
 type EndpointListResponse struct {
 	Endpoints []Endpoint `json:"endpoints"`
