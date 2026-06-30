@@ -151,8 +151,8 @@ releases are fully automated by [goreleaser](https://goreleaser.com/) via the `r
 2. create and push a `v*` semver tag on the commit to release:
 
    ```bash
-   git tag v2.4.0
-   git push origin v2.4.0
+   git tag v2.7.0
+   git push origin v2.7.0
    ```
 
 3. the tag push triggers the `release` workflow, which runs `goreleaser release --clean` and:
