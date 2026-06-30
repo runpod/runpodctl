@@ -14,6 +14,7 @@ runpodctl template create [flags]
 
 ```
   runpodctl template create --name private-gpu --image registry.example.com/team/image:tag --registry-auth-id <registry-auth-id>
+  runpodctl template create --name dev --image example/image:tag --ports "22/tcp,8888/http" --port-labels "22=ssh,8888=jupyter lab"
 ```
 
 ### Options
@@ -26,6 +27,7 @@ runpodctl template create [flags]
   -h, --help                       help for create
       --image string               docker image name (required)
       --name string                template name (required)
+      --port-labels string         port labels as port=name pairs or json (requires --ports)
       --ports string               comma-separated list of ports
       --readme string              readme content
       --registry-auth-id string    container registry auth id (from 'runpodctl registry list')

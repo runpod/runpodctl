@@ -6,24 +6,31 @@ import (
 	"strings"
 )
 
+// TemplatePortConfig represents a named port shown in the Runpod dashboard.
+type TemplatePortConfig struct {
+	Port string `json:"port"`
+	Name string `json:"name"`
+}
+
 // Template represents a runpod template
 type Template struct {
-	ID                      string            `json:"id"`
-	Name                    string            `json:"name"`
-	ImageName               string            `json:"imageName"`
-	IsServerless            bool              `json:"isServerless,omitempty"`
-	IsPublic                bool              `json:"isPublic,omitempty"`
-	IsRunpod                bool              `json:"isRunpod,omitempty"`
-	Category                string            `json:"category,omitempty"`
-	Ports                   []string          `json:"ports,omitempty"`
-	DockerEntrypoint        []string          `json:"dockerEntrypoint,omitempty"`
-	DockerStartCmd          []string          `json:"dockerStartCmd,omitempty"`
-	Env                     map[string]string `json:"env,omitempty"`
-	ContainerDiskInGb       int               `json:"containerDiskInGb,omitempty"`
-	ContainerRegistryAuthID string            `json:"containerRegistryAuthId,omitempty"`
-	VolumeInGb              int               `json:"volumeInGb,omitempty"`
-	VolumeMountPath         string            `json:"volumeMountPath,omitempty"`
-	Readme                  string            `json:"readme,omitempty"`
+	ID                      string               `json:"id"`
+	Name                    string               `json:"name"`
+	ImageName               string               `json:"imageName"`
+	IsServerless            bool                 `json:"isServerless,omitempty"`
+	IsPublic                bool                 `json:"isPublic,omitempty"`
+	IsRunpod                bool                 `json:"isRunpod,omitempty"`
+	Category                string               `json:"category,omitempty"`
+	Ports                   []string             `json:"ports,omitempty"`
+	PortsConfig             []TemplatePortConfig `json:"portsConfig,omitempty"`
+	DockerEntrypoint        []string             `json:"dockerEntrypoint,omitempty"`
+	DockerStartCmd          []string             `json:"dockerStartCmd,omitempty"`
+	Env                     map[string]string    `json:"env,omitempty"`
+	ContainerDiskInGb       int                  `json:"containerDiskInGb,omitempty"`
+	ContainerRegistryAuthID string               `json:"containerRegistryAuthId,omitempty"`
+	VolumeInGb              int                  `json:"volumeInGb,omitempty"`
+	VolumeMountPath         string               `json:"volumeMountPath,omitempty"`
+	Readme                  string               `json:"readme,omitempty"`
 }
 
 type templateEnvPair struct {
@@ -68,20 +75,21 @@ func (p *templatePorts) UnmarshalJSON(data []byte) error {
 }
 
 type templateGraphQL struct {
-	ID                      string            `json:"id"`
-	Name                    string            `json:"name"`
-	ImageName               string            `json:"imageName"`
-	IsServerless            bool              `json:"isServerless,omitempty"`
-	IsPublic                bool              `json:"isPublic,omitempty"`
-	IsRunpod                bool              `json:"isRunpod,omitempty"`
-	Category                string            `json:"category,omitempty"`
-	Ports                   templatePorts     `json:"ports,omitempty"`
-	Env                     []templateEnvPair `json:"env,omitempty"`
-	ContainerDiskInGb       int               `json:"containerDiskInGb,omitempty"`
-	ContainerRegistryAuthID string            `json:"containerRegistryAuthId,omitempty"`
-	VolumeInGb              int               `json:"volumeInGb,omitempty"`
-	VolumeMountPath         string            `json:"volumeMountPath,omitempty"`
-	Readme                  string            `json:"readme,omitempty"`
+	ID                      string               `json:"id"`
+	Name                    string               `json:"name"`
+	ImageName               string               `json:"imageName"`
+	IsServerless            bool                 `json:"isServerless,omitempty"`
+	IsPublic                bool                 `json:"isPublic,omitempty"`
+	IsRunpod                bool                 `json:"isRunpod,omitempty"`
+	Category                string               `json:"category,omitempty"`
+	Ports                   templatePorts        `json:"ports,omitempty"`
+	PortsConfig             []TemplatePortConfig `json:"portsConfig,omitempty"`
+	Env                     []templateEnvPair    `json:"env,omitempty"`
+	ContainerDiskInGb       int                  `json:"containerDiskInGb,omitempty"`
+	ContainerRegistryAuthID string               `json:"containerRegistryAuthId,omitempty"`
+	VolumeInGb              int                  `json:"volumeInGb,omitempty"`
+	VolumeMountPath         string               `json:"volumeMountPath,omitempty"`
+	Readme                  string               `json:"readme,omitempty"`
 }
 
 // TemplateType for filtering
@@ -288,6 +296,10 @@ func (c *Client) getTemplateByIDGraphQL(templateID string) (*Template, error) {
 				isRunpod
 				category
 				ports
+				portsConfig {
+					port
+					name
+				}
 				env {
 					key
 					value
@@ -348,6 +360,7 @@ func templateFromGraphQL(source *templateGraphQL) *Template {
 		IsRunpod:                source.IsRunpod,
 		Category:                source.Category,
 		Ports:                   []string(source.Ports),
+		PortsConfig:             source.PortsConfig,
 		ContainerDiskInGb:       source.ContainerDiskInGb,
 		ContainerRegistryAuthID: source.ContainerRegistryAuthID,
 		VolumeInGb:              source.VolumeInGb,
