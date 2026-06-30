@@ -8,21 +8,22 @@ import (
 
 // Template represents a runpod template
 type Template struct {
-	ID                string            `json:"id"`
-	Name              string            `json:"name"`
-	ImageName         string            `json:"imageName"`
-	IsServerless      bool              `json:"isServerless,omitempty"`
-	IsPublic          bool              `json:"isPublic,omitempty"`
-	IsRunpod          bool              `json:"isRunpod,omitempty"`
-	Category          string            `json:"category,omitempty"`
-	Ports             []string          `json:"ports,omitempty"`
-	DockerEntrypoint  []string          `json:"dockerEntrypoint,omitempty"`
-	DockerStartCmd    []string          `json:"dockerStartCmd,omitempty"`
-	Env               map[string]string `json:"env,omitempty"`
-	ContainerDiskInGb int               `json:"containerDiskInGb,omitempty"`
-	VolumeInGb        int               `json:"volumeInGb,omitempty"`
-	VolumeMountPath   string            `json:"volumeMountPath,omitempty"`
-	Readme            string            `json:"readme,omitempty"`
+	ID                      string            `json:"id"`
+	Name                    string            `json:"name"`
+	ImageName               string            `json:"imageName"`
+	IsServerless            bool              `json:"isServerless,omitempty"`
+	IsPublic                bool              `json:"isPublic,omitempty"`
+	IsRunpod                bool              `json:"isRunpod,omitempty"`
+	Category                string            `json:"category,omitempty"`
+	Ports                   []string          `json:"ports,omitempty"`
+	DockerEntrypoint        []string          `json:"dockerEntrypoint,omitempty"`
+	DockerStartCmd          []string          `json:"dockerStartCmd,omitempty"`
+	Env                     map[string]string `json:"env,omitempty"`
+	ContainerDiskInGb       int               `json:"containerDiskInGb,omitempty"`
+	ContainerRegistryAuthID string            `json:"containerRegistryAuthId,omitempty"`
+	VolumeInGb              int               `json:"volumeInGb,omitempty"`
+	VolumeMountPath         string            `json:"volumeMountPath,omitempty"`
+	Readme                  string            `json:"readme,omitempty"`
 }
 
 type templateEnvPair struct {
@@ -67,19 +68,20 @@ func (p *templatePorts) UnmarshalJSON(data []byte) error {
 }
 
 type templateGraphQL struct {
-	ID                string            `json:"id"`
-	Name              string            `json:"name"`
-	ImageName         string            `json:"imageName"`
-	IsServerless      bool              `json:"isServerless,omitempty"`
-	IsPublic          bool              `json:"isPublic,omitempty"`
-	IsRunpod          bool              `json:"isRunpod,omitempty"`
-	Category          string            `json:"category,omitempty"`
-	Ports             templatePorts     `json:"ports,omitempty"`
-	Env               []templateEnvPair `json:"env,omitempty"`
-	ContainerDiskInGb int               `json:"containerDiskInGb,omitempty"`
-	VolumeInGb        int               `json:"volumeInGb,omitempty"`
-	VolumeMountPath   string            `json:"volumeMountPath,omitempty"`
-	Readme            string            `json:"readme,omitempty"`
+	ID                      string            `json:"id"`
+	Name                    string            `json:"name"`
+	ImageName               string            `json:"imageName"`
+	IsServerless            bool              `json:"isServerless,omitempty"`
+	IsPublic                bool              `json:"isPublic,omitempty"`
+	IsRunpod                bool              `json:"isRunpod,omitempty"`
+	Category                string            `json:"category,omitempty"`
+	Ports                   templatePorts     `json:"ports,omitempty"`
+	Env                     []templateEnvPair `json:"env,omitempty"`
+	ContainerDiskInGb       int               `json:"containerDiskInGb,omitempty"`
+	ContainerRegistryAuthID string            `json:"containerRegistryAuthId,omitempty"`
+	VolumeInGb              int               `json:"volumeInGb,omitempty"`
+	VolumeMountPath         string            `json:"volumeMountPath,omitempty"`
+	Readme                  string            `json:"readme,omitempty"`
 }
 
 // TemplateType for filtering
@@ -107,17 +109,18 @@ type TemplateListResponse struct {
 
 // TemplateCreateRequest is the request to create a template
 type TemplateCreateRequest struct {
-	Name              string            `json:"name"`
-	ImageName         string            `json:"imageName"`
-	IsServerless      bool              `json:"isServerless,omitempty"`
-	Ports             []string          `json:"ports,omitempty"`
-	DockerEntrypoint  []string          `json:"dockerEntrypoint,omitempty"`
-	DockerStartCmd    []string          `json:"dockerStartCmd,omitempty"`
-	Env               map[string]string `json:"env,omitempty"`
-	ContainerDiskInGb int               `json:"containerDiskInGb,omitempty"`
-	VolumeInGb        int               `json:"volumeInGb,omitempty"`
-	VolumeMountPath   string            `json:"volumeMountPath,omitempty"`
-	Readme            string            `json:"readme,omitempty"`
+	Name                    string            `json:"name"`
+	ImageName               string            `json:"imageName"`
+	IsServerless            bool              `json:"isServerless,omitempty"`
+	Ports                   []string          `json:"ports,omitempty"`
+	DockerEntrypoint        []string          `json:"dockerEntrypoint,omitempty"`
+	DockerStartCmd          []string          `json:"dockerStartCmd,omitempty"`
+	Env                     map[string]string `json:"env,omitempty"`
+	ContainerDiskInGb       int               `json:"containerDiskInGb,omitempty"`
+	ContainerRegistryAuthID string            `json:"containerRegistryAuthId,omitempty"`
+	VolumeInGb              int               `json:"volumeInGb,omitempty"`
+	VolumeMountPath         string            `json:"volumeMountPath,omitempty"`
+	Readme                  string            `json:"readme,omitempty"`
 }
 
 // TemplateUpdateRequest is the request to update a template
@@ -128,6 +131,8 @@ type TemplateUpdateRequest struct {
 	Env               map[string]string `json:"env,omitempty"`
 	Readme            string            `json:"readme,omitempty"`
 	ContainerDiskInGb *int              `json:"containerDiskInGb,omitempty"`
+	// ContainerRegistryAuthID is a pointer so an empty string can clear the auth.
+	ContainerRegistryAuthID *string `json:"containerRegistryAuthId,omitempty"`
 }
 
 // ListTemplates returns templates (user's own via REST API)
@@ -288,6 +293,7 @@ func (c *Client) getTemplateByIDGraphQL(templateID string) (*Template, error) {
 					value
 				}
 				containerDiskInGb
+				containerRegistryAuthId
 				volumeInGb
 				volumeMountPath
 				readme
@@ -334,18 +340,19 @@ func templateFromGraphQL(source *templateGraphQL) *Template {
 	}
 
 	template := &Template{
-		ID:                source.ID,
-		Name:              source.Name,
-		ImageName:         source.ImageName,
-		IsServerless:      source.IsServerless,
-		IsPublic:          source.IsPublic,
-		IsRunpod:          source.IsRunpod,
-		Category:          source.Category,
-		Ports:             []string(source.Ports),
-		ContainerDiskInGb: source.ContainerDiskInGb,
-		VolumeInGb:        source.VolumeInGb,
-		VolumeMountPath:   source.VolumeMountPath,
-		Readme:            source.Readme,
+		ID:                      source.ID,
+		Name:                    source.Name,
+		ImageName:               source.ImageName,
+		IsServerless:            source.IsServerless,
+		IsPublic:                source.IsPublic,
+		IsRunpod:                source.IsRunpod,
+		Category:                source.Category,
+		Ports:                   []string(source.Ports),
+		ContainerDiskInGb:       source.ContainerDiskInGb,
+		ContainerRegistryAuthID: source.ContainerRegistryAuthID,
+		VolumeInGb:              source.VolumeInGb,
+		VolumeMountPath:         source.VolumeMountPath,
+		Readme:                  source.Readme,
 	}
 
 	if len(source.Env) > 0 {
