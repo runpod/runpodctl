@@ -12,11 +12,12 @@ import (
 )
 
 var createCmd = &cobra.Command{
-	Use:   "create",
-	Short: "create a new template",
-	Long:  "create a new template",
-	Args:  cobra.NoArgs,
-	RunE:  runCreate,
+	Use:     "create",
+	Short:   "create a new template",
+	Long:    "create a new template",
+	Example: `  runpodctl template create --name private-gpu --image registry.example.com/team/image:tag --registry-auth-id <registry-auth-id>`,
+	Args:    cobra.NoArgs,
+	RunE:    runCreate,
 }
 
 var (
@@ -31,6 +32,7 @@ var (
 	createVolumeInGb        int
 	createVolumeMountPath   string
 	createReadme            string
+	createRegistryAuthID    string
 )
 
 func init() {
@@ -45,6 +47,7 @@ func init() {
 	createCmd.Flags().IntVar(&createVolumeInGb, "volume-in-gb", 0, "volume size in gb")
 	createCmd.Flags().StringVar(&createVolumeMountPath, "volume-mount-path", "/workspace", "volume mount path")
 	createCmd.Flags().StringVar(&createReadme, "readme", "", "readme content")
+	createCmd.Flags().StringVar(&createRegistryAuthID, "registry-auth-id", "", "container registry auth id (from 'runpodctl registry list')")
 
 	createCmd.MarkFlagRequired("name")  //nolint:errcheck
 	createCmd.MarkFlagRequired("image") //nolint:errcheck
@@ -58,11 +61,12 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	req := &api.TemplateCreateRequest{
-		Name:              createName,
-		ImageName:         createImageName,
-		IsServerless:      createIsServerless,
-		ContainerDiskInGb: createContainerDiskInGb,
-		Readme:            createReadme,
+		Name:                    createName,
+		ImageName:               createImageName,
+		IsServerless:            createIsServerless,
+		ContainerDiskInGb:       createContainerDiskInGb,
+		ContainerRegistryAuthID: strings.TrimSpace(createRegistryAuthID),
+		Readme:                  createReadme,
 	}
 
 	// serverless templates do not support volume fields

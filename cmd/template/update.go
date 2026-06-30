@@ -12,11 +12,12 @@ import (
 )
 
 var updateCmd = &cobra.Command{
-	Use:   "update <template-id>",
-	Short: "update a template",
-	Long:  "update an existing template",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runUpdate,
+	Use:     "update <template-id>",
+	Short:   "update a template",
+	Long:    "update an existing template",
+	Example: `  runpodctl template update <template-id> --registry-auth-id <registry-auth-id>`,
+	Args:    cobra.ExactArgs(1),
+	RunE:    runUpdate,
 }
 
 var (
@@ -26,6 +27,7 @@ var (
 	updateEnv               string
 	updateReadme            string
 	updateContainerDiskInGb int
+	updateRegistryAuthID    string
 )
 
 func init() {
@@ -35,6 +37,7 @@ func init() {
 	updateCmd.Flags().StringVar(&updateEnv, "env", "", "new environment variables as json object")
 	updateCmd.Flags().StringVar(&updateReadme, "readme", "", "new readme content")
 	updateCmd.Flags().IntVar(&updateContainerDiskInGb, "container-disk-in-gb", -1, "new container disk size in gb")
+	updateCmd.Flags().StringVar(&updateRegistryAuthID, "registry-auth-id", "", "new container registry auth id; pass an empty value to clear")
 }
 
 func runUpdate(cmd *cobra.Command, args []string) error {
@@ -68,6 +71,11 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	}
 	if updateContainerDiskInGb >= 0 {
 		req.ContainerDiskInGb = &updateContainerDiskInGb
+	}
+	// Use Changed() (not "") so an explicit empty value clears the registry auth.
+	if cmd.Flags().Changed("registry-auth-id") {
+		value := strings.TrimSpace(updateRegistryAuthID)
+		req.ContainerRegistryAuthID = &value
 	}
 
 	template, err := client.UpdateTemplate(templateID, req)
