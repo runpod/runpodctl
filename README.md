@@ -25,6 +25,7 @@ _note: all pods automatically come with runpodctl installed with a pod-scoped ap
     - [file transfer](#file-transfer)
   - [output format](#output-format)
   - [legacy commands](#legacy-commands)
+  - [release process](#release-process)
   - [acknowledgements](#acknowledgements)
 
 ## get started
@@ -141,6 +142,31 @@ runpodctl pod list --output=yaml      # yaml format
 legacy commands are still supported but deprecated. please update your scripts:
 
 `get pod`, `create pod`, `remove pod`, `start pod`, `stop pod`
+
+## release process
+
+releases are fully automated by [goreleaser](https://goreleaser.com/) via the `release` github action ([.github/workflows/release.yml](.github/workflows/release.yml)). to cut a release:
+
+1. make sure `main` is green and holds everything you want to ship.
+2. create and push a `v*` semver tag on the commit to release:
+
+   ```bash
+   git tag v2.4.0
+   git push origin v2.4.0
+   ```
+
+3. the tag push triggers the `release` workflow, which runs `goreleaser release --clean` and:
+   - builds binaries for darwin/linux/windows (amd64/arm64), incl. raw `runpodctl-{os}-{arch}` binaries for the legacy self-update command and a upx-compressed linux/amd64 build.
+   - creates the github release with archives + checksums (prereleases are auto-detected from the tag).
+   - opens pull requests on [runpod/homebrew-runpodctl](https://github.com/runpod/homebrew-runpodctl) for the homebrew formula and cask.
+
+4. **merge the homebrew pull requests.** the tap lives in a separate repo, so the release is not complete for `brew install` users until those prs are merged. (they cannot be combined into this repo.)
+
+notes:
+
+- the workflow can also be run manually via `workflow_dispatch` (re-runs goreleaser against the current ref).
+- the homebrew prs are authored by a github app; tap auth uses the `RELEASE_APP_ID` / `RELEASE_APP_PRIVATE_KEY` secrets, and goreleaser pushes via the generated `HOMEBREW_TAP_TOKEN`.
+- conda-forge is updated separately by the conda-forge feedstock bot, not by this workflow.
 
 ## acknowledgements
 
