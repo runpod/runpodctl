@@ -275,6 +275,13 @@ func (c *Client) GetTemplate(templateID string) (*Template, error) {
 	if err == nil {
 		var template Template
 		if err := json.Unmarshal(data, &template); err == nil {
+			// The REST template schema has no port labels, so backfill portsConfig
+			// from GraphQL when the template exposes ports but REST returned none.
+			if len(template.Ports) > 0 && len(template.PortsConfig) == 0 {
+				if gqlTemplate, gqlErr := c.getTemplateByIDGraphQL(templateID); gqlErr == nil && len(gqlTemplate.PortsConfig) > 0 {
+					template.PortsConfig = gqlTemplate.PortsConfig
+				}
+			}
 			return &template, nil
 		}
 	}
