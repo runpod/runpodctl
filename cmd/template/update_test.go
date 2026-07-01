@@ -8,3 +8,15 @@ func TestUpdateCmd_HasContainerDiskFlag(t *testing.T) {
 		t.Fatal("expected container-disk-in-gb flag")
 	}
 }
+
+func TestUpdateCmd_HasRegistryAuthFlag(t *testing.T) {
+	if updateCmd.Flags().Lookup("registry-auth-id") == nil {
+		t.Fatal("expected registry-auth-id flag")
+	}
+}
+
+func TestCreateCmd_HasRegistryAuthFlag(t *testing.T) {
+	if createCmd.Flags().Lookup("registry-auth-id") == nil {
+		t.Fatal("expected registry-auth-id flag")
+	}
+}
