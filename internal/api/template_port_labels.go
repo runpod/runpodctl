@@ -275,7 +275,7 @@ func templateEnvPairs(env map[string]string) []templateEnvPair {
 func normalizeTemplatePortLabels(labels []TemplatePortConfig, ports templatePorts) ([]TemplatePortConfig, error) {
 	available := make(map[string]struct{}, len(ports))
 	for _, rawPort := range ports {
-		port, err := templatePortNumber(rawPort)
+		port, err := NormalizePort(rawPort)
 		if err != nil {
 			return nil, fmt.Errorf("template has invalid port %q: %w", rawPort, err)
 		}
@@ -289,7 +289,7 @@ func normalizeTemplatePortLabels(labels []TemplatePortConfig, ports templatePort
 	normalized := make([]TemplatePortConfig, 0, len(labels))
 	seen := make(map[string]struct{}, len(labels))
 	for _, label := range labels {
-		port, err := templatePortNumber(label.Port)
+		port, err := NormalizePort(label.Port)
 		if err != nil {
 			return nil, err
 		}
@@ -310,7 +310,10 @@ func normalizeTemplatePortLabels(labels []TemplatePortConfig, ports templatePort
 	return normalized, nil
 }
 
-func templatePortNumber(raw string) (string, error) {
+// NormalizePort validates a port spec (optionally "port/proto" with tcp or
+// http) and returns the bare port number as a string. Shared by the template
+// command layer and the GraphQL port-label normalizer.
+func NormalizePort(raw string) (string, error) {
 	value := strings.TrimSpace(raw)
 	parts := strings.Split(value, "/")
 	if len(parts) > 2 {

@@ -54,7 +54,7 @@ func parsePortLabels(raw string) ([]api.TemplatePortConfig, error) {
 
 	seen := make(map[string]struct{}, len(labels))
 	for i := range labels {
-		port, err := normalizePortLabelPort(labels[i].Port)
+		port, err := api.NormalizePort(labels[i].Port)
 		if err != nil {
 			return nil, err
 		}
@@ -72,30 +72,6 @@ func parsePortLabels(raw string) ([]api.TemplatePortConfig, error) {
 	return labels, nil
 }
 
-func normalizePortLabelPort(raw string) (string, error) {
-	value := strings.TrimSpace(raw)
-	parts := strings.Split(value, "/")
-	if len(parts) > 2 {
-		return "", fmt.Errorf("invalid port %q", raw)
-	}
-	if len(parts) == 2 {
-		protocol := strings.ToLower(strings.TrimSpace(parts[1]))
-		if protocol != "tcp" && protocol != "http" {
-			return "", fmt.Errorf("unsupported protocol %q for port %s", protocol, strings.TrimSpace(parts[0]))
-		}
-	}
-
-	port, err := strconv.Atoi(strings.TrimSpace(parts[0]))
-	if err != nil {
-		return "", fmt.Errorf("invalid port %q", raw)
-	}
-	if port < 1 || port > 65535 {
-		return "", fmt.Errorf("port %d is outside the valid range 1-65535", port)
-	}
-
-	return strconv.Itoa(port), nil
-}
-
 func validatePortLabelsAgainstPorts(labels []api.TemplatePortConfig, rawPorts string) error {
 	available := make(map[string]struct{})
 	for _, value := range strings.Split(rawPorts, ",") {
@@ -103,7 +79,7 @@ func validatePortLabelsAgainstPorts(labels []api.TemplatePortConfig, rawPorts st
 		if value == "" {
 			continue
 		}
-		port, err := normalizePortLabelPort(value)
+		port, err := api.NormalizePort(value)
 		if err != nil {
 			return fmt.Errorf("invalid --ports value %q: %w", value, err)
 		}
