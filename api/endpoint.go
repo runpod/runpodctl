@@ -33,12 +33,13 @@ type CreateEndpointInput struct {
 	WorkersMin      int    `json:"workersMin"`
 	WorkersMax      int    `json:"workersMax"`
 	FlashBootType   string `json:"flashBootType"`
+	ModelReferences []string `json:"modelReferences"`
 }
 
 // there are many more fields in the result of the query but I just care about these for CLI port
 type Endpoint struct {
 	Name string `json:"name"`
-	Id   string
+	Id   string `json:"id"`
 }
 type EndpointOut struct {
 	Data   *EndpointData   `json:"data"`
