@@ -42,7 +42,7 @@ func init() {
 	createCmd.Flags().StringVar(&createImageName, "image", "", "docker image name (required)")
 	createCmd.Flags().BoolVar(&createIsServerless, "serverless", false, "is this a serverless template")
 	createCmd.Flags().StringVar(&createPorts, "ports", "", "comma-separated list of ports")
-	createCmd.Flags().StringVar(&createPortLabels, "port-labels", "", "port labels as port=name pairs or json (requires --ports)")
+	createCmd.Flags().StringVar(&createPortLabels, "port-labels", "", "port labels as comma-separated port=name pairs, or json when a name contains a comma (requires --ports)")
 	createCmd.Flags().StringVar(&createDockerEntrypoint, "docker-entrypoint", "", "comma-separated docker entrypoint commands")
 	createCmd.Flags().StringVar(&createDockerStartCmd, "docker-start-cmd", "", "comma-separated docker start commands")
 	createCmd.Flags().StringVar(&createEnv, "env", "", "environment variables as json object")

@@ -36,7 +36,7 @@ func init() {
 	updateCmd.Flags().StringVar(&updateName, "name", "", "new template name")
 	updateCmd.Flags().StringVar(&updateImageName, "image", "", "new docker image name")
 	updateCmd.Flags().StringVar(&updatePorts, "ports", "", "new comma-separated list of ports")
-	updateCmd.Flags().StringVar(&updatePortLabels, "port-labels", "", "new port labels as port=name pairs or json; pass an empty value to clear")
+	updateCmd.Flags().StringVar(&updatePortLabels, "port-labels", "", "new port labels as comma-separated port=name pairs, or json when a name contains a comma; pass an empty value to clear")
 	updateCmd.Flags().StringVar(&updateEnv, "env", "", "new environment variables as json object")
 	updateCmd.Flags().StringVar(&updateReadme, "readme", "", "new readme content")
 	updateCmd.Flags().IntVar(&updateContainerDiskInGb, "container-disk-in-gb", -1, "new container disk size in gb")

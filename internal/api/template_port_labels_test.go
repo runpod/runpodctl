@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -117,6 +118,66 @@ func TestUpdateTemplatePortLabelsPreservesStateAndAppliesOverrides(t *testing.T)
 	}
 	if requestCount != 2 {
 		t.Fatalf("request count = %d, want 2", requestCount)
+	}
+}
+
+// TestUpdateTemplatePortLabelsPreservesStartCommand pins the highest-risk path
+// of the read-subset/write-whole label write: applying a label must NOT wipe the
+// template's start command. The CLI accepts dockerStartCmd/dockerEntrypoint on
+// the REST create/update path; the backend stores the resulting start command in
+// GraphQL's `dockerArgs` (there is no separate dockerStartCmd/dockerEntrypoint on
+// the GraphQL PodTemplate). Because saveTemplate rewrites the whole object, the
+// only thing protecting the start command is that getTemplateSaveState reads
+// `dockerArgs` and writes it straight back. Here we apply a label WITHOUT any
+// override touching the command and assert the exact dockerArgs + startScript
+// round-trip unchanged — a regression here means a label write silently clears a
+// template's start command.
+func TestUpdateTemplatePortLabelsPreservesStartCommand(t *testing.T) {
+	const startCmd = `sh -c "python -u app.py"`
+	const startScript = "echo booting"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request GraphQLInput
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		switch {
+		case strings.Contains(request.Query, "GetTemplateForPortLabels"):
+			_, _ = w.Write([]byte(`{"data":{"myself":{"podTemplates":[{
+				"id":"tpl-cmd",
+				"name":"cmd-template",
+				"imageName":"img",
+				"dockerArgs":` + strconv.Quote(startCmd) + `,
+				"env":[],
+				"ports":"22/tcp",
+				"containerDiskInGb":20,
+				"startScript":` + strconv.Quote(startScript) + `,
+				"category":"NVIDIA"
+			}]}}}`))
+		case strings.Contains(request.Query, "UpdateTemplatePortLabels"):
+			input, ok := request.Variables["input"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("input = %#v", request.Variables["input"])
+			}
+			// The start command must survive untouched.
+			assertStringValue(t, input, "dockerArgs", startCmd)
+			assertStringValue(t, input, "startScript", startScript)
+			_, _ = w.Write([]byte(`{"data":{"saveTemplate":{"id":"tpl-cmd"}}}`))
+		default:
+			t.Fatalf("unexpected graphql query: %s", request.Query)
+		}
+	}))
+	defer server.Close()
+
+	client := &GraphQLClient{url: server.URL, apiKey: "test-key", httpClient: server.Client()}
+	// Apply a label with NO overrides — nothing here should touch the command.
+	err := client.UpdateTemplatePortLabels(
+		"tpl-cmd",
+		[]TemplatePortConfig{{Port: "22/tcp", Name: "SSH"}},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("UpdateTemplatePortLabels() error = %v", err)
 	}
 }
 

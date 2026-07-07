@@ -313,6 +313,12 @@ func normalizeTemplatePortLabels(labels []TemplatePortConfig, ports templatePort
 // NormalizePort validates a port spec (optionally "port/proto" with tcp or
 // http) and returns the bare port number as a string. Shared by the template
 // command layer and the GraphQL port-label normalizer.
+//
+// The protocol is validated but then DISCARDED: "22/tcp" and "22/http" both
+// normalize to "22". Port matching (labels vs. --ports) is therefore by number
+// only — a protocol mismatch between --ports and --port-labels is treated as a
+// match, and the label carries no protocol. This is intentional: dashboard port
+// labels key on the port number.
 func NormalizePort(raw string) (string, error) {
 	value := strings.TrimSpace(raw)
 	parts := strings.Split(value, "/")

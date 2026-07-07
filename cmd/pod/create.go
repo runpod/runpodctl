@@ -210,8 +210,8 @@ func createPodGraphQL(gpuTypeID, cloudType string, supportPublicIP bool) (map[st
 		req.DockerArgs = createDockerArgs
 	}
 
-	if createRegistryAuthID != "" {
-		req.ContainerRegistryAuthId = createRegistryAuthID
+	if trimmed := strings.TrimSpace(createRegistryAuthID); trimmed != "" {
+		req.ContainerRegistryAuthId = trimmed
 	}
 
 	if createCountryCode != "" {

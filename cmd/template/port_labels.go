@@ -10,6 +10,11 @@ import (
 	"github.com/runpod/runpodctl/internal/api"
 )
 
+// parsePortLabels accepts three forms: a json object ({"22":"ssh"}), a json
+// array ([{"port":"22","name":"ssh"}]), or comma-separated port=name pairs
+// (22=ssh,8888=jupyter). The pair form splits on "," so a label NAME cannot
+// contain a comma — use the json form for names with commas. A name may contain
+// "=" (only the first "=" splits the pair).
 func parsePortLabels(raw string) ([]api.TemplatePortConfig, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
