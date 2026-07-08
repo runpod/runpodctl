@@ -172,6 +172,7 @@ type ModelVersionStatusMutationResult struct {
 type AddModelToRepoInput struct {
 	Owner               string                 `json:"owner,omitempty"`
 	Name                string                 `json:"name"`
+	Provider            string                 `json:"provider,omitempty"`
 	CredentialType      string                 `json:"credentialType,omitempty"`
 	CredentialReference string                 `json:"credentialReference,omitempty"`
 	ModelStatus         string                 `json:"modelStatus,omitempty"`
@@ -234,6 +235,7 @@ func AddModelToRepo(input *AddModelToRepoInput) (*Model, error) {
 	}
 
 	addString("owner", input.Owner)
+	addString("provider", input.Provider)
 	addString("credentialType", input.CredentialType)
 	addString("credentialReference", input.CredentialReference)
 	addString("modelStatus", input.ModelStatus)
@@ -346,7 +348,9 @@ func GetModels(input *GetModelsInput) ([]*Model, error) {
                 updatedAt
         }
         versions {
+                uuid
                 hash
+                versionHash
                 status
                 metadata
                 createdAt
