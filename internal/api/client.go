@@ -7,11 +7,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"runtime"
 	"time"
 
 	"github.com/runpod/runpodctl/internal/agent"
+	"github.com/runpod/runpodctl/internal/configenv"
 	"github.com/spf13/viper"
 )
 
@@ -38,18 +38,12 @@ type Client struct {
 
 // NewClient creates a new REST API client
 func NewClient() (*Client, error) {
-	apiKey := os.Getenv("RUNPOD_API_KEY")
-	if apiKey == "" {
-		apiKey = viper.GetString("apiKey")
-	}
+	apiKey := configenv.APIKey()
 	if apiKey == "" {
 		return nil, fmt.Errorf("api key not configured. get your key at https://www.runpod.io/console/user/settings then: export RUNPOD_API_KEY=your-key OR run: runpodctl doctor")
 	}
 
-	baseURL := os.Getenv("RUNPOD_API_URL")
-	if baseURL == "" {
-		baseURL = viper.GetString("restApiUrl")
-	}
+	baseURL := configenv.RESTURL()
 	if baseURL == "" {
 		baseURL = DefaultBaseURL
 	}

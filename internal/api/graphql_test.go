@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/spf13/viper"
 )
 
 func TestSSHKeyMatches(t *testing.T) {
@@ -44,6 +46,27 @@ func TestSplitSSHKeyBlock(t *testing.T) {
 	}
 	if keys[1] != "ssh-rsa bbb second" {
 		t.Fatalf("unexpected second key: %q", keys[1])
+	}
+}
+
+func TestNewGraphQLClientEnvOverridesConfig(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	viper.Set("apiKey", "config-key")
+	viper.Set("apiUrl", "https://config.example.test/graphql")
+	t.Setenv("RUNPOD_API_KEY", "env-key")
+	t.Setenv("RUNPOD_GRAPHQL_URL", "https://env.example.test/graphql")
+
+	client, err := NewGraphQLClient()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if client.apiKey != "env-key" {
+		t.Fatalf("expected env api key, got %q", client.apiKey)
+	}
+	if client.url != "https://env.example.test/graphql" {
+		t.Fatalf("expected env graphql url, got %q", client.url)
 	}
 }
 

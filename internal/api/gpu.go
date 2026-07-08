@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/spf13/viper"
+	"github.com/runpod/runpodctl/internal/configenv"
 )
 
 // GpuType represents a GPU type
@@ -53,7 +53,7 @@ type User struct {
 
 // graphqlRequest makes a GraphQL request
 func (c *Client) graphqlRequest(query string, variables map[string]interface{}) ([]byte, error) {
-	apiURL := viper.GetString("apiUrl")
+	apiURL := configenv.GraphQLURL()
 	if apiURL == "" {
 		apiURL = "https://api.runpod.io/graphql"
 	}

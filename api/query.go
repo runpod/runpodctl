@@ -6,12 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"runtime"
 	"strings"
 	"time"
 
 	"github.com/runpod/runpodctl/internal/agent"
+	"github.com/runpod/runpodctl/internal/configenv"
 	"github.com/spf13/viper"
 )
 
@@ -33,18 +33,12 @@ func Query(input Input) (res *http.Response, err error) {
 		return nil, err
 	}
 
-	apiUrl := os.Getenv("RUNPOD_GRAPHQL_URL")
-	if apiUrl == "" {
-		apiUrl = viper.GetString("apiUrl")
-	}
+	apiUrl := configenv.GraphQLURL()
 	if apiUrl == "" {
 		apiUrl = DefaultGraphQLURL
 	}
 
-	apiKey := os.Getenv("RUNPOD_API_KEY")
-	if apiKey == "" {
-		apiKey = viper.GetString("apiKey")
-	}
+	apiKey := configenv.APIKey()
 
 	// Check if the API key is present
 	if apiKey == "" {

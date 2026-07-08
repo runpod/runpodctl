@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
+	"github.com/runpod/runpodctl/internal/configenv"
 	"github.com/spf13/viper"
 	"golang.org/x/crypto/ssh"
 )
@@ -34,18 +34,12 @@ type GraphQLInput struct {
 
 // NewGraphQLClient creates a new GraphQL client
 func NewGraphQLClient() (*GraphQLClient, error) {
-	apiKey := os.Getenv("RUNPOD_API_KEY")
-	if apiKey == "" {
-		apiKey = viper.GetString("apiKey")
-	}
+	apiKey := configenv.APIKey()
 	if apiKey == "" {
 		return nil, fmt.Errorf("api key not found. run 'runpodctl config --apiKey=xxx' or set RUNPOD_API_KEY")
 	}
 
-	apiURL := os.Getenv("RUNPOD_GRAPHQL_URL")
-	if apiURL == "" {
-		apiURL = viper.GetString("apiUrl")
-	}
+	apiURL := configenv.GraphQLURL()
 	if apiURL == "" {
 		apiURL = DefaultGraphQLURL
 	}
@@ -299,28 +293,28 @@ type PodEnvVar struct {
 
 // CreatePodGQLInput is the input for creating a pod via GraphQL
 type CreatePodGQLInput struct {
-	CloudType         string       `json:"cloudType,omitempty"`
-	ContainerDiskInGb int          `json:"containerDiskInGb"`
-	DataCenterId      string       `json:"dataCenterId,omitempty"`
-	Env               []*PodEnvVar `json:"env,omitempty"`
-	GpuCount          int          `json:"gpuCount"`
-	GpuTypeId         string       `json:"gpuTypeId,omitempty"`
-	ImageName         string       `json:"imageName,omitempty"`
-	Name              string       `json:"name,omitempty"`
-	Ports             string       `json:"ports,omitempty"`
-	StartSsh          bool         `json:"startSsh"`
-	SupportPublicIp   bool         `json:"supportPublicIp,omitempty"`
-	TemplateId        string       `json:"templateId,omitempty"`
-	VolumeInGb        int          `json:"volumeInGb,omitempty"`
-	VolumeMountPath   string       `json:"volumeMountPath,omitempty"`
-	NetworkVolumeId   string       `json:"networkVolumeId,omitempty"`
-	MinCudaVersion         string       `json:"minCudaVersion,omitempty"`
-	DockerArgs             string       `json:"dockerArgs,omitempty"`
-	ContainerRegistryAuthId string     `json:"containerRegistryAuthId,omitempty"`
-	CountryCode            string       `json:"countryCode,omitempty"`
-	StopAfter              string       `json:"stopAfter,omitempty"`
-	TerminateAfter         string       `json:"terminateAfter,omitempty"`
-	Compliance             []string     `json:"compliance,omitempty"`
+	CloudType               string       `json:"cloudType,omitempty"`
+	ContainerDiskInGb       int          `json:"containerDiskInGb"`
+	DataCenterId            string       `json:"dataCenterId,omitempty"`
+	Env                     []*PodEnvVar `json:"env,omitempty"`
+	GpuCount                int          `json:"gpuCount"`
+	GpuTypeId               string       `json:"gpuTypeId,omitempty"`
+	ImageName               string       `json:"imageName,omitempty"`
+	Name                    string       `json:"name,omitempty"`
+	Ports                   string       `json:"ports,omitempty"`
+	StartSsh                bool         `json:"startSsh"`
+	SupportPublicIp         bool         `json:"supportPublicIp,omitempty"`
+	TemplateId              string       `json:"templateId,omitempty"`
+	VolumeInGb              int          `json:"volumeInGb,omitempty"`
+	VolumeMountPath         string       `json:"volumeMountPath,omitempty"`
+	NetworkVolumeId         string       `json:"networkVolumeId,omitempty"`
+	MinCudaVersion          string       `json:"minCudaVersion,omitempty"`
+	DockerArgs              string       `json:"dockerArgs,omitempty"`
+	ContainerRegistryAuthId string       `json:"containerRegistryAuthId,omitempty"`
+	CountryCode             string       `json:"countryCode,omitempty"`
+	StopAfter               string       `json:"stopAfter,omitempty"`
+	TerminateAfter          string       `json:"terminateAfter,omitempty"`
+	Compliance              []string     `json:"compliance,omitempty"`
 }
 
 // CreatePod creates a pod via GraphQL (podFindAndDeployOnDemand)
