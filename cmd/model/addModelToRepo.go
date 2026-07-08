@@ -17,6 +17,7 @@ import (
 	"github.com/runpod/runpodctl/api"
 	"github.com/runpod/runpodctl/internal/output"
 
+	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -96,9 +97,21 @@ type uploadedModelFile struct {
 }
 
 type modelAddOutput struct {
-	Model         *api.Model           `json:"model,omitempty"`
-	Upload        *api.ModelRepoUpload `json:"upload,omitempty"`
-	UploadedFiles []uploadedModelFile  `json:"uploadedFiles,omitempty"`
+	Model          *api.Model           `json:"model,omitempty"`
+	Upload         *api.ModelRepoUpload `json:"upload,omitempty"`
+	UploadedFiles  []uploadedModelFile  `json:"uploadedFiles,omitempty"`
+	ModelSizeBytes *int64               `json:"modelSizeBytes,omitempty"`
+}
+
+type modelUploadProgress interface {
+	Add64(int64) error
+	Finish() error
+	Clear() error
+}
+
+type progressReader struct {
+	reader   io.Reader
+	progress modelUploadProgress
 }
 
 // TODO: replace the manual completion call with github.com/aws/aws-sdk-go-v2/service/s3's
@@ -106,7 +119,7 @@ type modelAddOutput struct {
 var (
 	createModelRepoUpload   = api.CreateModelRepoUpload
 	completeModelRepoUpload = api.CompleteModelRepoUpload
-	completeModelUploadFile = completeModelUpload
+	completeModelUploadFile = completeModelUploadWithProgress
 )
 
 var addCmd = &cobra.Command{
@@ -220,7 +233,8 @@ func runAddModel(cmd *cobra.Command, args []string) {
 	if len(modelFiles) > 0 {
 		uploadedFiles, err := uploadModelFiles(modelFiles, uploadInput)
 		cobra.CheckErr(err)
-		printModelAddOutput(cmd, modelAddOutput{Model: model, UploadedFiles: uploadedFiles})
+		modelSizeBytes := totalModelFileSize(modelFiles)
+		printModelAddOutput(cmd, modelAddOutput{Model: model, UploadedFiles: uploadedFiles, ModelSizeBytes: &modelSizeBytes})
 		return
 	}
 
@@ -298,9 +312,59 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 	return files, nil
 }
 
+func (r progressReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	if n > 0 && r.progress != nil {
+		_ = r.progress.Add64(int64(n))
+	}
+	return n, err
+}
+
+func totalModelFileSize(files []modelFile) int64 {
+	var total int64
+	for _, file := range files {
+		total += file.Size
+	}
+	return total
+}
+
+func stderrIsTerminal() bool {
+	info, err := os.Stderr.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
+
+func newModelUploadProgress(totalBytes int64) modelUploadProgress {
+	if totalBytes <= 0 || !stderrIsTerminal() {
+		return nil
+	}
+
+	return progressbar.NewOptions64(totalBytes,
+		progressbar.OptionOnCompletion(func() {
+			fmt.Fprintln(os.Stderr)
+		}),
+		progressbar.OptionSetDescription("uploading model"),
+		progressbar.OptionSetWidth(20),
+		progressbar.OptionSetRenderBlankState(true),
+		progressbar.OptionShowBytes(true),
+		progressbar.OptionShowCount(),
+		progressbar.OptionSetPredictTime(true),
+		progressbar.OptionThrottle(100*time.Millisecond),
+		progressbar.OptionSetWriter(os.Stderr),
+	)
+}
+
+func printCompletedModelUploadSize(totalBytes int64) {
+	fmt.Fprintf(os.Stderr, "model size: %d bytes\n", totalBytes)
+}
+
 func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInput) ([]uploadedModelFile, error) {
 	var modelVersionUUID string
 	uploadedFiles := make([]uploadedModelFile, 0, len(files))
+	totalSize := totalModelFileSize(files)
+	progress := newModelUploadProgress(totalSize)
 
 	for i, file := range files {
 		input := *baseInput
@@ -310,9 +374,15 @@ func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInp
 
 		result, err := createModelRepoUpload(&input)
 		if err != nil {
+			if progress != nil {
+				_ = progress.Clear()
+			}
 			return nil, fmt.Errorf("create upload for %s: %w", file.RelativePath, err)
 		}
 		if result.Upload == nil {
+			if progress != nil {
+				_ = progress.Clear()
+			}
 			return nil, fmt.Errorf("upload response missing upload session details for %s", file.RelativePath)
 		}
 		if modelVersionUUID == "" {
@@ -320,15 +390,24 @@ func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInp
 				modelVersionUUID = strings.TrimSpace(result.Version.UUID)
 			}
 			if modelVersionUUID == "" && i < len(files)-1 {
+				if progress != nil {
+					_ = progress.Clear()
+				}
 				return nil, fmt.Errorf("upload response missing model version uuid for %s", file.RelativePath)
 			}
 		}
 
-		if err = completeModelUploadFile(result.Upload, file.AbsolutePath); err != nil {
+		if err = completeModelUploadFile(result.Upload, file.AbsolutePath, progress); err != nil {
+			if progress != nil {
+				_ = progress.Clear()
+			}
 			return nil, fmt.Errorf("upload %s: %w", file.RelativePath, err)
 		}
 
 		if result.Upload.SessionID == "" {
+			if progress != nil {
+				_ = progress.Clear()
+			}
 			return nil, fmt.Errorf("upload %s: missing session identifier for completion", file.RelativePath)
 		}
 
@@ -342,12 +421,20 @@ func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInp
 	for i := range uploadedFiles {
 		completion, err := completeModelRepoUpload(uploadedFiles[i].SessionID)
 		if err != nil {
+			if progress != nil {
+				_ = progress.Clear()
+			}
 			return nil, fmt.Errorf("complete upload session for %s: %w", uploadedFiles[i].RelativePath, err)
 		}
 
 		uploadedFiles[i].SessionID = completion.SessionID
 		uploadedFiles[i].Status = completion.Status
 	}
+
+	if progress != nil {
+		_ = progress.Finish()
+	}
+	printCompletedModelUploadSize(totalSize)
 
 	return uploadedFiles, nil
 }
@@ -358,6 +445,10 @@ func printModelAddOutput(cmd *cobra.Command, result modelAddOutput) {
 }
 
 func completeModelUpload(upload *api.ModelRepoUpload, artifactPath string) error {
+	return completeModelUploadWithProgress(upload, artifactPath, nil)
+}
+
+func completeModelUploadWithProgress(upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
 	if upload == nil {
 		return fmt.Errorf("upload details are required")
 	}
@@ -409,8 +500,12 @@ func completeModelUpload(upload *api.ModelRepoUpload, artifactPath string) error
 			chunkSize = remaining
 		}
 
-		section := io.NewSectionReader(file, offset, chunkSize)
-		req, err := http.NewRequest(http.MethodPut, part.URL, section)
+		var body io.Reader = io.NewSectionReader(file, offset, chunkSize)
+		if progress != nil {
+			body = progressReader{reader: body, progress: progress}
+		}
+
+		req, err := http.NewRequest(http.MethodPut, part.URL, body)
 		if err != nil {
 			return fmt.Errorf("create request for part %d: %w", part.PartNumber, err)
 		}

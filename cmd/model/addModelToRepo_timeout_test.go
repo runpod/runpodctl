@@ -1,8 +1,12 @@
 package model
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,7 +124,7 @@ func TestUploadModelFilesUsesModelVersionUUIDAfterFirstFile(t *testing.T) {
 	}
 	var events []string
 	var uploadedArtifacts []string
-	completeModelUploadFile = func(upload *api.ModelRepoUpload, artifactPath string) error {
+	completeModelUploadFile = func(upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
 		events = append(events, "upload:"+artifactPath)
 		uploadedArtifacts = append(uploadedArtifacts, artifactPath)
 		return nil
@@ -194,6 +198,100 @@ func TestUploadModelFilesUsesModelVersionUUIDAfterFirstFile(t *testing.T) {
 		if events[i] != expected {
 			t.Fatalf("expected event %d to be %q, got %q", i, expected, events[i])
 		}
+	}
+}
+
+type recordingModelUploadProgress struct {
+	bytes    int64
+	finished bool
+	cleared  bool
+}
+
+func (p *recordingModelUploadProgress) Add64(n int64) error {
+	p.bytes += n
+	return nil
+}
+
+func (p *recordingModelUploadProgress) Finish() error {
+	p.finished = true
+	return nil
+}
+
+func (p *recordingModelUploadProgress) Clear() error {
+	p.cleared = true
+	return nil
+}
+
+func TestProgressReaderTracksBytes(t *testing.T) {
+	progress := &recordingModelUploadProgress{}
+	reader := progressReader{
+		reader:   strings.NewReader("abcdef"),
+		progress: progress,
+	}
+
+	if _, err := io.Copy(io.Discard, reader); err != nil {
+		t.Fatalf("copy progress reader: %v", err)
+	}
+	if progress.bytes != 6 {
+		t.Fatalf("expected 6 progress bytes, got %d", progress.bytes)
+	}
+}
+
+func TestPrintCompletedModelUploadSizeWritesToStderr(t *testing.T) {
+	stdout, stderr := captureStdStreams(t, func() {
+		printCompletedModelUploadSize(123)
+	})
+
+	if stdout != "" {
+		t.Fatalf("stdout must remain empty, got %q", stdout)
+	}
+	if stderr != "model size: 123 bytes\n" {
+		t.Fatalf("expected model size on stderr, got %q", stderr)
+	}
+}
+
+func TestCompleteModelUploadWithProgressTracksMultipartBytes(t *testing.T) {
+	artifactPath := filepath.Join(t.TempDir(), "model.bin")
+	if err := os.WriteFile(artifactPath, []byte("abcdef"), 0600); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+
+	var uploadedBytes int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read upload body: %v", err)
+			}
+			uploadedBytes += int64(len(body))
+			w.Header().Set("ETag", `"etag"`)
+			w.WriteHeader(http.StatusOK)
+		case http.MethodPost:
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	progress := &recordingModelUploadProgress{}
+	err := completeModelUploadWithProgress(&api.ModelRepoUpload{
+		PartSizeBytes: 3,
+		CompleteURL:   server.URL,
+		Parts: []*api.ModelRepoUploadPart{
+			{PartNumber: 2, URL: server.URL},
+			{PartNumber: 1, URL: server.URL},
+		},
+	}, artifactPath, progress)
+	if err != nil {
+		t.Fatalf("complete upload: %v", err)
+	}
+	if uploadedBytes != 6 {
+		t.Fatalf("expected server to receive 6 bytes, got %d", uploadedBytes)
+	}
+	if progress.bytes != 6 {
+		t.Fatalf("expected progress to receive 6 bytes, got %d", progress.bytes)
 	}
 }
 
