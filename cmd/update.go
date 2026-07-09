@@ -29,7 +29,7 @@ type GithubApiResponse struct {
 	Assets  []Asset `json:"assets"`
 }
 
-func DownloadFile(url string, savePath string) (file *os.File, err error) {
+func DownloadBytes(url string) ([]byte, error) {
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, err
@@ -40,7 +40,11 @@ func DownloadFile(url string, savePath string) (file *os.File, err error) {
 		return nil, fmt.Errorf("bad status: %s", resp.Status)
 	}
 
-	content, err := io.ReadAll(resp.Body)
+	return io.ReadAll(resp.Body)
+}
+
+func DownloadFile(url string, savePath string) (file *os.File, err error) {
+	content, err := DownloadBytes(url)
 	if err != nil {
 		return nil, err
 	}
@@ -143,6 +147,14 @@ func verifyFileChecksum(path string, expected string) error {
 	return nil
 }
 
+func verifyArchiveChecksum(archivePath string, archiveName string, checksumText []byte) error {
+	expected, err := checksumForAsset(checksumText, archiveName)
+	if err != nil {
+		return err
+	}
+	return verifyFileChecksum(archivePath, expected)
+}
+
 // extractBinaryFromTarGz extracts the "runpodctl" binary from a .tar.gz archive.
 func extractBinaryFromTarGz(archivePath, destPath string) error {
 	f, err := os.Open(archivePath)
@@ -231,15 +243,15 @@ var updateCmd = &cobra.Command{
 
 		// find download link for current platform
 		expectedAsset := assetName()
-		var downloadLink string
-		for _, asset := range apiResp.Assets {
-			if asset.Name == expectedAsset {
-				downloadLink = asset.Url
-				break
-			}
-		}
-		if downloadLink == "" {
+		downloadAsset, ok := findAsset(apiResp.Assets, expectedAsset)
+		if !ok {
 			return fmt.Errorf("platform %s-%s not supported in latest version", runtime.GOOS, runtime.GOARCH)
+		}
+
+		checksumAssetName := checksumAssetName(latestVersion)
+		checksumAsset, ok := findAsset(apiResp.Assets, checksumAssetName)
+		if !ok {
+			return fmt.Errorf("failed to verify update checksum: checksum asset %s not found", checksumAssetName)
 		}
 
 		ex, err := os.Executable()
@@ -264,11 +276,19 @@ var updateCmd = &cobra.Command{
 		defer os.Remove(archivePath)
 
 		fmt.Printf("downloading runpodctl %s\n", latestVersion)
-		file, err := DownloadFile(downloadLink, archivePath)
+		file, err := DownloadFile(downloadAsset.Url, archivePath)
 		if err != nil {
 			return fmt.Errorf("failed to fetch the latest version of runpodctl: %w", err)
 		}
 		file.Close()
+
+		checksumText, err := DownloadBytes(checksumAsset.Url)
+		if err != nil {
+			return fmt.Errorf("failed to fetch update checksum: %w", err)
+		}
+		if err := verifyArchiveChecksum(archivePath, expectedAsset, checksumText); err != nil {
+			return fmt.Errorf("failed to verify update checksum: %w", err)
+		}
 
 		// extract binary from archive to a temp location next to the destination
 		extractedPath := destPath + ".new"

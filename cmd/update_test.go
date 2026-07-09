@@ -107,3 +107,41 @@ func TestVerifyFileChecksum(t *testing.T) {
 		t.Fatal("expected checksum mismatch to fail")
 	}
 }
+
+func TestVerifyArchiveChecksum(t *testing.T) {
+	archive, err := os.CreateTemp(t.TempDir(), "runpodctl-linux-amd64-*.tar.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := archive.WriteString("archive bytes"); err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	digest := sha256.Sum256([]byte("archive bytes"))
+	checksumText := []byte(fmt.Sprintf("%x  runpodctl-linux-amd64.tar.gz\n", digest))
+
+	if err := verifyArchiveChecksum(archive.Name(), "runpodctl-linux-amd64.tar.gz", checksumText); err != nil {
+		t.Fatalf("verifyArchiveChecksum returned error: %v", err)
+	}
+}
+
+func TestVerifyArchiveChecksumFailsWhenEntryMissing(t *testing.T) {
+	archive, err := os.CreateTemp(t.TempDir(), "runpodctl-linux-amd64-*.tar.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	err = verifyArchiveChecksum(archive.Name(), "runpodctl-linux-amd64.tar.gz", []byte("09001e4666934c338919b00bc5e415259fe93228b5eb56f51c141730d5e5bbee  runpodctl-darwin-all.tar.gz\n"))
+	if err == nil {
+		t.Fatal("expected missing checksum to fail")
+	}
+	if !strings.Contains(err.Error(), "checksum not found") {
+		t.Fatalf("expected missing checksum error, got %v", err)
+	}
+}
