@@ -16,6 +16,8 @@ This document exists for non-obvious, error-prone shortcomings in the codebase, 
 - serverless create is graphql-only (`saveEndpoint`); the rest `/endpoints` create path is intentionally unused so model references + multi-region volumes + all flags work on one path. do not reintroduce rest routing.
 - `saveEndpoint.gpuIds` wants gpu *pool* ids (e.g. `ADA_24`), not the gpu *type* ids (e.g. `NVIDIA A40`) that `gpu list` / `--gpu-id` use; translate via `serverlessGpuPools` (`ResolveServerlessGpuPoolID`). pod create uses type ids directly — different identifier space.
 - `saveEndpoint` has no `computeType`: cpu is selected by sending `instanceIds` like `cpu3g-4-16` (gpu is the default when instanceIds is empty). `name` is required (`String!`, min 3) and is never auto-generated server-side — generate one client-side. flashboot is the `flashBootType` enum (`OFF`/`FLASHBOOT`), not a bool. multi-region volumes are `networkVolumeIds: [{networkVolumeId}]`, not a flat string array.
+- `podFindAndDeployOnDemand` template inheritance is inconsistent: `containerDiskInGb` is inherited from the template when omitted, but `volumeInGb` is not — it always takes the request value (0 = no volume). fix: fetch the template client-side and set `volumeInGb` explicitly when the flag is not provided.
+- `podFindAndDeployOnDemand` env merge: when both `templateId` and `env` are sent, the server applies template env on top of the request env, with template values winning for duplicate keys. fix: fetch the template client-side, merge template env as the base with user values overriding, and send the full merged set — handled in `cmd/pod/create.go` before the create call.
 
 ## constraints
 

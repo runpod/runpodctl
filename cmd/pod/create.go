@@ -141,6 +141,53 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// the server inherits containerDiskInGb from the template when the field is absent,
+	// so zero it out (omitempty drops it) unless the caller explicitly set it.
+	if !cmd.Flags().Changed("container-disk-in-gb") {
+		createContainerDiskInGb = 0
+	}
+
+	// two template fields the server does NOT propagate automatically:
+	//   - volumeInGb: server always uses the value in the request (0 = no volume), ignoring the template.
+	//   - env: server merges template env on top of request env, with template values winning for
+	//     duplicate keys. fix both by fetching the template and applying the correct values client-side
+	//     before the create request is sent.
+	if createTemplateID != "" {
+		wantVolumeInherit := !cmd.Flags().Changed("volume-in-gb")
+		wantEnvMerge := cmd.Flags().Changed("env")
+		if wantVolumeInherit || wantEnvMerge {
+			apiClient, clientErr := api.NewClient()
+			if clientErr != nil {
+				return clientErr
+			}
+			tmpl, clientErr := apiClient.GetTemplate(createTemplateID)
+			if clientErr != nil {
+				return fmt.Errorf("failed to fetch template %s: %w", createTemplateID, clientErr)
+			}
+			if wantVolumeInherit && tmpl.VolumeInGb > 0 {
+				createVolumeInGb = tmpl.VolumeInGb
+			}
+			if wantEnvMerge && len(tmpl.Env) > 0 {
+				var userEnv map[string]string
+				if err := json.Unmarshal([]byte(createEnv), &userEnv); err != nil {
+					return fmt.Errorf("invalid env json: %w", err)
+				}
+				merged := make(map[string]string, len(tmpl.Env)+len(userEnv))
+				for k, v := range tmpl.Env {
+					merged[k] = v
+				}
+				for k, v := range userEnv {
+					merged[k] = v
+				}
+				mergedBytes, mergeErr := json.Marshal(merged)
+				if mergeErr != nil {
+					return fmt.Errorf("failed to merge env: %w", mergeErr)
+				}
+				createEnv = string(mergedBytes)
+			}
+		}
+	}
+
 	var (
 		result interface{}
 		err    error
