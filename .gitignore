@@ -19,3 +19,6 @@ vendor/
 
 ## auto generated file during make and release
 version
+
+# User built binaries
+runpodctl
