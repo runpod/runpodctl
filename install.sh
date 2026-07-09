@@ -12,6 +12,7 @@
 #   - Internet connection
 #   - Homebrew (for macOS users)
 #   - jq (for JSON processing, will be installed automatically)
+#   - sha256sum on Linux or shasum on macOS (usually preinstalled)
 #
 # Supported Platforms:
 #   - Linux (amd64)
@@ -19,6 +20,10 @@
 
 set -e
 REQUIRED_PKGS=("jq")  # Add all required packages to this list, separated by spaces.
+
+VERSION=""
+DOWNLOAD_URL=""
+ARCHIVE_FILENAME=""
 
 
 # -------------------------------- Check Root -------------------------------- #
@@ -99,7 +104,8 @@ download_url_constructor() {
 
     if [[ "$os_type" == "darwin" ]]; then
         # macOS uses a universal binary (all architectures)
-        DOWNLOAD_URL="https://github.com/runpod/runpodctl/releases/download/${VERSION}/runpodctl-darwin-all.tar.gz"
+        ARCHIVE_FILENAME="runpodctl-darwin-all.tar.gz"
+        DOWNLOAD_URL="https://github.com/runpod/runpodctl/releases/download/${VERSION}/${ARCHIVE_FILENAME}"
         return
     elif [[ "$os_type" == "linux" ]]; then
         if [[ "$arch_type" == "x86_64" ]]; then
@@ -115,16 +121,79 @@ download_url_constructor() {
         exit 1
     fi
 
-    DOWNLOAD_URL="https://github.com/runpod/runpodctl/releases/download/${VERSION}/runpodctl-${os_type}-${arch_type}.tar.gz"
+    ARCHIVE_FILENAME="runpodctl-${os_type}-${arch_type}.tar.gz"
+    DOWNLOAD_URL="https://github.com/runpod/runpodctl/releases/download/${VERSION}/${ARCHIVE_FILENAME}"
+}
+
+# ------------------------------- Checksum Helpers ---------------------------- #
+checksum_file_name() {
+    echo "checksums_${VERSION#v}_sha256.txt"
+}
+
+calculate_sha256() {
+    local file_path=$1
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file_path" | awk '{print $1}'
+        return
+    fi
+
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file_path" | awk '{print $1}'
+        return
+    fi
+
+    echo "No SHA-256 checksum tool found. Install sha256sum or shasum." >&2
+    return 1
+}
+
+checksum_for_archive() {
+    local checksum_path=$1
+    awk -v archive="$ARCHIVE_FILENAME" '$2 == archive { print $1; found=1; exit } END { if (!found) exit 1 }' "$checksum_path"
+}
+
+verify_download_checksum() {
+    local archive_path=$1
+    local checksum_path=$2
+    local expected
+    local actual
+
+    if ! expected=$(checksum_for_archive "$checksum_path"); then
+        echo "Checksum not found for $ARCHIVE_FILENAME."
+        return 1
+    fi
+
+    actual=$(calculate_sha256 "$archive_path")
+    expected=$(echo "$expected" | tr '[:upper:]' '[:lower:]')
+    actual=$(echo "$actual" | tr '[:upper:]' '[:lower:]')
+
+    if [[ "$actual" != "$expected" ]]; then
+        echo "Checksum mismatch for $ARCHIVE_FILENAME."
+        return 1
+    fi
+
+    echo "Checksum verified for $ARCHIVE_FILENAME."
 }
 
 # ---------------------------- Download & Install ---------------------------- #
 download_and_install_cli() {
-    local cli_archive_file_name="runpodctl.tar.gz"
+    local cli_archive_file_name="$ARCHIVE_FILENAME"
+    local checksum_file
+    checksum_file=$(checksum_file_name)
+
     if ! wget -q --progress=bar "$DOWNLOAD_URL" -O "$cli_archive_file_name"; then
         echo "Failed to download $cli_archive_file_name."
         exit 1
     fi
+
+    local checksum_url="https://github.com/runpod/runpodctl/releases/download/${VERSION}/${checksum_file}"
+    if ! wget -q --progress=bar "$checksum_url" -O "$checksum_file"; then
+        echo "Failed to download $checksum_file."
+        exit 1
+    fi
+
+    verify_download_checksum "$cli_archive_file_name" "$checksum_file"
+
     local cli_file_name="runpodctl"
     tar -xzf "$cli_archive_file_name" "$cli_file_name"
     chmod +x "$cli_file_name"
@@ -139,10 +208,16 @@ download_and_install_cli() {
 # ---------------------------------------------------------------------------- #
 #                                     Main                                     #
 # ---------------------------------------------------------------------------- #
-echo "Installing runpodctl..."
+main() {
+    echo "Installing runpodctl..."
 
-check_root
-check_system_requirements
-fetch_latest_version
-download_url_constructor
-download_and_install_cli
+    check_root
+    check_system_requirements
+    fetch_latest_version
+    download_url_constructor
+    download_and_install_cli
+}
+
+if [[ "${RUNPODCTL_INSTALL_TEST:-}" != "1" ]]; then
+    main
+fi
