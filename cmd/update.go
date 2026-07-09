@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -88,6 +90,57 @@ func assetName() string {
 		ext = ".zip"
 	}
 	return fmt.Sprintf("runpodctl-%s-%s%s", runtime.GOOS, arch, ext)
+}
+
+func checksumAssetName(version string) string {
+	return fmt.Sprintf("checksums_%s_sha256.txt", strings.TrimPrefix(version, "v"))
+}
+
+func findAsset(assets []Asset, name string) (Asset, bool) {
+	for _, asset := range assets {
+		if asset.Name == name {
+			return asset, true
+		}
+	}
+	return Asset{}, false
+}
+
+func checksumForAsset(checksumText []byte, assetName string) (string, error) {
+	for _, line := range strings.Split(string(checksumText), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[1] != assetName {
+			continue
+		}
+		digest := strings.ToLower(fields[0])
+		if len(digest) != sha256.Size*2 {
+			return "", fmt.Errorf("invalid checksum for %s", assetName)
+		}
+		if _, err := hex.DecodeString(digest); err != nil {
+			return "", fmt.Errorf("invalid checksum for %s: %w", assetName, err)
+		}
+		return digest, nil
+	}
+	return "", fmt.Errorf("checksum not found for %s", assetName)
+}
+
+func verifyFileChecksum(path string, expected string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return err
+	}
+
+	actual := hex.EncodeToString(hash.Sum(nil))
+	expected = strings.ToLower(strings.TrimSpace(expected))
+	if actual != expected {
+		return fmt.Errorf("checksum mismatch for %s", filepath.Base(path))
+	}
+	return nil
 }
 
 // extractBinaryFromTarGz extracts the "runpodctl" binary from a .tar.gz archive.
