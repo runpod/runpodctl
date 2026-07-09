@@ -160,5 +160,31 @@ func createPortLabelOverrides(req *api.TemplateCreateRequest) *api.TemplatePortL
 		overrides.VolumeInGb = &req.VolumeInGb
 		overrides.VolumeMountPath = &req.VolumeMountPath
 	}
+	if dockerArgs := dockerArgsJSON(req.DockerEntrypoint, req.DockerStartCmd); dockerArgs != "" {
+		overrides.DockerArgs = &dockerArgs
+	}
 	return overrides
+}
+
+// dockerArgsJSON reconstructs the backend's canonical dockerArgs encoding
+// (`{"cmd":[...],"entrypoint":[...]}`) from the REST create fields. The port-label
+// write reads the template back over GraphQL and re-sends dockerArgs; if that
+// post-create read is briefly stale it returns an empty dockerArgs and the write
+// would blank the just-set start command. Carrying the reconstructed value through
+// the overrides makes the write re-assert the command regardless of read staleness.
+// Returns "" when neither field is set (so the override stays nil and a genuinely
+// command-less template is left untouched).
+func dockerArgsJSON(entrypoint, cmd []string) string {
+	if len(entrypoint) == 0 && len(cmd) == 0 {
+		return ""
+	}
+	payload := struct {
+		Cmd        []string `json:"cmd,omitempty"`
+		Entrypoint []string `json:"entrypoint,omitempty"`
+	}{Cmd: cmd, Entrypoint: entrypoint}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }

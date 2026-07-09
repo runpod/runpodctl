@@ -24,6 +24,11 @@ type TemplatePortLabelOverrides struct {
 	VolumeInGb              *int
 	VolumeMountPath         *string
 	Readme                  *string
+	// DockerArgs carries the just-set start command (the backend's
+	// {"cmd":[...],"entrypoint":[...]} dockerArgs encoding) through the label
+	// write. Without it, a briefly-stale post-create GraphQL read can return an
+	// empty dockerArgs and the write would blank the command (see NEW-1).
+	DockerArgs *string
 }
 
 var errTemplateForPortLabelsNotFound = errors.New("template not found")
@@ -251,6 +256,9 @@ func applyTemplatePortLabelOverrides(state *templateSaveState, overrides *Templa
 	}
 	if overrides.Readme != nil {
 		state.Readme = *overrides.Readme
+	}
+	if overrides.DockerArgs != nil {
+		state.DockerArgs = *overrides.DockerArgs
 	}
 }
 

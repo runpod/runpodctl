@@ -181,6 +181,60 @@ func TestUpdateTemplatePortLabelsPreservesStartCommand(t *testing.T) {
 	}
 }
 
+// TestUpdateTemplatePortLabelsCarriesStartCommandThroughStaleRead pins NEW-1:
+// the exact `template create --docker-start-cmd … --port-labels …` data-loss path.
+// After the REST create sets the start command, the follow-up GraphQL read used by
+// the label write can be briefly stale and return an EMPTY dockerArgs. The write
+// always sends dockerArgs, so without the create overrides carrying the command it
+// would send dockerArgs:"" and blank the template's start command. Here the read is
+// deliberately stale (empty dockerArgs) and the override carries the reconstructed
+// command; the write MUST send the non-empty command, not "".
+func TestUpdateTemplatePortLabelsCarriesStartCommandThroughStaleRead(t *testing.T) {
+	const wantDockerArgs = `{"cmd":["python -u app.py"]}`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request GraphQLInput
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		switch {
+		case strings.Contains(request.Query, "GetTemplateForPortLabels"):
+			// STALE read: dockerArgs empty even though create just set it.
+			_, _ = w.Write([]byte(`{"data":{"myself":{"podTemplates":[{
+				"id":"tpl-stale",
+				"name":"cmd-template",
+				"imageName":"img",
+				"dockerArgs":"",
+				"env":[],
+				"ports":"22/tcp",
+				"containerDiskInGb":20
+			}]}}}`))
+		case strings.Contains(request.Query, "UpdateTemplatePortLabels"):
+			input, ok := request.Variables["input"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("input = %#v", request.Variables["input"])
+			}
+			// The start command must be carried through, not blanked by the stale read.
+			assertStringValue(t, input, "dockerArgs", wantDockerArgs)
+			_, _ = w.Write([]byte(`{"data":{"saveTemplate":{"id":"tpl-stale"}}}`))
+		default:
+			t.Fatalf("unexpected graphql query: %s", request.Query)
+		}
+	}))
+	defer server.Close()
+
+	client := &GraphQLClient{url: server.URL, apiKey: "test-key", httpClient: server.Client()}
+	dockerArgs := wantDockerArgs
+	err := client.UpdateTemplatePortLabels(
+		"tpl-stale",
+		[]TemplatePortConfig{{Port: "22/tcp", Name: "SSH"}},
+		&TemplatePortLabelOverrides{DockerArgs: &dockerArgs},
+	)
+	if err != nil {
+		t.Fatalf("UpdateTemplatePortLabels() error = %v", err)
+	}
+}
+
 func TestUpdateTemplatePortLabelsRejectsUnknownPort(t *testing.T) {
 	requestCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
