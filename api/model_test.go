@@ -117,3 +117,51 @@ func TestGetModelsRequestsVersionIdentifiers(t *testing.T) {
 		t.Fatalf("expected version identifiers to decode, got %#v", version)
 	}
 }
+
+func TestUpdateModelVersionStatusByIdentifierUsesUUID(t *testing.T) {
+	input, err := newUpdateModelVersionStatusInput(&UpdateModelVersionStatusInput{
+		UUID:   "version-uuid",
+		Status: ModelVersionStatusPodRemoved,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if input.Variables["uuid"] != "version-uuid" {
+		t.Fatalf("expected uuid variable, got %#v", input.Variables)
+	}
+	if _, ok := input.Variables["hash"]; ok {
+		t.Fatalf("did not expect hash variable, got %#v", input.Variables)
+	}
+	if input.Variables["status"] != ModelVersionStatusPodRemoved {
+		t.Fatalf("expected status %q, got %#v", ModelVersionStatusPodRemoved, input.Variables["status"])
+	}
+}
+
+func TestUpdateModelVersionStatusByIdentifierUsesHash(t *testing.T) {
+	input, err := newUpdateModelVersionStatusInput(&UpdateModelVersionStatusInput{
+		Hash:   "version-hash",
+		Status: ModelVersionStatusPodRemoved,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if input.Variables["hash"] != "version-hash" {
+		t.Fatalf("expected hash variable, got %#v", input.Variables)
+	}
+	if _, ok := input.Variables["uuid"]; ok {
+		t.Fatalf("did not expect uuid variable, got %#v", input.Variables)
+	}
+}
+
+func TestUpdateModelVersionStatusByIdentifierValidatesIdentifier(t *testing.T) {
+	if _, err := newUpdateModelVersionStatusInput(&UpdateModelVersionStatusInput{Status: ModelVersionStatusPodRemoved}); err == nil {
+		t.Fatal("expected missing identifier error")
+	}
+	if _, err := newUpdateModelVersionStatusInput(&UpdateModelVersionStatusInput{
+		UUID:   "version-uuid",
+		Hash:   "version-hash",
+		Status: ModelVersionStatusPodRemoved,
+	}); err == nil {
+		t.Fatal("expected conflicting identifier error")
+	}
+}
