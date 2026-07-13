@@ -179,27 +179,41 @@ verify_download_checksum() {
 download_and_install_cli() {
     local cli_archive_file_name="$ARCHIVE_FILENAME"
     local checksum_file
+    local download_dir
     checksum_file=$(checksum_file_name)
+    download_dir=$(mktemp -d)
 
-    if ! wget -q --progress=bar "$DOWNLOAD_URL" -O "$cli_archive_file_name"; then
+    trap 'rm -rf "$download_dir"; trap - RETURN' RETURN
+
+    local archive_path="$download_dir/$cli_archive_file_name"
+    if ! wget -q --progress=bar "$DOWNLOAD_URL" -O "$archive_path"; then
         echo "Failed to download $cli_archive_file_name."
-        exit 1
+        return 1
     fi
 
+    local checksum_path="$download_dir/$checksum_file"
     local checksum_url="https://github.com/runpod/runpodctl/releases/download/${VERSION}/${checksum_file}"
-    if ! wget -q --progress=bar "$checksum_url" -O "$checksum_file"; then
+    if ! wget -q --progress=bar "$checksum_url" -O "$checksum_path"; then
         echo "Failed to download $checksum_file."
-        exit 1
+        return 1
     fi
 
-    verify_download_checksum "$cli_archive_file_name" "$checksum_file"
+    if ! verify_download_checksum "$archive_path" "$checksum_path"; then
+        return 1
+    fi
 
     local cli_file_name="runpodctl"
-    tar -xzf "$cli_archive_file_name" "$cli_file_name"
-    chmod +x "$cli_file_name"
-    if ! mv "$cli_file_name" /usr/local/bin/; then
+    if ! tar -xzf "$archive_path" -C "$download_dir" "$cli_file_name"; then
+        echo "Failed to extract $cli_file_name from $cli_archive_file_name."
+        return 1
+    fi
+    if ! chmod +x "$download_dir/$cli_file_name"; then
+        echo "Failed to mark $cli_file_name as executable."
+        return 1
+    fi
+    if ! mv "$download_dir/$cli_file_name" /usr/local/bin/; then
         echo "Failed to move $cli_file_name to /usr/local/bin/."
-        exit 1
+        return 1
     fi
     echo "runpodctl installed successfully."
 }
