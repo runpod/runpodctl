@@ -163,7 +163,10 @@ verify_download_checksum() {
         return 1
     fi
 
-    actual=$(calculate_sha256 "$archive_path")
+    if ! actual=$(calculate_sha256 "$archive_path"); then
+        echo "Failed to calculate checksum for $ARCHIVE_FILENAME."
+        return 1
+    fi
     expected=$(echo "$expected" | tr '[:upper:]' '[:lower:]')
     actual=$(echo "$actual" | tr '[:upper:]' '[:lower:]')
 

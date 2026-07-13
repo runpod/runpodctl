@@ -126,9 +126,13 @@ run_download_cleanup_success_test() {
     fi
 }
 
-run_download_cleanup_failure_test() {
-    local work_dir="$TEST_TMPDIR/failure-cwd"
-    local expected_download_dir="$TEST_TMPDIR/failure-download"
+run_download_cleanup_calculation_failure_test() {
+    local work_dir="$TEST_TMPDIR/calculation-failure-cwd"
+    local expected_download_dir="$TEST_TMPDIR/calculation-failure-download"
+    local tar_called="$TEST_TMPDIR/calculation-failure-tar-called"
+    local command_output_path="$TEST_TMPDIR/calculation-failure-output"
+    local archive_filename="runpodctl-linux-amd64.tar.gz"
+    local output
     mkdir -p "$work_dir"
 
     set +e
@@ -136,7 +140,7 @@ run_download_cleanup_failure_test() {
         set -e
         cd "$work_dir"
         VERSION="v9.9.9"
-        ARCHIVE_FILENAME="runpodctl-linux-amd64.tar.gz"
+        ARCHIVE_FILENAME="$archive_filename"
         DOWNLOAD_URL="https://example.test/$ARCHIVE_FILENAME"
 
         mktemp() {
@@ -145,42 +149,52 @@ run_download_cleanup_failure_test() {
         }
 
         wget() {
-            local output=""
+            local output_path=""
             while [[ $# -gt 0 ]]; do
                 if [[ "$1" == "-O" ]]; then
-                    output=$2
+                    output_path=$2
                     shift 2
                     continue
                 fi
                 shift
             done
 
-            case "${output##*/}" in
+            case "${output_path##*/}" in
                 "$ARCHIVE_FILENAME")
-                    printf 'release archive bytes' > "$output"
+                    printf 'release archive bytes' > "$output_path"
                     ;;
-                "$(checksum_file_name)")
-                    printf '%064d  %s\n' 0 "$ARCHIVE_FILENAME" > "$output"
+                "checksums_9.9.9_sha256.txt")
+                    printf '%064d  %s\n' 0 "$ARCHIVE_FILENAME" > "$output_path"
                     ;;
                 *)
-                    echo "unexpected wget output path: $output" >&2
+                    echo "unexpected wget output path: $output_path" >&2
                     return 1
                     ;;
             esac
         }
 
-        tar() {
-            echo "tar should not run after checksum failure" >&2
+        calculate_sha256() {
             return 1
         }
 
-        download_and_install_cli >/dev/null
-    ) >/dev/null 2>&1
+        tar() {
+            touch "$tar_called"
+            return 1
+        }
+
+        download_and_install_cli
+    ) > "$command_output_path" 2>&1
     local status=$?
     set -e
+    output=$(<"$command_output_path")
 
     if [[ $status -eq 0 ]]; then
-        echo "expected checksum failure to abort install"
+        echo "expected checksum calculation failure to abort install"
+        exit 1
+    fi
+    if [[ "$output" != *"Failed to calculate checksum for $archive_filename."* ]]; then
+        echo "expected checksum calculation failure message, got:"
+        echo "$output"
         exit 1
     fi
 
@@ -189,7 +203,11 @@ run_download_cleanup_failure_test() {
         echo "installer left download directory $expected_download_dir"
         exit 1
     fi
+    if [[ -e "$tar_called" ]]; then
+        echo "tar ran after checksum calculation failure"
+        exit 1
+    fi
 }
 
 run_download_cleanup_success_test
-run_download_cleanup_failure_test
+run_download_cleanup_calculation_failure_test
