@@ -248,10 +248,10 @@ var updateCmd = &cobra.Command{
 			return fmt.Errorf("platform %s-%s not supported in latest version", runtime.GOOS, runtime.GOARCH)
 		}
 
-		checksumAssetName := checksumAssetName(latestVersion)
-		checksumAsset, ok := findAsset(apiResp.Assets, checksumAssetName)
+		checksumName := checksumAssetName(latestVersion)
+		checksumAsset, ok := findAsset(apiResp.Assets, checksumName)
 		if !ok {
-			return fmt.Errorf("failed to verify update checksum: checksum asset %s not found", checksumAssetName)
+			return fmt.Errorf("failed to verify update checksum: checksum asset %s not found", checksumName)
 		}
 
 		ex, err := os.Executable()
