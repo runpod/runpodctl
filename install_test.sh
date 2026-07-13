@@ -48,6 +48,7 @@ assert_no_installer_artifacts() {
 run_download_cleanup_success_test() {
     local work_dir="$TEST_TMPDIR/success-cwd"
     local installed_dir="$TEST_TMPDIR/success-installed"
+    local expected_download_dir="$TEST_TMPDIR/success-download"
     mkdir -p "$work_dir" "$installed_dir"
 
     (
@@ -55,6 +56,11 @@ run_download_cleanup_success_test() {
         VERSION="v9.9.9"
         ARCHIVE_FILENAME="runpodctl-linux-amd64.tar.gz"
         DOWNLOAD_URL="https://example.test/$ARCHIVE_FILENAME"
+
+        mktemp() {
+            mkdir -p "$expected_download_dir"
+            printf '%s\n' "$expected_download_dir"
+        }
 
         local downloaded_archive_path=""
         wget() {
@@ -110,6 +116,10 @@ run_download_cleanup_success_test() {
     )
 
     assert_no_installer_artifacts "$work_dir"
+    if [[ -e "$expected_download_dir" ]]; then
+        echo "installer left download directory $expected_download_dir"
+        exit 1
+    fi
     if [[ ! -f "$installed_dir/runpodctl" ]]; then
         echo "expected runpodctl to be installed"
         exit 1
@@ -118,6 +128,7 @@ run_download_cleanup_success_test() {
 
 run_download_cleanup_failure_test() {
     local work_dir="$TEST_TMPDIR/failure-cwd"
+    local expected_download_dir="$TEST_TMPDIR/failure-download"
     mkdir -p "$work_dir"
 
     set +e
@@ -127,6 +138,11 @@ run_download_cleanup_failure_test() {
         VERSION="v9.9.9"
         ARCHIVE_FILENAME="runpodctl-linux-amd64.tar.gz"
         DOWNLOAD_URL="https://example.test/$ARCHIVE_FILENAME"
+
+        mktemp() {
+            mkdir -p "$expected_download_dir"
+            printf '%s\n' "$expected_download_dir"
+        }
 
         wget() {
             local output=""
@@ -169,6 +185,10 @@ run_download_cleanup_failure_test() {
     fi
 
     assert_no_installer_artifacts "$work_dir"
+    if [[ -e "$expected_download_dir" ]]; then
+        echo "installer left download directory $expected_download_dir"
+        exit 1
+    fi
 }
 
 run_download_cleanup_success_test
