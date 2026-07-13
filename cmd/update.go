@@ -248,10 +248,10 @@ var updateCmd = &cobra.Command{
 			return
 		}
 
-		checksumAssetName := checksumAssetName(latestVersion)
-		checksumAsset, ok := findAsset(apiResp.Assets, checksumAssetName)
+		checksumName := checksumAssetName(latestVersion)
+		checksumAsset, ok := findAsset(apiResp.Assets, checksumName)
 		if !ok {
-			fmt.Printf("error verifying update checksum: checksum asset %s not found\n", checksumAssetName)
+			fmt.Printf("error verifying update checksum: checksum asset %s not found\n", checksumName)
 			return
 		}
 
