@@ -49,7 +49,8 @@ type ModelVersion struct {
 
 // ModelVersionStatus constants used when updating a model version's status.
 const (
-	ModelVersionStatusReady = "READY"
+	ModelVersionStatusReady      = "READY"
+	ModelVersionStatusPodRemoved = "POD_REMOVED"
 )
 
 // ModelRepoUpload describes the multipart upload session returned by createModelRepoUpload.
@@ -172,6 +173,7 @@ type ModelVersionStatusMutationResult struct {
 type AddModelToRepoInput struct {
 	Owner               string                 `json:"owner,omitempty"`
 	Name                string                 `json:"name"`
+	Provider            string                 `json:"provider,omitempty"`
 	CredentialType      string                 `json:"credentialType,omitempty"`
 	CredentialReference string                 `json:"credentialReference,omitempty"`
 	ModelStatus         string                 `json:"modelStatus,omitempty"`
@@ -194,6 +196,13 @@ type GetModelInput struct {
 type RemoveModelInput struct {
 	Owner string `json:"owner"`
 	Name  string `json:"name"`
+}
+
+// UpdateModelVersionStatusInput captures the identifier and target status for a model version.
+type UpdateModelVersionStatusInput struct {
+	Hash   string `json:"hash,omitempty"`
+	UUID   string `json:"uuid,omitempty"`
+	Status string `json:"status"`
 }
 
 // CreateModelRepoUploadInput defines the payload used to start a multipart upload for a model version.
@@ -234,6 +243,7 @@ func AddModelToRepo(input *AddModelToRepoInput) (*Model, error) {
 	}
 
 	addString("owner", input.Owner)
+	addString("provider", input.Provider)
 	addString("credentialType", input.CredentialType)
 	addString("credentialReference", input.CredentialReference)
 	addString("modelStatus", input.ModelStatus)
@@ -346,7 +356,9 @@ func GetModels(input *GetModelsInput) ([]*Model, error) {
                 updatedAt
         }
         versions {
+                uuid
                 hash
+                versionHash
                 status
                 metadata
                 createdAt
@@ -457,7 +469,9 @@ func GetModel(input *GetModelInput) (*Model, error) {
                                         updatedAt
                                 }
                                 versions {
+                                        uuid
                                         hash
+                                        versionHash
                                         status
                                         metadata
                                         createdAt
@@ -806,40 +820,19 @@ func CompleteModelRepoUpload(sessionID string) (*CompleteModelRepoUploadResult, 
 	return result, nil
 }
 
-// UpdateModelVersionStatus updates the status for a model version in the repository.
+// UpdateModelVersionStatus updates the status for a model version by hash.
 func UpdateModelVersionStatus(hash, status string) (*ModelVersion, error) {
-	hash = strings.TrimSpace(hash)
-	if hash == "" {
-		return nil, fmt.Errorf("hash cannot be empty")
-	}
+	return UpdateModelVersionStatusByIdentifier(&UpdateModelVersionStatusInput{
+		Hash:   hash,
+		Status: status,
+	})
+}
 
-	status = strings.TrimSpace(status)
-	if status == "" {
-		return nil, fmt.Errorf("status cannot be empty")
-	}
-
-	variables := map[string]interface{}{
-		"hash":   hash,
-		"status": status,
-	}
-
-	gqlInput := Input{
-		Query: `
-                mutation updateModelVersionStatus($hash: ID!, $status: ModelVersionStatus!) {
-                        updateModelVersionStatus(hash: $hash, status: $status) {
-                                success
-                                message
-                                modelVersion {
-                                        hash
-                                        status
-                                        metadata
-                                        createdAt
-                                        updatedAt
-                                }
-                        }
-                }
-                `,
-		Variables: variables,
+// UpdateModelVersionStatusByIdentifier updates the status for a model version by hash or UUID.
+func UpdateModelVersionStatusByIdentifier(input *UpdateModelVersionStatusInput) (*ModelVersion, error) {
+	gqlInput, err := newUpdateModelVersionStatusInput(input)
+	if err != nil {
+		return nil, err
 	}
 
 	res, err := Query(gqlInput)
@@ -884,4 +877,55 @@ func UpdateModelVersionStatus(hash, status string) (*ModelVersion, error) {
 	}
 
 	return result.ModelVersion, nil
+}
+
+func newUpdateModelVersionStatusInput(input *UpdateModelVersionStatusInput) (Input, error) {
+	if input == nil {
+		return Input{}, fmt.Errorf("input cannot be nil")
+	}
+
+	hash := strings.TrimSpace(input.Hash)
+	uuid := strings.TrimSpace(input.UUID)
+	if hash == "" && uuid == "" {
+		return Input{}, fmt.Errorf("either hash or uuid must be provided")
+	}
+	if hash != "" && uuid != "" {
+		return Input{}, fmt.Errorf("only one of hash or uuid can be provided")
+	}
+
+	status := strings.TrimSpace(input.Status)
+	if status == "" {
+		return Input{}, fmt.Errorf("status cannot be empty")
+	}
+
+	variables := map[string]interface{}{
+		"status": status,
+	}
+	if hash != "" {
+		variables["hash"] = hash
+	}
+	if uuid != "" {
+		variables["uuid"] = uuid
+	}
+
+	return Input{
+		Query: `
+                mutation updateModelVersionStatus($uuid: ID, $hash: ID, $status: ModelVersionStatus!) {
+                        updateModelVersionStatus(uuid: $uuid, hash: $hash, status: $status) {
+                                success
+                                message
+                                modelVersion {
+                                        uuid
+                                        hash
+                                        versionHash
+                                        status
+                                        metadata
+                                        createdAt
+                                        updatedAt
+                                }
+                        }
+                }
+                `,
+		Variables: variables,
+	}, nil
 }

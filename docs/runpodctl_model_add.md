@@ -19,6 +19,7 @@ runpodctl model add [flags]
       --credential-type string        credential type (if required)
       --file-name string              file name for upload
       --file-size string              file size in bytes
+      --hash-timeout duration         maximum duration to wait for --wait-for-hash (0 disables timeout) (default 30m0s)
   -h, --help                          help for add
       --metadata stringToString       metadata key=value pairs (default [])
       --model-path string             directory containing model files to upload
@@ -26,6 +27,8 @@ runpodctl model add [flags]
       --name string                   model name
       --owner string                  model owner namespace (user or team owner id)
       --part-size string              multipart upload part size in bytes
+  -v, --verbose                       include upload details in wait-for-hash output
+      --wait-for-hash                 wait for completed model-path uploads to be hashed
 ```
 
 ### Options inherited from parent commands
@@ -37,4 +40,3 @@ runpodctl model add [flags]
 ### SEE ALSO
 
 * [runpodctl model](runpodctl_model.md)	 - manage model repository
-

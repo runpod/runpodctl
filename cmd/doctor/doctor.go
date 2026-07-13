@@ -9,6 +9,7 @@ import (
 	"github.com/runpod/runpodctl/api"
 	"github.com/runpod/runpodctl/cmd/ssh"
 	internalapi "github.com/runpod/runpodctl/internal/api"
+	"github.com/runpod/runpodctl/internal/configenv"
 	"github.com/runpod/runpodctl/internal/output"
 
 	"github.com/spf13/cobra"
@@ -75,10 +76,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 func checkAPIKey() checkResult {
 	result := checkResult{Name: "api_key"}
 
-	apiKey := os.Getenv("RUNPOD_API_KEY")
-	if apiKey == "" {
-		apiKey = viper.GetString("apiKey")
-	}
+	apiKey := configenv.APIKey()
 
 	if apiKey != "" {
 		result.Status = "pass"

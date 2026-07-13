@@ -2,6 +2,7 @@ package model
 
 import (
 	"bytes"
+	"context"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"github.com/runpod/runpodctl/api"
 	"github.com/runpod/runpodctl/internal/output"
 
+	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -34,11 +36,16 @@ var (
 	addModelContentType         string
 	addModelDirectoryPath       string
 	addModelMetadata            map[string]string
+	addModelWaitForHash         bool
+	addModelHashTimeout         time.Duration
+	addModelVerbose             bool
 )
 
 const (
 	graphqlTimeoutFlagName   = "graphql-timeout"
 	modelGraphQLTimeoutValue = time.Minute
+	modelHashPollInterval    = 5 * time.Second
+	modelHashWaitTimeout     = 30 * time.Minute
 )
 
 // The GraphQL requests for uploading a model can take longer than the default
@@ -56,7 +63,6 @@ func setModelGraphQLTimeout(cmd *cobra.Command) {
 		}
 
 		viper.Set(api.GraphQLTimeoutKey, modelGraphQLTimeoutValue)
-		fmt.Fprintf(os.Stderr, "--graphql-timeout not set; defaulting to %s for model creation operations\n", modelGraphQLTimeoutValue)
 		return
 	}
 
@@ -68,7 +74,6 @@ func setModelGraphQLTimeout(cmd *cobra.Command) {
 	}
 
 	viper.Set(api.GraphQLTimeoutKey, modelGraphQLTimeoutValue)
-	fmt.Fprintf(os.Stderr, "defaulting graphql timeout to %s for model creation operations\n", modelGraphQLTimeoutValue)
 }
 
 type completedPart struct {
@@ -96,17 +101,51 @@ type uploadedModelFile struct {
 }
 
 type modelAddOutput struct {
-	Model         *api.Model           `json:"model,omitempty"`
-	Upload        *api.ModelRepoUpload `json:"upload,omitempty"`
-	UploadedFiles []uploadedModelFile  `json:"uploadedFiles,omitempty"`
+	Model          *api.Model           `json:"model,omitempty"`
+	Upload         *api.ModelRepoUpload `json:"upload,omitempty"`
+	UploadedFiles  []uploadedModelFile  `json:"uploadedFiles,omitempty"`
+	ModelSizeBytes *int64               `json:"modelSizeBytes,omitempty"`
+	ModelHash      string               `json:"modelHash,omitempty"`
+	ModelURL       string               `json:"modelUrl,omitempty"`
+}
+
+type compactModelAddOutput struct {
+	Model compactModel `json:"model"`
+}
+
+type compactModel struct {
+	ID    string `json:"id,omitempty"`
+	Name  string `json:"name,omitempty"`
+	Owner string `json:"owner,omitempty"`
+}
+
+type modelReadyOutput struct {
+	Owner     string
+	Name      string
+	ModelHash string
+	ModelURL  string
+}
+
+type modelUploadProgress interface {
+	Add64(int64) error
+	Finish() error
+	Clear() error
+}
+
+type progressReader struct {
+	reader   io.Reader
+	progress modelUploadProgress
 }
 
 // TODO: replace the manual completion call with github.com/aws/aws-sdk-go-v2/service/s3's
 // CompleteMultipartUpload to rely on the SDK for payload formatting and signing logic.
 var (
+	addModelToRepo          = api.AddModelToRepo
 	createModelRepoUpload   = api.CreateModelRepoUpload
 	completeModelRepoUpload = api.CompleteModelRepoUpload
-	completeModelUploadFile = completeModelUpload
+	completeModelUploadFile = completeModelUploadWithProgress
+	getModelsForAdd         = api.GetModels
+	sleepModelHashPoll      = waitModelHashPoll
 )
 
 var addCmd = &cobra.Command{
@@ -146,6 +185,9 @@ func bindAddModelFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&addModelContentType, "content-type", "", "upload content type")
 	cmd.Flags().StringVar(&addModelDirectoryPath, "model-path", "", "directory containing model files to upload")
 	cmd.Flags().StringToStringVar(&addModelMetadata, "metadata", nil, "metadata key=value pairs")
+	cmd.Flags().BoolVar(&addModelWaitForHash, "wait-for-hash", false, "wait for completed model-path uploads to be hashed")
+	cmd.Flags().DurationVar(&addModelHashTimeout, "hash-timeout", modelHashWaitTimeout, "maximum duration to wait for --wait-for-hash (0 disables timeout)")
+	cmd.Flags().BoolVarP(&addModelVerbose, "verbose", "v", false, "include upload details in wait-for-hash output")
 }
 
 func runAddModel(cmd *cobra.Command, args []string) {
@@ -173,12 +215,18 @@ func runAddModel(cmd *cobra.Command, args []string) {
 		addModelCreateUpload = true
 	}
 
+	isUploadFlow := addModelCreateUpload || addModelFileName != "" || addModelFileSize != "" || addModelPartSize != "" || addModelContentType != ""
+
 	var metadata map[string]interface{}
 	if len(addModelMetadata) > 0 {
 		metadata = make(map[string]interface{}, len(addModelMetadata))
 		for key, value := range addModelMetadata {
 			metadata[key] = value
 		}
+	}
+
+	if addModelWaitForHash && len(modelFiles) == 0 {
+		cobra.CheckErr(fmt.Errorf("--wait-for-hash requires --model-path"))
 	}
 
 	input := &api.AddModelToRepoInput{
@@ -189,8 +237,11 @@ func runAddModel(cmd *cobra.Command, args []string) {
 		ModelStatus:         addModelStatus,
 		Metadata:            metadata,
 	}
+	if isUploadFlow {
+		input.Provider = "LOCAL"
+	}
 
-	model, err := api.AddModelToRepo(input)
+	model, err := addModelToRepo(input)
 	if err != nil {
 		if handleModelRepoError(err) {
 			return
@@ -218,9 +269,34 @@ func runAddModel(cmd *cobra.Command, args []string) {
 	uploadInput.Name = addModelName
 
 	if len(modelFiles) > 0 {
-		uploadedFiles, err := uploadModelFiles(modelFiles, uploadInput)
+		uploadedFiles, uploadModel, modelVersionUUID, err := uploadModelFiles(modelFiles, uploadInput)
 		cobra.CheckErr(err)
-		printModelAddOutput(cmd, modelAddOutput{Model: model, UploadedFiles: uploadedFiles})
+		if uploadModel != nil {
+			model = uploadModel
+		}
+		modelSizeBytes := totalModelFileSize(modelFiles)
+		result := modelAddOutput{Model: model, UploadedFiles: uploadedFiles, ModelSizeBytes: &modelSizeBytes}
+		if addModelWaitForHash {
+			if modelVersionUUID == "" {
+				cobra.CheckErr(fmt.Errorf("upload response missing model version uuid required by --wait-for-hash"))
+			}
+			ctx := context.Background()
+			var cancel context.CancelFunc
+			if addModelHashTimeout > 0 {
+				ctx, cancel = context.WithTimeout(ctx, addModelHashTimeout)
+				defer cancel()
+			}
+			ready, err := waitForUploadedModelHash(ctx, addModelOwner, addModelName, model, modelVersionUUID, modelHashPollInterval)
+			cobra.CheckErr(err)
+			result.ModelHash = ready.ModelHash
+			result.ModelURL = ready.ModelURL
+			printModelReadyURL(ready.ModelURL)
+			if !addModelVerbose {
+				printCompactModelAddOutput(cmd, model)
+				return
+			}
+		}
+		printModelAddOutput(cmd, result)
 		return
 	}
 
@@ -239,6 +315,9 @@ func runAddModel(cmd *cobra.Command, args []string) {
 
 	if result.Upload == nil {
 		cobra.CheckErr(fmt.Errorf("upload response missing upload session details"))
+	}
+	if result.Model != nil {
+		model = result.Model
 	}
 
 	printModelAddOutput(cmd, modelAddOutput{Model: model, Upload: result.Upload})
@@ -298,9 +377,239 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 	return files, nil
 }
 
-func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInput) ([]uploadedModelFile, error) {
+func (r progressReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	if n > 0 && r.progress != nil {
+		_ = r.progress.Add64(int64(n))
+	}
+	return n, err
+}
+
+func totalModelFileSize(files []modelFile) int64 {
+	var total int64
+	for _, file := range files {
+		total += file.Size
+	}
+	return total
+}
+
+func stderrIsTerminal() bool {
+	info, err := os.Stderr.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
+
+func newModelUploadProgress(totalBytes int64) modelUploadProgress {
+	if totalBytes <= 0 || !stderrIsTerminal() {
+		return nil
+	}
+
+	return progressbar.NewOptions64(totalBytes,
+		progressbar.OptionOnCompletion(func() {
+			fmt.Fprintln(os.Stderr)
+		}),
+		progressbar.OptionSetDescription("uploading model"),
+		progressbar.OptionSetWidth(20),
+		progressbar.OptionSetRenderBlankState(true),
+		progressbar.OptionShowBytes(true),
+		progressbar.OptionShowCount(),
+		progressbar.OptionSetPredictTime(true),
+		progressbar.OptionThrottle(100*time.Millisecond),
+		progressbar.OptionSetWriter(os.Stderr),
+	)
+}
+
+func printCompletedModelUploadSize(totalBytes int64) {
+	fmt.Fprintf(os.Stderr, "model size: %d bytes\n", totalBytes)
+}
+
+func waitForUploadedModelHash(ctx context.Context, owner, name string, uploadedModel *api.Model, modelVersionUUID string, pollInterval time.Duration) (*modelReadyOutput, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	name = strings.TrimSpace(name)
+	if name == "" && uploadedModel != nil {
+		name = strings.TrimSpace(uploadedModel.Name)
+	}
+	if name == "" {
+		return nil, fmt.Errorf("model name is required to wait for hashing")
+	}
+	modelVersionUUID = strings.TrimSpace(modelVersionUUID)
+	if modelVersionUUID == "" {
+		return nil, fmt.Errorf("model version uuid is required to wait for hashing")
+	}
+
+	fmt.Fprint(os.Stderr, "waiting for model to be hashed")
+	defer fmt.Fprintln(os.Stderr)
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("timed out waiting for model hash: %w", err)
+		}
+
+		models, err := getModelsForAdd(&api.GetModelsInput{Name: name})
+		if err != nil {
+			return nil, fmt.Errorf("get model hash: %w", err)
+		}
+
+		model := findUploadedModel(models, owner, name, uploadedModel)
+		hash := uploadedModelVersionHash(model, modelVersionUUID)
+		if hash != "" {
+			ownerID := modelOwnerForURL(owner, uploadedModel, model)
+			if ownerID == "" {
+				return nil, fmt.Errorf("model owner is required to build model url")
+			}
+			modelName := modelNameForURL(name, uploadedModel, model)
+			if modelName == "" {
+				return nil, fmt.Errorf("model name is required to build model url")
+			}
+
+			modelURL := formatModelURL(ownerID, modelName, hash)
+			return &modelReadyOutput{
+				Owner:     ownerID,
+				Name:      modelName,
+				ModelHash: hash,
+				ModelURL:  modelURL,
+			}, nil
+		}
+
+		fmt.Fprint(os.Stderr, ".")
+		if err := sleepModelHashPoll(ctx, pollInterval); err != nil {
+			return nil, fmt.Errorf("timed out waiting for model hash: %w", err)
+		}
+	}
+}
+
+func uploadedModelVersionHash(model *api.Model, modelVersionUUID string) string {
+	if model == nil {
+		return ""
+	}
+	modelVersionUUID = strings.TrimSpace(modelVersionUUID)
+	if modelVersionUUID == "" {
+		return ""
+	}
+	for _, version := range model.Versions {
+		if version == nil || strings.TrimSpace(version.UUID) != modelVersionUUID {
+			continue
+		}
+		if hash := strings.TrimSpace(version.Hash); hash != "" {
+			return hash
+		}
+		if hash := strings.TrimSpace(version.VersionHash); hash != "" {
+			return hash
+		}
+		return ""
+	}
+	return ""
+}
+
+func waitModelHashPoll(ctx context.Context, duration time.Duration) error {
+	if duration <= 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func findUploadedModel(models []*api.Model, owner, name string, uploadedModel *api.Model) *api.Model {
+	owner = strings.TrimSpace(owner)
+	name = strings.TrimSpace(name)
+	uploadedID := ""
+	uploadedOwner := ""
+	uploadedName := ""
+	if uploadedModel != nil {
+		uploadedID = strings.TrimSpace(uploadedModel.ID)
+		uploadedOwner = strings.TrimSpace(uploadedModel.Owner)
+		uploadedName = strings.TrimSpace(uploadedModel.Name)
+	}
+	if owner == "" {
+		owner = uploadedOwner
+	}
+	if name == "" {
+		name = uploadedName
+	}
+
+	for _, model := range models {
+		if model == nil {
+			continue
+		}
+		if uploadedID != "" && strings.TrimSpace(model.ID) == uploadedID {
+			return model
+		}
+		if name != "" && strings.TrimSpace(model.Name) != name {
+			continue
+		}
+		if owner != "" && strings.TrimSpace(model.Owner) != owner {
+			continue
+		}
+		return model
+	}
+
+	return nil
+}
+
+func modelOwnerForURL(owner string, uploadedModel, polledModel *api.Model) string {
+	if owner = strings.TrimSpace(owner); owner != "" {
+		return owner
+	}
+	if polledModel != nil {
+		if owner = strings.TrimSpace(polledModel.Owner); owner != "" {
+			return owner
+		}
+	}
+	if uploadedModel != nil {
+		return strings.TrimSpace(uploadedModel.Owner)
+	}
+	return ""
+}
+
+func modelNameForURL(name string, uploadedModel, polledModel *api.Model) string {
+	if name = strings.TrimSpace(name); name != "" {
+		return name
+	}
+	if polledModel != nil {
+		if name = strings.TrimSpace(polledModel.Name); name != "" {
+			return name
+		}
+	}
+	if uploadedModel != nil {
+		return strings.TrimSpace(uploadedModel.Name)
+	}
+	return ""
+}
+
+func formatModelURL(owner, name, hash string) string {
+	return fmt.Sprintf("https://local/%s/%s:%s", owner, name, hash)
+}
+
+func printModelReadyURL(modelURL string) {
+	fmt.Fprintf(os.Stderr, "model is ready to deploy, your model url is: \"%s\"\n", shellDoubleQuoteValue(modelURL))
+}
+
+func shellDoubleQuoteValue(value string) string {
+	replacer := strings.NewReplacer(
+		`\`, `\\`,
+		`"`, `\"`,
+		`$`, `\$`,
+		"`", "\\`",
+	)
+	return replacer.Replace(value)
+}
+
+func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInput) ([]uploadedModelFile, *api.Model, string, error) {
 	var modelVersionUUID string
+	var uploadModel *api.Model
 	uploadedFiles := make([]uploadedModelFile, 0, len(files))
+	totalSize := totalModelFileSize(files)
+	progress := newModelUploadProgress(totalSize)
 
 	for i, file := range files {
 		input := *baseInput
@@ -310,26 +619,44 @@ func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInp
 
 		result, err := createModelRepoUpload(&input)
 		if err != nil {
-			return nil, fmt.Errorf("create upload for %s: %w", file.RelativePath, err)
+			if progress != nil {
+				_ = progress.Clear()
+			}
+			return nil, nil, "", fmt.Errorf("create upload for %s: %w", file.RelativePath, err)
 		}
 		if result.Upload == nil {
-			return nil, fmt.Errorf("upload response missing upload session details for %s", file.RelativePath)
+			if progress != nil {
+				_ = progress.Clear()
+			}
+			return nil, nil, "", fmt.Errorf("upload response missing upload session details for %s", file.RelativePath)
+		}
+		if result.Model != nil {
+			uploadModel = result.Model
 		}
 		if modelVersionUUID == "" {
 			if result.Version != nil {
 				modelVersionUUID = strings.TrimSpace(result.Version.UUID)
 			}
 			if modelVersionUUID == "" && i < len(files)-1 {
-				return nil, fmt.Errorf("upload response missing model version uuid for %s", file.RelativePath)
+				if progress != nil {
+					_ = progress.Clear()
+				}
+				return nil, nil, "", fmt.Errorf("upload response missing model version uuid for %s", file.RelativePath)
 			}
 		}
 
-		if err = completeModelUploadFile(result.Upload, file.AbsolutePath); err != nil {
-			return nil, fmt.Errorf("upload %s: %w", file.RelativePath, err)
+		if err = completeModelUploadFile(result.Upload, file.AbsolutePath, progress); err != nil {
+			if progress != nil {
+				_ = progress.Clear()
+			}
+			return nil, nil, "", fmt.Errorf("upload %s: %w", file.RelativePath, err)
 		}
 
 		if result.Upload.SessionID == "" {
-			return nil, fmt.Errorf("upload %s: missing session identifier for completion", file.RelativePath)
+			if progress != nil {
+				_ = progress.Clear()
+			}
+			return nil, nil, "", fmt.Errorf("upload %s: missing session identifier for completion", file.RelativePath)
 		}
 
 		uploadedFiles = append(uploadedFiles, uploadedModelFile{
@@ -342,14 +669,22 @@ func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInp
 	for i := range uploadedFiles {
 		completion, err := completeModelRepoUpload(uploadedFiles[i].SessionID)
 		if err != nil {
-			return nil, fmt.Errorf("complete upload session for %s: %w", uploadedFiles[i].RelativePath, err)
+			if progress != nil {
+				_ = progress.Clear()
+			}
+			return nil, nil, "", fmt.Errorf("complete upload session for %s: %w", uploadedFiles[i].RelativePath, err)
 		}
 
 		uploadedFiles[i].SessionID = completion.SessionID
 		uploadedFiles[i].Status = completion.Status
 	}
 
-	return uploadedFiles, nil
+	if progress != nil {
+		_ = progress.Finish()
+	}
+	printCompletedModelUploadSize(totalSize)
+
+	return uploadedFiles, uploadModel, modelVersionUUID, nil
 }
 
 func printModelAddOutput(cmd *cobra.Command, result modelAddOutput) {
@@ -357,7 +692,24 @@ func printModelAddOutput(cmd *cobra.Command, result modelAddOutput) {
 	cobra.CheckErr(output.Print(result, &output.Config{Format: format}))
 }
 
+func printCompactModelAddOutput(cmd *cobra.Command, model *api.Model) {
+	format := output.ParseFormat(cmd.Flag("output").Value.String())
+	compact := compactModel{}
+	if model != nil {
+		compact.ID = strings.TrimSpace(model.ID)
+		compact.Name = strings.TrimSpace(model.Name)
+		compact.Owner = strings.TrimSpace(model.Owner)
+	}
+	cobra.CheckErr(output.Print(compactModelAddOutput{
+		Model: compact,
+	}, &output.Config{Format: format}))
+}
+
 func completeModelUpload(upload *api.ModelRepoUpload, artifactPath string) error {
+	return completeModelUploadWithProgress(upload, artifactPath, nil)
+}
+
+func completeModelUploadWithProgress(upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
 	if upload == nil {
 		return fmt.Errorf("upload details are required")
 	}
@@ -409,8 +761,12 @@ func completeModelUpload(upload *api.ModelRepoUpload, artifactPath string) error
 			chunkSize = remaining
 		}
 
-		section := io.NewSectionReader(file, offset, chunkSize)
-		req, err := http.NewRequest(http.MethodPut, part.URL, section)
+		var body io.Reader = io.NewSectionReader(file, offset, chunkSize)
+		if progress != nil {
+			body = progressReader{reader: body, progress: progress}
+		}
+
+		req, err := http.NewRequest(http.MethodPut, part.URL, body)
 		if err != nil {
 			return fmt.Errorf("create request for part %d: %w", part.PartNumber, err)
 		}

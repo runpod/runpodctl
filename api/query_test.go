@@ -11,6 +11,7 @@ import (
 
 func TestQueryUsesGraphQLEndpointEnv(t *testing.T) {
 	viper.Reset()
+	t.Cleanup(viper.Reset)
 	t.Setenv("RUNPOD_API_KEY", "test-key")
 
 	restServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -18,6 +19,12 @@ func TestQueryUsesGraphQLEndpointEnv(t *testing.T) {
 	}))
 	defer restServer.Close()
 	t.Setenv("RUNPOD_API_URL", restServer.URL)
+
+	configServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("expected RUNPOD_GRAPHQL_URL to override configured apiUrl")
+	}))
+	defer configServer.Close()
+	viper.Set("apiUrl", configServer.URL)
 
 	graphqlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var input Input
@@ -41,6 +48,7 @@ func TestQueryUsesGraphQLEndpointEnv(t *testing.T) {
 
 func TestQueryFallsBackToConfiguredAPIURL(t *testing.T) {
 	viper.Reset()
+	t.Cleanup(viper.Reset)
 	t.Setenv("RUNPOD_API_KEY", "test-key")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

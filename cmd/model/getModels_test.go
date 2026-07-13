@@ -64,6 +64,15 @@ func TestModelCommandFlags(t *testing.T) {
 	if addCmd.Flags().Lookup("owner") == nil {
 		t.Fatal("expected model add --owner flag")
 	}
+	if addCmd.Flags().Lookup("wait-for-hash") == nil {
+		t.Fatal("expected model add --wait-for-hash flag")
+	}
+	if addCmd.Flags().Lookup("hash-timeout") == nil {
+		t.Fatal("expected model add --hash-timeout flag")
+	}
+	if addCmd.Flags().Lookup("verbose") == nil {
+		t.Fatal("expected model add --verbose flag")
+	}
 	if addCmd.Flags().Lookup("version-status") != nil {
 		t.Fatal("did not expect model add --version-status flag")
 	}

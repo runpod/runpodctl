@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/runpod/runpodctl/internal/agent"
+	"github.com/spf13/viper"
 )
 
 func TestNewClient_NoAPIKey(t *testing.T) {
@@ -30,6 +31,27 @@ func TestNewClient_WithEnvKey(t *testing.T) {
 	}
 	if client == nil {
 		t.Error("expected client to be created")
+	}
+}
+
+func TestNewClientEnvOverridesConfig(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	viper.Set("apiKey", "config-key")
+	viper.Set("restApiUrl", "https://config.example.test")
+	t.Setenv("RUNPOD_API_KEY", "env-key")
+	t.Setenv("RUNPOD_API_URL", "https://env.example.test")
+
+	client, err := NewClient()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if client.apiKey != "env-key" {
+		t.Fatalf("expected env api key, got %q", client.apiKey)
+	}
+	if client.baseURL != "https://env.example.test" {
+		t.Fatalf("expected env rest url, got %q", client.baseURL)
 	}
 }
 
@@ -145,6 +167,53 @@ func TestClient_ErrorResponse(t *testing.T) {
 	_, err = client.Get("/notfound", nil)
 	if err == nil {
 		t.Error("expected error for 404 response")
+	}
+}
+
+func TestClientGraphQLRequestEnvOverridesConfig(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	configHit := false
+	configServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		configHit = true
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer configServer.Close()
+	viper.Set("apiUrl", configServer.URL)
+
+	graphqlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": map[string]interface{}{
+				"myself": map[string]interface{}{
+					"id":                "user-1",
+					"email":             "test@example.com",
+					"clientBalance":     1,
+					"currentSpendPerHr": 0,
+					"spendLimit":        10,
+				},
+			},
+		})
+	}))
+	defer graphqlServer.Close()
+	t.Setenv("RUNPOD_GRAPHQL_URL", graphqlServer.URL)
+
+	client := &Client{
+		baseURL:    "https://rest.example.test",
+		apiKey:     "test-key",
+		httpClient: graphqlServer.Client(),
+		userAgent:  "test",
+	}
+
+	user, err := client.GetUser()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if user.ID != "user-1" {
+		t.Fatalf("unexpected user id: %q", user.ID)
+	}
+	if configHit {
+		t.Fatal("expected RUNPOD_GRAPHQL_URL to override configured apiUrl")
 	}
 }
 
