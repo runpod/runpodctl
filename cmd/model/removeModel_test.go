@@ -11,7 +11,6 @@ func TestFindModelVersion(t *testing.T) {
 		Versions: []*api.ModelVersion{
 			nil,
 			{UUID: "version-uuid", Hash: "version-hash"},
-			{UUID: "other-uuid", VersionHash: "legacy-version-hash"},
 		},
 	}
 
@@ -22,7 +21,6 @@ func TestFindModelVersion(t *testing.T) {
 		want    string
 	}{
 		{name: "hash", hash: "version-hash", want: "version-uuid"},
-		{name: "version hash", hash: "legacy-version-hash", want: "other-uuid"},
 		{name: "uuid", version: "version-uuid", want: "version-uuid"},
 		{name: "missing", hash: "missing", want: ""},
 	}
@@ -53,24 +51,12 @@ func TestRemoveModelVersionUpdatesTargetVersion(t *testing.T) {
 		wantUUID string
 	}{
 		{
-			name: "hash uses canonical target hash",
+			name: "hash uses target hash",
 			model: &api.Model{
 				Owner: "owner",
 				Name:  "name",
 				Versions: []*api.ModelVersion{
-					{UUID: "version-uuid", Hash: "canonical-hash", VersionHash: "version-hash"},
-				},
-			},
-			hash:     "version-hash",
-			wantHash: "canonical-hash",
-		},
-		{
-			name: "hash falls back to target version hash",
-			model: &api.Model{
-				Owner: "owner",
-				Name:  "name",
-				Versions: []*api.ModelVersion{
-					{UUID: "version-uuid", VersionHash: "version-hash"},
+					{UUID: "version-uuid", Hash: "version-hash"},
 				},
 			},
 			hash:     "version-hash",

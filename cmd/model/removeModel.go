@@ -117,9 +117,6 @@ func removeModelVersion(owner, name, hash, version string) (*api.ModelRepoMutati
 	}
 	if hash != "" {
 		input.Hash = target.Hash
-		if input.Hash == "" {
-			input.Hash = target.VersionHash
-		}
 	} else {
 		input.UUID = target.UUID
 	}
@@ -146,7 +143,7 @@ func findModelVersion(model *api.Model, hash, version string) *api.ModelVersion 
 		if modelVersion == nil {
 			continue
 		}
-		if hash != "" && (modelVersion.Hash == hash || modelVersion.VersionHash == hash) {
+		if hash != "" && modelVersion.Hash == hash {
 			return modelVersion
 		}
 		if version != "" && modelVersion.UUID == version {

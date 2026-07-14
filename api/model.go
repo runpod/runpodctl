@@ -38,13 +38,12 @@ type ModelUser struct {
 
 // ModelVersion represents a specific version of a model stored in the repository.
 type ModelVersion struct {
-	UUID        string                 `json:"uuid,omitempty"`
-	Hash        string                 `json:"hash,omitempty"`
-	VersionHash string                 `json:"versionHash,omitempty"`
-	Status      string                 `json:"status,omitempty"`
-	CreatedAt   string                 `json:"createdAt,omitempty"`
-	UpdatedAt   string                 `json:"updatedAt,omitempty"`
-	Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	UUID      string                 `json:"uuid,omitempty"`
+	Hash      string                 `json:"hash,omitempty"`
+	Status    string                 `json:"status,omitempty"`
+	CreatedAt string                 `json:"createdAt,omitempty"`
+	UpdatedAt string                 `json:"updatedAt,omitempty"`
+	Metadata  map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // ModelVersionStatus constants used when updating a model version's status.
@@ -358,7 +357,6 @@ func GetModels(input *GetModelsInput) ([]*Model, error) {
         versions {
                 uuid
                 hash
-                versionHash
                 status
                 metadata
                 createdAt
@@ -471,7 +469,6 @@ func GetModel(input *GetModelInput) (*Model, error) {
                                 versions {
                                         uuid
                                         hash
-                                        versionHash
                                         status
                                         metadata
                                         createdAt
@@ -917,7 +914,6 @@ func newUpdateModelVersionStatusInput(input *UpdateModelVersionStatusInput) (Inp
                                 modelVersion {
                                         uuid
                                         hash
-                                        versionHash
                                         status
                                         metadata
                                         createdAt
