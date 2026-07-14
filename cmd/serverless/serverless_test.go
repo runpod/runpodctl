@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/runpod/runpodctl/internal/api"
 	"github.com/spf13/cobra"
 )
 
@@ -123,6 +124,49 @@ func snapshotCreateFlags(t *testing.T) {
 	createEnvVars, createModelReferences = nil, nil
 }
 
+type mockServerlessCreateClient struct {
+	listing       *api.Listing
+	getListingHit bool
+	createInput   *api.EndpointCreateGQLInput
+}
+
+func (c *mockServerlessCreateClient) GetListing(string) (*api.Listing, error) {
+	c.getListingHit = true
+	return c.listing, nil
+}
+
+func (c *mockServerlessCreateClient) ResolveServerlessGpuPoolID(gpuID string) (string, error) {
+	return gpuID, nil
+}
+
+func (c *mockServerlessCreateClient) CreateEndpointGQL(input *api.EndpointCreateGQLInput) (*api.Endpoint, error) {
+	c.createInput = input
+	return &api.Endpoint{ID: "endpoint-1", Name: input.Name}, nil
+}
+
+func mockCreateCommand(changedFlags ...string) *cobra.Command {
+	cmd := &cobra.Command{}
+	cmd.Flags().String("compute-type", "GPU", "")
+	cmd.Flags().Int("gpu-count", 1, "")
+	cmd.Flags().String("output", "json", "")
+	for _, name := range changedFlags {
+		cmd.Flags().Lookup(name).Changed = true
+	}
+	return cmd
+}
+
+func mockHubListing(config string) *api.Listing {
+	return &api.Listing{
+		ID:    "hub-1",
+		Title: "Hub endpoint",
+		ListedRelease: &api.HubRelease{
+			ID:     "release-1",
+			Config: config,
+			Build:  &api.GitBuild{ImageName: "runpod/test:latest"},
+		},
+	}
+}
+
 // these validations all run before any api client/network call, so they're
 // safe to exercise without hitting the live api.
 func TestCreateCmd_Validations(t *testing.T) {
@@ -179,6 +223,99 @@ func TestCreateCmd_Validations(t *testing.T) {
 			if !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("expected error containing %q, got: %v", tc.wantErr, err)
 			}
+		})
+	}
+}
+
+func TestHubDeploymentConstraintPrecedence(t *testing.T) {
+	config := api.HubReleaseConfig{
+		GpuCount:            2,
+		AllowedCudaVersions: []string{"13.0", "12.8"},
+	}
+
+	if got := hubGPUCount(config, 1, false); got != 2 {
+		t.Fatalf("hub gpu count = %d, want 2", got)
+	}
+	if got := hubGPUCount(config, 4, true); got != 4 {
+		t.Fatalf("explicit gpu count = %d, want 4", got)
+	}
+	if got := hubMinCudaVersion(config.AllowedCudaVersions); got != "13.0" {
+		t.Fatalf("hub cuda version = %q, want 13.0", got)
+	}
+	if got := hubMinCudaVersion([]string{" ", "12.8"}); got != "12.8" {
+		t.Fatalf("blank cuda values were not ignored: %q", got)
+	}
+}
+
+func TestRunCreate_HubDeploymentConstraints(t *testing.T) {
+	cases := []struct {
+		name       string
+		config     string
+		setup      func()
+		wantInput  func(*testing.T, *api.EndpointCreateGQLInput)
+		wantErr    string
+		wantCreate bool
+	}{
+		{
+			name:   "applies gpu constraints",
+			config: `{"runsOn":"GPU","gpuCount":2,"allowedCudaVersions":["13.0","12.8"]}`,
+			wantInput: func(t *testing.T, input *api.EndpointCreateGQLInput) {
+				t.Helper()
+				if input.GpuCount != 2 || input.MinCudaVersion != "13.0" {
+					t.Fatalf("gpu constraints = count %d, cuda %q", input.GpuCount, input.MinCudaVersion)
+				}
+			},
+			wantCreate: true,
+		},
+		{
+			name:   "runsOn overrides default compute type",
+			config: `{"runsOn":"CPU"}`,
+			wantInput: func(t *testing.T, input *api.EndpointCreateGQLInput) {
+				t.Helper()
+				if len(input.InstanceIDs) != 1 || input.InstanceIDs[0] != defaultCPUInstanceID {
+					t.Fatalf("instance ids = %v, want default cpu instance", input.InstanceIDs)
+				}
+			},
+			wantCreate: true,
+		},
+		{
+			name:    "reports hub compute constraint",
+			config:  `{"runsOn":"CPU"}`,
+			setup:   func() { createGpuTypeID = "NVIDIA A40" },
+			wantErr: `hub listing "hub-1" requires CPU: --gpu-id must be empty`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshotCreateFlags(t)
+			createTemplateID, createHubID = "", "hub-1"
+			if tc.setup != nil {
+				tc.setup()
+			}
+
+			client := &mockServerlessCreateClient{listing: mockHubListing(tc.config)}
+			oldFactory := newServerlessCreateClient
+			newServerlessCreateClient = func() (serverlessCreateClient, error) { return client, nil }
+			t.Cleanup(func() { newServerlessCreateClient = oldFactory })
+
+			err := runCreate(mockCreateCommand(), nil)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("error = %v, want containing %q", err, tc.wantErr)
+				}
+				if !client.getListingHit {
+					t.Fatal("hub lookup was skipped before Hub-derived validation")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantCreate && client.createInput == nil {
+				t.Fatal("endpoint create was not called")
+			}
+			tc.wantInput(t, client.createInput)
 		})
 	}
 }

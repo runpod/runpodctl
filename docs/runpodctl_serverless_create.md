@@ -8,6 +8,7 @@ create a new serverless endpoint.
 
 requires either --template-id or --hub-id.
 --hub-id accepts both SERVERLESS and POD hub listings.
+hub deployment constraints are applied unless explicitly overridden by cli flags.
 
 examples:
   # create from a template

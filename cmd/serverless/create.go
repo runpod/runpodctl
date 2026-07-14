@@ -23,6 +23,7 @@ var createCmd = &cobra.Command{
 
 requires either --template-id or --hub-id.
 --hub-id accepts both SERVERLESS and POD hub listings.
+hub deployment constraints are applied unless explicitly overridden by cli flags.
 
 examples:
   # create from a template
@@ -69,6 +70,16 @@ var (
 	createNetworkVolumeIDs string
 	createModelReferences  []string
 )
+
+type serverlessCreateClient interface {
+	GetListing(string) (*api.Listing, error)
+	ResolveServerlessGpuPoolID(string) (string, error)
+	CreateEndpointGQL(*api.EndpointCreateGQLInput) (*api.Endpoint, error)
+}
+
+var newServerlessCreateClient = func() (serverlessCreateClient, error) {
+	return api.NewClient()
+}
 
 func init() {
 	createCmd.Flags().StringVar(&createName, "name", "", "endpoint name")
@@ -120,24 +131,62 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	if strings.Contains(gpuTypeID, ",") {
 		return fmt.Errorf("only one gpu id is supported; use --gpu-count for multiple gpus of the same type")
 	}
-	if computeType == "CPU" && gpuTypeID != "" {
-		return fmt.Errorf("--gpu-id must be empty when --compute-type is CPU")
-	}
-	if computeType == "GPU" && strings.TrimSpace(createInstanceID) != "" {
-		return fmt.Errorf("--instance-id is only supported with --compute-type CPU")
-	}
-
-	if len(createModelReferences) > 0 && computeType != "GPU" {
-		return fmt.Errorf("--model-reference is only supported with --compute-type GPU")
+	if createHubID == "" || flagChanged(cmd, "compute-type") {
+		// Validate before the Hub lookup when its compute type cannot override it.
+		if err := validateComputeFlags(computeType, gpuTypeID, createInstanceID, createModelReferences); err != nil {
+			return err
+		}
 	}
 
 	if createNetworkVolumeID != "" && createNetworkVolumeIDs != "" {
 		return fmt.Errorf("--network-volume-id and --network-volume-ids are mutually exclusive")
 	}
 
-	client, err := api.NewClient()
+	client, err := newServerlessCreateClient()
 	if err != nil {
 		output.Error(err)
+		return err
+	}
+
+	var listing *api.Listing
+	var release *api.HubRelease
+	var hubConfig api.HubReleaseConfig
+	var imageName string
+	if createHubID != "" {
+		listing, err = client.GetListing(createHubID)
+		if err != nil {
+			output.Error(err)
+			return fmt.Errorf("failed to get hub listing: %w", err)
+		}
+		if listing.ListedRelease == nil {
+			return fmt.Errorf("hub listing %q has no published release", createHubID)
+		}
+
+		release = listing.ListedRelease
+		if release.Build != nil {
+			imageName = release.Build.ImageName
+		}
+		if imageName == "" {
+			return fmt.Errorf("hub listing %q has no built image; the release may still be building", createHubID)
+		}
+
+		if release.Config != "" {
+			if err := json.Unmarshal([]byte(release.Config), &hubConfig); err != nil {
+				return fmt.Errorf("failed to parse hub release config for %q: %w", createHubID, err)
+			}
+		}
+	}
+
+	if createHubID != "" && !flagChanged(cmd, "compute-type") && hubConfig.RunsOn != "" {
+		computeType = strings.ToUpper(strings.TrimSpace(hubConfig.RunsOn))
+	}
+	if computeType != "GPU" && computeType != "CPU" {
+		return fmt.Errorf("hub listing %q has unsupported runsOn value %q", createHubID, hubConfig.RunsOn)
+	}
+	if err := validateComputeFlags(computeType, gpuTypeID, createInstanceID, createModelReferences); err != nil {
+		if createHubID != "" && !flagChanged(cmd, "compute-type") && hubConfig.RunsOn != "" {
+			return fmt.Errorf("hub listing %q requires %s: %w", createHubID, computeType, err)
+		}
 		return err
 	}
 
@@ -160,11 +209,11 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		if createMinCudaVersion != "" {
 			fmt.Fprintln(cmd.ErrOrStderr(), "note: --min-cuda-version has no effect with --compute-type cpu; ignoring")
 		}
-		if cmd.Flags().Changed("gpu-count") {
+		if flagChanged(cmd, "gpu-count") {
 			fmt.Fprintln(cmd.ErrOrStderr(), "note: --gpu-count has no effect with --compute-type cpu; ignoring")
 		}
 	} else {
-		input.GpuCount = createGpuCount
+		input.GpuCount = hubGPUCount(hubConfig, createGpuCount, flagChanged(cmd, "gpu-count"))
 		if gpuTypeID != "" {
 			// saveEndpoint wants a gpu pool id, not a gpu type id; translate.
 			poolID, err := client.ResolveServerlessGpuPoolID(gpuTypeID)
@@ -176,6 +225,8 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		}
 		if createMinCudaVersion != "" {
 			input.MinCudaVersion = createMinCudaVersion
+		} else if createHubID != "" {
+			input.MinCudaVersion = hubMinCudaVersion(hubConfig.AllowedCudaVersions)
 		}
 	}
 
@@ -236,36 +287,11 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	endpointName := createName
 
-	// hub-id path: resolve listing, attach release + inline template (same as web ui).
+	// hub-id path: attach the resolved release and an inline template (same as web ui).
 	if createHubID != "" {
-		listing, err := client.GetListing(createHubID)
-		if err != nil {
-			output.Error(err)
-			return fmt.Errorf("failed to get hub listing: %w", err)
-		}
-		if listing.ListedRelease == nil {
-			return fmt.Errorf("hub listing %q has no published release", createHubID)
-		}
-
-		release := listing.ListedRelease
-
-		// build inline template from the hub release (same as web ui)
-		var imageName string
-		if release.Build != nil {
-			imageName = release.Build.ImageName
-		}
-		if imageName == "" {
-			return fmt.Errorf("hub listing %q has no built image; the release may still be building", createHubID)
-		}
-
 		containerDisk := 10
-		var hubConfig api.HubReleaseConfig
-		if release.Config != "" {
-			if err := json.Unmarshal([]byte(release.Config), &hubConfig); err == nil {
-				if hubConfig.ContainerDiskInGb > 0 {
-					containerDisk = hubConfig.ContainerDiskInGb
-				}
-			}
+		if hubConfig.ContainerDiskInGb > 0 {
+			containerDisk = hubConfig.ContainerDiskInGb
 		}
 
 		// translate hub release env config into pod env vars
@@ -349,6 +375,45 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
 	return output.Print(endpoint, &output.Config{Format: format})
+}
+
+// flagChanged reports whether a command-line value was explicitly provided.
+// Hub release values must override CLI defaults, but never explicit user input.
+func flagChanged(cmd *cobra.Command, name string) bool {
+	flag := cmd.Flags().Lookup(name)
+	return flag != nil && flag.Changed
+}
+
+func hubGPUCount(config api.HubReleaseConfig, cliValue int, cliChanged bool) int {
+	if !cliChanged && config.GpuCount > 0 {
+		return config.GpuCount
+	}
+	return cliValue
+}
+
+// hubMinCudaVersion translates the ordered Hub constraint list to EndpointInput's
+// single minCudaVersion field. The first non-empty Hub value is sent; blank
+// optional values are ignored.
+func hubMinCudaVersion(versions []string) string {
+	for _, version := range versions {
+		if version = strings.TrimSpace(version); version != "" {
+			return version
+		}
+	}
+	return ""
+}
+
+func validateComputeFlags(computeType, gpuTypeID, instanceID string, modelReferences []string) error {
+	if computeType == "CPU" && gpuTypeID != "" {
+		return fmt.Errorf("--gpu-id must be empty when --compute-type is CPU")
+	}
+	if computeType == "GPU" && strings.TrimSpace(instanceID) != "" {
+		return fmt.Errorf("--instance-id is only supported with --compute-type CPU")
+	}
+	if len(modelReferences) > 0 && computeType != "GPU" {
+		return fmt.Errorf("--model-reference is only supported with --compute-type GPU")
+	}
+	return nil
 }
 
 // randomString builds a short lowercase suffix for generated endpoint/template
