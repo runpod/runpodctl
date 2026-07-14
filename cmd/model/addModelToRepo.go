@@ -497,9 +497,6 @@ func uploadedModelVersionHash(model *api.Model, modelVersionUUID string) string 
 		if hash := strings.TrimSpace(version.Hash); hash != "" {
 			return hash
 		}
-		if hash := strings.TrimSpace(version.VersionHash); hash != "" {
-			return hash
-		}
 		return ""
 	}
 	return ""

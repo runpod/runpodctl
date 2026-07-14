@@ -86,9 +86,8 @@ func TestGetModelsRequestsVersionIdentifiers(t *testing.T) {
 						"provider": "LOCAL",
 						"versions": []map[string]interface{}{
 							{
-								"uuid":        "version-uuid",
-								"hash":        "version-hash",
-								"versionHash": "legacy-version-hash",
+								"uuid": "version-uuid",
+								"hash": "version-hash",
 							},
 						},
 					},
@@ -106,14 +105,17 @@ func TestGetModelsRequestsVersionIdentifiers(t *testing.T) {
 	if !strings.Contains(query, "uuid") {
 		t.Fatalf("expected GetModels query to request version uuid, got %s", query)
 	}
-	if !strings.Contains(query, "versionHash") {
-		t.Fatalf("expected GetModels query to request versionHash, got %s", query)
+	if !strings.Contains(query, "hash") {
+		t.Fatalf("expected GetModels query to request version hash, got %s", query)
+	}
+	if strings.Contains(query, "versionHash") {
+		t.Fatalf("GetModels query must not request versionHash, got %s", query)
 	}
 	if len(models) != 1 || len(models[0].Versions) != 1 {
 		t.Fatalf("expected one model version, got %#v", models)
 	}
 	version := models[0].Versions[0]
-	if version.UUID != "version-uuid" || version.Hash != "version-hash" || version.VersionHash != "legacy-version-hash" {
+	if version.UUID != "version-uuid" || version.Hash != "version-hash" {
 		t.Fatalf("expected version identifiers to decode, got %#v", version)
 	}
 }
