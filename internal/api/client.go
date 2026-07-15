@@ -125,6 +125,17 @@ func (c *Client) Delete(endpoint string) ([]byte, error) {
 	return c.request(http.MethodDelete, endpoint, nil, nil)
 }
 
+// Error codes emitted by the cli via the ErrorCode() interface. These form the
+// stable, lowercase vocabulary agents branch on:
+//
+//	bad_request, unauthorized, forbidden, not_found, conflict, rate_limited,
+//	server_error, api_error   -- from a REST APIError (see codeForStatus)
+//	graphql_error             -- from a GraphQLError
+//	usage_error               -- from a cli usage mistake (see cmd package)
+//
+// An explicit code returned by the API is passed through (lowercased) instead
+// of the status-derived one.
+
 // APIError is a structured error returned by the runpod API. It implements the
 // error interface and exposes a stable machine-readable code plus the HTTP
 // status so the cli can emit a single flat JSON error object for agents.
@@ -196,7 +207,8 @@ func parseAPIError(body []byte, status int) *APIError {
 			case envelope.Message != "":
 				apiErr.Message = envelope.Message
 			}
-			apiErr.Code = envelope.Code
+			// normalize an explicit api code to the lowercase vocabulary.
+			apiErr.Code = strings.ToLower(envelope.Code)
 		}
 	}
 
@@ -210,9 +222,68 @@ func parseAPIError(body []byte, status int) *APIError {
 	return apiErr
 }
 
-// FormatError formats an error as a flat JSON object for agent consumption.
-func FormatError(err error) string {
-	apiErr := APIError{Message: err.Error()}
-	data, _ := json.Marshal(apiErr)
-	return string(data)
+// GraphQLError is a structured error from a GraphQL response. GraphQL commonly
+// returns HTTP 200 with an {"errors":[{message}]} body, so Message is the
+// unwrapped errors[0].message rather than the raw envelope. It carries a stable
+// code so agents can branch on graphql failures the same way as REST ones.
+type GraphQLError struct {
+	Message string
+	Status  int
+}
+
+// Error implements the error interface, preserving the historical
+// "graphql error: <message>" text.
+func (e *GraphQLError) Error() string { return "graphql error: " + e.Message }
+
+// ErrorCode returns the stable code for a graphql failure.
+func (e *GraphQLError) ErrorCode() string { return "graphql_error" }
+
+// HTTPStatus returns the HTTP status associated with the error (0 when the
+// failure came back inside a 200 response body).
+func (e *GraphQLError) HTTPStatus() int { return e.Status }
+
+// newGraphQLError wraps an already-unwrapped graphql message.
+func newGraphQLError(message string) *GraphQLError {
+	return &GraphQLError{Message: message}
+}
+
+// parseGraphQLHTTPError builds a GraphQLError from a non-200 graphql HTTP
+// response, unwrapping the errors/error envelope so the body is not
+// double-encoded into the message string.
+func parseGraphQLHTTPError(body []byte, status int) *GraphQLError {
+	msg := extractGraphQLMessage(body)
+	if msg == "" {
+		msg = strings.TrimSpace(string(body))
+	}
+	if msg == "" {
+		msg = fmt.Sprintf("request failed with status %d", status)
+	}
+	return &GraphQLError{Message: msg, Status: status}
+}
+
+// extractGraphQLMessage pulls the first human-readable message out of a graphql
+// error body ({"errors":[{message}]} or {"error"/"message":...}), or "" when
+// the body is not that shape.
+func extractGraphQLMessage(body []byte) string {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return ""
+	}
+	var env struct {
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(trimmed, &env); err != nil {
+		return ""
+	}
+	if len(env.Errors) > 0 && env.Errors[0].Message != "" {
+		return env.Errors[0].Message
+	}
+	if env.Error != "" {
+		return env.Error
+	}
+	return env.Message
 }

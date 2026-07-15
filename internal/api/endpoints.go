@@ -210,7 +210,7 @@ func (c *Client) UpdateEndpointTemplate(endpointID, templateID string) error {
 	}
 
 	if len(resp.Errors) > 0 {
-		return fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+		return newGraphQLError(resp.Errors[0].Message)
 	}
 
 	return nil
@@ -312,7 +312,7 @@ func (c *Client) UpdateEndpointModels(endpointID string, modelRefs []string) (*E
 	}
 
 	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+		return nil, newGraphQLError(resp.Errors[0].Message)
 	}
 
 	if resp.Data.SaveEndpoint == nil {
@@ -418,7 +418,7 @@ func (c *Client) CreateEndpointGQL(req *EndpointCreateGQLInput) (*Endpoint, erro
 	}
 
 	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+		return nil, newGraphQLError(resp.Errors[0].Message)
 	}
 
 	if resp.Data.SaveEndpoint == nil {

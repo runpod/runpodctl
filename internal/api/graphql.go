@@ -89,7 +89,7 @@ func (c *GraphQLClient) Query(input GraphQLInput) ([]byte, error) {
 	}
 
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("graphql error: status %d: %s", resp.StatusCode, string(body))
+		return nil, parseGraphQLHTTPError(body, resp.StatusCode)
 	}
 
 	return body, nil
@@ -137,7 +137,7 @@ func (c *GraphQLClient) GetPublicSSHKeys() (string, []SSHKey, error) {
 	}
 
 	if len(data.Errors) > 0 {
-		return "", nil, fmt.Errorf("graphql error: %s", data.Errors[0].Message)
+		return "", nil, newGraphQLError(data.Errors[0].Message)
 	}
 
 	// Parse the public key string into a list of SSHKey structs
@@ -483,7 +483,7 @@ func (c *GraphQLClient) GetPods() ([]*LegacyPod, error) {
 	}
 
 	if len(data.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", data.Errors[0].Message)
+		return nil, newGraphQLError(data.Errors[0].Message)
 	}
 
 	return data.Data.Myself.Pods, nil
@@ -535,7 +535,7 @@ func (c *GraphQLClient) GetNetworkVolumes() ([]*LegacyNetworkVolume, error) {
 	}
 
 	if len(data.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", data.Errors[0].Message)
+		return nil, newGraphQLError(data.Errors[0].Message)
 	}
 
 	return data.Data.Myself.NetworkVolumes, nil

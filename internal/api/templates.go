@@ -343,7 +343,7 @@ func (c *Client) getTemplateByIDGraphQL(templateID string) (*Template, error) {
 	}
 
 	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+		return nil, newGraphQLError(resp.Errors[0].Message)
 	}
 
 	if resp.Data.PodTemplate == nil {
