@@ -157,7 +157,6 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		if createGlobalNetworking {
 			err = decorateGlobalNetworkingError(err, createDataCenterIDs)
 		}
-		output.Error(err)
 		return fmt.Errorf("failed to create pod: %w", err)
 	}
 

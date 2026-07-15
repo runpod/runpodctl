@@ -22,13 +22,11 @@ func runGet(cmd *cobra.Command, args []string) error {
 
 	client, err := api.NewClient()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
 	volume, err := client.GetNetworkVolume(volumeID)
 	if err != nil {
-		output.Error(err)
 		return fmt.Errorf("failed to get volume: %w", err)
 	}
 

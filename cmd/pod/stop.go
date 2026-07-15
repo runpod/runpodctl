@@ -22,13 +22,11 @@ func runStop(cmd *cobra.Command, args []string) error {
 
 	client, err := api.NewClient()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
 	pod, err := client.StopPod(podID)
 	if err != nil {
-		output.Error(err)
 		return fmt.Errorf("failed to stop pod: %w", err)
 	}
 

@@ -22,13 +22,11 @@ func runGet(cmd *cobra.Command, args []string) error {
 
 	client, err := api.NewClient()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
 	template, err := client.GetTemplate(templateID)
 	if err != nil {
-		output.Error(err)
 		return fmt.Errorf("failed to get template: %w", err)
 	}
 

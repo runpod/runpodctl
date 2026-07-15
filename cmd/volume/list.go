@@ -18,13 +18,11 @@ var listCmd = &cobra.Command{
 func runList(cmd *cobra.Command, args []string) error {
 	client, err := api.NewClient()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
 	volumes, err := client.ListNetworkVolumes()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 

@@ -2,6 +2,7 @@ package output
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -50,11 +51,34 @@ func printYAML(data interface{}) error {
 	return encoder.Encode(data)
 }
 
-// Error outputs an error in JSON format to stderr
+// errorObject is the flat, stable JSON shape emitted for cli errors so agents
+// can branch on a machine-readable code without parsing the message string.
+type errorObject struct {
+	Error  string `json:"error"`
+	Code   string `json:"code,omitempty"`
+	Status int    `json:"status,omitempty"`
+}
+
+// Error writes a single flat JSON error object to stderr. When the error (or an
+// error it wraps) exposes a stable code or HTTP status, those are included.
 func Error(err error) {
-	errObj := map[string]string{"error": err.Error()}
+	if err == nil {
+		return
+	}
+
+	obj := errorObject{Error: err.Error()}
+
+	var coder interface{ ErrorCode() string }
+	if errors.As(err, &coder) {
+		obj.Code = coder.ErrorCode()
+	}
+	var statuser interface{ HTTPStatus() int }
+	if errors.As(err, &statuser) {
+		obj.Status = statuser.HTTPStatus()
+	}
+
 	encoder := json.NewEncoder(os.Stderr)
-	encoder.Encode(errObj) //nolint:errcheck
+	encoder.Encode(obj) //nolint:errcheck
 }
 
 // ParseFormat parses a format string into a Format
