@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/runpod/runpodctl/cmd/billing"
 	"github.com/runpod/runpodctl/cmd/config"
@@ -21,6 +23,7 @@ import (
 	"github.com/runpod/runpodctl/cmd/user"
 	"github.com/runpod/runpodctl/cmd/volume"
 	"github.com/runpod/runpodctl/internal/api"
+	"github.com/runpod/runpodctl/internal/output"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -73,8 +76,16 @@ func init() {
 	cobra.OnInitialize(initConfig)
 	// disable default completion command, we have our own
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
-	// commands emit JSON errors via output.Error; silence Cobra's plain-text re-print
+	// Execute emits a single flat JSON error object; silence Cobra's own
+	// plain-text error re-print and its usage dump on runtime failures. Usage is
+	// re-printed explicitly for genuine usage errors (bad flags/args) in Execute.
 	rootCmd.SilenceErrors = true
+	rootCmd.SilenceUsage = true
+	// tag flag-parsing failures as usage errors so Execute can show usage for
+	// them (but not for runtime errors). inherited by subcommands via cobra.
+	rootCmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
+		return &usageError{cmd: c, err: err}
+	})
 	registerCommands()
 }
 
@@ -182,16 +193,82 @@ func newHelpCmd(root *cobra.Command) *cobra.Command {
 	}
 }
 
+// usageError marks an error caused by incorrect cli usage (bad flags, wrong
+// arg count, unknown command) as opposed to a runtime/API failure. Execute
+// prints usage text only for these, keeping runtime errors to a clean JSON
+// object.
+type usageError struct {
+	cmd *cobra.Command
+	err error
+}
+
+func (e *usageError) Error() string     { return e.err.Error() }
+func (e *usageError) Unwrap() error     { return e.err }
+func (e *usageError) ErrorCode() string { return "usage_error" }
+
+// usageErrorPrefixes are the stable leading strings Cobra uses for argument and
+// command validation errors. Flag-parsing errors are already wrapped via
+// SetFlagErrorFunc; these cover the arg/command validators that are not.
+var usageErrorPrefixes = []string{
+	"unknown command",
+	"unknown flag",
+	"unknown shorthand flag",
+	"invalid argument",
+	"accepts ",
+	"requires ",
+	"requires at least",
+	"requires at most",
+}
+
+// asUsageError reports whether err represents a usage error, returning a
+// *usageError (wrapping when needed) carrying the command to print usage for.
+func asUsageError(cmd *cobra.Command, err error) (*usageError, bool) {
+	var ue *usageError
+	if errors.As(err, &ue) {
+		return ue, true
+	}
+	msg := err.Error()
+	for _, p := range usageErrorPrefixes {
+		if strings.HasPrefix(msg, p) {
+			return &usageError{cmd: cmd, err: err}, true
+		}
+	}
+	return nil, false
+}
+
 // Execute runs the root command
 func Execute(ver string) {
 	version = ver
 	api.Version = ver
 	rootCmd.Version = ver
 
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, `{"error":"%s"}`+"\n", err.Error())
-		os.Exit(1)
+	err := rootCmd.Execute()
+	if err == nil {
+		return
 	}
+
+	// best-effort: find the command that was invoked so usage text (when shown)
+	// matches the subcommand rather than the root.
+	invoked := rootCmd
+	if len(os.Args) > 1 {
+		if found, _, findErr := rootCmd.Find(os.Args[1:]); findErr == nil && found != nil {
+			invoked = found
+		}
+	}
+
+	if ue, ok := asUsageError(invoked, err); ok {
+		// emit the flat JSON error (with a stable "usage_error" code) then the
+		// usage text, so agents get the machine-readable object and humans get help.
+		output.Error(ue)
+		cmd := ue.cmd
+		if cmd == nil {
+			cmd = invoked
+		}
+		fmt.Fprint(os.Stderr, cmd.UsageString())
+	} else {
+		output.Error(err)
+	}
+	os.Exit(1)
 }
 
 // initConfig reads config file and ENV variables

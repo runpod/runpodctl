@@ -44,7 +44,6 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	client, err := api.NewClient()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
@@ -75,7 +74,6 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		}
 		pod, err := client.GetPod(podID, false, false)
 		if err != nil {
-			output.Error(err)
 			return fmt.Errorf("failed to get existing pod env: %w", err)
 		}
 		req.Env = mergeEnvMaps(pod.Env, env)
@@ -83,7 +81,6 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	pod, err := client.UpdatePod(podID, req)
 	if err != nil {
-		output.Error(err)
 		return fmt.Errorf("failed to update pod: %w", err)
 	}
 

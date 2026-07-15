@@ -36,7 +36,6 @@ func init() {
 func runPodsBilling(cmd *cobra.Command, args []string) error {
 	client, err := api.NewClient()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
@@ -52,7 +51,6 @@ func runPodsBilling(cmd *cobra.Command, args []string) error {
 
 	records, err := client.GetPodBilling(opts)
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 

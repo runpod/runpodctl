@@ -23,12 +23,10 @@ func runDelete(cmd *cobra.Command, args []string) error {
 
 	client, err := api.NewClient()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
 	if err := client.DeleteTemplate(templateID); err != nil {
-		output.Error(err)
 		return fmt.Errorf("failed to delete template: %w", err)
 	}
 

@@ -28,7 +28,6 @@ func init() {
 func runList(cmd *cobra.Command, args []string) error {
 	client, err := api.NewClient()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
@@ -39,7 +38,6 @@ func runList(cmd *cobra.Command, args []string) error {
 
 	endpoints, err := client.ListEndpoints(opts)
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 

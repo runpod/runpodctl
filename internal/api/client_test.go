@@ -259,3 +259,44 @@ func TestFormatError(t *testing.T) {
 		t.Errorf("expected %s, got %s", expected, err)
 	}
 }
+
+func TestParseAPIError(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     string
+		status   int
+		wantMsg  string
+		wantCode string
+	}{
+		{"nested error envelope is unwrapped", `{"error":"pod not found"}`, 404, "pod not found", "not_found"},
+		{"message envelope is unwrapped", `{"message":"bad request"}`, 400, "bad request", "bad_request"},
+		{"explicit code is preserved", `{"error":"denied","code":"quota_exceeded"}`, 403, "denied", "quota_exceeded"},
+		{"raw non-json body is used verbatim", "internal error", 500, "internal error", "server_error"},
+		{"empty body falls back to status message", "", 502, "api request failed with status 502", "server_error"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := parseAPIError([]byte(tt.body), tt.status)
+			if e.Message != tt.wantMsg {
+				t.Errorf("message = %q, want %q", e.Message, tt.wantMsg)
+			}
+			if e.ErrorCode() != tt.wantCode {
+				t.Errorf("code = %q, want %q", e.ErrorCode(), tt.wantCode)
+			}
+			if e.HTTPStatus() != tt.status {
+				t.Errorf("status = %d, want %d", e.HTTPStatus(), tt.status)
+			}
+			// the whole point: the message must not be a double-encoded json blob.
+			if strings.Contains(e.Message, `{"error"`) || strings.Contains(e.Message, "(status ") {
+				t.Errorf("message is still double-encoded: %q", e.Message)
+			}
+		})
+	}
+}
+
+func TestParseAPIError_ImplementsError(t *testing.T) {
+	var err error = parseAPIError([]byte(`{"error":"nope"}`), 404)
+	if err.Error() != "nope" {
+		t.Errorf("Error() = %q, want 'nope'", err.Error())
+	}
+}
