@@ -118,7 +118,7 @@ func (c *Client) ListGpuTypes(includeUnavailable bool) ([]GpuTypeWithAvailabilit
 	}
 
 	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+		return nil, newGraphQLError(resp.Errors[0].Message)
 	}
 
 	// get availability from datacenters
@@ -225,7 +225,7 @@ func (c *Client) ListServerlessGpuPools() ([]ServerlessGpuPool, error) {
 	}
 
 	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+		return nil, newGraphQLError(resp.Errors[0].Message)
 	}
 
 	return resp.Data.ServerlessGpuPools, nil
@@ -320,7 +320,7 @@ func (c *Client) ListDataCenters() ([]DataCenter, error) {
 	}
 
 	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+		return nil, newGraphQLError(resp.Errors[0].Message)
 	}
 
 	return resp.Data.DataCenters, nil
@@ -362,7 +362,7 @@ func (c *Client) GetUser() (*User, error) {
 	}
 
 	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+		return nil, newGraphQLError(resp.Errors[0].Message)
 	}
 
 	return resp.Data.Myself, nil
