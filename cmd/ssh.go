@@ -93,13 +93,11 @@ func init() {
 func runSSHListKeys(cmd *cobra.Command, args []string) error {
 	client, err := api.NewGraphQLClient()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
 	_, keys, err := client.GetPublicSSHKeys()
 	if err != nil {
-		output.Error(err)
 		return fmt.Errorf("failed to get ssh keys: %w", err)
 	}
 
@@ -120,13 +118,11 @@ func runSSHAddKey(cmd *cobra.Command, args []string) error {
 		keyName := promptKeyName()
 		publicKey, err = ssh.GenerateSSHKeyPair(keyName)
 		if err != nil {
-			output.Error(err)
 			return fmt.Errorf("failed to generate ssh key: %w", err)
 		}
 	} else if sshKeyFile != "" {
 		publicKey, err = os.ReadFile(sshKeyFile)
 		if err != nil {
-			output.Error(err)
 			return fmt.Errorf("failed to read key file: %w", err)
 		}
 	} else {
@@ -135,12 +131,10 @@ func runSSHAddKey(cmd *cobra.Command, args []string) error {
 
 	client, err := api.NewGraphQLClient()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
 	if err := client.AddPublicSSHKey(publicKey); err != nil {
-		output.Error(err)
 		return fmt.Errorf("failed to add ssh key: %w", err)
 	}
 
@@ -173,13 +167,11 @@ func runSSHConnectLegacy(cmd *cobra.Command, args []string) error {
 func runSSHInfoWithArgs(cmd *cobra.Command, args []string, allowAll bool) error {
 	client, err := api.NewGraphQLClient()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
 	pods, err := client.GetPods()
 	if err != nil {
-		output.Error(err)
 		return fmt.Errorf("failed to get pods: %w", err)
 	}
 

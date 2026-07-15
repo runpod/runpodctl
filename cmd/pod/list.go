@@ -53,7 +53,6 @@ func init() {
 func runList(cmd *cobra.Command, args []string) error {
 	client, err := api.NewClient()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
@@ -64,7 +63,6 @@ func runList(cmd *cobra.Command, args []string) error {
 
 	pods, err := client.ListPods(opts)
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
@@ -73,7 +71,6 @@ func runList(cmd *cobra.Command, args []string) error {
 	if listSince != "" {
 		d, err := parseDuration(listSince)
 		if err != nil {
-			output.Error(err)
 			return err
 		}
 		cutoff = time.Now().Add(-d)
@@ -82,7 +79,6 @@ func runList(cmd *cobra.Command, args []string) error {
 		t, err := time.Parse("2006-01-02", listCreatedAfter)
 		if err != nil {
 			err = fmt.Errorf("invalid --created-after format, expected YYYY-MM-DD: %w", err)
-			output.Error(err)
 			return err
 		}
 		if cutoff.IsZero() || t.After(cutoff) {
@@ -92,13 +88,11 @@ func runList(cmd *cobra.Command, args []string) error {
 
 	if listSince != "" && listCreatedAfter != "" {
 		err := fmt.Errorf("--since and --created-after cannot be used together")
-		output.Error(err)
 		return err
 	}
 
 	if listAll && listStatus != "" {
 		err := fmt.Errorf("--all and --status cannot be used together")
-		output.Error(err)
 		return err
 	}
 

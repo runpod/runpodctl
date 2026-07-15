@@ -144,7 +144,6 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	client, err := newServerlessCreateClient()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
@@ -218,7 +217,6 @@ func runCreate(cmd *cobra.Command, args []string) error {
 			// saveEndpoint wants a gpu pool id, not a gpu type id; translate.
 			poolID, err := client.ResolveServerlessGpuPoolID(gpuTypeID)
 			if err != nil {
-				output.Error(err)
 				return err
 			}
 			input.GpuIDs = poolID
@@ -346,7 +344,6 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		if computeType == "GPU" && input.GpuIDs == "" && hubConfig.GpuIDs != "" {
 			poolID, err := client.ResolveServerlessGpuPoolID(hubConfig.GpuIDs)
 			if err != nil {
-				output.Error(err)
 				return err
 			}
 			input.GpuIDs = poolID
@@ -369,7 +366,6 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	endpoint, err := client.CreateEndpointGQL(input)
 	if err != nil {
-		output.Error(err)
 		return fmt.Errorf("failed to create endpoint: %w", err)
 	}
 

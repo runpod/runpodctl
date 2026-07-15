@@ -33,13 +33,11 @@ func runGet(cmd *cobra.Command, args []string) error {
 
 	client, err := api.NewClient()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
 	pod, err := client.GetPod(podID, getIncludeMachine, getIncludeNetworkVolume)
 	if err != nil {
-		output.Error(err)
 		return fmt.Errorf("failed to get pod: %w", err)
 	}
 

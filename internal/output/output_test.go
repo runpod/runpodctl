@@ -122,3 +122,59 @@ func TestError(t *testing.T) {
 		t.Errorf("expected error json, got %s", output)
 	}
 }
+
+// codedError implements ErrorCode/HTTPStatus so Error can surface a stable code.
+type codedError struct {
+	msg    string
+	code   string
+	status int
+}
+
+func (e codedError) Error() string     { return e.msg }
+func (e codedError) ErrorCode() string { return e.code }
+func (e codedError) HTTPStatus() int   { return e.status }
+
+func TestError_WithCodeAndStatus(t *testing.T) {
+	old := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	Error(codedError{msg: "pod not found", code: "not_found", status: 404})
+
+	w.Close()
+	os.Stderr = old
+
+	var buf bytes.Buffer
+	buf.ReadFrom(r)
+
+	var got map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("error output is not valid json: %v (%s)", err, buf.String())
+	}
+	if got["error"] != "pod not found" {
+		t.Errorf("error = %v, want 'pod not found'", got["error"])
+	}
+	if got["code"] != "not_found" {
+		t.Errorf("code = %v, want 'not_found'", got["code"])
+	}
+	if status, ok := got["status"].(float64); !ok || int(status) != 404 {
+		t.Errorf("status = %v, want 404", got["status"])
+	}
+}
+
+func TestError_NilIsNoOp(t *testing.T) {
+	old := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	Error(nil)
+
+	w.Close()
+	os.Stderr = old
+
+	var buf bytes.Buffer
+	buf.ReadFrom(r)
+	if buf.Len() != 0 {
+		t.Errorf("expected no output for nil error, got %q", buf.String())
+	}
+}
