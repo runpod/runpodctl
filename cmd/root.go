@@ -214,10 +214,8 @@ var usageErrorPrefixes = []string{
 	"unknown flag",
 	"unknown shorthand flag",
 	"invalid argument",
-	"accepts ",
-	"requires ",
+	"accepts ", // "accepts N arg(s)…" and "accepts at most/between…"
 	"requires at least",
-	"requires at most",
 }
 
 // asUsageError reports whether err represents a usage error, returning a
@@ -227,6 +225,20 @@ func asUsageError(cmd *cobra.Command, err error) (*usageError, bool) {
 	if errors.As(err, &ue) {
 		return ue, true
 	}
+	// typed api/graphql errors are runtime failures, never usage errors — bail
+	// before the string fallback so a server message that happens to start with
+	// a usage-ish word (e.g. "invalid argument: ...") keeps its real code and
+	// doesn't trigger a usage dump.
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) {
+		return nil, false
+	}
+	var gqlErr *api.GraphQLError
+	if errors.As(err, &gqlErr) {
+		return nil, false
+	}
+	// the remaining fallback matches cobra's arg/command validators, which
+	// return plain errors (flag errors are already typed via SetFlagErrorFunc).
 	msg := err.Error()
 	for _, p := range usageErrorPrefixes {
 		if strings.HasPrefix(msg, p) {

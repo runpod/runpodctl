@@ -152,7 +152,7 @@ func (c *GraphQLClient) UpdateTemplatePortLabels(templateID string, labels []Tem
 		return fmt.Errorf("failed to parse template port label response: %w", err)
 	}
 	if len(response.Errors) > 0 {
-		return fmt.Errorf("graphql error: %s", response.Errors[0].Message)
+		return newGraphQLError(response.Errors[0].Message)
 	}
 	if response.Data.SaveTemplate == nil || response.Data.SaveTemplate.ID == "" {
 		return errors.New("template port label update returned an empty response")
@@ -211,7 +211,7 @@ func (c *GraphQLClient) getTemplateSaveState(templateID string) (*templateSaveSt
 		return nil, fmt.Errorf("failed to parse template response: %w", err)
 	}
 	if len(response.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", response.Errors[0].Message)
+		return nil, newGraphQLError(response.Errors[0].Message)
 	}
 
 	for i := range response.Data.Myself.PodTemplates {

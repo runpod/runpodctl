@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/runpod/runpodctl/internal/api"
 )
 
 func TestRootCmd_Structure(t *testing.T) {
@@ -140,6 +142,15 @@ func TestAsUsageError(t *testing.T) {
 		if _, ok := asUsageError(root, errors.New(msg)); ok {
 			t.Errorf("expected %q NOT to be classified as a usage error", msg)
 		}
+	}
+
+	// typed api/graphql errors must never be classified as usage errors, even
+	// when the server message happens to start with a usage-ish word.
+	if _, ok := asUsageError(root, &api.APIError{Message: "invalid argument: region", Status: 400}); ok {
+		t.Error("a typed *api.APIError must not be classified as a usage error")
+	}
+	if _, ok := asUsageError(root, &api.GraphQLError{Message: "requires a valid gpu"}); ok {
+		t.Error("a typed *api.GraphQLError must not be classified as a usage error")
 	}
 
 	// an already-wrapped usageError is recognized regardless of message.
