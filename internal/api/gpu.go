@@ -10,18 +10,30 @@ import (
 
 // GpuType represents a GPU type
 type GpuType struct {
-	ID             string `json:"id"`
-	DisplayName    string `json:"displayName"`
-	MemoryInGb     int    `json:"memoryInGb"`
-	SecureCloud    bool   `json:"secureCloud"`
-	CommunityCloud bool   `json:"communityCloud"`
+	ID             string  `json:"id"`
+	DisplayName    string  `json:"displayName"`
+	MemoryInGb     int     `json:"memoryInGb"`
+	SecureCloud    bool    `json:"secureCloud"`
+	CommunityCloud bool    `json:"communityCloud"`
+	SecurePrice    float64 `json:"securePrice"`
+	CommunityPrice float64 `json:"communityPrice"`
+}
+
+// GpuDataCenterAvailability is a GPU's stock status in a single data center.
+type GpuDataCenterAvailability struct {
+	DataCenterID string `json:"dataCenterId"`
+	StockStatus  string `json:"stockStatus"`
 }
 
 // GpuTypeWithAvailability includes availability info
 type GpuTypeWithAvailability struct {
 	GpuType
+	// StockStatus is the best availability across all data centers.
 	StockStatus string `json:"stockStatus,omitempty"`
 	Available   bool   `json:"available"`
+	// DataCenterAvailability breaks availability down per data center so agents
+	// can pick a location that will actually schedule.
+	DataCenterAvailability []GpuDataCenterAvailability `json:"dataCenterAvailability,omitempty"`
 }
 
 // DataCenter represents a data center
@@ -81,6 +93,8 @@ func (c *Client) ListGpuTypes(includeUnavailable bool) ([]GpuTypeWithAvailabilit
 				memoryInGb
 				secureCloud
 				communityCloud
+				securePrice
+				communityPrice
 			}
 		}
 	`
@@ -104,7 +118,7 @@ func (c *Client) ListGpuTypes(includeUnavailable bool) ([]GpuTypeWithAvailabilit
 	}
 
 	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+		return nil, newGraphQLError(resp.Errors[0].Message)
 	}
 
 	// get availability from datacenters
@@ -123,8 +137,10 @@ func (c *Client) ListGpuTypes(includeUnavailable bool) ([]GpuTypeWithAvailabilit
 		return result, nil
 	}
 
-	// build availability map from datacenters
-	availabilityMap := make(map[string]string) // gpuTypeId -> best stock status
+	// build availability maps from datacenters: the best stock status overall
+	// and the per-data-center breakdown.
+	availabilityMap := make(map[string]string)               // gpuTypeId -> best stock status
+	perDCMap := make(map[string][]GpuDataCenterAvailability) // gpuTypeId -> per-dc availability
 	for _, dc := range dataCenters {
 		for _, avail := range dc.GpuAvailability {
 			current, exists := availabilityMap[avail.GpuTypeID]
@@ -132,6 +148,17 @@ func (c *Client) ListGpuTypes(includeUnavailable bool) ([]GpuTypeWithAvailabilit
 			if !exists || betterStock(avail.StockStatus, current) {
 				availabilityMap[avail.GpuTypeID] = avail.StockStatus
 			}
+			// list every data center the gpu appears in, but make an unreported
+			// status explicit ("none") rather than an empty string, so an agent
+			// can tell "offered here, currently no stock" from a missing entry.
+			stock := avail.StockStatus
+			if stock == "" {
+				stock = "none"
+			}
+			perDCMap[avail.GpuTypeID] = append(perDCMap[avail.GpuTypeID], GpuDataCenterAvailability{
+				DataCenterID: dc.ID,
+				StockStatus:  stock,
+			})
 		}
 	}
 
@@ -151,9 +178,10 @@ func (c *Client) ListGpuTypes(includeUnavailable bool) ([]GpuTypeWithAvailabilit
 		}
 
 		result = append(result, GpuTypeWithAvailability{
-			GpuType:     gpu,
-			StockStatus: stockStatus,
-			Available:   available,
+			GpuType:                gpu,
+			StockStatus:            stockStatus,
+			Available:              available,
+			DataCenterAvailability: perDCMap[gpu.ID],
 		})
 	}
 
@@ -204,7 +232,7 @@ func (c *Client) ListServerlessGpuPools() ([]ServerlessGpuPool, error) {
 	}
 
 	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+		return nil, newGraphQLError(resp.Errors[0].Message)
 	}
 
 	return resp.Data.ServerlessGpuPools, nil
@@ -299,7 +327,7 @@ func (c *Client) ListDataCenters() ([]DataCenter, error) {
 	}
 
 	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+		return nil, newGraphQLError(resp.Errors[0].Message)
 	}
 
 	return resp.Data.DataCenters, nil
@@ -341,7 +369,7 @@ func (c *Client) GetUser() (*User, error) {
 	}
 
 	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+		return nil, newGraphQLError(resp.Errors[0].Message)
 	}
 
 	return resp.Data.Myself, nil

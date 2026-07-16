@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -252,10 +251,85 @@ func TestBuildUserAgent_Codex(t *testing.T) {
 	}
 }
 
-func TestFormatError(t *testing.T) {
-	err := FormatError(fmt.Errorf("test error"))
-	expected := `{"error":"test error"}`
-	if err != expected {
-		t.Errorf("expected %s, got %s", expected, err)
+func TestParseAPIError(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     string
+		status   int
+		wantMsg  string
+		wantCode string
+	}{
+		{"nested error envelope is unwrapped", `{"error":"pod not found"}`, 404, "pod not found", "not_found"},
+		{"message envelope is unwrapped", `{"message":"bad request"}`, 400, "bad request", "bad_request"},
+		{"explicit code is preserved", `{"error":"denied","code":"quota_exceeded"}`, 403, "denied", "quota_exceeded"},
+		{"raw non-json body is used verbatim", "internal error", 500, "internal error", "server_error"},
+		{"empty body falls back to status message", "", 502, "api request failed with status 502", "server_error"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := parseAPIError([]byte(tt.body), tt.status)
+			if e.Message != tt.wantMsg {
+				t.Errorf("message = %q, want %q", e.Message, tt.wantMsg)
+			}
+			if e.ErrorCode() != tt.wantCode {
+				t.Errorf("code = %q, want %q", e.ErrorCode(), tt.wantCode)
+			}
+			if e.HTTPStatus() != tt.status {
+				t.Errorf("status = %d, want %d", e.HTTPStatus(), tt.status)
+			}
+			// the whole point: the message must not be a double-encoded json blob.
+			if strings.Contains(e.Message, `{"error"`) || strings.Contains(e.Message, "(status ") {
+				t.Errorf("message is still double-encoded: %q", e.Message)
+			}
+		})
+	}
+}
+
+func TestParseAPIError_ImplementsError(t *testing.T) {
+	var err error = parseAPIError([]byte(`{"error":"nope"}`), 404)
+	if err.Error() != "nope" {
+		t.Errorf("Error() = %q, want 'nope'", err.Error())
+	}
+}
+
+func TestGraphQLError_Shape(t *testing.T) {
+	e := newGraphQLError("something broke")
+	if e.Error() != "graphql error: something broke" {
+		t.Errorf("Error() = %q", e.Error())
+	}
+	if e.ErrorCode() != "graphql_error" {
+		t.Errorf("ErrorCode() = %q, want graphql_error", e.ErrorCode())
+	}
+}
+
+func TestParseGraphQLHTTPError(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		status  int
+		wantMsg string
+	}{
+		{"errors envelope is unwrapped", `{"errors":[{"message":"bad token"}]}`, 401, "bad token"},
+		{"error envelope is unwrapped", `{"error":"nope"}`, 400, "nope"},
+		{"raw non-json body", "gateway timeout", 504, "gateway timeout"},
+		{"empty body falls back to status", "", 502, "request failed with status 502"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := parseGraphQLHTTPError([]byte(tt.body), tt.status)
+			if e.Message != tt.wantMsg {
+				t.Errorf("message = %q, want %q", e.Message, tt.wantMsg)
+			}
+			if e.HTTPStatus() != tt.status {
+				t.Errorf("status = %d, want %d", e.HTTPStatus(), tt.status)
+			}
+			if e.ErrorCode() != "graphql_error" {
+				t.Errorf("code = %q, want graphql_error", e.ErrorCode())
+			}
+			// must not double-encode the raw envelope back into the message.
+			if strings.Contains(e.Message, `{"error`) {
+				t.Errorf("message still double-encoded: %q", e.Message)
+			}
+		})
 	}
 }

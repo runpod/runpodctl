@@ -32,7 +32,6 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	client, err := api.NewClient()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
@@ -47,7 +46,6 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	volume, err := client.UpdateNetworkVolume(volumeID, req)
 	if err != nil {
-		output.Error(err)
 		return fmt.Errorf("failed to update volume: %w", err)
 	}
 

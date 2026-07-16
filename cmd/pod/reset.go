@@ -20,13 +20,11 @@ func runReset(cmd *cobra.Command, args []string) error {
 
 	client, err := api.NewClient()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
 	pod, err := client.ResetPod(podID)
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 

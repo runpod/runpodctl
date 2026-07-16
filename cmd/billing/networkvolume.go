@@ -31,7 +31,6 @@ func init() {
 func runNetworkVolumeBilling(cmd *cobra.Command, args []string) error {
 	client, err := api.NewClient()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
@@ -43,7 +42,6 @@ func runNetworkVolumeBilling(cmd *cobra.Command, args []string) error {
 
 	records, err := client.GetNetworkVolumeBilling(opts)
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 

@@ -30,6 +30,32 @@ type Endpoint struct {
 	ModelReferences    []string                `json:"modelReferences,omitempty"`
 	Template           map[string]interface{}  `json:"template,omitempty"`
 	Workers            []interface{}           `json:"workers,omitempty"`
+	// URLs are the ready-to-call invoke urls, computed client-side from the id so
+	// an agent that just created an endpoint can call it without extra lookups.
+	URLs *EndpointInvokeURLs `json:"urls,omitempty"`
+}
+
+// ServerlessInvokeBaseURL is the base url used to invoke serverless endpoints.
+const ServerlessInvokeBaseURL = "https://api.runpod.ai/v2"
+
+// EndpointInvokeURLs are the ready-to-call urls for a serverless endpoint.
+type EndpointInvokeURLs struct {
+	Run     string `json:"run"`
+	RunSync string `json:"runsync"`
+	Health  string `json:"health"`
+}
+
+// invokeURLs builds the invoke urls for an endpoint id (nil when id is empty).
+func invokeURLs(id string) *EndpointInvokeURLs {
+	if id == "" {
+		return nil
+	}
+	base := ServerlessInvokeBaseURL + "/" + id
+	return &EndpointInvokeURLs{
+		Run:     base + "/run",
+		RunSync: base + "/runsync",
+		Health:  base + "/health",
+	}
 }
 
 // EndpointNetworkVolume is a multi-region network volume attached to an endpoint.
@@ -101,6 +127,10 @@ func (c *Client) ListEndpoints(opts *EndpointListOptions) ([]Endpoint, error) {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
+	for i := range endpoints {
+		endpoints[i].URLs = invokeURLs(endpoints[i].ID)
+	}
+
 	return endpoints, nil
 }
 
@@ -124,6 +154,8 @@ func (c *Client) GetEndpoint(endpointID string, includeTemplate, includeWorkers 
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
+	endpoint.URLs = invokeURLs(endpoint.ID)
+
 	return &endpoint, nil
 }
 
@@ -138,6 +170,8 @@ func (c *Client) UpdateEndpoint(endpointID string, req *EndpointUpdateRequest) (
 	if err := json.Unmarshal(data, &endpoint); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
+
+	endpoint.URLs = invokeURLs(endpoint.ID)
 
 	return &endpoint, nil
 }
@@ -176,7 +210,7 @@ func (c *Client) UpdateEndpointTemplate(endpointID, templateID string) error {
 	}
 
 	if len(resp.Errors) > 0 {
-		return fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+		return newGraphQLError(resp.Errors[0].Message)
 	}
 
 	return nil
@@ -278,12 +312,14 @@ func (c *Client) UpdateEndpointModels(endpointID string, modelRefs []string) (*E
 	}
 
 	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+		return nil, newGraphQLError(resp.Errors[0].Message)
 	}
 
 	if resp.Data.SaveEndpoint == nil {
 		return nil, fmt.Errorf("update returned nil response")
 	}
+
+	resp.Data.SaveEndpoint.URLs = invokeURLs(resp.Data.SaveEndpoint.ID)
 
 	return resp.Data.SaveEndpoint, nil
 }
@@ -382,12 +418,14 @@ func (c *Client) CreateEndpointGQL(req *EndpointCreateGQLInput) (*Endpoint, erro
 	}
 
 	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+		return nil, newGraphQLError(resp.Errors[0].Message)
 	}
 
 	if resp.Data.SaveEndpoint == nil {
 		return nil, fmt.Errorf("endpoint creation returned nil response")
 	}
+
+	resp.Data.SaveEndpoint.URLs = invokeURLs(resp.Data.SaveEndpoint.ID)
 
 	return resp.Data.SaveEndpoint, nil
 }

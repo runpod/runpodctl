@@ -10,7 +10,7 @@ import (
 var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "list available gpu types",
-	Long:  "list available gpu types with stock status",
+	Long:  "list available gpu types with on-demand pricing and per-datacenter stock status",
 	Args:  cobra.NoArgs,
 	RunE:  runList,
 }
@@ -23,8 +23,14 @@ type gpuTypeOutput struct {
 	MemoryInGb     int    `json:"memoryInGb"`
 	SecureCloud    bool   `json:"secureCloud"`
 	CommunityCloud bool   `json:"communityCloud"`
-	StockStatus    string `json:"stockStatus,omitempty"`
-	Available      bool   `json:"available"`
+	// on-demand price per hour in usd; 0/omitted when the cloud type is not offered.
+	SecurePricePerHr    float64 `json:"securePricePerHr,omitempty"`
+	CommunityPricePerHr float64 `json:"communityPricePerHr,omitempty"`
+	// StockStatus is the best availability across data centers.
+	StockStatus string `json:"stockStatus,omitempty"`
+	Available   bool   `json:"available"`
+	// DataCenterAvailability breaks stock status down per data center.
+	DataCenterAvailability []api.GpuDataCenterAvailability `json:"dataCenterAvailability,omitempty"`
 }
 
 func init() {
@@ -34,26 +40,27 @@ func init() {
 func runList(cmd *cobra.Command, args []string) error {
 	client, err := api.NewClient()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
 	gpus, err := client.ListGpuTypes(includeUnavailable)
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
 	typed := make([]gpuTypeOutput, 0, len(gpus))
 	for _, gpu := range gpus {
 		typed = append(typed, gpuTypeOutput{
-			GpuID:          gpu.ID,
-			DisplayName:    gpu.DisplayName,
-			MemoryInGb:     gpu.MemoryInGb,
-			SecureCloud:    gpu.SecureCloud,
-			CommunityCloud: gpu.CommunityCloud,
-			StockStatus:    gpu.StockStatus,
-			Available:      gpu.Available,
+			GpuID:                  gpu.ID,
+			DisplayName:            gpu.DisplayName,
+			MemoryInGb:             gpu.MemoryInGb,
+			SecureCloud:            gpu.SecureCloud,
+			CommunityCloud:         gpu.CommunityCloud,
+			SecurePricePerHr:       gpu.SecurePrice,
+			CommunityPricePerHr:    gpu.CommunityPrice,
+			StockStatus:            gpu.StockStatus,
+			Available:              gpu.Available,
+			DataCenterAvailability: gpu.DataCenterAvailability,
 		})
 	}
 
