@@ -30,7 +30,8 @@ func TestListGpuTypes_PricingAndPerDC(t *testing.T) {
 		case strings.Contains(q, "dataCenters"):
 			w.Write([]byte(`{"data":{"dataCenters":[
 				{"id":"US-GA-1","name":"Georgia","location":"US","gpuAvailability":[{"gpuTypeId":"NVIDIA A40","displayName":"A40","stockStatus":"Low"}]},
-				{"id":"EU-RO-1","name":"Romania","location":"EU","gpuAvailability":[{"gpuTypeId":"NVIDIA A40","displayName":"A40","stockStatus":"High"},{"gpuTypeId":"NVIDIA GeForce RTX 4090","displayName":"RTX 4090","stockStatus":"Medium"}]}
+				{"id":"EU-RO-1","name":"Romania","location":"EU","gpuAvailability":[{"gpuTypeId":"NVIDIA A40","displayName":"A40","stockStatus":"High"},{"gpuTypeId":"NVIDIA GeForce RTX 4090","displayName":"RTX 4090","stockStatus":"Medium"}]},
+				{"id":"US-KS-2","name":"Kansas","location":"US","gpuAvailability":[{"gpuTypeId":"NVIDIA A40","displayName":"A40","stockStatus":""}]}
 			]}}`))
 		default:
 			t.Errorf("unexpected graphql query: %s", q)
@@ -66,14 +67,16 @@ func TestListGpuTypes_PricingAndPerDC(t *testing.T) {
 	if a40.StockStatus != "High" {
 		t.Errorf("A40 best stock = %q, want High", a40.StockStatus)
 	}
-	if len(a40.DataCenterAvailability) != 2 {
-		t.Fatalf("A40 per-dc availability len = %d, want 2", len(a40.DataCenterAvailability))
+	if len(a40.DataCenterAvailability) != 3 {
+		t.Fatalf("A40 per-dc availability len = %d, want 3", len(a40.DataCenterAvailability))
 	}
 	seen := map[string]string{}
 	for _, dc := range a40.DataCenterAvailability {
 		seen[dc.DataCenterID] = dc.StockStatus
 	}
-	if seen["US-GA-1"] != "Low" || seen["EU-RO-1"] != "High" {
+	// every dc the gpu appears in is listed; an unreported status is "none",
+	// never an empty string.
+	if seen["US-GA-1"] != "Low" || seen["EU-RO-1"] != "High" || seen["US-KS-2"] != "none" {
 		t.Errorf("A40 per-dc availability = %+v", a40.DataCenterAvailability)
 	}
 
