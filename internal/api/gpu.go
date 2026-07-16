@@ -148,14 +148,17 @@ func (c *Client) ListGpuTypes(includeUnavailable bool) ([]GpuTypeWithAvailabilit
 			if !exists || betterStock(avail.StockStatus, current) {
 				availabilityMap[avail.GpuTypeID] = avail.StockStatus
 			}
-			// only list data centers with a real stock status; an empty status
-			// is noise (the gpu exists there but has no reported availability).
-			if avail.StockStatus != "" {
-				perDCMap[avail.GpuTypeID] = append(perDCMap[avail.GpuTypeID], GpuDataCenterAvailability{
-					DataCenterID: dc.ID,
-					StockStatus:  avail.StockStatus,
-				})
+			// list every data center the gpu appears in, but make an unreported
+			// status explicit ("none") rather than an empty string, so an agent
+			// can tell "offered here, currently no stock" from a missing entry.
+			stock := avail.StockStatus
+			if stock == "" {
+				stock = "none"
 			}
+			perDCMap[avail.GpuTypeID] = append(perDCMap[avail.GpuTypeID], GpuDataCenterAvailability{
+				DataCenterID: dc.ID,
+				StockStatus:  stock,
+			})
 		}
 	}
 
