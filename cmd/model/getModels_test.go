@@ -64,6 +64,9 @@ func TestModelCommandFlags(t *testing.T) {
 	if addCmd.Flags().Lookup("owner") == nil {
 		t.Fatal("expected model add --owner flag")
 	}
+	if addCmd.Flags().Lookup("huggingface-model") == nil {
+		t.Fatal("expected model add --huggingface-model flag")
+	}
 	if addCmd.Flags().Lookup("wait-for-hash") == nil {
 		t.Fatal("expected model add --wait-for-hash flag")
 	}

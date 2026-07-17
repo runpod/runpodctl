@@ -10,6 +10,13 @@ add a model to the runpod model repository
 runpodctl model add [flags]
 ```
 
+### Examples
+
+```
+  # --name is the destination; --huggingface-model is the source
+  runpodctl model add --name tiny-llm --huggingface-model arnir0/Tiny-LLM
+```
+
 ### Options
 
 ```
@@ -21,6 +28,7 @@ runpodctl model add [flags]
       --file-size string              file size in bytes
       --hash-timeout duration         maximum duration to wait for --wait-for-hash (0 disables timeout) (default 30m0s)
   -h, --help                          help for add
+      --huggingface-model string      hugging face model to mirror (owner/repo)
       --metadata stringToString       metadata key=value pairs (default [])
       --model-path string             directory containing model files to upload
       --model-status string           initial model status
@@ -40,4 +48,3 @@ runpodctl model add [flags]
 ### SEE ALSO
 
 * [runpodctl model](runpodctl_model.md)	 - manage model repository
-

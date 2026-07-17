@@ -47,4 +47,3 @@ runpodctl serverless update <endpoint-id> [flags]
 ### SEE ALSO
 
 * [runpodctl serverless](runpodctl_serverless.md)	 - manage serverless endpoints
-
