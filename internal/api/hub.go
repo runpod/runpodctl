@@ -55,10 +55,12 @@ type GitBuild struct {
 
 // HubReleaseConfig is the parsed config from a hub release
 type HubReleaseConfig struct {
-	ContainerDiskInGb int                   `json:"containerDiskInGb,omitempty"`
-	GpuIDs            string                `json:"gpuIds,omitempty"`
-	GpuCount          int                   `json:"gpuCount,omitempty"`
-	Env               []HubReleaseConfigEnv `json:"env,omitempty"`
+	ContainerDiskInGb   int                   `json:"containerDiskInGb,omitempty"`
+	GpuIDs              string                `json:"gpuIds,omitempty"`
+	GpuCount            int                   `json:"gpuCount,omitempty"`
+	RunsOn              string                `json:"runsOn,omitempty"`
+	AllowedCudaVersions []string              `json:"allowedCudaVersions,omitempty"`
+	Env                 []HubReleaseConfigEnv `json:"env,omitempty"`
 }
 
 // HubReleaseConfigEnv is an env var entry in the hub release config
