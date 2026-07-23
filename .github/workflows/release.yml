@@ -44,3 +44,37 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ steps.app-token.outputs.token }}
+
+  # Linear release tracking (SLS-172). Only runs for tag pushes, not manual dispatch.
+  linear-sync:
+    name: Linear Release Sync
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: linear/linear-release-action@v0
+        with:
+          access_key: ${{ secrets.LINEAR_RELEASE_ACCESS_KEY }}
+          command: sync
+          version: ${{ github.ref_name }}
+          name: runpodctl ${{ github.ref_name }}
+
+  linear-complete:
+    name: Linear Release Complete
+    needs: [release, linear-sync]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: linear/linear-release-action@v0
+        with:
+          access_key: ${{ secrets.LINEAR_RELEASE_ACCESS_KEY }}
+          command: complete
+          version: ${{ github.ref_name }}
