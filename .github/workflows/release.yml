@@ -45,7 +45,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ steps.app-token.outputs.token }}
 
-  # Linear release tracking (SLS-172). Only runs for tag pushes, not manual dispatch.
+  # Linear release tracking. Only runs for tag pushes, not manual dispatch.
   linear-sync:
     name: Linear Release Sync
     needs: release
