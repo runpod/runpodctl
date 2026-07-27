@@ -29,7 +29,7 @@ var removeCmd = &cobra.Command{
 	Args:    cobra.ExactArgs(0),
 	Short:   "remove a model",
 	Long:    "remove a model from the runpod model repository",
-	Run:     runRemoveModel,
+	RunE:    runRemoveModel,
 }
 
 var RemoveModelCmd = &cobra.Command{
@@ -38,7 +38,7 @@ var RemoveModelCmd = &cobra.Command{
 	Short:  "deprecated: use 'runpodctl model remove'",
 	Long:   "",
 	Hidden: true,
-	Run:    runRemoveModel,
+	RunE:   runRemoveModel,
 }
 
 func init() {
@@ -57,17 +57,15 @@ func bindRemoveModelFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&removeVersion, "version", "", "model version uuid to remove")
 }
 
-func runRemoveModel(cmd *cobra.Command, args []string) {
+func runRemoveModel(cmd *cobra.Command, args []string) error {
 	if removeOwner == "" || removeName == "" {
-		cobra.CheckErr(fmt.Errorf("both --owner and --name must be provided"))
-		return
+		return fmt.Errorf("both --owner and --name must be provided")
 	}
 
 	hash := strings.TrimSpace(removeHash)
 	version := strings.TrimSpace(removeVersion)
 	if hash != "" && version != "" {
-		cobra.CheckErr(fmt.Errorf("only one of --hash or --version can be provided"))
-		return
+		return fmt.Errorf("only one of --hash or --version can be provided")
 	}
 
 	var result *api.ModelRepoMutationResult
@@ -83,16 +81,15 @@ func runRemoveModel(cmd *cobra.Command, args []string) {
 	}
 
 	if err != nil {
-		if handleModelRepoError(err) {
-			return
+		if mrErr := modelRepoError(err); mrErr != nil {
+			return mrErr
 		}
 
-		cobra.CheckErr(err)
-		return
+		return err
 	}
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
-	cobra.CheckErr(output.Print(result, &output.Config{Format: format}))
+	return output.Print(result, &output.Config{Format: format})
 }
 
 func removeModelVersion(owner, name, hash, version string) (*api.ModelRepoMutationResult, error) {

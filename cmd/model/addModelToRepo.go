@@ -153,7 +153,7 @@ var addCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(0),
 	Short: "add a model",
 	Long:  "add a model to the runpod model repository",
-	Run:   runAddModel,
+	RunE:  runAddModel,
 }
 
 var AddModelToRepoCmd = &cobra.Command{
@@ -162,7 +162,7 @@ var AddModelToRepoCmd = &cobra.Command{
 	Short:  "deprecated: use 'runpodctl model add'",
 	Long:   "",
 	Hidden: true,
-	Run:    runAddModel,
+	RunE:   runAddModel,
 }
 
 func init() {
@@ -190,7 +190,7 @@ func bindAddModelFlags(cmd *cobra.Command) {
 	cmd.Flags().BoolVarP(&addModelVerbose, "verbose", "v", false, "include upload details in wait-for-hash output")
 }
 
-func runAddModel(cmd *cobra.Command, args []string) {
+func runAddModel(cmd *cobra.Command, args []string) error {
 	setModelGraphQLTimeout(cmd)
 
 	var modelFiles []modelFile
@@ -243,18 +243,17 @@ func runAddModel(cmd *cobra.Command, args []string) {
 
 	model, err := addModelToRepo(input)
 	if err != nil {
-		if handleModelRepoError(err) {
-			return
+		if mrErr := modelRepoError(err); mrErr != nil {
+			return mrErr
 		}
 
-		cobra.CheckErr(err)
-		return
+		return err
 	}
 
 	shouldCreateUpload := addModelCreateUpload || addModelFileName != "" || addModelFileSize != "" || addModelPartSize != "" || addModelContentType != "" || len(addModelMetadata) > 0
 	if !shouldCreateUpload {
 		printModelAddOutput(cmd, modelAddOutput{Model: model})
-		return
+		return nil
 	}
 
 	uploadInput := &api.CreateModelRepoUploadInput{
@@ -293,11 +292,11 @@ func runAddModel(cmd *cobra.Command, args []string) {
 			printModelReadyURL(ready.ModelURL)
 			if !addModelVerbose {
 				printCompactModelAddOutput(cmd, model)
-				return
+				return nil
 			}
 		}
 		printModelAddOutput(cmd, result)
-		return
+		return nil
 	}
 
 	if addModelFileName == "" {
@@ -321,6 +320,7 @@ func runAddModel(cmd *cobra.Command, args []string) {
 	}
 
 	printModelAddOutput(cmd, modelAddOutput{Model: model, Upload: result.Upload})
+	return nil
 }
 
 func collectModelFiles(dir string) ([]modelFile, error) {

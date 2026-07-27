@@ -84,3 +84,37 @@ func TestListGpuTypes_PricingAndPerDC(t *testing.T) {
 		t.Error("the 'unknown' gpu type should be filtered out")
 	}
 }
+
+func TestStockRank(t *testing.T) {
+	// the known set, pinned: if the api adds a level, this test should be the
+	// thing that fails, not a silently misranked gpu in `gpu list`.
+	if len(stockOrder) != 3 {
+		t.Errorf("stockOrder has %d entries; a new api stock level must be ranked explicitly, not left to fall through to the unknown bucket", len(stockOrder))
+	}
+
+	if got, want := stockRank(""), 0; got != want {
+		t.Errorf("stockRank(\"\") = %d, want %d", got, want)
+	}
+	// case and whitespace must not change the ranking.
+	for _, s := range []string{"High", "high", "HIGH", " High "} {
+		if stockRank(s) != stockRank("High") {
+			t.Errorf("stockRank(%q) = %d, want same as \"High\" (%d)", s, stockRank(s), stockRank("High"))
+		}
+	}
+	if !(stockRank("High") > stockRank("Medium") && stockRank("Medium") > stockRank("Low")) {
+		t.Error("expected High > Medium > Low")
+	}
+
+	// the regression this fixes: an unknown status used to score 0 and tie with
+	// "no stock", so it lost to Low and the top-level stockStatus under-reported
+	// a gpu that was actually available.
+	if !betterStock("Very High", "") {
+		t.Error("an unknown non-empty status must outrank an absent one")
+	}
+	if betterStock("", "Low") {
+		t.Error("an absent status must never outrank Low")
+	}
+	if !betterStock("Low", "Very High") {
+		t.Error("a known level should still win over an unorderable unknown (documented tradeoff)")
+	}
+}
