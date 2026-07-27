@@ -188,9 +188,32 @@ func (c *Client) ListGpuTypes(includeUnavailable bool) ([]GpuTypeWithAvailabilit
 	return result, nil
 }
 
+// stockOrder ranks the api's known stock levels. KEEP IN SYNC with the api
+// enum; TestStockRank pins the known set so a new value shows up as a test
+// failure in review rather than as a silently misranked gpu.
+var stockOrder = map[string]int{"high": 4, "medium": 3, "low": 2}
+
+// stockRank scores a stock status for comparison. An unrecognized non-empty
+// status must outrank a genuinely absent one: previously every unknown value
+// fell through a map lookup to 0 and therefore tied with "no stock", so a new
+// api level (or a casing change) would lose to "Low" and the top-level
+// stockStatus would under-report a gpu that is in fact available.
+//
+// An unknown value cannot be ordered against the known ones, so it sits just
+// above "none". The per-datacenter breakdown carries every raw value, which is
+// where an agent that needs the truth should look.
+func stockRank(s string) int {
+	if s == "" {
+		return 0
+	}
+	if rank, ok := stockOrder[strings.ToLower(strings.TrimSpace(s))]; ok {
+		return rank
+	}
+	return 1
+}
+
 func betterStock(a, b string) bool {
-	order := map[string]int{"High": 3, "Medium": 2, "Low": 1, "": 0}
-	return order[a] > order[b]
+	return stockRank(a) > stockRank(b)
 }
 
 // ServerlessGpuPool is a serverless gpu pool. saveEndpoint's gpuIds field

@@ -1,8 +1,12 @@
 package output
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
+	"net/url"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -59,6 +63,45 @@ type errorObject struct {
 	Status int    `json:"status,omitempty"`
 }
 
+// fallbackCode classifies errors that carry no ErrorCode() of their own, so that
+// *every* emitted error object has a code. Without this, hand-written
+// validation errors and transport failures came out as a bare
+// {"error":"..."} and an agent had to read english to tell "i passed a bad
+// flag value" from "the network is down" from "the server broke".
+//
+//	network_error -- could not reach the api at all (dns, refused, tls, timeout)
+//	cli_error     -- everything else uncoded: local validation, config, bad input
+//
+// This is a fallback only; a typed error's own code always wins.
+func fallbackCode(err error) string {
+	if isNetworkError(err) {
+		return "network_error"
+	}
+	return "cli_error"
+}
+
+// isNetworkError reports whether err is a failure to reach the remote at all,
+// as opposed to a response from it. net/http wraps transport failures in
+// *url.Error, whose Unwrap chain carries the underlying *net.OpError,
+// *net.DNSError or tls error.
+func isNetworkError(err error) bool {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return true
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return true
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+	// a client-side deadline shows up as context.DeadlineExceeded, and an
+	// unexpectedly closed connection as io.ErrUnexpectedEOF.
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
 // Error writes a single flat JSON error object to stderr. When the error (or an
 // error it wraps) exposes a stable code or HTTP status, those are included.
 func Error(err error) {
@@ -75,6 +118,9 @@ func Error(err error) {
 	var statuser interface{ HTTPStatus() int }
 	if errors.As(err, &statuser) {
 		obj.Status = statuser.HTTPStatus()
+	}
+	if obj.Code == "" {
+		obj.Code = fallbackCode(err)
 	}
 
 	encoder := json.NewEncoder(os.Stderr)

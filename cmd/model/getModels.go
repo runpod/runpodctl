@@ -20,7 +20,7 @@ var listCmd = &cobra.Command{
 	Args:    cobra.ExactArgs(0),
 	Short:   "list models",
 	Long:    "list models in the runpod model repository",
-	Run:     runModelList,
+	RunE:    runModelList,
 }
 
 var GetModelsCmd = &cobra.Command{
@@ -29,7 +29,7 @@ var GetModelsCmd = &cobra.Command{
 	Args:    cobra.ExactArgs(0),
 	Short:   "deprecated: use 'runpodctl model list'",
 	Hidden:  true,
-	Run:     runModelList,
+	RunE:    runModelList,
 }
 
 func init() {
@@ -42,7 +42,7 @@ func bindModelListFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&getName, "name", "", "filter by model name")
 }
 
-func runModelList(cmd *cobra.Command, args []string) {
+func runModelList(cmd *cobra.Command, args []string) error {
 	input := &api.GetModelsInput{
 		Provider: getProvider,
 		Name:     getName,
@@ -50,16 +50,15 @@ func runModelList(cmd *cobra.Command, args []string) {
 
 	models, err := api.GetModels(input)
 	if err != nil {
-		if handleModelRepoError(err) {
-			return
+		if mrErr := modelRepoError(err); mrErr != nil {
+			return mrErr
 		}
 
-		cobra.CheckErr(err)
-		return
+		return err
 	}
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
-	cobra.CheckErr(output.Print(models, &output.Config{Format: format}))
+	return output.Print(models, &output.Config{Format: format})
 }
 
 func modelVersionHash(model *api.Model) string {

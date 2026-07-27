@@ -2,12 +2,34 @@ package output
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
 )
+
+// captureStderr runs fn with os.Stderr replaced by a pipe and returns what it
+// wrote. Errors go to stderr so stdout stays a clean data channel.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	fn()
+
+	w.Close()
+	os.Stderr = old
+
+	var buf bytes.Buffer
+	buf.ReadFrom(r) //nolint:errcheck
+	return buf.String()
+}
 
 func TestParseFormat(t *testing.T) {
 	tests := []struct {
@@ -176,5 +198,53 @@ func TestError_NilIsNoOp(t *testing.T) {
 	buf.ReadFrom(r)
 	if buf.Len() != 0 {
 		t.Errorf("expected no output for nil error, got %q", buf.String())
+	}
+}
+
+func TestErrorFallbackCode(t *testing.T) {
+	// every emitted error object must carry a code. before this, a hand-written
+	// validation error or a transport failure came out as a bare
+	// {"error":"..."} and an agent had to read english to tell them apart.
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"plain error", errors.New("invalid --created-after format"), "cli_error"},
+		{"wrapped plain error", fmt.Errorf("bad input: %w", errors.New("nope")), "cli_error"},
+		{"url error (connection refused)", &url.Error{
+			Op:  "Get",
+			URL: "http://127.0.0.1:9/v1/endpoints",
+			Err: &net.OpError{Op: "dial", Err: errors.New("connect: connection refused")},
+		}, "network_error"},
+		{"wrapped url error", fmt.Errorf("request failed: %w", &url.Error{
+			Op: "Post", URL: "http://x", Err: errors.New("EOF"),
+		}), "network_error"},
+		{"dns failure", &net.DNSError{Err: "no such host", Name: "nope.invalid"}, "network_error"},
+		{"client timeout", fmt.Errorf("request failed: %w", context.DeadlineExceeded), "network_error"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := fallbackCode(tt.err); got != tt.want {
+				t.Errorf("fallbackCode() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestErrorTypedCodeWinsOverFallback(t *testing.T) {
+	// a typed error's own code must never be overwritten by the fallback.
+	if got := fallbackCode(errors.New("x")); got != "cli_error" {
+		t.Fatalf("precondition: fallbackCode = %q", got)
+	}
+	stderr := captureStderr(t, func() {
+		Error(codedError{msg: "endpoint not found", code: "not_found", status: 404})
+	})
+	if !strings.Contains(stderr, `"code":"not_found"`) {
+		t.Errorf("expected the typed code to survive, got %s", stderr)
+	}
+	if strings.Contains(stderr, "cli_error") {
+		t.Errorf("fallback must not override a typed code, got %s", stderr)
 	}
 }

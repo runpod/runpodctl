@@ -355,3 +355,29 @@ func TestNewNotFoundError(t *testing.T) {
 		t.Errorf("wrapped error lost its code: %v", wrapped)
 	}
 }
+
+func TestCodeForStatus(t *testing.T) {
+	// pins the full vocabulary the runpodctl agent skill documents (CON-752).
+	tests := []struct {
+		status int
+		want   string
+	}{
+		{400, "bad_request"},
+		{401, "unauthorized"},
+		{403, "forbidden"},
+		{404, "not_found"},
+		{409, "conflict"},
+		{429, "rate_limited"},
+		{500, "server_error"},
+		{502, "server_error"},
+		{503, "server_error"},
+		{418, "api_error"}, // any other non-zero status
+		{422, "api_error"},
+		{0, ""}, // no status to derive from
+	}
+	for _, tt := range tests {
+		if got := codeForStatus(tt.status); got != tt.want {
+			t.Errorf("codeForStatus(%d) = %q, want %q", tt.status, got, tt.want)
+		}
+	}
+}

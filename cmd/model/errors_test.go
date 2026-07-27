@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/runpod/runpodctl/api"
+	"github.com/spf13/cobra"
 )
 
 // captureStdStreams runs fn with os.Stdout and os.Stderr replaced by pipes and
@@ -59,64 +60,82 @@ func captureStdStreams(t *testing.T, fn func()) (stdout, stderr string) {
 	return stdoutBuf.String(), stderrBuf.String()
 }
 
-func TestHandleModelRepoError(t *testing.T) {
+func TestModelRepoError(t *testing.T) {
 	tests := []struct {
-		name           string
-		err            error
-		wantHandled    bool
-		wantStderrSub  string // empty = stderr must be empty
-		wantStdoutSub  string // empty = stdout must be empty
+		name    string
+		err     error
+		wantErr bool
 	}{
 		{
-			name:        "nil error is a no-op",
-			err:         nil,
-			wantHandled: false,
+			name:    "nil error is a no-op",
+			err:     nil,
+			wantErr: false,
 		},
 		{
-			name:          "ErrModelRepoNotImplemented routes to stderr",
-			err:           api.ErrModelRepoNotImplemented,
-			wantHandled:   true,
-			wantStderrSub: api.ErrModelRepoNotImplemented.Error(),
+			name:    "ErrModelRepoNotImplemented is recognized",
+			err:     api.ErrModelRepoNotImplemented,
+			wantErr: true,
 		},
 		{
-			name:          "feature-not-enabled message routes to stderr",
-			err:           errors.New("Model Repo feature is not enabled for this user"),
-			wantHandled:   true,
-			wantStderrSub: "Model Repo feature is not enabled for this user",
+			name:    "feature-not-enabled message is recognized",
+			err:     errors.New("Model Repo feature is not enabled for this user"),
+			wantErr: true,
 		},
 		{
-			name:        "unrelated error is not handled",
-			err:         errors.New("some other failure"),
-			wantHandled: false,
+			name:    "unrelated error is not recognized",
+			err:     errors.New("some other failure"),
+			wantErr: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var handled bool
+			var got error
+			// modelRepoError must not print: the handler returns the error and
+			// the Execute sink emits the single JSON object. Printing here as
+			// well would double-print (the bug CON-683 removed elsewhere), and
+			// swallowing it made the process exit 0 on a real failure.
 			stdout, stderr := captureStdStreams(t, func() {
-				handled = handleModelRepoError(tt.err)
+				got = modelRepoError(tt.err)
 			})
 
-			if handled != tt.wantHandled {
-				t.Fatalf("handled = %v, want %v", handled, tt.wantHandled)
+			if (got != nil) != tt.wantErr {
+				t.Fatalf("modelRepoError() = %v, wantErr %v", got, tt.wantErr)
 			}
-
-			// CLAUDE.md: deprecation warnings / handled errors must go to stderr
-			// only; stdout must stay clean for JSON-consuming agents.
 			if stdout != "" {
 				t.Fatalf("stdout must remain empty, got %q", stdout)
 			}
-
-			if tt.wantStderrSub == "" {
-				if stderr != "" {
-					t.Fatalf("expected empty stderr, got %q", stderr)
-				}
-				return
-			}
-			if !strings.Contains(stderr, tt.wantStderrSub) {
-				t.Fatalf("stderr = %q, want substring %q", stderr, tt.wantStderrSub)
+			if stderr != "" {
+				t.Fatalf("stderr must remain empty (the sink prints), got %q", stderr)
 			}
 		})
+	}
+}
+
+// TestModelCommandsUseRunE pins the exit-code contract: a model command that
+// fails must return its error so cobra exits non-zero. They previously used
+// Run: with a swallowed error, so a real Model Repo failure exited 0 and any
+// script doing `runpodctl model add … && echo ok` printed ok.
+func TestModelCommandsUseRunE(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		cmd  *cobra.Command
+	}{
+		{"model list", listCmd},
+		{"model list (legacy alias)", GetModelsCmd},
+		{"model add", addCmd},
+		{"model add (legacy alias)", AddModelToRepoCmd},
+		{"model remove", removeCmd},
+		{"model remove (legacy alias)", RemoveModelCmd},
+	} {
+		if c.cmd == nil {
+			continue
+		}
+		if c.cmd.RunE == nil {
+			t.Errorf("%s: RunE is nil — errors cannot propagate to the exit code", c.name)
+		}
+		if c.cmd.Run != nil {
+			t.Errorf("%s: Run is set; use RunE so errors reach the sink", c.name)
+		}
 	}
 }

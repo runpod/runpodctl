@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"runtime"
 	"strings"
@@ -42,8 +41,10 @@ func Query(input Input) (res *http.Response, err error) {
 
 	// Check if the API key is present
 	if apiKey == "" {
-		fmt.Println("API key not found")
-		return nil, errors.New("API key not found")
+		// no print: the error is returned and the caller emits it on stderr.
+		// this used to print to *stdout*, corrupting the json contract for
+		// anything piping runpodctl output into a parser.
+		return nil, errors.New("api key not found. get your key at https://www.runpod.io/console/user/settings then: export RUNPOD_API_KEY=your-key OR run: runpodctl doctor")
 	}
 
 	req, err := http.NewRequest("POST", apiUrl, bytes.NewBuffer(jsonValue))
