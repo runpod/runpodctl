@@ -226,6 +226,10 @@ var usageErrorPrefixes = []string{
 	"invalid argument",
 	"accepts ", // "accepts N arg(s)…" and "accepts at most/between…"
 	"requires at least",
+	// cobra's ValidateRequiredFlags runs after flag parsing, so it does not go
+	// through SetFlagErrorFunc and has to be matched here (20 MarkFlagRequired
+	// sites, e.g. `template create` with no --name/--image).
+	"required flag(s)",
 }
 
 // asUsageError reports whether err represents a usage error, returning a

@@ -57,11 +57,14 @@ func invokeURLs(id string) *EndpointInvokeURLs {
 	if id == "" {
 		return nil
 	}
-	invokeBase := configenv.InvokeURL()
+	// tolerate a sloppy override: surrounding whitespace and any number of
+	// trailing slashes. a value of only slashes is treated as unset rather than
+	// silently emitting relative urls.
+	invokeBase := strings.TrimRight(strings.TrimSpace(configenv.InvokeURL()), "/")
 	if invokeBase == "" {
 		invokeBase = ServerlessInvokeBaseURL
 	}
-	base := strings.TrimSuffix(invokeBase, "/") + "/" + id
+	base := invokeBase + "/" + id
 	return &EndpointInvokeURLs{
 		Run:     base + "/run",
 		RunSync: base + "/runsync",

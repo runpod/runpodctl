@@ -126,6 +126,8 @@ func TestAsUsageError(t *testing.T) {
 		"accepts 1 arg(s), received 0",
 		"requires at least 1 arg(s), only received 0",
 		`invalid argument "x" for "--count"`,
+		// ValidateRequiredFlags bypasses SetFlagErrorFunc, so it must match here.
+		`required flag(s) "image", "name" not set`,
 	}
 	for _, msg := range usageCases {
 		if _, ok := asUsageError(root, errors.New(msg)); !ok {
