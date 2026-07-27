@@ -160,6 +160,15 @@ func (e *APIError) ErrorCode() string {
 // HTTPStatus returns the HTTP status code associated with the error (0 if none).
 func (e *APIError) HTTPStatus() int { return e.Status }
 
+// newNotFoundError builds a typed "not_found" error for lookups that fail
+// without an HTTP status to derive one from — graphql answers a missing resource
+// with 200 and a null data field, so callers must tag it themselves or agents
+// get an error object with no code. Status is deliberately left unset rather
+// than faked as 404, since no 404 was received on the wire.
+func newNotFoundError(format string, args ...interface{}) *APIError {
+	return &APIError{Message: fmt.Sprintf(format, args...), Code: "not_found"}
+}
+
 // codeForStatus maps an HTTP status to a stable, lowercase error code.
 func codeForStatus(status int) string {
 	switch status {

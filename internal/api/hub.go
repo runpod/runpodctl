@@ -254,7 +254,7 @@ func (c *Client) GetListing(listingID string) (*Listing, error) {
 	}
 
 	if resp.Data.Listing == nil {
-		return nil, fmt.Errorf("hub listing not found: %s", listingID)
+		return nil, newNotFoundError("hub listing not found: %s", listingID)
 	}
 
 	return resp.Data.Listing, nil
@@ -298,7 +298,7 @@ func (c *Client) GetListingFromRepo(owner, name string) (*Listing, error) {
 	}
 
 	if resp.Data.Listing == nil {
-		return nil, fmt.Errorf("hub listing not found: %s/%s", owner, name)
+		return nil, newNotFoundError("hub listing not found: %s/%s", owner, name)
 	}
 
 	return resp.Data.Listing, nil
