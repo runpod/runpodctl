@@ -129,6 +129,7 @@ func TestModelCommandsUseRunE(t *testing.T) {
 		{"model remove (legacy alias)", RemoveModelCmd},
 	} {
 		if c.cmd == nil {
+			t.Errorf("%s: command is nil — the test can no longer see it", c.name)
 			continue
 		}
 		if c.cmd.RunE == nil {

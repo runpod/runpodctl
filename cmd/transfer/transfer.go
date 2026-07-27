@@ -39,7 +39,7 @@ var SendCmd = &cobra.Command{
 	Args:  cobra.MinimumNArgs(1),
 	Short: "send files or folders",
 	Long:  "send files or folders to a pod or any computer using croc",
-	Run:   runSend,
+	RunE:  runSend,
 }
 
 // ReceiveCmd is the receive command
@@ -71,7 +71,7 @@ func getRelays() ([]Relay, error) {
 	return response.Relays, nil
 }
 
-func runSend(cmd *cobra.Command, args []string) {
+func runSend(cmd *cobra.Command, args []string) error {
 	logger := log.New(os.Stderr, "runpod-send: ", 0)
 
 	src, err := filepath.Abs(args[0])
@@ -127,18 +127,23 @@ func runSend(cmd *cobra.Command, args []string) {
 
 	minimalFileInfos, emptyFoldersToTransfer, totalNumberFolders, err := GetFilesInfo(args, crocOptions.ZipFolder)
 	if err != nil {
-		return
+		// was a bare return: a failure here produced no output at all and exit 0,
+		// so `runpodctl send x && echo ok` printed ok on a silent failure.
+		return fmt.Errorf("failed to read %s: %w", src, err)
 	}
 
 	cr, err := New(crocOptions)
 	if err != nil {
-		fmt.Println(err)
-		return
+		// was fmt.Println to stdout + exit 0.
+		return fmt.Errorf("croc: %w", err)
 	}
 
 	if err = cr.Send(minimalFileInfos, emptyFoldersToTransfer, totalNumberFolders); err != nil {
-		fmt.Println(err)
+		// was fmt.Println to stdout + exit 0.
+		return fmt.Errorf("croc: send: %w", err)
 	}
+
+	return nil
 }
 
 func runReceive(cmd *cobra.Command, args []string) {

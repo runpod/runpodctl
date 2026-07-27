@@ -461,9 +461,11 @@ func TestInvokeURLs_HonorsInvokeURLOverride(t *testing.T) {
 }
 
 func TestInvokeURLs_ConfigFileKey(t *testing.T) {
-	// the config-file path must work, not just the env var.
-	viper.Reset()
-	t.Cleanup(viper.Reset)
+	// the config-file path must work, not just the env var. save/restore the one
+	// key instead of viper.Reset() so this stays order-independent alongside the
+	// other tests in this package that set global viper keys.
+	prev := viper.Get("invokeUrl")
+	t.Cleanup(func() { viper.Set("invokeUrl", prev) })
 	t.Setenv(configenv.InvokeURLEnv, "")
 	viper.Set("invokeUrl", "https://from-config.example.com/v2")
 

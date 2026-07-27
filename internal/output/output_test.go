@@ -248,3 +248,25 @@ func TestErrorTypedCodeWinsOverFallback(t *testing.T) {
 		t.Errorf("fallback must not override a typed code, got %s", stderr)
 	}
 }
+
+func TestFallbackCode_ParseErrorIsNotNetwork(t *testing.T) {
+	// url.Parse returns *url.Error with Op "parse". A malformed RUNPOD_API_URL is
+	// a local config mistake, and network_error is the one code that tells an
+	// agent "transient, retry" — misfiling it here would make an agent retry a
+	// permanently broken url forever.
+	_, parseErr := url.Parse("http://[::1")
+	if parseErr == nil {
+		t.Fatal("expected the malformed url to fail parsing")
+	}
+	wrapped := fmt.Errorf("failed to create request: %w", parseErr)
+	if got := fallbackCode(wrapped); got != "cli_error" {
+		t.Errorf("fallbackCode(url parse error) = %q, want cli_error", got)
+	}
+
+	// a genuine transport failure through the same *url.Error type must still
+	// classify as network_error.
+	transport := &url.Error{Op: "Get", URL: "http://x", Err: &net.OpError{Op: "dial", Err: errors.New("connection refused")}}
+	if got := fallbackCode(fmt.Errorf("request failed: %w", transport)); got != "network_error" {
+		t.Errorf("fallbackCode(transport error) = %q, want network_error", got)
+	}
+}
