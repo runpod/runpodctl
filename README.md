@@ -24,6 +24,8 @@ _note: all pods automatically come with runpodctl installed with a pod-scoped ap
     - [serverless endpoints](#serverless-endpoints)
     - [file transfer](#file-transfer)
   - [output format](#output-format)
+    - [error format](#error-format)
+  - [environment variables](#environment-variables)
   - [legacy commands](#legacy-commands)
   - [release process](#release-process)
   - [acknowledgements](#acknowledgements)
