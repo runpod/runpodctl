@@ -137,9 +137,12 @@ func TestRunAddModelValidationErrorsCarryACodeAndPrintNothing(t *testing.T) {
 		wantMsg  string
 	}{
 		{
-			name:     "missing model-path is a not_found",
+			// a missing *local* path is cli_error, not not_found: not_found is
+			// reserved for resources the api does not have, so an agent can trust
+			// it to mean "server-side", not "you typed the path wrong".
+			name:     "missing model-path is a cli_error",
 			setup:    func(t *testing.T) { addModelDirectoryPath = filepath.Join(t.TempDir(), "absent") },
-			wantCode: "not_found",
+			wantCode: "cli_error",
 			wantMsg:  "does not exist",
 		},
 		{

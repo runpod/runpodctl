@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/runpod/runpodctl/api"
-	internalapi "github.com/runpod/runpodctl/internal/api"
 	"github.com/runpod/runpodctl/internal/output"
 
 	"github.com/schollz/progressbar/v3"
@@ -207,12 +206,13 @@ func runAddModel(cmd *cobra.Command, args []string) error {
 		modelPath := filepath.Clean(addModelDirectoryPath)
 		info, err := os.Stat(modelPath)
 		if err != nil {
-			// a path that isn't there is a missing resource, so it gets the
-			// existing not_found code rather than the cli_error fallback — an
-			// agent retrying with a corrected --model-path can branch on it.
-			// any other stat failure (permissions, i/o) is a real cli error.
+			// not_found is reserved for resources the *api* does not have. a
+			// mistyped local path is user input, so it takes the cli_error
+			// fallback: an agent that saw not_found here would reasonably read it
+			// as "the model is missing server-side" and retry with a different
+			// name instead of fixing the path.
 			if errors.Is(err, fs.ErrNotExist) {
-				return internalapi.NewNotFoundError("model-path %q does not exist", addModelDirectoryPath)
+				return fmt.Errorf("model-path %q does not exist", addModelDirectoryPath)
 			}
 			return fmt.Errorf("unable to read model directory: %w", err)
 		}
