@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -200,10 +199,8 @@ func runSSHInfoWithArgs(cmd *cobra.Command, args []string, allowAll bool) error 
 		return output.Print(conn, &output.Config{Format: format})
 	}
 
-	errData := map[string]interface{}{"error": fmt.Sprintf("pod '%s' not found", nameOrID)}
-	data, _ := json.Marshal(errData)
-	fmt.Fprintln(os.Stderr, string(data))
-	return fmt.Errorf("pod '%s' not found", nameOrID)
+	// return only; Execute is the single error sink and tags the code.
+	return api.NewNotFoundError("pod '%s' not found", nameOrID)
 }
 
 func confirmAddKey() bool {

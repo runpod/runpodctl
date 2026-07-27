@@ -337,7 +337,7 @@ func TestParseGraphQLHTTPError(t *testing.T) {
 }
 
 func TestNewNotFoundError(t *testing.T) {
-	err := newNotFoundError("template not found: %s", "tpl-1")
+	err := NewNotFoundError("template not found: %s", "tpl-1")
 	if got := err.Error(); got != "template not found: tpl-1" {
 		t.Errorf("message = %q", got)
 	}
