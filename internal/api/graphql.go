@@ -36,7 +36,10 @@ type GraphQLInput struct {
 func NewGraphQLClient() (*GraphQLClient, error) {
 	apiKey := configenv.APIKey()
 	if apiKey == "" {
-		return nil, fmt.Errorf("api key not found. run 'runpodctl config --apiKey=xxx' or set RUNPOD_API_KEY")
+		// same typed sentinel as the rest client: every missing-key path must
+		// report no_credentials, or an agent branching on that code silently
+		// misses pod create, pod get, template create/update and all of ssh.
+		return nil, ErrNoCredentials
 	}
 
 	apiURL := configenv.GraphQLURL()
