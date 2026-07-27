@@ -347,7 +347,7 @@ func (c *Client) getTemplateByIDGraphQL(templateID string) (*Template, error) {
 	}
 
 	if resp.Data.PodTemplate == nil {
-		return nil, newNotFoundError("template not found: %s", templateID)
+		return nil, NewNotFoundError("template not found: %s", templateID)
 	}
 
 	return templateFromGraphQL(resp.Data.PodTemplate), nil
