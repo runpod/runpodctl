@@ -366,7 +366,11 @@ func (c *GraphQLClient) CreatePod(input *CreatePodGQLInput) (map[string]interfac
 	}
 
 	if len(data.Errors) > 0 {
-		return nil, fmt.Errorf("%s", data.Errors[0].Message)
+		// typed, so it carries graphql_error and — importantly — bails out of
+		// asUsageError before the string fallback. this was the only site where a
+		// server-controlled message could reach that fallback and be misread as a
+		// usage error; the other 18 already used newGraphQLError.
+		return nil, newGraphQLError(data.Errors[0].Message)
 	}
 
 	if data.Data.Pod == nil {

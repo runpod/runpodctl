@@ -426,21 +426,53 @@ func TestInvokeURLs(t *testing.T) {
 
 func TestInvokeURLs_HonorsInvokeURLOverride(t *testing.T) {
 	// invoke is a separate service from the control plane, so it has its own
-	// override; a trailing slash must not produce a doubled separator.
-	t.Setenv(configenv.InvokeURLEnv, "https://staging.example.com/v2/")
+	// override. sloppy values must not produce malformed urls.
+	tests := []struct {
+		name    string
+		env     string
+		wantRun string
+	}{
+		{"plain", "https://staging.example.com/v2", "https://staging.example.com/v2/ep-abc/run"},
+		{"trailing slash", "https://staging.example.com/v2/", "https://staging.example.com/v2/ep-abc/run"},
+		{"repeated trailing slashes", "https://staging.example.com/v2//", "https://staging.example.com/v2/ep-abc/run"},
+		{"surrounding whitespace", "  https://staging.example.com/v2  ", "https://staging.example.com/v2/ep-abc/run"},
+		{"slash only falls back to prod", "/", ServerlessInvokeBaseURL + "/ep-abc/run"},
+		{"empty falls back to prod", "", ServerlessInvokeBaseURL + "/ep-abc/run"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(configenv.InvokeURLEnv, tt.env)
+
+			urls := invokeURLs("ep-abc")
+			if urls == nil {
+				t.Fatal("expected non-nil urls for a valid id")
+			}
+			if urls.Run != tt.wantRun {
+				t.Errorf("run = %q, want %q", urls.Run, tt.wantRun)
+			}
+			if want := strings.TrimSuffix(tt.wantRun, "/run") + "/runsync"; urls.RunSync != want {
+				t.Errorf("runsync = %q, want %q", urls.RunSync, want)
+			}
+			if want := strings.TrimSuffix(tt.wantRun, "/run") + "/health"; urls.Health != want {
+				t.Errorf("health = %q, want %q", urls.Health, want)
+			}
+		})
+	}
+}
+
+func TestInvokeURLs_ConfigFileKey(t *testing.T) {
+	// the config-file path must work, not just the env var.
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	t.Setenv(configenv.InvokeURLEnv, "")
+	viper.Set("invokeUrl", "https://from-config.example.com/v2")
 
 	urls := invokeURLs("ep-abc")
 	if urls == nil {
 		t.Fatal("expected non-nil urls for a valid id")
 	}
-	if urls.Run != "https://staging.example.com/v2/ep-abc/run" {
+	if urls.Run != "https://from-config.example.com/v2/ep-abc/run" {
 		t.Errorf("run = %q", urls.Run)
-	}
-	if urls.RunSync != "https://staging.example.com/v2/ep-abc/runsync" {
-		t.Errorf("runsync = %q", urls.RunSync)
-	}
-	if urls.Health != "https://staging.example.com/v2/ep-abc/health" {
-		t.Errorf("health = %q", urls.Health)
 	}
 }
 
