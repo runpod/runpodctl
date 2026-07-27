@@ -209,6 +209,16 @@ func (e *usageError) ErrorCode() string { return "usage_error" }
 // usageErrorPrefixes are the stable leading strings Cobra uses for argument and
 // command validation errors. Flag-parsing errors are already wrapped via
 // SetFlagErrorFunc; these cover the arg/command validators that are not.
+//
+// COMMAND AUTHORS: do not start a *runtime* error message with any of these
+// words. A plain `fmt.Errorf("invalid argument …")` returned from a command
+// would be classified as a usage error and dump the usage text. Typed
+// *api.APIError / *api.GraphQLError are exempt (they bail out in asUsageError
+// before this list), so this only bites hand-rolled errors. Prefer naming the
+// flag, e.g. `invalid --scale-by %q`, which does not match.
+//
+// This list mirrors Cobra's internal message strings; re-check it when bumping
+// the Cobra dependency. TestAsUsageError in root_test.go pins the current set.
 var usageErrorPrefixes = []string{
 	"unknown command",
 	"unknown flag",

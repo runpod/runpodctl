@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strings"
+
+	"github.com/runpod/runpodctl/internal/configenv"
 )
 
 // Endpoint represents a serverless endpoint
@@ -35,7 +38,11 @@ type Endpoint struct {
 	URLs *EndpointInvokeURLs `json:"urls,omitempty"`
 }
 
-// ServerlessInvokeBaseURL is the base url used to invoke serverless endpoints.
+// ServerlessInvokeBaseURL is the default base url used to invoke serverless
+// endpoints. Invoke is a separate service from the control plane, so pointing
+// runpodctl at a non-prod REST/GraphQL api (RUNPOD_API_URL / RUNPOD_GRAPHQL_URL)
+// does not move it; override it explicitly with RUNPOD_INVOKE_URL when testing
+// against a non-prod invoke host, otherwise the emitted urls target prod.
 const ServerlessInvokeBaseURL = "https://api.runpod.ai/v2"
 
 // EndpointInvokeURLs are the ready-to-call urls for a serverless endpoint.
@@ -50,7 +57,11 @@ func invokeURLs(id string) *EndpointInvokeURLs {
 	if id == "" {
 		return nil
 	}
-	base := ServerlessInvokeBaseURL + "/" + id
+	invokeBase := configenv.InvokeURL()
+	if invokeBase == "" {
+		invokeBase = ServerlessInvokeBaseURL
+	}
+	base := strings.TrimSuffix(invokeBase, "/") + "/" + id
 	return &EndpointInvokeURLs{
 		Run:     base + "/run",
 		RunSync: base + "/runsync",
