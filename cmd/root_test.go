@@ -184,3 +184,33 @@ func TestRootCmd_HelpMentionsLegacy(t *testing.T) {
 		t.Error("help should mention legacy model command")
 	}
 }
+
+// TestModelValidationMessagesAreNotUsageErrors closes a gap the cmd/model tests
+// cannot see: they assert on output.Error directly, but Execute runs
+// asUsageError FIRST, and any message beginning with a cobra usage prefix gets
+// reclassified as usage_error and followed by a usage dump. A command author
+// rewording a validation error into "invalid argument: …" would silently change
+// its code and add ~1.3KB of usage text to stderr, with every cmd/model test
+// still green.
+func TestModelValidationMessagesAreNotUsageErrors(t *testing.T) {
+	root := GetRootCmd()
+
+	// the real messages returned by cmd/model's validation paths.
+	for _, msg := range []string{
+		`model-path "/x" does not exist`,
+		`model-path "/x" must be a directory`,
+		`model-path "/x" does not contain any files to upload`,
+		"--wait-for-hash requires --model-path",
+		"file-name is required when creating an upload",
+		"file-size is required when creating an upload",
+		"upload response missing upload session details",
+		"upload response missing model version uuid required by --wait-for-hash",
+		"unable to read model directory: stat /x: no such file or directory",
+		"unable to set graphql timeout: bad duration",
+		"upload completed but timed out waiting for the model hash; the model exists, do not re-upload: context deadline exceeded",
+	} {
+		if ue, ok := asUsageError(root, errors.New(msg)); ok {
+			t.Errorf("%q was classified as a usage error (%v) — it would print a usage dump and report usage_error", msg, ue)
+		}
+	}
+}

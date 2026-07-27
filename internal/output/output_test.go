@@ -221,7 +221,10 @@ func TestErrorFallbackCode(t *testing.T) {
 			Op: "Post", URL: "http://x", Err: errors.New("EOF"),
 		}), "network_error"},
 		{"dns failure", &net.DNSError{Err: "no such host", Name: "nope.invalid"}, "network_error"},
-		{"client timeout", fmt.Errorf("request failed: %w", context.DeadlineExceeded), "network_error"},
+		// a real client timeout arrives wrapped in *url.Error; a BARE
+		// context.DeadlineExceeded is a local wait loop giving up and must not be
+		// called a network failure (see TestFallbackCode_LocalWaitTimeoutIsNotNetwork).
+		{"http client timeout", fmt.Errorf("request failed: %w", &url.Error{Op: "Get", URL: "http://x", Err: context.DeadlineExceeded}), "network_error"},
 	}
 
 	for _, tt := range tests {
@@ -268,5 +271,25 @@ func TestFallbackCode_ParseErrorIsNotNetwork(t *testing.T) {
 	transport := &url.Error{Op: "Get", URL: "http://x", Err: &net.OpError{Op: "dial", Err: errors.New("connection refused")}}
 	if got := fallbackCode(fmt.Errorf("request failed: %w", transport)); got != "network_error" {
 		t.Errorf("fallbackCode(transport error) = %q, want network_error", got)
+	}
+}
+
+func TestFallbackCode_LocalWaitTimeoutIsNotNetwork(t *testing.T) {
+	// a local wait loop that gives up produces context.DeadlineExceeded without
+	// any network involvement — e.g. `model add --wait-for-hash` timing out AFTER
+	// a fully successful upload. Classifying that as network_error told the agent
+	// "transient, retry", and a retry re-uploads the entire model.
+	err := fmt.Errorf("upload completed but timed out waiting for the model hash; the model exists, do not re-upload: %w", context.DeadlineExceeded)
+	if got := fallbackCode(err); got != "cli_error" {
+		t.Errorf("fallbackCode(local wait timeout) = %q, want cli_error", got)
+	}
+
+	// a real http client timeout still classifies as network_error, because
+	// net/http wraps it in *url.Error.
+	httpTimeout := fmt.Errorf("request failed: %w", &url.Error{
+		Op: "Get", URL: "http://x", Err: context.DeadlineExceeded,
+	})
+	if got := fallbackCode(httpTimeout); got != "network_error" {
+		t.Errorf("fallbackCode(http client timeout) = %q, want network_error", got)
 	}
 }

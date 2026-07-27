@@ -319,3 +319,115 @@ func TestModelCommandsUseRunE(t *testing.T) {
 		}
 	}
 }
+
+// TestRunAddModelPropagatesErrors covers what the validation table cannot: that
+// a failure from each stubbed dependency actually reaches the caller. An audit
+// mutated ten of these paths to `return nil` / `_ =` and every existing test
+// stayed green, so each case here is a mutation the suite previously missed.
+func TestRunAddModelPropagatesErrors(t *testing.T) {
+	boom := errors.New("boom")
+
+	tests := []struct {
+		name  string
+		setup func(t *testing.T)
+	}{
+		{
+			name: "addModelToRepo failure",
+			setup: func(t *testing.T) {
+				addModelName = "m"
+				addModelToRepo = func(*api.AddModelToRepoInput) (*api.Model, error) { return nil, boom }
+			},
+		},
+		{
+			name: "createModelRepoUpload failure on the create-upload branch",
+			setup: func(t *testing.T) {
+				addModelName = "m"
+				addModelCreateUpload = true
+				addModelFileName = "f.bin"
+				addModelFileSize = "10"
+				addModelToRepo = func(*api.AddModelToRepoInput) (*api.Model, error) {
+					return &api.Model{ID: "model-id"}, nil
+				}
+				createModelRepoUpload = func(*api.CreateModelRepoUploadInput) (*api.ModelRepoMutationResult, error) {
+					return nil, boom
+				}
+			},
+		},
+		{
+			name: "nil upload session is rejected",
+			setup: func(t *testing.T) {
+				addModelName = "m"
+				addModelCreateUpload = true
+				addModelFileName = "f.bin"
+				addModelFileSize = "10"
+				addModelToRepo = func(*api.AddModelToRepoInput) (*api.Model, error) {
+					return &api.Model{ID: "model-id"}, nil
+				}
+				createModelRepoUpload = func(*api.CreateModelRepoUploadInput) (*api.ModelRepoMutationResult, error) {
+					return &api.ModelRepoMutationResult{}, nil // Upload == nil
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resetAddModelGlobals(t)
+			oldAdd, oldCreate := addModelToRepo, createModelRepoUpload
+			t.Cleanup(func() { addModelToRepo, createModelRepoUpload = oldAdd, oldCreate })
+			tt.setup(t)
+
+			var err error
+			stdout, stderr := captureStdStreams(t, func() {
+				err = runAddModel(newTestAddModelCommand(), nil)
+			})
+
+			if err == nil {
+				t.Fatal("expected an error to propagate to the caller; a nil here means the cli exits 0 on a failure")
+			}
+			if stdout != "" {
+				t.Errorf("stdout must stay empty on failure, got %q", stdout)
+			}
+			if stderr != "" {
+				t.Errorf("the command must not print the error itself, got %q", stderr)
+			}
+		})
+	}
+}
+
+// TestCreateUploadValidationRunsBeforeCreatingTheModel pins the ordering fix: a
+// missing --file-name must fail BEFORE addModelToRepo is called, otherwise the
+// model is created server-side and the cli reports a plain validation error, so
+// an agent retrying creates a duplicate.
+func TestCreateUploadValidationRunsBeforeCreatingTheModel(t *testing.T) {
+	for _, missing := range []string{"file-name", "file-size"} {
+		t.Run(missing, func(t *testing.T) {
+			resetAddModelGlobals(t)
+			old := addModelToRepo
+			t.Cleanup(func() { addModelToRepo = old })
+
+			called := false
+			addModelToRepo = func(*api.AddModelToRepoInput) (*api.Model, error) {
+				called = true
+				return &api.Model{ID: "model-id"}, nil
+			}
+
+			addModelName = "m"
+			addModelCreateUpload = true
+			if missing == "file-size" {
+				addModelFileName = "f.bin"
+			}
+
+			err := runAddModel(newTestAddModelCommand(), nil)
+			if err == nil {
+				t.Fatal("expected a validation error")
+			}
+			if !strings.Contains(err.Error(), missing+" is required") {
+				t.Errorf("error = %v, want it to name %s", err, missing)
+			}
+			if called {
+				t.Error("addModelToRepo was called before validation — a model would be created server-side and then orphaned")
+			}
+		})
+	}
+}
