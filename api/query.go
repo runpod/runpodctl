@@ -14,6 +14,12 @@ import (
 	"github.com/spf13/viper"
 )
 
+// ErrNoCredentials is the "no api key configured" sentinel, re-exported from
+// internal/api so callers outside this module can match it with errors.Is
+// instead of string-matching the message. It is the SAME value the rest client
+// returns, so one errors.Is check covers every path.
+var ErrNoCredentials = internalapi.ErrNoCredentials
+
 type Input struct {
 	Query     string                 `json:"query"`
 	Variables map[string]interface{} `json:"variables"`
@@ -45,7 +51,7 @@ func Query(input Input) (res *http.Response, err error) {
 		// this used to print to *stdout*, corrupting the json contract for
 		// anything piping runpodctl output into a parser. shares the typed
 		// sentinel with the rest client so both report code no_credentials.
-		return nil, internalapi.ErrNoCredentials
+		return nil, ErrNoCredentials
 	}
 
 	req, err := http.NewRequest("POST", apiUrl, bytes.NewBuffer(jsonValue))

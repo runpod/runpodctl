@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -48,7 +47,7 @@ var ReceiveCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Short: "receive files or folders",
 	Long:  "receive files or folders from a pod or any computer using croc",
-	Run:   runReceive,
+	RunE:  runReceive,
 }
 
 func init() {
@@ -72,24 +71,21 @@ func getRelays() ([]Relay, error) {
 }
 
 func runSend(cmd *cobra.Command, args []string) error {
-	logger := log.New(os.Stderr, "runpod-send: ", 0)
-
 	src, err := filepath.Abs(args[0])
 	if err != nil {
-		logger.Fatalf("error getting absolute path of %s: %v", args[0], err)
+		return fmt.Errorf("failed to resolve path %s: %w", args[0], err)
 	}
 
 	switch _, err := os.Stat(src); {
 	case errors.Is(err, os.ErrNotExist):
-		logger.Fatalf("file or folder %q does not exist", src)
+		return fmt.Errorf("file or folder %q does not exist", src)
 	case err != nil:
-		logger.Fatalf("error reading file or folder %q: %v", src, err)
+		return fmt.Errorf("failed to read %q: %w", src, err)
 	}
 
 	relays, err := getRelays()
 	if err != nil {
-		logger.Print(err)
-		logger.Fatal("could not get list of relays. please contact support for help!")
+		return fmt.Errorf("could not get list of relays: %w", err)
 	}
 
 	// Test all relays' RTT in parallel, performs 2 pings and selects from top 3 fastest
@@ -146,27 +142,25 @@ func runSend(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runReceive(cmd *cobra.Command, args []string) {
-	logger := log.New(os.Stderr, "runpod-receive: ", 0)
-
+func runReceive(cmd *cobra.Command, args []string) error {
 	relays, err := getRelays()
 	if err != nil {
-		logger.Fatal("there was an issue getting the relay list. please try again.")
+		return fmt.Errorf("could not get list of relays: %w", err)
 	}
 
 	sharedSecretCode := args[0]
 	split := strings.Split(sharedSecretCode, "-")
 	if len(split) < 2 {
-		logger.Fatalf("malformed code %q: expected at least 2 parts separated by dashes, but got %v. please retry 'runpodctl send' to generate a valid code.", sharedSecretCode, len(split))
+		return fmt.Errorf("malformed code %q: expected at least 2 parts separated by dashes, got %v; re-run 'runpodctl send' for a valid code", sharedSecretCode, len(split))
 	}
 
 	relayIndex, err := strconv.Atoi(split[len(split)-1])
 	if err != nil {
-		logger.Fatalf("malformed relay, please retry 'runpodctl send' to generate a valid code.")
+		return fmt.Errorf("malformed relay in code %q; re-run 'runpodctl send' for a valid code", sharedSecretCode)
 	}
 
 	if relayIndex < 0 || relayIndex >= len(relays) {
-		logger.Fatalf("relay index %d not found; please retry 'runpodctl send' to generate a valid code.", relayIndex)
+		return fmt.Errorf("relay index %d not found; re-run 'runpodctl send' for a valid code", relayIndex)
 	}
 	relay := relays[relayIndex]
 
@@ -192,10 +186,12 @@ func runReceive(cmd *cobra.Command, args []string) {
 
 	cr, err := New(crocOptions)
 	if err != nil {
-		logger.Fatalf("croc: %v", err)
+		return fmt.Errorf("croc: %w", err)
 	}
 
 	if err = cr.Receive(); err != nil {
-		logger.Fatalf("croc: receive: %v", err)
+		return fmt.Errorf("croc: receive: %w", err)
 	}
+
+	return nil
 }

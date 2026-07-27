@@ -165,7 +165,9 @@ func (e *APIError) ErrorCode() string {
 // HTTPStatus returns the HTTP status code associated with the error (0 if none).
 func (e *APIError) HTTPStatus() int { return e.Status }
 
-// ErrNoCredentials is returned when no api key is configured. It carries its own
+// ErrNoCredentials is returned when no api key is configured. It is a
+// package-level pointer, so treat it as read-only: mutating its fields would
+// change the error every caller sees. Match it with errors.Is, never by message. It carries its own
 // code so an agent can tell "you have not authenticated" apart from "your input
 // was wrong" — both would otherwise land in the cli_error fallback, and this is
 // the most common and most actionable failure an agent hits.
@@ -221,6 +223,7 @@ func parseAPIError(body []byte, status int) *APIError {
 		var envelope struct {
 			Error   string `json:"error"`
 			Message string `json:"message"`
+			Detail  string `json:"detail"`
 			Code    string `json:"code"`
 		}
 		if err := json.Unmarshal(trimmed, &envelope); err == nil {
@@ -229,14 +232,26 @@ func parseAPIError(body []byte, status int) *APIError {
 				apiErr.Message = envelope.Error
 			case envelope.Message != "":
 				apiErr.Message = envelope.Message
+			case envelope.Detail != "":
+				// fastapi-style bodies use "detail"; without this the whole blob
+				// used to become the message.
+				apiErr.Message = envelope.Detail
 			}
 			// normalize an explicit api code to the lowercase vocabulary.
 			apiErr.Code = strings.ToLower(envelope.Code)
 		}
 	}
 
+	// a json body we could not find a message in must NOT be dumped verbatim:
+	// that reproduces the double-encoded `{"error":"{\"detail\":...}"}` shape this
+	// package exists to remove, and contradicts the documented contract that the
+	// message is never a nested json blob. Fall back to the status instead.
+	trimmedBody := strings.TrimSpace(string(body))
+	if apiErr.Message == "" && (len(trimmedBody) == 0 || trimmedBody[0] == '{' || trimmedBody[0] == '[') {
+		apiErr.Message = fmt.Sprintf("api request failed with status %d", status)
+	}
 	if apiErr.Message == "" {
-		apiErr.Message = strings.TrimSpace(string(body))
+		apiErr.Message = trimmedBody
 	}
 	if apiErr.Message == "" {
 		apiErr.Message = fmt.Sprintf("api request failed with status %d", status)

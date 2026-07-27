@@ -164,8 +164,8 @@ func (c *Client) ListGpuTypes(includeUnavailable bool) ([]GpuTypeWithAvailabilit
 
 	var result []GpuTypeWithAvailability
 	for _, gpu := range resp.Data.GpuTypes {
-		stockStatus, hasStock := availabilityMap[gpu.ID]
-		available := hasStock && stockStatus != ""
+		stockStatus, statusKnown := availabilityMap[gpu.ID]
+		available := statusKnown && hasStock(stockStatus)
 
 		// filter out GPUs with no availability unless includeUnavailable
 		if !includeUnavailable && !available {
@@ -193,6 +193,12 @@ func (c *Client) ListGpuTypes(includeUnavailable bool) ([]GpuTypeWithAvailabilit
 // failure in review rather than as a silently misranked gpu.
 var stockOrder = map[string]int{"high": 4, "medium": 3, "low": 2}
 
+// noStockStatuses are literal values that mean "offered here, nothing in stock".
+// They must rank BELOW low rather than land in the unknown bucket: an unknown
+// value ranks above absent, so a literal "none" would otherwise win the
+// top-level stockStatus and make available report true for a gpu with no stock.
+var noStockStatuses = map[string]bool{"none": true, "unavailable": true, "out of stock": true, "no stock": true}
+
 // stockRank scores a stock status for comparison. An unrecognized non-empty
 // status must outrank a genuinely absent one: previously every unknown value
 // fell through a map lookup to 0 and therefore tied with "no stock", so a new
@@ -203,13 +209,21 @@ var stockOrder = map[string]int{"high": 4, "medium": 3, "low": 2}
 // above "none". The per-datacenter breakdown carries every raw value, which is
 // where an agent that needs the truth should look.
 func stockRank(s string) int {
-	if s == "" {
+	normalized := strings.ToLower(strings.TrimSpace(s))
+	if normalized == "" || noStockStatuses[normalized] {
 		return 0
 	}
-	if rank, ok := stockOrder[strings.ToLower(strings.TrimSpace(s))]; ok {
+	if rank, ok := stockOrder[normalized]; ok {
 		return rank
 	}
 	return 1
+}
+
+// hasStock reports whether a stock status means anything is actually available.
+// Kept next to stockRank so the two cannot disagree: rank 0 means "nothing here",
+// and `available` must say the same.
+func hasStock(status string) bool {
+	return stockRank(status) > 0
 }
 
 func betterStock(a, b string) bool {

@@ -66,58 +66,6 @@ func captureStdStreams(t *testing.T, fn func()) (stdout, stderr string) {
 	return stdoutBuf.String(), stderrBuf.String()
 }
 
-func TestModelRepoError(t *testing.T) {
-	tests := []struct {
-		name    string
-		err     error
-		wantErr bool
-	}{
-		{
-			name:    "nil error is a no-op",
-			err:     nil,
-			wantErr: false,
-		},
-		{
-			name:    "ErrModelRepoNotImplemented is recognized",
-			err:     api.ErrModelRepoNotImplemented,
-			wantErr: true,
-		},
-		{
-			name:    "feature-not-enabled message is recognized",
-			err:     errors.New("Model Repo feature is not enabled for this user"),
-			wantErr: true,
-		},
-		{
-			name:    "unrelated error is not recognized",
-			err:     errors.New("some other failure"),
-			wantErr: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var got error
-			// modelRepoError must not print: the handler returns the error and
-			// the Execute sink emits the single JSON object. Printing here as
-			// well would double-print (the bug CON-683 removed elsewhere), and
-			// swallowing it made the process exit 0 on a real failure.
-			stdout, stderr := captureStdStreams(t, func() {
-				got = modelRepoError(tt.err)
-			})
-
-			if (got != nil) != tt.wantErr {
-				t.Fatalf("modelRepoError() = %v, wantErr %v", got, tt.wantErr)
-			}
-			if stdout != "" {
-				t.Fatalf("stdout must remain empty, got %q", stdout)
-			}
-			if stderr != "" {
-				t.Fatalf("stderr must remain empty (the sink prints), got %q", stderr)
-			}
-		})
-	}
-}
-
 // TestRunAddModelValidationErrorsCarryACodeAndPrintNothing pins the CON-683
 // contract on `model add`, which used to reach cobra.CheckErr on these paths:
 // plaintext "Error: …" on stderr plus os.Exit(1), bypassing the json sink. So a

@@ -50,9 +50,6 @@ func runModelList(cmd *cobra.Command, args []string) error {
 
 	models, err := api.GetModels(input)
 	if err != nil {
-		if mrErr := modelRepoError(err); mrErr != nil {
-			return mrErr
-		}
 
 		return err
 	}

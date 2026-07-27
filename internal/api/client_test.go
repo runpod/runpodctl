@@ -381,3 +381,31 @@ func TestCodeForStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestParseAPIError_NeverEmitsANestedJSONBlob(t *testing.T) {
+	// a non-2xx body that is valid json but carries no error/message key used to
+	// be dumped verbatim into the message, reproducing the double-encoded shape
+	// this package exists to remove and contradicting the documented contract.
+	tests := []struct {
+		name    string
+		body    string
+		status  int
+		wantMsg string
+	}{
+		{"unknown json object falls back to the status", `{"detail2":"x","field":"gpuIds"}`, 400, "api request failed with status 400"},
+		{"json array falls back to the status", `[{"loc":["body"],"msg":"bad"}]`, 422, "api request failed with status 422"},
+		{"detail is used when present", `{"detail":"validation failed"}`, 400, "validation failed"},
+		{"plain text is still used verbatim", "upstream timeout", 504, "upstream timeout"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseAPIError([]byte(tt.body), tt.status)
+			if got.Message != tt.wantMsg {
+				t.Errorf("message = %q, want %q", got.Message, tt.wantMsg)
+			}
+			if strings.HasPrefix(got.Message, "{") || strings.HasPrefix(got.Message, "[") {
+				t.Errorf("message must never be a raw json blob, got %q", got.Message)
+			}
+		})
+	}
+}

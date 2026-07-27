@@ -81,9 +81,6 @@ func runRemoveModel(cmd *cobra.Command, args []string) error {
 	}
 
 	if err != nil {
-		if mrErr := modelRepoError(err); mrErr != nil {
-			return mrErr
-		}
 
 		return err
 	}

@@ -151,7 +151,7 @@ exit code is non-zero. branch on `code`, never on the message text:
 | field | notes |
 | --- | --- |
 | `error` | human-readable message, unwrapped (never a nested json blob) |
-| `code` | always present. stable, lowercase |
+| `code` | stable, lowercase. present on every error from the resource commands (see the caveat below) |
 | `status` | http status, **only** when the failure came back from a rest call |
 
 `status` is deliberately absent when the api answered 200 with an empty result
@@ -173,6 +173,20 @@ codes the cli generates:
 the api may also return its own code, which is passed through lowercased, so
 treat the list as the set the cli generates rather than an exhaustive one.
 
+**known gaps.** the json error shape covers `pod`, `serverless`, `template`,
+`volume`, `registry`, `gpu`, `datacenter`, `billing`, `user`, `model`, `ssh`,
+`send`, `receive`, `hub` and `update`. these still print plaintext on stderr and
+carry no `code`:
+
+| surface | shape |
+| --- | --- |
+| legacy `get/create/remove/start/stop pod`, `create/remove pods`, `get cloud` | `Error: <msg>` via cobra, exit 1 |
+| `exec` | plaintext, exit 1 |
+| `project` | prints to **stdout** and exits 0 (bug, tracked as CON-816) |
+
+so a parser should tolerate a non-json line on stderr from those, and must not
+rely on the exit code for `project` until CON-816 lands.
+
 ## environment variables
 
 | variable | default | what it sets |
@@ -180,7 +194,7 @@ treat the list as the set the cli generates rather than an exhaustive one.
 | `RUNPOD_API_KEY` | — | api key. also settable via `runpodctl doctor` or `~/.runpod/config.toml` |
 | `RUNPOD_API_URL` | `https://rest.runpod.io/v1` | rest control plane (config key `restApiUrl`) |
 | `RUNPOD_GRAPHQL_URL` | `https://api.runpod.io/graphql` | graphql control plane (config key `apiUrl`) |
-| `RUNPOD_INVOKE_URL` | `https://api.runpod.ai/v2` | base for the serverless invoke urls reported by `serverless create/get/list` (config key `invokeUrl`) |
+| `RUNPOD_INVOKE_URL` | `https://api.runpod.ai/v2` | base for the serverless invoke urls reported by `serverless create/get/list/update` (config key `invokeUrl`) |
 
 invoke is a separate service from the control plane: pointing `RUNPOD_API_URL`
 or `RUNPOD_GRAPHQL_URL` at a non-prod host does **not** move the invoke urls.

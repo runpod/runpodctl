@@ -23,9 +23,11 @@ type gpuTypeOutput struct {
 	MemoryInGb     int    `json:"memoryInGb"`
 	SecureCloud    bool   `json:"secureCloud"`
 	CommunityCloud bool   `json:"communityCloud"`
-	// on-demand price per hour in usd; 0/omitted when the cloud type is not offered.
-	SecurePricePerHr    float64 `json:"securePricePerHr,omitempty"`
-	CommunityPricePerHr float64 `json:"communityPricePerHr,omitempty"`
+	// on-demand price per hour in usd, explicitly null when that cloud type does
+	// not offer the gpu. a pointer rather than a bare float64 so an agent can tell
+	// "not offered" (null) from a real 0 — with omitempty the two were identical.
+	SecurePricePerHr    *float64 `json:"securePricePerHr"`
+	CommunityPricePerHr *float64 `json:"communityPricePerHr"`
 	// StockStatus is the best availability across data centers.
 	StockStatus string `json:"stockStatus,omitempty"`
 	Available   bool   `json:"available"`
@@ -35,6 +37,15 @@ type gpuTypeOutput struct {
 
 func init() {
 	listCmd.Flags().BoolVar(&includeUnavailable, "include-unavailable", false, "include gpus with no current availability")
+}
+
+// priceForCloud returns nil when the gpu is not offered on that cloud type, so
+// the json carries an explicit null instead of a misleading 0.
+func priceForCloud(offered bool, price float64) *float64 {
+	if !offered {
+		return nil
+	}
+	return &price
 }
 
 func runList(cmd *cobra.Command, args []string) error {
@@ -56,8 +67,8 @@ func runList(cmd *cobra.Command, args []string) error {
 			MemoryInGb:             gpu.MemoryInGb,
 			SecureCloud:            gpu.SecureCloud,
 			CommunityCloud:         gpu.CommunityCloud,
-			SecurePricePerHr:       gpu.SecurePrice,
-			CommunityPricePerHr:    gpu.CommunityPrice,
+			SecurePricePerHr:       priceForCloud(gpu.SecureCloud, gpu.SecurePrice),
+			CommunityPricePerHr:    priceForCloud(gpu.CommunityCloud, gpu.CommunityPrice),
 			StockStatus:            gpu.StockStatus,
 			Available:              gpu.Available,
 			DataCenterAvailability: gpu.DataCenterAvailability,

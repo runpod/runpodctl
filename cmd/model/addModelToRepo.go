@@ -282,9 +282,6 @@ func runAddModel(cmd *cobra.Command, args []string) error {
 
 	model, err := addModelToRepo(input)
 	if err != nil {
-		if mrErr := modelRepoError(err); mrErr != nil {
-			return mrErr
-		}
 
 		return err
 	}
