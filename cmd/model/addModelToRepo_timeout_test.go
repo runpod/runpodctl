@@ -22,7 +22,9 @@ func TestSetModelGraphQLTimeoutWithoutInheritedFlag(t *testing.T) {
 
 	cmd := &cobra.Command{Use: "add"}
 	stdout, stderr := captureStdStreams(t, func() {
-		setModelGraphQLTimeout(cmd)
+		if err := setModelGraphQLTimeout(cmd); err != nil {
+			t.Errorf("setModelGraphQLTimeout: %v", err)
+		}
 	})
 
 	if got := viper.GetDuration(api.GraphQLTimeoutKey); got != modelGraphQLTimeoutValue {
@@ -43,7 +45,9 @@ func TestSetModelGraphQLTimeoutRespectsExistingConfiguredValue(t *testing.T) {
 	viper.Set(api.GraphQLTimeoutKey, existing)
 
 	cmd := &cobra.Command{Use: "add"}
-	setModelGraphQLTimeout(cmd)
+	if err := setModelGraphQLTimeout(cmd); err != nil {
+		t.Fatalf("setModelGraphQLTimeout: %v", err)
+	}
 
 	if got := viper.GetDuration(api.GraphQLTimeoutKey); got != existing {
 		t.Fatalf("expected graphql timeout to remain %s, got %s", existing, got)
@@ -58,7 +62,9 @@ func TestSetModelGraphQLTimeoutSetsInheritedFlagWhenUnchanged(t *testing.T) {
 	cmd := &cobra.Command{Use: "add"}
 	root.AddCommand(cmd)
 
-	setModelGraphQLTimeout(cmd)
+	if err := setModelGraphQLTimeout(cmd); err != nil {
+		t.Fatalf("setModelGraphQLTimeout: %v", err)
+	}
 
 	flag := cmd.InheritedFlags().Lookup(graphqlTimeoutFlagName)
 	if flag == nil {
@@ -84,7 +90,9 @@ func TestSetModelGraphQLTimeoutSkipsWhenInheritedFlagChanged(t *testing.T) {
 	cmd := &cobra.Command{Use: "add"}
 	root.AddCommand(cmd)
 
-	setModelGraphQLTimeout(cmd)
+	if err := setModelGraphQLTimeout(cmd); err != nil {
+		t.Fatalf("setModelGraphQLTimeout: %v", err)
+	}
 
 	if got := viper.GetDuration(api.GraphQLTimeoutKey); got != 0 {
 		t.Fatalf("expected graphql timeout to remain unset, got %s", got)
@@ -162,7 +170,9 @@ func TestRunAddModelPathWaitForHashPrintsCompactOutput(t *testing.T) {
 
 	cmd := newTestAddModelCommand()
 	stdout, _ := captureStdStreams(t, func() {
-		runAddModel(cmd, nil)
+		if err := runAddModel(cmd, nil); err != nil {
+			t.Errorf("runAddModel: %v", err)
+		}
 	})
 
 	if addInput == nil {
@@ -246,7 +256,9 @@ func TestRunAddModelPathWaitForHashVerbosePrintsFullOutput(t *testing.T) {
 
 	cmd := newTestAddModelCommand()
 	stdout, _ := captureStdStreams(t, func() {
-		runAddModel(cmd, nil)
+		if err := runAddModel(cmd, nil); err != nil {
+			t.Errorf("runAddModel: %v", err)
+		}
 	})
 
 	var output modelAddOutput
@@ -300,7 +312,9 @@ func TestRunAddModelNonUploadLeavesProviderUnset(t *testing.T) {
 
 	cmd := newTestAddModelCommand()
 	stdout, _ := captureStdStreams(t, func() {
-		runAddModel(cmd, nil)
+		if err := runAddModel(cmd, nil); err != nil {
+			t.Errorf("runAddModel: %v", err)
+		}
 	})
 
 	if addInput == nil {
