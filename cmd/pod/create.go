@@ -124,7 +124,10 @@ func runCreate(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("global networking requires compute type GPU")
 		}
 		if cloudType != "SECURE" {
-			return fmt.Errorf("global networking is only supported on secure cloud (set --cloud-type SECURE)")
+			// the hint has to live in the message: this returns before the
+			// --data-center-ids note below, and runtime errors no longer print the
+			// usage text that used to carry the flag name incidentally.
+			return fmt.Errorf("global networking is only supported on secure cloud (set --cloud-type SECURE); if you passed --data-center-ids, they must be secure data centers")
 		}
 		if strings.TrimSpace(createDataCenterIDs) != "" {
 			fmt.Fprintln(os.Stderr, "note: global networking availability varies by data center; if create fails, try another secure data center or omit --data-center-ids")
