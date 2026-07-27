@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -331,5 +333,25 @@ func TestParseGraphQLHTTPError(t *testing.T) {
 				t.Errorf("message still double-encoded: %q", e.Message)
 			}
 		})
+	}
+}
+
+func TestNewNotFoundError(t *testing.T) {
+	err := newNotFoundError("template not found: %s", "tpl-1")
+	if got := err.Error(); got != "template not found: tpl-1" {
+		t.Errorf("message = %q", got)
+	}
+	if got := err.ErrorCode(); got != "not_found" {
+		t.Errorf("code = %q, want not_found", got)
+	}
+	// graphql returns 200 with null data, so no wire status should be invented.
+	if got := err.HTTPStatus(); got != 0 {
+		t.Errorf("status = %d, want 0", got)
+	}
+	// must survive wrapping, since callers wrap with fmt.Errorf("failed to …: %w").
+	wrapped := fmt.Errorf("failed to get template: %w", err)
+	var apiErr *APIError
+	if !errors.As(wrapped, &apiErr) || apiErr.ErrorCode() != "not_found" {
+		t.Errorf("wrapped error lost its code: %v", wrapped)
 	}
 }
