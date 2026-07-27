@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/runpod/runpodctl/internal/configenv"
 	"github.com/spf13/viper"
 )
 
@@ -420,6 +421,26 @@ func TestInvokeURLs(t *testing.T) {
 	}
 	if invokeURLs("") != nil {
 		t.Error("expected nil urls for empty id")
+	}
+}
+
+func TestInvokeURLs_HonorsInvokeURLOverride(t *testing.T) {
+	// invoke is a separate service from the control plane, so it has its own
+	// override; a trailing slash must not produce a doubled separator.
+	t.Setenv(configenv.InvokeURLEnv, "https://staging.example.com/v2/")
+
+	urls := invokeURLs("ep-abc")
+	if urls == nil {
+		t.Fatal("expected non-nil urls for a valid id")
+	}
+	if urls.Run != "https://staging.example.com/v2/ep-abc/run" {
+		t.Errorf("run = %q", urls.Run)
+	}
+	if urls.RunSync != "https://staging.example.com/v2/ep-abc/runsync" {
+		t.Errorf("runsync = %q", urls.RunSync)
+	}
+	if urls.Health != "https://staging.example.com/v2/ep-abc/health" {
+		t.Errorf("health = %q", urls.Health)
 	}
 }
 
