@@ -10,11 +10,17 @@ import (
 
 // GpuType represents a GPU type
 type GpuType struct {
-	ID             string  `json:"id"`
-	DisplayName    string  `json:"displayName"`
-	MemoryInGb     int     `json:"memoryInGb"`
-	SecureCloud    bool    `json:"secureCloud"`
-	CommunityCloud bool    `json:"communityCloud"`
+	ID             string `json:"id"`
+	DisplayName    string `json:"displayName"`
+	MemoryInGb     int    `json:"memoryInGb"`
+	SecureCloud    bool   `json:"secureCloud"`
+	CommunityCloud bool   `json:"communityCloud"`
+	// DO NOT rename these json tags to add a PerHr suffix. They are the *decode*
+	// contract for the graphql response (which returns securePrice /
+	// communityPrice), not an output shape — renaming them makes json.Unmarshal
+	// miss the fields and silently reports every price as 0. The user-facing names
+	// (securePricePerHr / communityPricePerHr) are set by cmd/gpu's own output
+	// struct, which is the only thing that marshals gpu data.
 	SecurePrice    float64 `json:"securePrice"`
 	CommunityPrice float64 `json:"communityPrice"`
 }

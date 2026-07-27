@@ -1,8 +1,6 @@
 package template
 
 import (
-	"fmt"
-
 	"github.com/runpod/runpodctl/internal/api"
 	"github.com/runpod/runpodctl/internal/output"
 
@@ -57,9 +55,10 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if len(templates) == 0 {
-		fmt.Printf("no templates found matching %q\n", searchTerm)
-		return nil
+	// an empty result set is still data: emit [] rather than prose on stdout, so a
+	// caller piping this into a json parser does not break on "no X found".
+	if templates == nil {
+		templates = []api.Template{}
 	}
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
