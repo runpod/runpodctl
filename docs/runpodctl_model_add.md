@@ -40,3 +40,4 @@ runpodctl model add [flags]
 ### SEE ALSO
 
 * [runpodctl model](runpodctl_model.md)	 - manage model repository
+
