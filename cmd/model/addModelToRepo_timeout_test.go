@@ -604,8 +604,14 @@ func TestWaitForUploadedModelHashTimesOut(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
-	if !strings.Contains(err.Error(), "timed out waiting for model hash") {
+	if !strings.Contains(err.Error(), "timed out waiting for the model hash") {
 		t.Fatalf("expected timeout error, got %v", err)
+	}
+	// the upload already succeeded at this point, so the message must tell an
+	// agent not to re-upload, and the sink must NOT tag it network_error (which
+	// means "transient, retry").
+	if !strings.Contains(err.Error(), "do not re-upload") {
+		t.Errorf("timeout error should say the model exists, got %v", err)
 	}
 }
 

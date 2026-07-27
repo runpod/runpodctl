@@ -1,10 +1,8 @@
 package output
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net"
 	"net/url"
 	"os"
@@ -102,9 +100,13 @@ func isNetworkError(err error) bool {
 	if errors.As(err, &dnsErr) {
 		return true
 	}
-	// a client-side deadline shows up as context.DeadlineExceeded, and an
-	// unexpectedly closed connection as io.ErrUnexpectedEOF.
-	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.ErrUnexpectedEOF)
+	// Deliberately NOT matching a bare context.DeadlineExceeded or
+	// io.ErrUnexpectedEOF: any local wait loop can produce those without a
+	// network ever being involved (e.g. --wait-for-hash timing out after a
+	// perfectly successful upload), and network_error is the one code that tells
+	// an agent "transient, retry". A real http client timeout arrives wrapped in
+	// *url.Error, so the branches above already cover it.
+	return false
 }
 
 // Error writes a single flat JSON error object to stderr. When the error (or an

@@ -195,6 +195,14 @@ func bindAddModelFlags(cmd *cobra.Command) {
 	cmd.Flags().BoolVarP(&addModelVerbose, "verbose", "v", false, "include upload details in wait-for-hash output")
 }
 
+// wantsUploadSession reports whether the flags ask for an upload session. Used
+// both for the pre-flight validation and for the post-create branch so the two
+// cannot drift apart (they previously differed by --metadata).
+func wantsUploadSession() bool {
+	return addModelCreateUpload || addModelFileName != "" || addModelFileSize != "" ||
+		addModelPartSize != "" || addModelContentType != "" || len(addModelMetadata) > 0
+}
+
 func runAddModel(cmd *cobra.Command, args []string) error {
 	if err := setModelGraphQLTimeout(cmd); err != nil {
 		return err
@@ -246,6 +254,20 @@ func runAddModel(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--wait-for-hash requires --model-path")
 	}
 
+	// validate the single-file upload flags BEFORE creating the model. these
+	// checks used to run after addModelToRepo, so a missing --file-name left a
+	// model created server-side while the cli reported a plain validation error —
+	// an agent reading that as "bad input, nothing happened" and retrying would
+	// create a duplicate.
+	if wantsUploadSession() && len(modelFiles) == 0 {
+		if addModelFileName == "" {
+			return fmt.Errorf("file-name is required when creating an upload")
+		}
+		if addModelFileSize == "" {
+			return fmt.Errorf("file-size is required when creating an upload")
+		}
+	}
+
 	input := &api.AddModelToRepoInput{
 		Owner:               addModelOwner,
 		Name:                addModelName,
@@ -267,8 +289,7 @@ func runAddModel(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	shouldCreateUpload := addModelCreateUpload || addModelFileName != "" || addModelFileSize != "" || addModelPartSize != "" || addModelContentType != "" || len(addModelMetadata) > 0
-	if !shouldCreateUpload {
+	if !wantsUploadSession() {
 		return printModelAddOutput(cmd, modelAddOutput{Model: model})
 	}
 
@@ -327,7 +348,10 @@ func runAddModel(cmd *cobra.Command, args []string) error {
 	uploadInput.FileName = addModelFileName
 	uploadInput.FileSizeBytes = addModelFileSize
 
-	result, err := api.CreateModelRepoUpload(uploadInput)
+	// use the package-var seam (as uploadModelFiles does) so this branch is
+	// stubbable in tests; calling api.CreateModelRepoUpload directly is why it had
+	// no coverage.
+	result, err := createModelRepoUpload(uploadInput)
 	if err != nil {
 		return err
 	}
@@ -465,7 +489,7 @@ func waitForUploadedModelHash(ctx context.Context, owner, name string, uploadedM
 
 	for {
 		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("timed out waiting for model hash: %w", err)
+			return nil, fmt.Errorf("upload completed but timed out waiting for the model hash; the model exists, do not re-upload: %w", err)
 		}
 
 		models, err := getModelsForAdd(&api.GetModelsInput{Name: name})
@@ -496,7 +520,7 @@ func waitForUploadedModelHash(ctx context.Context, owner, name string, uploadedM
 
 		fmt.Fprint(os.Stderr, ".")
 		if err := sleepModelHashPoll(ctx, pollInterval); err != nil {
-			return nil, fmt.Errorf("timed out waiting for model hash: %w", err)
+			return nil, fmt.Errorf("upload completed but timed out waiting for the model hash; the model exists, do not re-upload: %w", err)
 		}
 	}
 }
