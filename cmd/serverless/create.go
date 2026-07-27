@@ -154,7 +154,6 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	if createHubID != "" {
 		listing, err = client.GetListing(createHubID)
 		if err != nil {
-			output.Error(err)
 			return fmt.Errorf("failed to get hub listing: %w", err)
 		}
 		if listing.ListedRelease == nil {
