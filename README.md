@@ -164,8 +164,9 @@ codes the cli generates:
 | `not_found` | the resource does not exist |
 | `bad_request` `unauthorized` `forbidden` `conflict` `rate_limited` `server_error` `api_error` | derived from the rest status |
 | `graphql_error` | graphql returned an errors array (http 200) |
-| `network_error` | the api could not be reached at all — dns, refused, tls, timeout |
-| `cli_error` | anything else local: validation, config, bad input |
+| `no_credentials` | no api key configured — run `runpodctl doctor` or set `RUNPOD_API_KEY` |
+| `network_error` | the api could not be reached at all — dns, refused, tls, timeout. the only code that means "transient, retry" |
+| `cli_error` | anything else local: validation, config, bad input (including a malformed `RUNPOD_API_URL`) |
 
 the api may also return its own code, which is passed through lowercased, so
 treat the list as the set the cli generates rather than an exhaustive one.

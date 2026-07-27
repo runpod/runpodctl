@@ -86,7 +86,12 @@ func fallbackCode(err error) string {
 // *net.DNSError or tls error.
 func isNetworkError(err error) bool {
 	var urlErr *url.Error
-	if errors.As(err, &urlErr) {
+	// url.Parse also returns *url.Error, with Op "parse" — a malformed
+	// RUNPOD_API_URL is a local config mistake, not an unreachable api, and it
+	// must not be reported as network_error. network_error is the one code that
+	// tells an agent "transient, retry"; a permanently broken url would then be
+	// retried forever instead of surfacing the real problem.
+	if errors.As(err, &urlErr) && urlErr.Op != "parse" {
 		return true
 	}
 	var opErr *net.OpError

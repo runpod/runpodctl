@@ -41,7 +41,7 @@ type Client struct {
 func NewClient() (*Client, error) {
 	apiKey := configenv.APIKey()
 	if apiKey == "" {
-		return nil, fmt.Errorf("api key not configured. get your key at https://www.runpod.io/console/user/settings then: export RUNPOD_API_KEY=your-key OR run: runpodctl doctor")
+		return nil, ErrNoCredentials
 	}
 
 	baseURL := configenv.RESTURL()
@@ -132,9 +132,14 @@ func (c *Client) Delete(endpoint string) ([]byte, error) {
 //	server_error, api_error   -- from a REST APIError (see codeForStatus)
 //	graphql_error             -- from a GraphQLError
 //	usage_error               -- from a cli usage mistake (see cmd package)
+//	no_credentials            -- no api key configured locally
+//	network_error             -- api unreachable (see internal/output)
+//	cli_error                 -- any other uncoded local failure (fallback)
 //
 // An explicit code returned by the API is passed through (lowercased) instead
-// of the status-derived one.
+// of the status-derived one, so this is the set the cli generates rather than an
+// exhaustive list. Keep README's "error format" table and the runpodctl agent
+// skill (AGENTS.md) in sync with any change here.
 
 // APIError is a structured error returned by the runpod API. It implements the
 // error interface and exposes a stable machine-readable code plus the HTTP
@@ -159,6 +164,15 @@ func (e *APIError) ErrorCode() string {
 
 // HTTPStatus returns the HTTP status code associated with the error (0 if none).
 func (e *APIError) HTTPStatus() int { return e.Status }
+
+// ErrNoCredentials is returned when no api key is configured. It carries its own
+// code so an agent can tell "you have not authenticated" apart from "your input
+// was wrong" — both would otherwise land in the cli_error fallback, and this is
+// the most common and most actionable failure an agent hits.
+var ErrNoCredentials = &APIError{
+	Message: "api key not found. get your key at https://www.runpod.io/console/user/settings then: export RUNPOD_API_KEY=your-key OR run: runpodctl doctor",
+	Code:    "no_credentials",
+}
 
 // NewNotFoundError builds a typed "not_found" error for lookups that fail
 // without an HTTP status to derive one from — graphql answers a missing resource
