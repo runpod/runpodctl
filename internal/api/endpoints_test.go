@@ -213,9 +213,10 @@ func TestUpdateEndpoint(t *testing.T) {
 
 	client, _ := NewClient()
 	client.baseURL = server.URL
+	wrkMax := 5
 
 	endpoint, err := client.UpdateEndpoint("ep-123", &EndpointUpdateRequest{
-		WorkersMax: 5,
+		WorkersMax: &wrkMax,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

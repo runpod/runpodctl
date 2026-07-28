@@ -76,15 +76,15 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		hasRESTUpdate = true
 	}
 	if updateWorkersMin >= 0 {
-		req.WorkersMin = updateWorkersMin
+		req.WorkersMin = &updateWorkersMin
 		hasRESTUpdate = true
 	}
 	if updateWorkersMax >= 0 {
-		req.WorkersMax = updateWorkersMax
+		req.WorkersMax = &updateWorkersMax
 		hasRESTUpdate = true
 	}
 	if updateIdleTimeout >= 0 {
-		req.IdleTimeout = updateIdleTimeout
+		req.IdleTimeout = &updateIdleTimeout
 		hasRESTUpdate = true
 	}
 	if updateScaleBy != "" {
@@ -99,7 +99,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		hasRESTUpdate = true
 	}
 	if updateScaleThreshold >= 0 {
-		req.ScalerValue = updateScaleThreshold
+		req.ScalerValue = &updateScaleThreshold
 		hasRESTUpdate = true
 	}
 

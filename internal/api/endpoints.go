@@ -117,11 +117,11 @@ type EndpointListResponse struct {
 // EndpointUpdateRequest is the request to update an endpoint
 type EndpointUpdateRequest struct {
 	Name        string `json:"name,omitempty"`
-	WorkersMin  int    `json:"workersMin,omitempty"`
-	WorkersMax  int    `json:"workersMax,omitempty"`
-	IdleTimeout int    `json:"idleTimeout,omitempty"`
+	WorkersMin  *int   `json:"workersMin,omitempty"`
+	WorkersMax  *int   `json:"workersMax,omitempty"`
+	IdleTimeout *int   `json:"idleTimeout,omitempty"`
 	ScalerType  string `json:"scalerType,omitempty"`
-	ScalerValue int    `json:"scalerValue,omitempty"`
+	ScalerValue *int   `json:"scalerValue,omitempty"`
 	Flashboot   *bool  `json:"flashboot,omitempty"`
 }
 
