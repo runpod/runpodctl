@@ -195,6 +195,9 @@ func TestCreateEndpointGQLIncludesModelReferences(t *testing.T) {
 }
 
 func TestUpdateEndpoint(t *testing.T) {
+	wrkMin := 0
+	wrkMax := 5
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPatch {
 			t.Errorf("expected PATCH, got %s", r.Method)
@@ -204,7 +207,8 @@ func TestUpdateEndpoint(t *testing.T) {
 		}
 		json.NewEncoder(w).Encode(Endpoint{
 			ID:         "ep-123",
-			WorkersMax: 5,
+			WorkersMin: wrkMin,
+			WorkersMax: wrkMax,
 		})
 	}))
 	defer server.Close()
@@ -213,9 +217,9 @@ func TestUpdateEndpoint(t *testing.T) {
 
 	client, _ := NewClient()
 	client.baseURL = server.URL
-	wrkMax := 5
 
 	endpoint, err := client.UpdateEndpoint("ep-123", &EndpointUpdateRequest{
+		WorkersMin: &wrkMin,
 		WorkersMax: &wrkMax,
 	})
 	if err != nil {
