@@ -23,6 +23,8 @@ type Pod struct {
 	VcpuCount         int                    `json:"vcpuCount,omitempty"`
 	VolumeMountPath   string                 `json:"volumeMountPath,omitempty"`
 	Ports             []string               `json:"ports,omitempty"`
+	DockerStartCmd    []string               `json:"dockerStartCmd,omitempty"`
+	DockerEntrypoint  []string               `json:"dockerEntrypoint,omitempty"`
 	CostPerHr         float64                `json:"costPerHr,omitempty"`
 	Machine           map[string]interface{} `json:"machine,omitempty"`
 	Runtime           map[string]interface{} `json:"runtime,omitempty"`
@@ -53,7 +55,8 @@ type PodCreateRequest struct {
 	DataCenterIDs     []string          `json:"dataCenterIds,omitempty"`
 	NetworkVolumeID   string            `json:"networkVolumeId,omitempty"`
 	MinCudaVersion    string            `json:"minCudaVersion,omitempty"`
-	DockerArgs        string            `json:"dockerArgs,omitempty"`
+	DockerStartCmd    []string          `json:"dockerStartCmd,omitempty"`
+	DockerEntrypoint  []string          `json:"dockerEntrypoint,omitempty"`
 }
 
 // PodUpdateRequest is the request to update a pod
