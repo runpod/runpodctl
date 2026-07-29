@@ -412,9 +412,34 @@ type LegacyMachine struct {
 	Location       string `json:"location"`
 }
 
-// LegacyRuntime is the runtime structure from GraphQL API
+// LegacyRuntime is the runtime structure from GraphQL API.
+//
+// This is the entire public runtime surface: there is no pulling/starting/ready
+// enum anywhere on it. `runtime` itself being null is the only signal that the
+// container is not up yet (the resolver returns null when the host daemon has
+// nothing for the pod). See internal/podstate.
 type LegacyRuntime struct {
 	Ports []*LegacyPort `json:"ports"`
+	// UptimeInSeconds is the real container uptime. Note the name: the
+	// deprecated top-level Pod.uptimeSeconds is a different field and is always
+	// 0 in prod, despite its deprecation notice pointing at a
+	// "runtime.uptimeSeconds" that does not exist.
+	UptimeInSeconds *int                `json:"uptimeInSeconds"`
+	Container       *LegacyContainer    `json:"container"`
+	Gpus            []*LegacyRuntimeGpu `json:"gpus"`
+}
+
+// LegacyContainer is the container utilisation block of PodRuntime.
+type LegacyContainer struct {
+	CPUPercent    *int `json:"cpuPercent"`
+	MemoryPercent *int `json:"memoryPercent"`
+}
+
+// LegacyRuntimeGpu is a per-gpu utilisation entry of PodRuntime.
+type LegacyRuntimeGpu struct {
+	ID                string `json:"id"`
+	GpuUtilPercent    *int   `json:"gpuUtilPercent"`
+	MemoryUtilPercent *int   `json:"memoryUtilPercent"`
 }
 
 // LegacyPort is the port structure from GraphQL API
@@ -455,6 +480,16 @@ func (c *GraphQLClient) GetPods() ([]*LegacyPod, error) {
 				  location
 				}
 				runtime {
+				  uptimeInSeconds
+				  container {
+					cpuPercent
+					memoryPercent
+				  }
+				  gpus {
+					id
+					gpuUtilPercent
+					memoryUtilPercent
+				  }
 				  ports {
 					ip
 					isIpPublic
