@@ -33,6 +33,8 @@ to poll, so a slow response would leave a running job unreachable.
 waiting is bounded by --wait (default 5m). when it runs out the job is still
 running server-side: the last payload is printed on stdout, a "timeout" error on
 stderr names the 'serverless status' command to poll it, and the exit code is 1.
+a single api call inside the wait is never given less than 1s, so a --wait below
+one second may overshoot by up to that much.
 
 exit codes: 0 when the job is COMPLETED, and when --wait 0 / --no-wait submitted
 it successfully. 1 when the request fails, when the wait budget runs out, or when
@@ -139,12 +141,17 @@ func invokeJob(client invokeClient, endpointID string, input json.RawMessage, de
 
 	if !wait {
 		// submission succeeded, which is the whole contract of --no-wait: the job is
-		// queued and the id on stdout is what 'serverless status' needs. Without an
-		// id there is nothing to follow up on, so say nothing rather than printing a
-		// command with a hole in it (jobOutcome turns that into a failure).
-		if job.ID != "" {
-			notef("submitted job %s (%s); poll it with: runpodctl serverless status %s %s", job.ID, job.Status, endpointID, job.ID)
+		// queued and the id on stdout is what 'serverless status' needs.
+		//
+		// Without an id there is nothing to follow up on, and this is the one place
+		// jobOutcome cannot catch it: HasEnvelope is satisfied by a bare status, so a
+		// {"status":"IN_QUEUE"} answer would exit 0 on a submitted, billed job that
+		// can never be polled. Fail here instead of printing a command with a hole in
+		// it. The payload still goes to stdout.
+		if job.ID == "" {
+			return job, api.NewNoJobIDError()
 		}
+		notef("submitted job %s (%s); poll it with: runpodctl serverless status %s %s", job.ID, job.Status, endpointID, job.ID)
 		return job, nil
 	}
 	return waitForTerminal(client, endpointID, job, deadline)
@@ -177,7 +184,9 @@ func resolveJobInput(stdin io.Reader, inline, file string) (json.RawMessage, err
 		source = "--input-file " + file
 		data, err := os.ReadFile(file)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read --input-file: %w", err)
+			// a path that does not exist or is a directory is a caller mistake, the
+			// same class as the payload validation below — not an environment failure.
+			return nil, clierr.Usagef("failed to read --input-file: %v", err)
 		}
 		raw = data
 	default:
@@ -200,18 +209,18 @@ func resolveJobInput(stdin io.Reader, inline, file string) (json.RawMessage, err
 	// that here costs nothing and turns a round trip into a local usage_error that
 	// names the flag.
 	obj, isObject := parsed.(map[string]interface{})
-	if !isObject && parsed != nil {
+	if !isObject {
 		return nil, clierr.Usagef("payload from %s must be a json object (the invoke api nests it under \"input\"), got %s", source, jsonKind(parsed))
 	}
 
-	// a payload that is *only* an "input" key is almost always the whole request
-	// envelope pasted in from curl, which would be sent as {"input":{"input":…}}
-	// and reach the handler double-wrapped. warn rather than unwrap: guessing
-	// would break a handler whose payload genuinely has one "input" field.
-	if len(obj) == 1 {
-		if _, wrapped := obj["input"]; wrapped {
-			notef(`note: payload from %s is just {"input":…}; it is sent as {"input": <payload>}, so pass only the handler payload`, source)
-		}
+	// a payload with a top-level "input" key is almost always the whole request
+	// envelope pasted in from curl, which is sent as {"input":{"input":…}} and
+	// reaches the handler double-wrapped. Warn rather than unwrap: guessing would
+	// break a handler whose payload genuinely has an "input" field. The sibling keys
+	// of a curl envelope (policy, webhook, s3Config) are read at the top level of the
+	// request body by the invoke api, so nesting them silently drops them.
+	if _, wrapped := obj["input"]; wrapped {
+		notef(`note: payload from %s has a top-level "input" key; it is sent as {"input": <payload>}, so pass only the handler payload. a whole curl request body arrives double-wrapped, and its "policy"/"webhook"/"s3Config" keys are ignored inside "input"`, source)
 	}
 
 	return json.RawMessage(trimmed), nil
@@ -220,6 +229,8 @@ func resolveJobInput(stdin io.Reader, inline, file string) (json.RawMessage, err
 // jsonKind names a json value's type for a usage error.
 func jsonKind(value interface{}) string {
 	switch value.(type) {
+	case nil:
+		return "null"
 	case []interface{}:
 		return "an array"
 	case string:

@@ -313,3 +313,15 @@ func NewNoJobEnvelopeError() *APIError {
 		Status:  http.StatusOK,
 	}
 }
+
+// NewNoJobIDError reports a submit that was accepted but came back without a job
+// id. HasEnvelope is satisfied by a bare status, so this case would otherwise look
+// like a clean submission — while the job it created can never be polled. Same
+// api_error code and reasoning as NewNoJobEnvelopeError.
+func NewNoJobIDError() *APIError {
+	return &APIError{
+		Message: "invoke api accepted the job but returned no job id, so it cannot be polled or followed up",
+		Code:    "api_error",
+		Status:  http.StatusOK,
+	}
+}

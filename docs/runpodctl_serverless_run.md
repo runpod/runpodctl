@@ -17,6 +17,8 @@ to poll, so a slow response would leave a running job unreachable.
 waiting is bounded by --wait (default 5m). when it runs out the job is still
 running server-side: the last payload is printed on stdout, a "timeout" error on
 stderr names the 'serverless status' command to poll it, and the exit code is 1.
+a single api call inside the wait is never given less than 1s, so a --wait below
+one second may overshoot by up to that much.
 
 exit codes: 0 when the job is COMPLETED, and when --wait 0 / --no-wait submitted
 it successfully. 1 when the request fails, when the wait budget runs out, or when

@@ -76,8 +76,13 @@ func TestResolveJobInput(t *testing.T) {
 			name: "inline number", inline: `42`,
 			wantErr: "must be a json object", wantCode: "usage_error",
 		},
-		// null decodes to an absent input server-side, which is legal.
-		{name: "inline null", inline: `null`, want: `null`},
+		// null is not an object either. It happens to be harmless server-side (it
+		// decodes to a nil map), but exempting it would make "must be a json object"
+		// a rule the cli documents and does not enforce.
+		{
+			name: "inline null", inline: `null`,
+			wantErr: "must be a json object", wantCode: "usage_error",
+		},
 		{name: "from file", file: payloadPath, want: `{"prompt":"from file"}`},
 		{name: "stdin via --input dash", inline: "-", stdin: `{"prompt":"stdin"}`, want: `{"prompt":"stdin"}`},
 		{name: "stdin via --input-file dash", file: "-", stdin: `{"prompt":"stdin"}`, want: `{"prompt":"stdin"}`},
@@ -85,6 +90,13 @@ func TestResolveJobInput(t *testing.T) {
 			name: "double wrapped payload is flagged", inline: `{"input":{"prompt":"hi"}}`,
 			want:     `{"input":{"prompt":"hi"}}`,
 			wantNote: `it is sent as {"input": <payload>}`,
+		},
+		// a whole curl request body is the common paste and has more than one key, so
+		// the warning must not be limited to a lone "input".
+		{
+			name: "curl request envelope is flagged", inline: `{"input":{"prompt":"hi"},"policy":{"ttl":600000}}`,
+			want:     `{"input":{"prompt":"hi"},"policy":{"ttl":600000}}`,
+			wantNote: `"policy"/"webhook"/"s3Config" keys are ignored inside "input"`,
 		},
 		{
 			name: "malformed json", inline: `{"prompt":`,
@@ -106,9 +118,11 @@ func TestResolveJobInput(t *testing.T) {
 			name:    "neither flag",
 			wantErr: "one of --input or --input-file is required", wantCode: "usage_error",
 		},
+		// a typo'd path is the same class of mistake as a malformed payload: fix the
+		// argument and retry. cli_error would tell an agent the environment is broken.
 		{
 			name: "missing file", file: filepath.Join(dir, "nope.json"),
-			wantErr: "failed to read --input-file", wantCode: "cli_error",
+			wantErr: "failed to read --input-file", wantCode: "usage_error",
 		},
 	}
 
@@ -394,6 +408,31 @@ func TestRunRun_NoWaitWithoutJobIDDoesNotAdviseAPoll(t *testing.T) {
 	})
 	if code := errorCode(t, err); code != "api_error" {
 		t.Fatalf("code = %q, want api_error (err %v)", code, err)
+	}
+	if strings.Contains(stderr, "serverless status ep-1 ") {
+		t.Errorf("advice with an empty job id is unrunnable, got %q", stderr)
+	}
+}
+
+func TestRunRun_NoWaitWithAStatusButNoJobIDFails(t *testing.T) {
+	snapshotRunFlags(t)
+	runNoWait = true
+	// HasEnvelope is satisfied by a bare status, so this is the one shape jobOutcome
+	// cannot catch: a job the api accepted and did not name is submitted, billed and
+	// unpollable. Exiting 0 on it is exactly the failure /runsync was dropped over.
+	installMockInvokeClient(t, &mockInvokeClient{
+		runStep: jobStep{job: mustJob(`{"status":"IN_QUEUE"}`)},
+	})
+
+	var err error
+	stdout, stderr := captureOutput(t, func() {
+		err = runRun(mockInvokeCommand(""), []string{"ep-1"})
+	})
+	if code := errorCode(t, err); code != "api_error" {
+		t.Fatalf("code = %q, want api_error (err %v)", code, err)
+	}
+	if !strings.Contains(stdout, "IN_QUEUE") {
+		t.Errorf("the payload must still reach stdout, got %q", stdout)
 	}
 	if strings.Contains(stderr, "serverless status ep-1 ") {
 		t.Errorf("advice with an empty job id is unrunnable, got %q", stderr)
