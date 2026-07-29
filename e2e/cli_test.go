@@ -410,6 +410,7 @@ func TestCLI_PodCreateCPU(t *testing.T) {
 	stdout, stderr, err := runCLI("pod", "create",
 		"--compute-type", "cpu",
 		"--image", "ubuntu:22.04",
+		"--docker-args", "sleep infinity",
 		"--name", name)
 	if err != nil {
 		lower := strings.ToLower(stdout + stderr)
@@ -452,6 +453,13 @@ func TestCLI_PodCreateCPU(t *testing.T) {
 	}
 	if createdAt, ok := podDetails["createdAt"].(string); !ok || strings.TrimSpace(createdAt) == "" {
 		t.Errorf("expected createdAt to be set for pod %s", podID)
+	}
+
+	// CON-842 regression: --docker-args must land as dockerStartCmd tokens,
+	// not be rejected as an extra dockerArgs key.
+	startCmd, ok := podDetails["dockerStartCmd"].([]interface{})
+	if !ok || len(startCmd) != 2 || startCmd[0] != "sleep" || startCmd[1] != "infinity" {
+		t.Errorf("expected dockerStartCmd [sleep infinity] for pod %s, got %v", podID, podDetails["dockerStartCmd"])
 	}
 }
 
