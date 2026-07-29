@@ -470,3 +470,157 @@ func TestRunGet_RuntimeStatus(t *testing.T) {
 		})
 	}
 }
+
+// TestRunList_SkipsRuntimeCallWhenNoPodCanUseIt is the other half of the latency
+// guard: podstate ignores telemetry for a stopped or terminated pod (it is
+// stale), so `pod list --all` on an account of stopped pods must not pay up to 5s
+// for a probe whose answer is provably discarded. The rows must be identical
+// either way.
+func TestRunList_SkipsRuntimeCallWhenNoPodCanUseIt(t *testing.T) {
+	s := &stub{
+		restPods: []map[string]interface{}{
+			restPod("p-stop", "EXITED", map[string]interface{}{"lastStatusChange": "Exited by user: x"}),
+			restPod("p-gone", "EXITED", map[string]interface{}{"lastStatusChange": "Terminated by user: x"}),
+		},
+		gqlPods: []map[string]interface{}{
+			gqlPod("p-stop", "EXITED", nil, map[string]interface{}{"lastStatusChange": "Exited by user: x"}),
+			gqlPod("p-gone", "EXITED", nil, map[string]interface{}{"lastStatusChange": "Terminated by user: x"}),
+		},
+	}
+	s.start(t)
+	resetListFlags(t) // --all
+
+	items := runListJSON(t)
+	if len(items) != 2 {
+		t.Fatalf("expected 2 pods, got %v", items)
+	}
+	if s.graphqlHits != 0 {
+		t.Errorf("graphql was called %d times for a result set with no running pod", s.graphqlHits)
+	}
+	want := map[string][2]string{
+		"p-stop": {"stopped", "stopped_by_user"},
+		"p-gone": {"terminated", "terminated_by_user"},
+	}
+	for _, item := range items {
+		id, _ := item["id"].(string)
+		status, _ := item["runtimeStatus"].(string)
+		reason, _ := item["runtimeStatusReason"].(string)
+		if got := [2]string{status, reason}; got != want[id] {
+			t.Errorf("%s = %v, want %v", id, got, want[id])
+		}
+	}
+
+	// one RUNNING pod anywhere in the result set brings the probe back.
+	s2 := &stub{
+		restPods: []map[string]interface{}{
+			restPod("p-stop", "EXITED", nil),
+			restPod("p-up", "RUNNING", nil),
+		},
+		gqlPods: []map[string]interface{}{
+			gqlPod("p-up", "RUNNING", map[string]interface{}{"uptimeInSeconds": 9}, nil),
+		},
+	}
+	s2.start(t)
+	resetListFlags(t)
+	if items := runListJSON(t); len(items) != 2 {
+		t.Fatalf("expected 2 pods, got %v", items)
+	}
+	if s2.graphqlHits != 1 {
+		t.Errorf("graphql called %d times, want exactly 1 when a running pod is listed", s2.graphqlHits)
+	}
+}
+
+// TestRunList_AgreesWithRunGetUnderSnapshotSkew is the list-side twin of the
+// `pod get` "rest and graphql disagreeing" case. `pod list` reads the runtime
+// block from the graphql snapshot, so it must gate it on *that* snapshot's
+// desiredStatus too: gating on rest's let momentary skew report `running` plus a
+// dead container's uptime for a pod graphql already called EXITED, contradicting
+// `pod get` in the same second.
+func TestRunList_AgreesWithRunGetUnderSnapshotSkew(t *testing.T) {
+	sshPort := map[string]interface{}{
+		"ip": "1.2.3.4", "isIpPublic": true, "privatePort": 22, "publicPort": 40022, "type": "tcp",
+	}
+	s := &stub{
+		restPods: []map[string]interface{}{restPod("p", "RUNNING", nil)},
+		gqlPods: []map[string]interface{}{gqlPod("p", "EXITED", map[string]interface{}{
+			"uptimeInSeconds": 261, "ports": []interface{}{sshPort},
+		}, map[string]interface{}{"lastStatusChange": "Exited by user: x"})},
+	}
+	s.start(t)
+	resetListFlags(t)
+
+	items := runListJSON(t)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 pod, got %v", items)
+	}
+	got := items[0]
+
+	if status, _ := got["runtimeStatus"].(string); status != "stopped" {
+		t.Errorf("runtimeStatus = %q, want stopped", status)
+	}
+	if reason, _ := got["runtimeStatusReason"].(string); reason != "stopped_by_user" {
+		t.Errorf("runtimeStatusReason = %q, want stopped_by_user", reason)
+	}
+	// the dead container's telemetry must not be published as uptime.
+	if uptime, ok := got["uptimeSeconds"]; ok {
+		t.Errorf("published stale uptime %v for a pod graphql calls EXITED", uptime)
+	}
+	// rest's desiredStatus is still what we publish; only the derivation moved.
+	if desired, _ := got["desiredStatus"].(string); desired != "RUNNING" {
+		t.Errorf("desiredStatus = %q, want rest's RUNNING", desired)
+	}
+
+	// and the two commands must not disagree in the same second.
+	fromGet := runGetJSON(t, "p")
+	for _, field := range []string{"runtimeStatus", "runtimeStatusReason"} {
+		if got[field] != fromGet[field] {
+			t.Errorf("pod list %s = %v but pod get says %v", field, got[field], fromGet[field])
+		}
+	}
+}
+
+// TestRunList_TerminateAttribution covers the terminate path, which writes
+// desiredStatus EXITED with "Terminated by user: <date>" rather than TERMINATED
+// (runpod-backend model/src/pod/terminatePod.ts:218). Before this it reported
+// `stopped` with no reason at all -- the one stop whose actor is plainly in the
+// text was the one that lost it.
+func TestRunList_TerminateAttribution(t *testing.T) {
+	tests := []struct {
+		text       string
+		wantStatus string
+		wantReason string
+	}{
+		{"Terminated by user: Wed Jul 29 2026", "terminated", "terminated_by_user"},
+		{"Terminated by RunPod: Wed Jul 29 2026", "terminated", "terminated_by_runpod"},
+		// a stop is still a stop, and an outbid on the EXITED path is still an
+		// outbid stop (model/src/utils/index.ts:481).
+		{"Exited by user: Wed Jul 29 2026", "stopped", "stopped_by_user"},
+		{"Outbid: Wed Jul 29 2026", "stopped", "stopped_outbid"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.wantReason, func(t *testing.T) {
+			s := &stub{
+				restPods: []map[string]interface{}{
+					restPod("p", "EXITED", map[string]interface{}{"lastStatusChange": tt.text}),
+				},
+				gqlPods: []map[string]interface{}{
+					gqlPod("p", "EXITED", nil, map[string]interface{}{"lastStatusChange": tt.text}),
+				},
+			}
+			s.start(t)
+			resetListFlags(t)
+
+			items := runListJSON(t)
+			if len(items) != 1 {
+				t.Fatalf("expected 1 pod, got %v", items)
+			}
+			if status, _ := items[0]["runtimeStatus"].(string); status != tt.wantStatus {
+				t.Errorf("runtimeStatus = %q, want %q", status, tt.wantStatus)
+			}
+			if reason, _ := items[0]["runtimeStatusReason"].(string); reason != tt.wantReason {
+				t.Errorf("runtimeStatusReason = %q, want %q", reason, tt.wantReason)
+			}
+		})
+	}
+}

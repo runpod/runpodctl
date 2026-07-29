@@ -9,6 +9,7 @@ import (
 	"github.com/runpod/runpodctl/internal/api"
 	"github.com/runpod/runpodctl/internal/output"
 	"github.com/runpod/runpodctl/internal/podstate"
+	"github.com/runpod/runpodctl/internal/sshconnect"
 
 	"github.com/spf13/cobra"
 )
@@ -137,7 +138,7 @@ func runList(cmd *cobra.Command, args []string) error {
 	}
 
 	var runtimes map[string]*api.LegacyPod
-	if len(matched) > 0 {
+	if needsRuntimeProbe(matched) {
 		runtimes = fetchRuntimes()
 	}
 
@@ -149,21 +150,29 @@ func runList(cmd *cobra.Command, args []string) error {
 			createdAtStr = ct.UTC().Format(time.RFC3339)
 		}
 
-		signals := podstate.Signals{
+		// Without the graphql snapshot nothing was probed. A pod rest lists that
+		// `myself.pods` omits tells us nothing about its container, and calling
+		// that "initializing" would be a claim we never checked — `pod get`
+		// reports unknown for the same pod.
+		state := podstate.Derive(podstate.Signals{
 			DesiredStatus:    p.DesiredStatus,
 			LastStatusChange: p.LastStatusChange,
-		}
+		})
 		var runtime *api.LegacyRuntime
-		// Only a pod actually present in the graphql result has been probed. A
-		// pod rest lists that `myself.pods` omits tells us nothing about its
-		// container, and calling that "initializing" would be a claim we never
-		// checked — `pod get` reports unknown for the same pod.
+		lastStatusChange := p.LastStatusChange
 		if gqlPod, ok := runtimes[p.ID]; ok {
-			signals.RuntimeProbed = true
+			// The same single derivation `pod get` and both ssh paths use, fed
+			// from the snapshot the runtime block came from. rest's
+			// desiredStatus is still what we *publish*, but gating graphql
+			// telemetry on the other surface's status lets momentary skew report
+			// `running` plus a dead container's uptime for a pod graphql already
+			// calls EXITED, and contradict `pod get` in the same second.
+			state = sshconnect.PodState(gqlPod)
 			runtime = gqlPod.Runtime
-			signals.RuntimeReported = runtime != nil
+			if lastStatusChange == nil {
+				lastStatusChange = gqlPod.LastStatusChange
+			}
 		}
-		state := podstate.Derive(signals)
 		var uptime *int
 		if state.Status == podstate.StatusRunning && runtime != nil {
 			// gated on running: stale telemetry outlives a stopped container.
@@ -183,7 +192,7 @@ func runList(cmd *cobra.Command, args []string) error {
 			CostPerHr:           p.CostPerHr,
 			CreatedAt:           createdAtStr,
 			UptimeSeconds:       uptime,
-			LastStatusChange:    statusText(p.LastStatusChange),
+			LastStatusChange:    statusText(lastStatusChange),
 		})
 	}
 
@@ -196,6 +205,24 @@ func runList(cmd *cobra.Command, args []string) error {
 func statusText(v interface{}) string {
 	s, _ := v.(string)
 	return s
+}
+
+// needsRuntimeProbe reports whether the graphql side-call can change any of the
+// rows we are about to print.
+//
+// podstate only consults runtime telemetry on the RUNNING branch — a stopped or
+// terminated pod is derived from lastStatusChange alone, on purpose, because its
+// telemetry is stale — so probing a result set with no RUNNING pod in it buys
+// nothing and can still cost the full 5s cap. `pod list --all` on an account of
+// stopped pods is the common shape of that, and it is exactly the case an
+// unresponsive graphql would otherwise have made slow for no reason.
+func needsRuntimeProbe(matched []api.Pod) bool {
+	for _, p := range matched {
+		if strings.EqualFold(strings.TrimSpace(p.DesiredStatus), "RUNNING") {
+			return true
+		}
+	}
+	return false
 }
 
 // runtimeProbeTimeout bounds the runtime side-call. `pod list` is the hottest
