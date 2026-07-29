@@ -140,8 +140,12 @@ func (c *Client) Delete(endpoint string) ([]byte, error) {
 //	graphql_error             -- from a GraphQLError
 //	usage_error               -- from a cli usage mistake (see cmd/root.go and
 //	                             internal/clierr)
-//	timeout                   -- the cli stopped waiting; the work may still be
-//	                             running server-side (see TimeoutError in invoke.go)
+//	timeout                   -- the cli stopped waiting. two cases, told apart by
+//	                             the message: a --wait budget ran out with the work
+//	                             still running server-side (the message names the
+//	                             command to poll it), or one api call exceeded the
+//	                             per-call timeout (nothing running; retry). See
+//	                             TimeoutError in invoke.go
 //	job_failed                -- a serverless job reached a terminal status other
 //	                             than COMPLETED (see JobFailedError in invoke.go)
 //	no_credentials            -- no api key configured locally
