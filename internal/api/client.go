@@ -138,7 +138,12 @@ func (c *Client) Delete(endpoint string) ([]byte, error) {
 //	bad_request, unauthorized, forbidden, not_found, conflict, rate_limited,
 //	server_error, api_error   -- from a REST APIError (see codeForStatus)
 //	graphql_error             -- from a GraphQLError
-//	usage_error               -- from a cli usage mistake (see cmd package)
+//	usage_error               -- from a cli usage mistake (see cmd/root.go and
+//	                             internal/clierr)
+//	timeout                   -- the cli stopped waiting; the work may still be
+//	                             running server-side (see TimeoutError in invoke.go)
+//	job_failed                -- a serverless job reached a terminal status other
+//	                             than COMPLETED (see JobFailedError in invoke.go)
 //	no_credentials            -- no api key configured locally
 //	network_error             -- api unreachable (see internal/output)
 //	wait_timeout              -- --wait gave up; resource exists (internal/waitfor)

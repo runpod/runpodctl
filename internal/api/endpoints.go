@@ -52,19 +52,28 @@ type EndpointInvokeURLs struct {
 	Health  string `json:"health"`
 }
 
+// invokeBaseURL resolves the base url of the invoke service, honouring the
+// RUNPOD_INVOKE_URL / invokeUrl override. It is the single source of the invoke
+// host: both the reported urls (invokeURLs) and the client that actually calls
+// them (InvokeClient) go through it, so an override can never move one without
+// the other.
+func invokeBaseURL() string {
+	// tolerate a sloppy override: surrounding whitespace and any number of
+	// trailing slashes. a value of only slashes is treated as unset rather than
+	// silently emitting relative urls.
+	base := strings.TrimRight(strings.TrimSpace(configenv.InvokeURL()), "/")
+	if base == "" {
+		base = ServerlessInvokeBaseURL
+	}
+	return base
+}
+
 // invokeURLs builds the invoke urls for an endpoint id (nil when id is empty).
 func invokeURLs(id string) *EndpointInvokeURLs {
 	if id == "" {
 		return nil
 	}
-	// tolerate a sloppy override: surrounding whitespace and any number of
-	// trailing slashes. a value of only slashes is treated as unset rather than
-	// silently emitting relative urls.
-	invokeBase := strings.TrimRight(strings.TrimSpace(configenv.InvokeURL()), "/")
-	if invokeBase == "" {
-		invokeBase = ServerlessInvokeBaseURL
-	}
-	base := invokeBase + "/" + id
+	base := invokeBaseURL() + "/" + id
 	return &EndpointInvokeURLs{
 		Run:     base + "/run",
 		RunSync: base + "/runsync",
