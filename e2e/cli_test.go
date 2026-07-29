@@ -1873,3 +1873,134 @@ func TestCLI_HelpCoverage(t *testing.T) {
 		})
 	}
 }
+
+// TestCLI_PodRuntimeStatusTransition walks a real pod from creation to a
+// container-up state and asserts the derived runtimeStatus tracks it (CON-690).
+// It also checks the stopped case, since "not running" values are otherwise
+// never exercised against the live api.
+func TestCLI_PodRuntimeStatusTransition(t *testing.T) {
+	gpuTypeID := pickCommunityGpuType(t)
+	name := "e2e-runtime-status-" + time.Now().Format("20060102150405")
+
+	stdout, stderr, err := runCLI("pod", "create",
+		"--cloud-type", "community",
+		"--image", "runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404",
+		"--gpu-id", gpuTypeID,
+		"--volume-in-gb", "0",
+		"--container-disk-in-gb", "20",
+		"--ports", "22/tcp",
+		"--name", name,
+	)
+	if err != nil {
+		if shouldSkipCommunityCreate(stdout + stderr) {
+			t.Skipf("community pod unavailable: %s", strings.TrimSpace(stderr))
+		}
+		t.Fatalf("failed to create pod: %v\nstderr: %s", err, stderr)
+	}
+
+	var created map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &created); err != nil {
+		t.Fatalf("create output is not valid json: %v\noutput: %s", err, stdout)
+	}
+	podID, ok := created["id"].(string)
+	if !ok || strings.TrimSpace(podID) == "" {
+		t.Fatal("expected pod id in create response")
+	}
+
+	// pods bill by the second: delete unconditionally, even on failure.
+	t.Cleanup(func() {
+		if _, _, err := runCLI("pod", "delete", podID); err != nil {
+			t.Logf("warning: failed to delete test pod %s: %v", podID, err)
+		} else {
+			t.Logf("cleaned up pod %s", podID)
+		}
+	})
+
+	seen := map[string]bool{}
+	var last map[string]interface{}
+	for i := 0; i < 40; i++ {
+		details := podGetJSON(t, podID)
+		status, _ := details["runtimeStatus"].(string)
+		if status == "" {
+			t.Fatalf("runtimeStatus missing from pod get: %v", details)
+		}
+		seen[status] = true
+		last = details
+		if status == "running" {
+			break
+		}
+		if status != "initializing" && status != "unknown" {
+			t.Fatalf("unexpected runtimeStatus %q while starting up: %v", status, details)
+		}
+		time.Sleep(6 * time.Second)
+	}
+
+	if status, _ := last["runtimeStatus"].(string); status != "running" {
+		t.Fatalf("pod never reported runtimeStatus running (saw %v)", keysOf(seen))
+	}
+	// a running pod has no reason to explain and must report real uptime.
+	if reason, ok := last["runtimeStatusReason"]; ok {
+		t.Errorf("running pod should carry no runtimeStatusReason, got %v", reason)
+	}
+	if _, ok := last["uptimeSeconds"]; !ok {
+		t.Errorf("running pod should report uptimeSeconds, got %v", last)
+	}
+
+	// pod list must agree, and must carry the field on the bulk path too.
+	stdout, stderr, err = runCLI("pod", "list")
+	if err != nil {
+		t.Fatalf("pod list failed: %v\nstderr: %s", err, stderr)
+	}
+	var listed []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &listed); err != nil {
+		t.Fatalf("pod list output is not valid json: %v\noutput: %s", err, stdout)
+	}
+	found := false
+	for _, item := range listed {
+		if id, _ := item["id"].(string); id != podID {
+			continue
+		}
+		found = true
+		if status, _ := item["runtimeStatus"].(string); status != "running" {
+			t.Errorf("pod list runtimeStatus = %q, want running", status)
+		}
+	}
+	if !found {
+		t.Errorf("pod %s missing from pod list", podID)
+	}
+
+	// stopped: a user-initiated stop must be attributed as such, and must not be
+	// reported as running even though stale runtime telemetry lingers.
+	if _, stderr, err := runCLI("pod", "stop", podID); err != nil {
+		t.Fatalf("pod stop failed: %v\nstderr: %s", err, stderr)
+	}
+	stopped := podGetJSON(t, podID)
+	if status, _ := stopped["runtimeStatus"].(string); status != "stopped" {
+		t.Errorf("stopped pod runtimeStatus = %v, want stopped (%v)", stopped["runtimeStatus"], stopped)
+	}
+	if reason, _ := stopped["runtimeStatusReason"].(string); reason != "stopped_by_user" {
+		t.Errorf("stopped pod runtimeStatusReason = %q, want stopped_by_user", reason)
+	}
+}
+
+func podGetJSON(t *testing.T, podID string) map[string]interface{} {
+	t.Helper()
+
+	stdout, stderr, err := runCLI("pod", "get", podID)
+	if err != nil {
+		t.Fatalf("pod get %s failed: %v\nstderr: %s", podID, err, stderr)
+	}
+	var details map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &details); err != nil {
+		t.Fatalf("pod get output is not valid json: %v\noutput: %s", err, stdout)
+	}
+	return details
+}
+
+func keysOf(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
