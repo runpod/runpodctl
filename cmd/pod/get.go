@@ -17,9 +17,11 @@ var getCmd = &cobra.Command{
 	Long: `get details for a specific pod by id.
 
 runtimeStatus reports what the pod is actually doing, which desiredStatus
-cannot: running (container up), initializing (placed, container not up yet -
-image pull, create or boot), stopped, terminated, or unknown.
-runtimeStatusReason carries a stable token when there is more to say.`,
+cannot: running (container up and reporting), initializing (no container
+reported yet - image pull, create or boot), stopped, terminated, or unknown
+(not derivable, read desiredStatus). runtimeStatusReason carries a stable
+token when there is more to say, and lastStatusChange carries the backend's
+raw text.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runGet,
 }
@@ -50,34 +52,44 @@ func runGet(cmd *cobra.Command, args []string) error {
 	// The graphql side-call below is the only source of runtime telemetry (rest
 	// never returns `runtime` at all), and it was already being made for the ssh
 	// block, so runtimeStatus costs no extra round trip here.
-	sshInfo := map[string]interface{}{}
-	signals := podstate.Signals{
+	sshInfo := map[string]interface{}{"error": "ssh info unavailable"}
+	// Without the graphql snapshot there is no telemetry at all, so the honest
+	// answer is unknown rather than a guess from desiredStatus alone.
+	state := podstate.Derive(podstate.Signals{
 		DesiredStatus:    pod.DesiredStatus,
 		LastStatusChange: pod.LastStatusChange,
-	}
+	})
 
-	gqlClient, err := api.NewGraphQLClient()
-	if err == nil {
-		pods, gqlErr := gqlClient.GetPods()
-		if gqlErr == nil {
+	if gqlClient, gqlClientErr := api.NewGraphQLClient(); gqlClientErr == nil {
+		if pods, gqlErr := gqlClient.GetPods(); gqlErr == nil {
 			keyInfo := sshconnect.ResolveKeyInfo(gqlClient)
 			sshPod, conn := sshconnect.FindPodConnection(pods, podID, keyInfo)
 			if sshPod != nil {
-				signals.RuntimeProbed = true
-				signals.RuntimeReported = sshPod.Runtime != nil
 				if pod.LastStatusChange == nil && sshPod.LastStatusChange != nil {
 					pod.LastStatusChange = sshPod.LastStatusChange
-					signals.LastStatusChange = sshPod.LastStatusChange
 				}
-				state := podstate.Derive(signals)
+				// Derive from the graphql snapshot, not from rest's
+				// desiredStatus: the runtime block and its ports come from this
+				// snapshot, and gating them on a status read from the *other*
+				// surface means momentary skew between the two bypasses the
+				// gate and hands back an ssh command for a dead container.
+				// rest's desiredStatus is still published as desiredStatus.
+				state = sshconnect.PodState(sshPod)
 				pod.UptimeSeconds = runtimeUptime(state, sshPod.Runtime)
 				// A stopped pod keeps reporting stale runtime ports for a while,
 				// which is enough for FindPodConnection to hand back an ssh
-				// command that cannot possibly work. Only trust it while the
-				// container is actually up.
-				if conn == nil || state.Status != podstate.StatusRunning {
+				// command that cannot possibly work.
+				if conn == nil || state.IsKnownDown() {
+					declared := pod.Ports
+					if len(declared) == 0 {
+						declared = sshconnect.SplitPorts(sshPod.Ports)
+					}
+					var runtimePorts []*api.LegacyPort
+					if sshPod.Runtime != nil {
+						runtimePorts = sshPod.Runtime.Ports
+					}
 					sshInfo = map[string]interface{}{
-						"error":  notReadyMessage(state),
+						"error":  sshconnect.NotReadyMessage(state, declared, runtimePorts),
 						"id":     sshPod.ID,
 						"name":   sshPod.Name,
 						"status": sshPod.DesiredStatus,
@@ -85,17 +97,9 @@ func runGet(cmd *cobra.Command, args []string) error {
 				} else {
 					sshInfo = conn
 				}
-			} else {
-				sshInfo = map[string]interface{}{"error": "ssh info unavailable"}
 			}
-		} else {
-			sshInfo = map[string]interface{}{"error": "ssh info unavailable"}
 		}
-	} else {
-		sshInfo = map[string]interface{}{"error": "ssh info unavailable"}
 	}
-
-	state := podstate.Derive(signals)
 
 	response := struct {
 		*api.Pod
@@ -129,14 +133,4 @@ func runtimeUptime(state podstate.State, runtime *api.LegacyRuntime) interface{}
 		return nil
 	}
 	return *runtime.UptimeInSeconds
-}
-
-// notReadyMessage turns "pod not ready" — the bare string that used to be the
-// only thing an agent got while an image was pulling — into a message that says
-// which of the possible causes applies.
-func notReadyMessage(state podstate.State) string {
-	if reason := podstate.SSHUnavailableReason(state); reason != "" {
-		return "pod not ready: " + reason
-	}
-	return "pod not ready"
 }

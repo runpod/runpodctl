@@ -97,44 +97,6 @@ func TestRuntimeUptimeOmittedFromJSON(t *testing.T) {
 	}
 }
 
-func TestNotReadyMessage(t *testing.T) {
-	tests := []struct {
-		name  string
-		state podstate.State
-		want  string
-	}{
-		{
-			name:  "initializing says why",
-			state: podstate.State{Status: podstate.StatusInitializing, Reason: podstate.ReasonAwaitingContainer},
-			want:  "pod not ready: container is still starting (image pull, container create, or boot)",
-		},
-		{
-			name:  "running blames the missing ssh port",
-			state: podstate.State{Status: podstate.StatusRunning},
-			want:  "pod not ready: no public port 22 mapped; recreate the pod with --ports 22/tcp",
-		},
-		{
-			name:  "stopped says so",
-			state: podstate.State{Status: podstate.StatusStopped, Reason: podstate.ReasonStoppedByUser},
-			want:  "pod not ready: pod is stopped; start it with 'runpodctl pod start <pod-id>'",
-		},
-		{
-			// unknown adds nothing, so the message must not gain a dangling colon.
-			name:  "unknown keeps the bare message",
-			state: podstate.State{Status: podstate.StatusUnknown, Reason: podstate.ReasonRuntimeUnavailable},
-			want:  "pod not ready",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := notReadyMessage(tt.state); got != tt.want {
-				t.Errorf("notReadyMessage() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 // TestPodListOutputShape locks the additive output contract: the pre-existing
 // keys keep their names, runtimeStatus is always present so an agent can branch
 // on it unconditionally, and the two new optional keys disappear when empty.

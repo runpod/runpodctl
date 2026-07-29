@@ -83,6 +83,45 @@ func parseStringSlice(value interface{}) []string {
 	}
 }
 
+// pickCheapestCommunityGpuType returns the lowest-priced available community
+// gpu, unlike pickCommunityGpuType which returns whatever the api lists first
+// (an A100 80GB at $1.19/hr as of writing). Anything that provisions a pod
+// purely to observe cli behaviour should use this: the gpu model is irrelevant
+// to the assertion and the pod bills by the second.
+func pickCheapestCommunityGpuType(t *testing.T) string {
+	t.Helper()
+
+	stdout, stderr, err := runCLI("gpu", "list")
+	if err != nil {
+		t.Skipf("skipping - can't list gpus: %v\nstderr: %s", err, stderr)
+	}
+
+	var gpus []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &gpus); err != nil {
+		t.Skipf("skipping - can't parse gpu list: %v", err)
+	}
+
+	cheapestID := ""
+	cheapestPrice := 0.0
+	for _, gpu := range gpus {
+		community, _ := gpu["communityCloud"].(bool)
+		available, _ := gpu["available"].(bool)
+		id, _ := gpu["gpuId"].(string)
+		price, ok := gpu["communityPricePerHr"].(float64)
+		if !community || !available || strings.TrimSpace(id) == "" || !ok || price <= 0 {
+			continue
+		}
+		if cheapestID == "" || price < cheapestPrice {
+			cheapestID, cheapestPrice = id, price
+		}
+	}
+	if cheapestID == "" {
+		t.Skip("skipping - no priced community gpu types available")
+	}
+	t.Logf("using cheapest community gpu %s at $%.2f/hr", cheapestID, cheapestPrice)
+	return cheapestID
+}
+
 func pickCommunityGpuType(t *testing.T) string {
 	t.Helper()
 
@@ -1882,7 +1921,7 @@ func TestCLI_HelpCoverage(t *testing.T) {
 // It also checks the stopped case, since "not running" values are otherwise
 // never exercised against the live api.
 func TestCLI_PodRuntimeStatusTransition(t *testing.T) {
-	gpuTypeID := pickCommunityGpuType(t)
+	gpuTypeID := pickCheapestCommunityGpuType(t)
 	name := "e2e-runtime-status-" + time.Now().Format("20060102150405")
 
 	stdout, stderr, err := runCLI("pod", "create",
@@ -1919,9 +1958,14 @@ func TestCLI_PodRuntimeStatusTransition(t *testing.T) {
 		}
 	})
 
+	// poll fast: the whole point is to catch the initializing -> running
+	// transition, and a slow poll can step straight over it.
 	seen := map[string]bool{}
+	initializingReason := ""
+	initializingSSHError := ""
 	var last map[string]interface{}
-	for i := 0; i < 40; i++ {
+	deadline := time.Now().Add(6 * time.Minute)
+	for time.Now().Before(deadline) {
 		details := podGetJSON(t, podID)
 		status, _ := details["runtimeStatus"].(string)
 		if status == "" {
@@ -1932,14 +1976,35 @@ func TestCLI_PodRuntimeStatusTransition(t *testing.T) {
 		if status == "running" {
 			break
 		}
-		if status != "initializing" && status != "unknown" {
+		if status != "initializing" {
+			// unknown means the runtime lookup itself failed, which is not a
+			// startup state and would make the rest of the test vacuous.
 			t.Fatalf("unexpected runtimeStatus %q while starting up: %v", status, details)
 		}
-		time.Sleep(6 * time.Second)
+		initializingReason, _ = details["runtimeStatusReason"].(string)
+		if ssh, ok := details["ssh"].(map[string]interface{}); ok {
+			initializingSSHError, _ = ssh["error"].(string)
+		}
+		time.Sleep(2 * time.Second)
 	}
 
 	if status, _ := last["runtimeStatus"].(string); status != "running" {
 		t.Fatalf("pod never reported runtimeStatus running (saw %v)", keysOf(seen))
+	}
+	// the transition itself is the thing under test. a run that only ever saw
+	// "running" proves nothing about the state this ticket exists for, so it is
+	// a failure of the test rather than a pass.
+	if !seen["initializing"] {
+		t.Errorf("never observed initializing: the transition under test was not exercised (saw %v)", keysOf(seen))
+	}
+	if seen["initializing"] {
+		if initializingReason != "awaiting_container" {
+			t.Errorf("initializing runtimeStatusReason = %q, want awaiting_container", initializingReason)
+		}
+		// the ticket's actual complaint: "pod not ready" with no reason.
+		if !strings.Contains(initializingSSHError, "no container reported yet") {
+			t.Errorf("initializing ssh error should say why, got %q", initializingSSHError)
+		}
 	}
 	// a running pod has no reason to explain and must report real uptime.
 	if reason, ok := last["runtimeStatusReason"]; ok {
@@ -1967,6 +2032,9 @@ func TestCLI_PodRuntimeStatusTransition(t *testing.T) {
 		if status, _ := item["runtimeStatus"].(string); status != "running" {
 			t.Errorf("pod list runtimeStatus = %q, want running", status)
 		}
+		if _, ok := item["lastStatusChange"].(string); !ok {
+			t.Errorf("pod list should carry lastStatusChange: %v", item)
+		}
 	}
 	if !found {
 		t.Errorf("pod %s missing from pod list", podID)
@@ -1983,6 +2051,21 @@ func TestCLI_PodRuntimeStatusTransition(t *testing.T) {
 	}
 	if reason, _ := stopped["runtimeStatusReason"].(string); reason != "stopped_by_user" {
 		t.Errorf("stopped pod runtimeStatusReason = %q, want stopped_by_user", reason)
+	}
+	if _, ok := stopped["uptimeSeconds"]; ok {
+		t.Errorf("stopped pod must not report stale uptimeSeconds: %v", stopped["uptimeSeconds"])
+	}
+	// stale runtime ports outlive the container, so this must not be an
+	// ssh command that cannot connect.
+	stoppedSSH, ok := stopped["ssh"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("stopped pod has no ssh block: %v", stopped)
+	}
+	if _, ok := stoppedSSH["ssh_command"]; ok {
+		t.Errorf("stopped pod must not offer an ssh command: %v", stoppedSSH)
+	}
+	if msg, _ := stoppedSSH["error"].(string); !strings.Contains(msg, "pod is stopped") {
+		t.Errorf("stopped pod ssh error = %q, want it to say the pod is stopped", msg)
 	}
 }
 

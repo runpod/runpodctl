@@ -9,7 +9,6 @@ import (
 	"github.com/runpod/runpodctl/cmd/ssh"
 	"github.com/runpod/runpodctl/internal/api"
 	"github.com/runpod/runpodctl/internal/output"
-	"github.com/runpod/runpodctl/internal/podstate"
 	"github.com/runpod/runpodctl/internal/sshconnect"
 
 	"github.com/spf13/cobra"
@@ -191,19 +190,18 @@ func runSSHInfoWithArgs(cmd *cobra.Command, args []string, allowAll bool) error 
 	if pod != nil {
 		// the same derivation `pod get` uses, so both commands explain a
 		// not-ready pod identically instead of saying only "pod not ready".
-		state := podstate.Derive(podstate.Signals{
-			DesiredStatus:    pod.DesiredStatus,
-			LastStatusChange: pod.LastStatusChange,
-			RuntimeProbed:    true,
-			RuntimeReported:  pod.Runtime != nil,
-		})
+		state := sshconnect.PodState(pod)
 		// A stopped pod keeps reporting stale runtime ports for a while, which
-		// is enough to build an ssh command that cannot possibly connect.
-		if conn == nil || state.Status != podstate.StatusRunning {
-			message := "pod not ready"
-			if reason := podstate.SSHUnavailableReason(state); reason != "" {
-				message += ": " + reason
+		// is enough to build an ssh command that cannot possibly connect. The
+		// gate is "known down", not "not running": an unknown state is no
+		// evidence the pod is down, so a connection built from live ports is
+		// still worth returning.
+		if conn == nil || state.IsKnownDown() {
+			var runtimePorts []*api.LegacyPort
+			if pod.Runtime != nil {
+				runtimePorts = pod.Runtime.Ports
 			}
+			message := sshconnect.NotReadyMessage(state, sshconnect.SplitPorts(pod.Ports), runtimePorts)
 			return output.Print(map[string]interface{}{
 				"error":         message,
 				"id":            pod.ID,

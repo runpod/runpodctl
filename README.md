@@ -151,17 +151,23 @@ branch on these, not on the reason text.
 | `runtimeStatus` | meaning |
 | --- | --- |
 | `running` | `desiredStatus` is RUNNING and the platform reports runtime telemetry: the container is up. does **not** imply any port is reachable |
-| `initializing` | `desiredStatus` is RUNNING and no telemetry yet: placed on a machine, container not up. covers image pull, container create and boot — the platform does not distinguish them |
+| `initializing` | `desiredStatus` is RUNNING and no telemetry is being reported. usually placed on a machine with the container not up yet — image pull, container create or boot, which the platform does not distinguish — but the same absence is what an upstream telemetry lookup failure looks like, so read it as "no container reported", not "the container is provably down". either way: keep polling |
 | `stopped` | `desiredStatus` is EXITED. container gone, disk kept, `pod start` will bring it back |
 | `terminated` | `desiredStatus` is TERMINATED |
 | `unknown` | not derivable: either a `desiredStatus` the platform defines but does not surface in practice (CREATED, RESTARTING, PAUSED, DEAD), or the runtime lookup failed. read `desiredStatus`, which is in the same output |
 
 | `runtimeStatusReason` | meaning |
 | --- | --- |
-| `awaiting_container` | with `initializing`: waiting for the host to report a container |
+| `awaiting_container` | with `initializing`: no container is being reported for a pod that should be running |
 | `stopped_by_user` / `terminated_by_user` | you did it |
 | `stopped_by_runpod` / `terminated_by_runpod` | runpod did it. the platform records no machine-readable cause; in practice this is insufficient credit, a fatal image-pull failure, or host action |
+| `stopped_outbid` / `terminated_outbid` | a spot/community pod lost its machine to a higher bid. the only involuntary stop with a real recorded cause; retry elsewhere or at on-demand pricing |
 | `runtime_unavailable` | with `unknown`: the runtime lookup could not be made, so running and initializing cannot be told apart |
+
+the token is a lossy read of the backend's free-text `lastStatusChange`, which
+`pod get` and `pod list` both also publish — so a phrasing this cli does not
+recognise leaves `runtimeStatusReason` absent rather than wrong, and the raw text
+is still there.
 
 there is deliberately no `pulling` value. the api exposes no pull state (see
 `internal/podstate` for the full trace of what it does expose), so `pulling`
@@ -172,8 +178,15 @@ window honestly instead.
 reporting, rather than being published as `0`.
 
 to poll a pod to readiness, wait for `runtimeStatus: running`; for ssh, wait for
-`ssh.ssh_command` to appear in `pod get` — a running container still needs port
-22 published, which only happens if the pod was created with it in `--ports`.
+`ssh.ssh_command` to appear in `pod get`. a running container still needs a
+publicly routable port 22, and when it has none `ssh.error` says which case it
+is: the pod never asked for `22/tcp`, the host has not published the mapping
+yet, or the mapping exists but is not publicly routable on that machine (no
+public ip — nothing you can change on the pod).
+
+`pod list` gets its telemetry from one bulk graphql call regardless of pod count,
+never one per pod. that call is best-effort and capped at 5s: if it fails, every
+pod comes back `unknown` / `runtime_unavailable` and the list still succeeds.
 
 ### error format
 

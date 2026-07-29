@@ -21,9 +21,11 @@ var listCmd = &cobra.Command{
 defaults to running pods only; use --all to include stopped ones.
 
 runtimeStatus reports what each pod is actually doing, which desiredStatus
-cannot: running (container up), initializing (placed, container not up yet -
-image pull, create or boot), stopped, terminated, or unknown.
-runtimeStatusReason carries a stable token when there is more to say.`,
+cannot: running (container up and reporting), initializing (no container
+reported yet - image pull, create or boot), stopped, terminated, or unknown
+(not derivable, read desiredStatus). runtimeStatusReason carries a stable
+token when there is more to say, and lastStatusChange carries the backend's
+raw text.`,
 	Args: cobra.NoArgs,
 	RunE: runList,
 }
@@ -41,6 +43,12 @@ type podListOutput struct {
 	CostPerHr           float64 `json:"costPerHr,omitempty"`
 	CreatedAt           string  `json:"createdAt,omitempty"`
 	UptimeSeconds       *int    `json:"uptimeSeconds,omitempty"`
+	// LastStatusChange is the backend's free-text note about the last
+	// transition ("Rented by User: ...", "Exited by user: ...", "Outbid: ..."),
+	// which runtimeStatusReason is a lossy tokenisation of. It is carried here
+	// so a phrasing this cli does not recognise still reaches the caller,
+	// instead of leaving `pod list` with no explanation at all.
+	LastStatusChange string `json:"lastStatusChange,omitempty"`
 }
 
 var (
@@ -112,9 +120,9 @@ func runList(cmd *cobra.Command, args []string) error {
 		statusFilter = "RUNNING"
 	}
 
-	runtimes := fetchRuntimes()
-
-	items := make([]podListOutput, 0, len(pods))
+	// Filter first: the runtime side-call below is decoration, and must not be
+	// paid for when there is nothing left to decorate.
+	matched := make([]api.Pod, 0, len(pods))
 	for _, p := range pods {
 		if statusFilter != "" && !strings.EqualFold(p.DesiredStatus, statusFilter) {
 			continue
@@ -125,7 +133,16 @@ func runList(cmd *cobra.Command, args []string) error {
 				continue
 			}
 		}
+		matched = append(matched, p)
+	}
 
+	var runtimes map[string]*api.LegacyPod
+	if len(matched) > 0 {
+		runtimes = fetchRuntimes()
+	}
+
+	items := make([]podListOutput, 0, len(matched))
+	for _, p := range matched {
 		ct := parseCreatedAt(p.CreatedAt)
 		var createdAtStr string
 		if !ct.IsZero() {
@@ -137,12 +154,14 @@ func runList(cmd *cobra.Command, args []string) error {
 			LastStatusChange: p.LastStatusChange,
 		}
 		var runtime *api.LegacyRuntime
-		if runtimes != nil {
+		// Only a pod actually present in the graphql result has been probed. A
+		// pod rest lists that `myself.pods` omits tells us nothing about its
+		// container, and calling that "initializing" would be a claim we never
+		// checked — `pod get` reports unknown for the same pod.
+		if gqlPod, ok := runtimes[p.ID]; ok {
 			signals.RuntimeProbed = true
-			if gqlPod, ok := runtimes[p.ID]; ok {
-				runtime = gqlPod.Runtime
-				signals.RuntimeReported = runtime != nil
-			}
+			runtime = gqlPod.Runtime
+			signals.RuntimeReported = runtime != nil
 		}
 		state := podstate.Derive(signals)
 		var uptime *int
@@ -164,12 +183,26 @@ func runList(cmd *cobra.Command, args []string) error {
 			CostPerHr:           p.CostPerHr,
 			CreatedAt:           createdAtStr,
 			UptimeSeconds:       uptime,
+			LastStatusChange:    statusText(p.LastStatusChange),
 		})
 	}
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
 	return output.Print(items, &output.Config{Format: format})
 }
+
+// statusText coerces the api's interface{} lastStatusChange to a string, and to
+// "" for anything else so the field is simply omitted.
+func statusText(v interface{}) string {
+	s, _ := v.(string)
+	return s
+}
+
+// runtimeProbeTimeout bounds the runtime side-call. `pod list` is the hottest
+// read command and is polled in loops; before CON-690 it never touched graphql
+// at all, so an unresponsive graphql must not be able to turn a ~100ms list into
+// a 30s stall (the default graphqlTimeout) for the sake of a decorative field.
+const runtimeProbeTimeout = 5 * time.Second
 
 // fetchRuntimes returns runtime telemetry keyed by pod id, or nil when it could
 // not be obtained.
@@ -178,13 +211,15 @@ func runList(cmd *cobra.Command, args []string) error {
 // is unavoidable. It is deliberately the *bulk* graphql myPods query — one
 // request for every pod, never one per pod — and it is best-effort: a failure
 // downgrades runtimeStatus to unknown/runtime_unavailable rather than failing a
-// list that otherwise succeeded. nil (not an empty map) means "did not look",
-// which podstate treats differently from "no runtime reported".
+// list that otherwise succeeded. A pod missing from the returned map is treated
+// as "not probed", which podstate reports as unknown rather than as a container
+// that is down.
 func fetchRuntimes() map[string]*api.LegacyPod {
 	gqlClient, err := api.NewGraphQLClient()
 	if err != nil {
 		return nil
 	}
+	gqlClient.LimitTimeout(runtimeProbeTimeout)
 	pods, err := gqlClient.GetPods()
 	if err != nil {
 		return nil

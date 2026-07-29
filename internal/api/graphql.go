@@ -60,6 +60,15 @@ func NewGraphQLClient() (*GraphQLClient, error) {
 	}, nil
 }
 
+// LimitTimeout lowers this client's http timeout for best-effort side-calls
+// whose result is optional. It only ever shortens: an operator who configured a
+// tighter graphqlTimeout keeps theirs.
+func (c *GraphQLClient) LimitTimeout(d time.Duration) {
+	if d > 0 && d < c.httpClient.Timeout {
+		c.httpClient.Timeout = d
+	}
+}
+
 // Query executes a GraphQL query
 func (c *GraphQLClient) Query(input GraphQLInput) ([]byte, error) {
 	if input.Variables == nil {
@@ -424,22 +433,7 @@ type LegacyRuntime struct {
 	// deprecated top-level Pod.uptimeSeconds is a different field and is always
 	// 0 in prod, despite its deprecation notice pointing at a
 	// "runtime.uptimeSeconds" that does not exist.
-	UptimeInSeconds *int                `json:"uptimeInSeconds"`
-	Container       *LegacyContainer    `json:"container"`
-	Gpus            []*LegacyRuntimeGpu `json:"gpus"`
-}
-
-// LegacyContainer is the container utilisation block of PodRuntime.
-type LegacyContainer struct {
-	CPUPercent    *int `json:"cpuPercent"`
-	MemoryPercent *int `json:"memoryPercent"`
-}
-
-// LegacyRuntimeGpu is a per-gpu utilisation entry of PodRuntime.
-type LegacyRuntimeGpu struct {
-	ID                string `json:"id"`
-	GpuUtilPercent    *int   `json:"gpuUtilPercent"`
-	MemoryUtilPercent *int   `json:"memoryUtilPercent"`
+	UptimeInSeconds *int `json:"uptimeInSeconds"`
 }
 
 // LegacyPort is the port structure from GraphQL API
@@ -481,15 +475,6 @@ func (c *GraphQLClient) GetPods() ([]*LegacyPod, error) {
 				}
 				runtime {
 				  uptimeInSeconds
-				  container {
-					cpuPercent
-					memoryPercent
-				  }
-				  gpus {
-					id
-					gpuUtilPercent
-					memoryUtilPercent
-				  }
 				  ports {
 					ip
 					isIpPublic

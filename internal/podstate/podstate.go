@@ -21,11 +21,21 @@
 //     no `status`, `phase`, `state` or `pullStatus` field anywhere on Pod or
 //     PodRuntime. It resolves by GET hapi.runpod.net/v1/internal/pod/{id} with
 //     a 2s timeout and returns null on any error, 404 included. So
-//     "runtime == null" means "the host daemon is not reporting a container for
-//     this pod yet" — that absence is the only start-up signal there is.
-//   - The host daemon does track image pulls internally, but the response it
-//     serves for a pod is mapped down to stats/gpus/ports/uptime before it
-//     reaches graphql, so the pull state never leaves the machine.
+//     "runtime == null" usually means "the host daemon is not reporting a
+//     container for this pod yet" — that absence is the only start-up signal
+//     there is — but it is also what a 2s timeout or a hapi 5xx looks like, so
+//     it is evidence and not proof. See StatusInitializing.
+//   - The host daemon does track image pulls, and does expose them, but not on
+//     this path: podsync pushes "create container: still fetching image <img>"
+//     into pkg/userlogs, which hapi serves as *log text* at
+//     GET /v1/pod/:podId/logs (public: /v2/pods/{id}/logs). What is dropped is
+//     the structured pull state: the telemetry hapi serves at
+//     /v1/internal/pod/{id} is stats/gpus/ports/uptime only, so nothing
+//     machine-readable about the pull reaches `Pod.runtime`. That log route is
+//     on a different base url than this cli's (v2-rest.runpod.io, not
+//     rest.runpod.io/v1) but it does accept this cli's key, so reading it is a
+//     plausible follow-up — as free text to show a human, not as a state to
+//     branch on.
 //   - `PodStopReason` (IMAGE_AUTH_ERROR, IMAGE_NOT_FOUND, IMAGE_PULL_ERROR,
 //     CUDA_VERSION_MISMATCH) exists, but only as an *input* to the podStop
 //     mutation. It is not persisted and not queryable: it is used to send the
@@ -43,6 +53,11 @@
 // Likewise there is no terminal `image_pull_error` value: the reason a
 // Runpod-initiated stop happened is not exposed, only that Runpod (rather than
 // the user) did it, which is what `stopped_by_runpod` says and no more.
+//
+// The one machine-readable cause the platform does record is an outbid on a
+// spot/community pod (`lastStatusChange` = "Outbid: <date>", written by
+// model/src/pod/resumePod.ts and model/src/utils/index.ts on both the EXITED
+// and TERMINATED paths), so that one gets its own reason.
 package podstate
 
 import "strings"
@@ -57,10 +72,13 @@ const (
 	// NOT imply any port is reachable — see SSHUnavailableReason.
 	StatusRunning Status = "running"
 
-	// StatusInitializing means desiredStatus is RUNNING but the platform
-	// reports no runtime telemetry yet. The pod is placed and the container is
-	// not up. This covers image pull, container create and container boot: the
-	// platform does not distinguish them.
+	// StatusInitializing means desiredStatus is RUNNING and the platform
+	// reports no runtime telemetry. Usually the pod is placed and the container
+	// is not up yet — image pull, container create or container boot, which the
+	// platform does not distinguish — but the same absence is what an upstream
+	// telemetry lookup failure looks like, so this is "no container reported",
+	// not "the container is provably down". Either way the action is the same:
+	// keep polling.
 	StatusInitializing Status = "initializing"
 
 	// StatusStopped means desiredStatus is EXITED. The container is gone; the
@@ -84,9 +102,10 @@ const (
 type Reason string
 
 const (
-	// ReasonAwaitingContainer accompanies StatusInitializing: the pod is
-	// placed on a machine but the host daemon reports no container. Could be
-	// image pull, container create or boot — indistinguishable from outside.
+	// ReasonAwaitingContainer accompanies StatusInitializing: no container is
+	// being reported for a pod that should be running. Could be image pull,
+	// container create or boot — indistinguishable from outside — or an
+	// upstream telemetry lookup that failed.
 	ReasonAwaitingContainer Reason = "awaiting_container"
 
 	// ReasonStoppedByUser means lastStatusChange attributes the stop to the
@@ -105,6 +124,16 @@ const (
 	// ReasonTerminatedByRunpod means lastStatusChange attributes the
 	// termination to Runpod.
 	ReasonTerminatedByRunpod Reason = "terminated_by_runpod"
+
+	// ReasonStoppedOutbid means the pod was a spot/community pod and lost its
+	// machine to a higher bid. This is the one involuntary stop the platform
+	// records a real cause for, and it is the only one worth retrying on a
+	// different machine or at on-demand pricing.
+	ReasonStoppedOutbid Reason = "stopped_outbid"
+
+	// ReasonTerminatedOutbid is ReasonStoppedOutbid on the path where the
+	// backend terminates the pod outright instead of exiting it.
+	ReasonTerminatedOutbid Reason = "terminated_outbid"
 
 	// ReasonRuntimeUnavailable accompanies StatusUnknown for a RUNNING pod:
 	// the runtime lookup was not made or failed, so running cannot be told
@@ -160,31 +189,34 @@ func Derive(s Signals) State {
 	case "EXITED":
 		return State{
 			Status: StatusStopped,
-			Reason: actor(s.LastStatusChange, "exited by ", ReasonStoppedByUser, ReasonStoppedByRunpod),
+			Reason: stopReason(s.LastStatusChange, "exited by ", ReasonStoppedByUser, ReasonStoppedByRunpod, ReasonStoppedOutbid),
 		}
 	case "TERMINATED":
 		return State{
 			Status: StatusTerminated,
-			Reason: actor(s.LastStatusChange, "terminated by ", ReasonTerminatedByUser, ReasonTerminatedByRunpod),
+			Reason: stopReason(s.LastStatusChange, "terminated by ", ReasonTerminatedByUser, ReasonTerminatedByRunpod, ReasonTerminatedOutbid),
 		}
 	default:
 		return State{Status: StatusUnknown}
 	}
 }
 
-// SSHUnavailableReason explains, in one lowercase clause, why no ssh connection
-// could be built for a pod in this state. It returns "" when the state says
-// nothing useful, so callers keep their bare message.
-//
-// The running case is the non-obvious one: the container is genuinely up, so
-// the only thing left that can block ssh is the pod not publishing port 22,
-// which happens whenever a pod was created without it in --ports.
-func SSHUnavailableReason(st State) string {
+// IsKnownDown reports whether the platform positively says the container is
+// gone. StatusUnknown is deliberately not included: "we could not tell" is not
+// evidence that a pod is down, so callers must not throw away information (an
+// ssh connection they already built, say) on the strength of it.
+func (st State) IsKnownDown() bool {
+	return st.Status == StatusStopped || st.Status == StatusTerminated
+}
+
+// Explain describes the state in one lowercase clause, or "" when the state
+// says nothing worth adding. It explains the *pod*, never a particular way of
+// reaching it: ssh-specific advice lives with the ssh code, in
+// internal/sshconnect.
+func (st State) Explain() string {
 	switch st.Status {
-	case StatusRunning:
-		return "no public port 22 mapped; recreate the pod with --ports 22/tcp"
 	case StatusInitializing:
-		return "container is still starting (image pull, container create, or boot)"
+		return "no container reported yet (image pull, container create or boot)"
 	case StatusStopped:
 		return "pod is stopped; start it with 'runpodctl pod start <pod-id>'"
 	case StatusTerminated:
@@ -194,12 +226,18 @@ func SSHUnavailableReason(st State) string {
 	}
 }
 
-// actor reads the "<verb> by user" / "<verb> by Runpod" attribution out of
-// lastStatusChange. The match is case-insensitive on purpose: the backend
-// spells the platform's name both "Runpod" (stopPod, terminatePod) and
-// "RunPod" (terminateAllStoppedPods), and a case-sensitive check silently stops
-// matching whenever one of those is touched.
-func actor(lastStatusChange any, prefix string, byUser, byRunpod Reason) Reason {
+// stopReason reads what little cause lastStatusChange records: the
+// "<verb> by user" / "<verb> by Runpod" attribution, or an outbid.
+//
+// The match is case-insensitive on purpose: the backend spells the platform's
+// name both "Runpod" (stopPod, terminatePod) and "RunPod"
+// (terminateAllStoppedPods), and a case-sensitive check silently stops matching
+// whenever one of those is touched.
+//
+// Anything else yields "", and the caller still has the raw lastStatusChange in
+// the same output — `pod get` and `pod list` both publish it — so an unknown
+// phrasing degrades to "no token" rather than to a wrong token.
+func stopReason(lastStatusChange any, prefix string, byUser, byRunpod, outbid Reason) Reason {
 	text, ok := lastStatusChange.(string)
 	if !ok {
 		return ""
@@ -210,6 +248,8 @@ func actor(lastStatusChange any, prefix string, byUser, byRunpod Reason) Reason 
 		return byUser
 	case strings.Contains(lower, prefix+"runpod"):
 		return byRunpod
+	case strings.Contains(lower, "outbid"):
+		return outbid
 	default:
 		return ""
 	}

@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/runpod/runpodctl/internal/api"
+	"github.com/runpod/runpodctl/internal/podstate"
 	sshcrypto "golang.org/x/crypto/ssh"
 )
 
@@ -96,16 +97,42 @@ func BuildConnection(pod *api.LegacyPod, keyInfo KeyInfo) map[string]interface{}
 	return nil
 }
 
-// ListConnections builds connection maps for all pods.
+// ListConnections builds connection maps for all pods that can actually be
+// reached.
+//
+// A stopped or terminated pod keeps reporting its old runtime ports for a while,
+// so BuildConnection will happily produce an ssh command for a container that no
+// longer exists. Those pods are skipped rather than listed, since the whole
+// point of this output is "here is what you can ssh into".
 func ListConnections(pods []*api.LegacyPod, keyInfo KeyInfo) []map[string]interface{} {
-	var connections []map[string]interface{}
+	// non-nil so "nothing reachable" serialises as [] rather than null: this
+	// filters more pods than it used to, so the empty case is now common.
+	connections := make([]map[string]interface{}, 0, len(pods))
 	for _, pod := range pods {
+		if PodState(pod).IsKnownDown() {
+			continue
+		}
 		conn := BuildConnection(pod, keyInfo)
 		if conn != nil {
 			connections = append(connections, conn)
 		}
 	}
 	return connections
+}
+
+// PodState derives the runtime state of a graphql pod. It lives here so every
+// ssh path uses one derivation with one set of signals, instead of each caller
+// assembling podstate.Signals slightly differently.
+func PodState(pod *api.LegacyPod) podstate.State {
+	if pod == nil {
+		return podstate.State{Status: podstate.StatusUnknown, Reason: podstate.ReasonRuntimeUnavailable}
+	}
+	return podstate.Derive(podstate.Signals{
+		DesiredStatus:    pod.DesiredStatus,
+		LastStatusChange: pod.LastStatusChange,
+		RuntimeProbed:    true,
+		RuntimeReported:  pod.Runtime != nil,
+	})
 }
 
 // FindPodConnection finds a pod by id or name and returns its connection.

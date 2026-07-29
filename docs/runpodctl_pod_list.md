@@ -9,9 +9,11 @@ list all pods in your account.
 defaults to running pods only; use --all to include stopped ones.
 
 runtimeStatus reports what each pod is actually doing, which desiredStatus
-cannot: running (container up), initializing (placed, container not up yet -
-image pull, create or boot), stopped, terminated, or unknown.
-runtimeStatusReason carries a stable token when there is more to say.
+cannot: running (container up and reporting), initializing (no container
+reported yet - image pull, create or boot), stopped, terminated, or unknown
+(not derivable, read desiredStatus). runtimeStatusReason carries a stable
+token when there is more to say, and lastStatusChange carries the backend's
+raw text.
 
 ```
 runpodctl pod list [flags]

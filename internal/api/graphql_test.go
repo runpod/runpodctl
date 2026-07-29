@@ -163,8 +163,6 @@ func TestGetPodsRequestsAndParsesRuntime(t *testing.T) {
 	const responseBody = `{"data":{"myself":{"pods":[
 		{"id":"up","desiredStatus":"RUNNING","lastStatusChange":"Rented by User: x",
 		 "runtime":{"uptimeInSeconds":111,
-			"container":{"cpuPercent":3,"memoryPercent":7},
-			"gpus":[{"id":"GPU-1","gpuUtilPercent":11,"memoryUtilPercent":22}],
 			"ports":[{"ip":"1.2.3.4","isIpPublic":true,"privatePort":22,"publicPort":40022,"type":"tcp"}]}},
 		{"id":"pulling","desiredStatus":"RUNNING","lastStatusChange":"Rented by User: y","runtime":null}
 	]}}}`
@@ -192,7 +190,7 @@ func TestGetPodsRequestsAndParsesRuntime(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	for _, field := range []string{"runtime", "uptimeInSeconds", "container", "cpuPercent", "gpus", "gpuUtilPercent", "ports"} {
+	for _, field := range []string{"runtime", "uptimeInSeconds", "ports", "isIpPublic", "privatePort", "publicPort"} {
 		if !strings.Contains(gotQuery, field) {
 			t.Errorf("myPods query does not request %q", field)
 		}
@@ -208,12 +206,6 @@ func TestGetPodsRequestsAndParsesRuntime(t *testing.T) {
 	}
 	if up.Runtime.UptimeInSeconds == nil || *up.Runtime.UptimeInSeconds != 111 {
 		t.Errorf("uptimeInSeconds = %v, want 111", up.Runtime.UptimeInSeconds)
-	}
-	if up.Runtime.Container == nil || up.Runtime.Container.CPUPercent == nil || *up.Runtime.Container.CPUPercent != 3 {
-		t.Errorf("container.cpuPercent not parsed: %+v", up.Runtime.Container)
-	}
-	if len(up.Runtime.Gpus) != 1 || up.Runtime.Gpus[0].ID != "GPU-1" {
-		t.Errorf("gpus not parsed: %+v", up.Runtime.Gpus)
 	}
 	if len(up.Runtime.Ports) != 1 || up.Runtime.Ports[0].PrivatePort != 22 {
 		t.Errorf("ports not parsed: %+v", up.Runtime.Ports)
