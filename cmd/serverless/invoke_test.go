@@ -45,6 +45,9 @@ type mockInvokeClient struct {
 	runSyncCalls int
 	statusCalls  int
 	lastInput    json.RawMessage
+	// statusDeadlines records the per-call deadline handed to JobStatus, so a
+	// test can assert the last poll of a wait still gets a usable timeout.
+	statusDeadlines []time.Duration
 }
 
 func (m *mockInvokeClient) EndpointHealth(_ context.Context, _ string) (map[string]interface{}, error) {
@@ -64,7 +67,10 @@ func (m *mockInvokeClient) RunSync(_ context.Context, _ string, input json.RawMe
 	return m.runSyncStep.job, m.runSyncStep.err
 }
 
-func (m *mockInvokeClient) JobStatus(_ context.Context, _ string, _ string) (*api.Job, error) {
+func (m *mockInvokeClient) JobStatus(ctx context.Context, _ string, _ string) (*api.Job, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		m.statusDeadlines = append(m.statusDeadlines, time.Until(deadline))
+	}
 	step := m.statusSteps[len(m.statusSteps)-1]
 	if m.statusCalls < len(m.statusSteps) {
 		step = m.statusSteps[m.statusCalls]
@@ -327,5 +333,59 @@ func TestRunHealth_ErrorKeepsAPICode(t *testing.T) {
 	}
 	if strings.TrimSpace(stdout) != "" {
 		t.Errorf("errors must not reach stdout, got %q", stdout)
+	}
+}
+
+func TestHumanDuration(t *testing.T) {
+	tests := []struct {
+		d    time.Duration
+		want string
+	}{
+		// a sub-second budget must not be reported as "0s".
+		{200 * time.Millisecond, "200ms"},
+		{1500 * time.Millisecond, "2s"},
+		{95 * time.Second, "1m35s"},
+	}
+	for _, tt := range tests {
+		if got := humanDuration(tt.d); got != tt.want {
+			t.Errorf("humanDuration(%s) = %q, want %q", tt.d, got, tt.want)
+		}
+	}
+}
+
+func TestWaitForTerminal_BudgetGoneAfterTransientFailure(t *testing.T) {
+	fastPolling(t)
+	// every poll fails transiently and the budget runs out: the caller still needs
+	// the actionable "poll it later" message, not the incidental 502.
+	client := &mockInvokeClient{statusSteps: []jobStep{{err: &api.APIError{Message: "bad gateway", Status: 502}}}}
+
+	var err error
+	_, stderr := captureOutput(t, func() {
+		_, err = waitForTerminal(client, "ep-1", mustJob(`{"id":"job-1","status":"IN_QUEUE"}`), time.Now().Add(5*time.Millisecond))
+	})
+	if code := errorCode(t, err); code != "timeout" {
+		t.Fatalf("code = %q, want timeout (err %v)", code, err)
+	}
+	if !strings.Contains(err.Error(), "runpodctl serverless status ep-1 job-1") {
+		t.Errorf("timeout message is not actionable: %q", err.Error())
+	}
+	// the swallowed failure must still be visible.
+	if !strings.Contains(stderr, "bad gateway") {
+		t.Errorf("expected the last failure as a note on stderr, got %q", stderr)
+	}
+}
+
+func TestPollJobStatus_LastPollKeepsAUsableTimeout(t *testing.T) {
+	client := &mockInvokeClient{statusSteps: []jobStep{{job: mustJob(`{"id":"job-1","status":"COMPLETED"}`)}}}
+
+	// a budget of a few milliseconds must not produce a doomed request.
+	if _, err := pollJobStatus(client, "ep-1", "job-1", time.Now().Add(2*time.Millisecond)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(client.statusDeadlines) != 1 {
+		t.Fatalf("status deadlines = %v, want one entry", client.statusDeadlines)
+	}
+	if client.statusDeadlines[0] < minPollRequest/2 {
+		t.Errorf("poll deadline = %s, want at least %s", client.statusDeadlines[0], minPollRequest)
 	}
 }

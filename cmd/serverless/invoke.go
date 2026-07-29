@@ -100,10 +100,13 @@ func waitForTerminal(client invokeClient, endpointID string, job *api.Job, deadl
 				return job, fmt.Errorf("failed to get job status: %w", err)
 			}
 			// transient: a single 502 or dropped connection must not throw away a
-			// job that is still running. keep retrying until the budget is gone,
-			// then report the last failure instead of a bare timeout.
+			// job that is still running.
 			if time.Until(deadline) <= 0 {
-				return job, fmt.Errorf("failed to get job status: %w", err)
+				// the budget is gone, so the actionable answer is the wait timeout
+				// (which names the follow-up command), not the incidental transport
+				// failure of the last attempt — that goes out as a note instead.
+				notef("job %s: last status check failed (%v)", job.ID, err)
+				return job, waitTimeoutError(endpointID, job, time.Since(start))
 			}
 			notef("job %s: status check failed (%v), retrying", job.ID, err)
 			continue
@@ -122,12 +125,21 @@ func waitForTerminal(client invokeClient, endpointID string, job *api.Job, deadl
 	}
 }
 
+// minPollRequest is the floor for a single /status call. Clamping the last poll
+// of a wait to the few milliseconds left of the budget guarantees a timeout
+// instead of an answer, and would throw away a terminal status that was one round
+// trip away — so the wait bound may overshoot by this much.
+const minPollRequest = time.Second
+
 // pollJobStatus runs one /status call, bounded by both the per-request timeout
-// and whatever is left of the wait budget.
+// and whatever is left of the wait budget (never below minPollRequest).
 func pollJobStatus(client invokeClient, endpointID, jobID string, deadline time.Time) (*api.Job, error) {
 	timeout := requestTimeout()
 	if remaining := time.Until(deadline); remaining < timeout {
 		timeout = remaining
+	}
+	if timeout < minPollRequest {
+		timeout = minPollRequest
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -183,7 +195,13 @@ func jobOutcome(job *api.Job) error {
 }
 
 // humanDuration renders a duration for a progress note or error message,
-// dropping sub-second noise.
-func humanDuration(d time.Duration) string { return d.Round(time.Second).String() }
+// dropping sub-second noise — except below a second, where rounding to seconds
+// would report a sub-second wait budget as "0s".
+func humanDuration(d time.Duration) string {
+	if d < time.Second {
+		return d.Round(time.Millisecond).String()
+	}
+	return d.Round(time.Second).String()
+}
 
 func since(start time.Time) string { return humanDuration(time.Since(start)) }
