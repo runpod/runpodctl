@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -83,12 +84,18 @@ func parseStringSlice(value interface{}) []string {
 	}
 }
 
-// pickCheapestCommunityGpuType returns the lowest-priced available community
-// gpu, unlike pickCommunityGpuType which returns whatever the api lists first
-// (an A100 80GB at $1.19/hr as of writing). Anything that provisions a pod
-// purely to observe cli behaviour should use this: the gpu model is irrelevant
-// to the assertion and the pod bills by the second.
-func pickCheapestCommunityGpuType(t *testing.T) string {
+// communityGpuTypesByPrice returns available community gpu ids cheapest first.
+//
+// pickCommunityGpuType returns whatever the api happens to list first, which is
+// an A100 80GB at $1.19/hr as of writing; anything that provisions a pod purely
+// to observe cli behaviour should not pay 7x for a gpu the assertion never
+// touches. `available: true` is also not a capacity guarantee — the cheapest
+// types are frequently sold out — so callers should walk the list rather than
+// skip on the first failure.
+func communityGpuTypesByPrice(t *testing.T) []struct {
+	ID    string
+	Price float64
+} {
 	t.Helper()
 
 	stdout, stderr, err := runCLI("gpu", "list")
@@ -101,8 +108,10 @@ func pickCheapestCommunityGpuType(t *testing.T) string {
 		t.Skipf("skipping - can't parse gpu list: %v", err)
 	}
 
-	cheapestID := ""
-	cheapestPrice := 0.0
+	var candidates []struct {
+		ID    string
+		Price float64
+	}
 	for _, gpu := range gpus {
 		community, _ := gpu["communityCloud"].(bool)
 		available, _ := gpu["available"].(bool)
@@ -111,15 +120,16 @@ func pickCheapestCommunityGpuType(t *testing.T) string {
 		if !community || !available || strings.TrimSpace(id) == "" || !ok || price <= 0 {
 			continue
 		}
-		if cheapestID == "" || price < cheapestPrice {
-			cheapestID, cheapestPrice = id, price
-		}
+		candidates = append(candidates, struct {
+			ID    string
+			Price float64
+		}{id, price})
 	}
-	if cheapestID == "" {
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].Price < candidates[j].Price })
+	if len(candidates) == 0 {
 		t.Skip("skipping - no priced community gpu types available")
 	}
-	t.Logf("using cheapest community gpu %s at $%.2f/hr", cheapestID, cheapestPrice)
-	return cheapestID
+	return candidates
 }
 
 func pickCommunityGpuType(t *testing.T) string {
@@ -1921,30 +1931,45 @@ func TestCLI_HelpCoverage(t *testing.T) {
 // It also checks the stopped case, since "not running" values are otherwise
 // never exercised against the live api.
 func TestCLI_PodRuntimeStatusTransition(t *testing.T) {
-	gpuTypeID := pickCheapestCommunityGpuType(t)
 	name := "e2e-runtime-status-" + time.Now().Format("20060102150405")
 
-	stdout, stderr, err := runCLI("pod", "create",
-		"--cloud-type", "community",
-		"--image", "runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404",
-		"--gpu-id", gpuTypeID,
-		"--volume-in-gb", "0",
-		"--container-disk-in-gb", "20",
-		"--ports", "22/tcp",
-		"--name", name,
-	)
-	if err != nil {
-		if shouldSkipCommunityCreate(stdout + stderr) {
-			t.Skipf("community pod unavailable: %s", strings.TrimSpace(stderr))
+	// cheapest first, walking down the list: "available" is not capacity, and a
+	// skip here would mean the transition never gets tested at all.
+	var stdout, stderr string
+	var err error
+	created := false
+	for i, candidate := range communityGpuTypesByPrice(t) {
+		if i >= 4 {
+			break
 		}
-		t.Fatalf("failed to create pod: %v\nstderr: %s", err, stderr)
+		stdout, stderr, err = runCLI("pod", "create",
+			"--cloud-type", "community",
+			"--image", "runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404",
+			"--gpu-id", candidate.ID,
+			"--volume-in-gb", "0",
+			"--container-disk-in-gb", "20",
+			"--ports", "22/tcp",
+			"--name", name,
+		)
+		if err == nil {
+			t.Logf("created on %s at $%.2f/hr", candidate.ID, candidate.Price)
+			created = true
+			break
+		}
+		if !shouldSkipCommunityCreate(stdout + stderr) {
+			t.Fatalf("failed to create pod on %s: %v\nstderr: %s", candidate.ID, err, stderr)
+		}
+		t.Logf("no capacity on %s at $%.2f/hr, trying the next one", candidate.ID, candidate.Price)
+	}
+	if !created {
+		t.Skipf("community pods unavailable on every candidate gpu: %s", strings.TrimSpace(stderr))
 	}
 
-	var created map[string]interface{}
-	if err := json.Unmarshal([]byte(stdout), &created); err != nil {
+	var createResponse map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &createResponse); err != nil {
 		t.Fatalf("create output is not valid json: %v\noutput: %s", err, stdout)
 	}
-	podID, ok := created["id"].(string)
+	podID, ok := createResponse["id"].(string)
 	if !ok || strings.TrimSpace(podID) == "" {
 		t.Fatal("expected pod id in create response")
 	}
