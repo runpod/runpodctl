@@ -37,16 +37,31 @@ func init() {
 }
 
 func runGet(cmd *cobra.Command, args []string) error {
-	podID := args[0]
-
-	client, err := api.NewClient()
+	details, err := fetchPodDetails(args[0], getIncludeMachine, getIncludeNetworkVolume)
 	if err != nil {
 		return err
 	}
 
-	pod, err := client.GetPod(podID, getIncludeMachine, getIncludeNetworkVolume)
+	format := output.ParseFormat(cmd.Flag("output").Value.String())
+	return output.Print(details, &output.Config{Format: format})
+}
+
+// fetchPodDetails reads a pod over rest and enriches it with the derived runtime
+// state and the live ssh connection info from graphql (rest leaves runtime null,
+// so it has neither telemetry nor ports).
+//
+// `pod create --wait` prints this same shape once ssh is up, instead of the
+// create response: the point of waiting is to hand back a pod you can connect
+// to, and neither create response carries the ssh command.
+func fetchPodDetails(podID string, includeMachine, includeNetworkVolume bool) (*podDetails, error) {
+	client, err := api.NewClient()
 	if err != nil {
-		return fmt.Errorf("failed to get pod: %w", err)
+		return nil, err
+	}
+
+	pod, err := client.GetPod(podID, includeMachine, includeNetworkVolume)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get pod: %w", err)
 	}
 
 	// The graphql side-call below is the only source of runtime telemetry (rest
@@ -101,20 +116,42 @@ func runGet(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	response := struct {
-		*api.Pod
-		RuntimeStatus       string                 `json:"runtimeStatus"`
-		RuntimeStatusReason string                 `json:"runtimeStatusReason,omitempty"`
-		SSH                 map[string]interface{} `json:"ssh"`
-	}{
+	return &podDetails{
 		Pod:                 pod,
 		RuntimeStatus:       string(state.Status),
 		RuntimeStatusReason: string(state.Reason),
 		SSH:                 sshInfo,
-	}
+	}, nil
+}
 
-	format := output.ParseFormat(cmd.Flag("output").Value.String())
-	return output.Print(response, &output.Config{Format: format})
+// podDetails is a pod read over rest enriched with the derived runtime state and
+// the live ssh block from graphql. It is the `pod get` payload, and the
+// `pod create --wait` payload.
+type podDetails struct {
+	*api.Pod
+	RuntimeStatus       string                 `json:"runtimeStatus"`
+	RuntimeStatusReason string                 `json:"runtimeStatusReason,omitempty"`
+	SSH                 map[string]interface{} `json:"ssh"`
+}
+
+// sshInfoMissing reports whether the ssh block is the degraded {"error": ...}
+// placeholder rather than a usable connection.
+func sshInfoMissing(details *podDetails) bool {
+	if details == nil {
+		return true
+	}
+	_, degraded := details.SSH["error"]
+	return degraded
+}
+
+// sshInfoError returns the reason the ssh block is degraded. Only meaningful
+// after sshInfoMissing returned true.
+func sshInfoError(details *podDetails) string {
+	if details == nil {
+		return "no pod payload"
+	}
+	reason, _ := details.SSH["error"].(string)
+	return reason
 }
 
 // runtimeUptime returns the only uptime the api actually reports, and only

@@ -18,6 +18,9 @@ examples:
   # create a cpu pod
   runpodctl pod create --compute-type cpu --image ubuntu:22.04
 
+  # block until the pod's ssh is actually reachable, then print it
+  runpodctl pod create --image runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404 --gpu-id "NVIDIA GeForce RTX 4090" --wait
+
   # find templates first
   runpodctl template search pytorch
   runpodctl template list --type official
@@ -54,6 +57,8 @@ runpodctl pod create [flags]
       --terminate-after string     auto-terminate datetime (e.g., 2026-04-15T00:00:00Z)
       --volume-in-gb int           volume size in gb
       --volume-mount-path string   volume mount path (default "/workspace")
+      --wait                       block until ssh is reachable (tcp connect to the pod's public port 22 answers with an ssh banner; no key or handshake needed), then print the pod as 'pod get' does
+      --wait-timeout string        max time to wait with --wait, e.g. 90s, 10m, 1h; on timeout the pod is kept and the error carries its id (default "10m")
 ```
 
 ### Options inherited from parent commands

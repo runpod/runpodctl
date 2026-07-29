@@ -1,14 +1,20 @@
 package pod
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/google/shlex"
 	"github.com/runpod/runpodctl/internal/api"
+	"github.com/runpod/runpodctl/internal/duration"
 	"github.com/runpod/runpodctl/internal/output"
+	"github.com/runpod/runpodctl/internal/waitfor"
 
 	"github.com/spf13/cobra"
 )
@@ -29,6 +35,9 @@ examples:
 
   # create a cpu pod
   runpodctl pod create --compute-type cpu --image ubuntu:22.04
+
+  # block until the pod's ssh is actually reachable, then print it
+  runpodctl pod create --image runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404 --gpu-id "NVIDIA GeForce RTX 4090" --wait
 
   # find templates first
   runpodctl template search pytorch
@@ -62,6 +71,8 @@ var (
 	createStopAfter         string
 	createTerminateAfter    string
 	createCompliance        string
+	createWait              bool
+	createWaitTimeout       string
 )
 
 func init() {
@@ -89,7 +100,14 @@ func init() {
 	createCmd.Flags().StringVar(&createStopAfter, "stop-after", "", "auto-stop datetime (e.g., 2026-04-15T00:00:00Z)")
 	createCmd.Flags().StringVar(&createTerminateAfter, "terminate-after", "", "auto-terminate datetime (e.g., 2026-04-15T00:00:00Z)")
 	createCmd.Flags().StringVar(&createCompliance, "compliance", "", "comma-separated compliance requirements (e.g., HIPAA,SOC_2_TYPE_2)")
+	createCmd.Flags().BoolVar(&createWait, "wait", false, "block until ssh is reachable (tcp connect to the pod's public port 22 answers with an ssh banner; no key or handshake needed), then print the pod as 'pod get' does")
+	createCmd.Flags().StringVar(&createWaitTimeout, "wait-timeout", defaultWaitTimeout, "max time to wait with --wait, e.g. 90s, 10m, 1h; on timeout the pod is kept and the error carries its id")
 }
+
+// defaultWaitTimeout is the --wait-timeout default. 10 minutes covers an image
+// pull plus boot on a cold machine; a create that is not usable by then almost
+// always needs a human, not more waiting.
+const defaultWaitTimeout = "10m"
 
 func runCreate(cmd *cobra.Command, args []string) error {
 	// Validate: either template or image must be provided
@@ -145,10 +163,12 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	var (
-		result interface{}
-		err    error
-	)
+	waitTimeout, err := resolveWaitTimeout(cmd, computeType)
+	if err != nil {
+		return err
+	}
+
+	var result interface{}
 
 	if computeType == "CPU" {
 		// CPU pods use the REST API (GraphQL requires gpuTypeId)
@@ -165,7 +185,109 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
+
+	if createWait {
+		podID, idErr := podIDFrom(result)
+		if idErr != nil {
+			// the pod exists but we cannot address it; say so rather than waiting.
+			return idErr
+		}
+		if waitErr := waitForPodSSH(cmd, podID, waitTimeout); waitErr != nil {
+			return waitErr
+		}
+		// re-read: the create response (either shape) has no live ssh info, and
+		// handing back a pod you can connect to is the entire point of --wait.
+		details, detailsErr := fetchPodDetails(podID, false, false)
+		if detailsErr != nil {
+			return detailsErr
+		}
+		return output.Print(details, &output.Config{Format: format})
+	}
+
 	return output.Print(result, &output.Config{Format: format})
+}
+
+// resolveWaitTimeout validates the --wait flag combination and returns the
+// timeout to use. It runs before the pod is created so an unsatisfiable
+// combination costs nothing.
+func resolveWaitTimeout(cmd *cobra.Command, computeType string) (time.Duration, error) {
+	if !createWait {
+		if cmd.Flags().Changed("wait-timeout") {
+			fmt.Fprintln(cmd.ErrOrStderr(), "note: --wait-timeout has no effect without --wait; ignoring")
+		}
+		return 0, nil
+	}
+
+	if !createSSH {
+		return 0, fmt.Errorf("--wait waits for ssh, so it cannot be combined with --ssh=false")
+	}
+
+	timeout, err := duration.Parse(createWaitTimeout)
+	if err != nil {
+		return 0, fmt.Errorf("invalid --wait-timeout: %w", err)
+	}
+
+	if computeType == "CPU" {
+		// cpu pods are created over rest, which rejects startSsh, so runpod does
+		// not set ssh up for them. prod does still allocate a public port 22, and
+		// an image that runs its own sshd is reachable there — but plain images
+		// are not, and that only shows up as a timeout. warn instead of guessing.
+		fmt.Fprintln(cmd.ErrOrStderr(), "note: cpu pods are created through the rest api, which cannot request runpod-managed ssh; --wait only succeeds if the image starts sshd itself")
+	}
+
+	return timeout, nil
+}
+
+// injection points for the wait, so its tests neither sleep nor hit the network.
+var (
+	newPodWaitLister = func() (waitfor.PodLister, error) { return api.NewGraphQLClient() }
+	podSSHProbe      waitfor.Prober // nil means waitfor.ProbeSSH
+	waitPollInterval = waitfor.DefaultInterval
+)
+
+// waitForPodSSH blocks until the pod's ssh is reachable. Progress goes to
+// stderr; stdout stays a single json object.
+func waitForPodSSH(cmd *cobra.Command, podID string, timeout time.Duration) error {
+	lister, err := newPodWaitLister()
+	if err != nil {
+		return err
+	}
+
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// ctrl-c cancels the wait but must not lose the pod: the error below carries
+	// its id and the delete command, because the pod bills either way.
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if _, err := waitfor.Until(ctx, waitfor.PodSSHPoller(lister, podID, podSSHProbe), waitfor.Options{
+		Label:    "ssh on pod " + podID,
+		Timeout:  timeout,
+		Interval: waitPollInterval,
+		Progress: cmd.ErrOrStderr(),
+	}); err != nil {
+		return fmt.Errorf("%w; pod %s was created and is still billing: 'runpodctl pod get %s' or 'runpodctl pod delete %s'", err, podID, podID, podID)
+	}
+
+	return nil
+}
+
+// podIDFrom pulls the pod id out of either create response shape: the rest path
+// returns *api.Pod, the graphql path an untyped map.
+func podIDFrom(result interface{}) (string, error) {
+	switch typed := result.(type) {
+	case *api.Pod:
+		if typed != nil && typed.ID != "" {
+			return typed.ID, nil
+		}
+	case map[string]interface{}:
+		if id, ok := typed["id"].(string); ok && id != "" {
+			return id, nil
+		}
+	}
+	return "", fmt.Errorf("pod was created but the response carried no id, so --wait cannot poll it; find it with 'runpodctl pod list'")
 }
 
 func createPodGraphQL(gpuTypeID, cloudType string, supportPublicIP bool) (map[string]interface{}, error) {

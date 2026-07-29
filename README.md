@@ -22,6 +22,7 @@ _note: all pods automatically come with runpodctl installed with a pod-scoped ap
   - [commands](#commands)
     - [pod management](#pod-management)
     - [serverless endpoints](#serverless-endpoints)
+    - [waiting until a resource is usable](#waiting-until-a-resource-is-usable)
     - [file transfer](#file-transfer)
   - [output format](#output-format)
     - [pod runtime status](#pod-runtime-status)
@@ -116,6 +117,49 @@ runpodctl serverless delete <id>      # delete endpoint
 ```
 
 other resources: `template` (alias: `tpl`), `volume` (alias: `vol`), `registry` (alias: `reg`)
+
+### waiting until a resource is usable
+
+create returns as soon as the resource is *scheduled*: a pod reports
+`desiredStatus: RUNNING` while its image is still being pulled. `--wait` blocks
+until it is actually usable instead, so there is no poll loop to write.
+
+```bash
+# returns when ssh answers, not when the pod is scheduled
+runpodctl pod create --image <img> --gpu-id "NVIDIA GeForce RTX 4090" --wait
+
+# returns when the endpoint has a worker that can take a job
+runpodctl serverless create --template-id <id> --workers-min 1 --wait
+
+# give up sooner than the 10m default
+runpodctl pod create --image <img> --gpu-id <id> --wait --wait-timeout 3m
+```
+
+what each one waits for, precisely:
+
+| command | ready means |
+| --- | --- |
+| `pod create --wait` | the pod's public port 22 accepts a tcp connection **and** answers with an ssh protocol banner. no key and no handshake, so it works before `runpodctl doctor` has ever run — it proves sshd is up, not that your key is installed. port 22 merely *appearing* in `runtime.ports` is not enough: prod allocates that port for images that run no sshd at all |
+| `serverless create --wait` | the endpoint's `/health` reports at least one worker `ready` or `running` |
+
+- progress goes to **stderr** on a 15s cadence; stdout stays exactly one json
+  object, so `... 2>/dev/null | jq` sees a single payload.
+- `pod create --wait` prints the same shape as `pod get` (which includes the live
+  `ssh` block) rather than the create response, which has no ssh info.
+  `serverless create --wait` prints the same create response as without `--wait`.
+- `--wait-timeout` defaults to `10m` and accepts `90s`, `10m`, `1h`, `2d`.
+- on timeout or ctrl-c the resource is **not** deleted — you paid for it, and you
+  need the id to debug or clean up. the exit code is non-zero and the error
+  carries the id, the last known state and the delete command, with code
+  `wait_timeout` / `wait_interrupted`.
+- `serverless create --wait` requires `--workers-min 1` or more. at `0` runpod
+  starts no worker until a request arrives, so "a worker is ready" could never
+  become true; the cli refuses up front instead of timing out. a warm worker
+  bills while it runs.
+- `pod create --wait` needs ssh, so it cannot be combined with `--ssh=false`. on
+  `--compute-type CPU` it warns: cpu pods are created over rest, which cannot
+  request runpod-managed ssh, so only an image that starts its own sshd will
+  become reachable.
 
 ### file transfer
 
@@ -232,6 +276,8 @@ codes the cli generates:
 | `graphql_error` | graphql returned an errors array (http 200) |
 | `no_credentials` | no api key configured — run `runpodctl doctor` or set `RUNPOD_API_KEY` |
 | `network_error` | the api could not be reached at all — dns, refused, tls, timeout. the only code that means "transient, retry" |
+| `wait_timeout` | `--wait` gave up before the resource was usable. the resource **was created and still bills** — its id and the last known state are in the message |
+| `wait_interrupted` | `--wait` was cancelled (ctrl-c / SIGTERM). same as above: the resource exists, its id is in the message |
 | `cli_error` | anything else local: validation, config, bad input (including a malformed `RUNPOD_API_URL`) |
 
 the api may also return its own code, which is passed through lowercased, so

@@ -2,10 +2,13 @@ package serverless
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/runpod/runpodctl/internal/api"
+	"github.com/runpod/runpodctl/internal/waitfor"
 	"github.com/spf13/cobra"
 )
 
@@ -89,18 +92,18 @@ func snapshotCreateFlags(t *testing.T) {
 	old := struct {
 		name, templateID, hubID, computeType, gpuID, instanceID string
 		dataCenterIDs, networkVolumeID, networkVolumeIDs        string
-		minCudaVersion, scaleBy                                 string
+		minCudaVersion, scaleBy, waitTimeout                    string
 		gpuCount, workersMin, workersMax                        int
 		scaleThreshold, idleTimeout, executionTimeout           int
-		flashBoot                                               bool
+		flashBoot, wait                                         bool
 		envVars, modelReferences                                []string
 	}{
 		createName, createTemplateID, createHubID, createComputeType, createGpuTypeID, createInstanceID,
 		createDataCenterIDs, createNetworkVolumeID, createNetworkVolumeIDs,
-		createMinCudaVersion, createScaleBy,
+		createMinCudaVersion, createScaleBy, createWaitTimeout,
 		createGpuCount, createWorkersMin, createWorkersMax,
 		createScaleThreshold, createIdleTimeout, createExecutionTimeout,
-		createFlashBoot,
+		createFlashBoot, createWait,
 		createEnvVars, createModelReferences,
 	}
 	t.Cleanup(func() {
@@ -110,7 +113,8 @@ func snapshotCreateFlags(t *testing.T) {
 		createMinCudaVersion, createScaleBy = old.minCudaVersion, old.scaleBy
 		createGpuCount, createWorkersMin, createWorkersMax = old.gpuCount, old.workersMin, old.workersMax
 		createScaleThreshold, createIdleTimeout, createExecutionTimeout = old.scaleThreshold, old.idleTimeout, old.executionTimeout
-		createFlashBoot = old.flashBoot
+		createFlashBoot, createWait = old.flashBoot, old.wait
+		createWaitTimeout = old.waitTimeout
 		createEnvVars, createModelReferences = old.envVars, old.modelReferences
 	})
 	// known-good baseline matching the flag defaults; tests override per case.
@@ -121,6 +125,7 @@ func snapshotCreateFlags(t *testing.T) {
 	createGpuCount, createWorkersMin, createWorkersMax = 1, 0, 3
 	createScaleThreshold, createIdleTimeout, createExecutionTimeout = -1, -1, -1
 	createFlashBoot = true
+	createWait, createWaitTimeout = false, defaultWaitTimeout
 	createEnvVars, createModelReferences = nil, nil
 }
 
@@ -128,6 +133,11 @@ type mockServerlessCreateClient struct {
 	listing       *api.Listing
 	getListingHit bool
 	createInput   *api.EndpointCreateGQLInput
+	// health is served to --wait; healthCalls counts the polls so a test can
+	// prove the wait ran (or did not).
+	health      []api.EndpointHealthWorkers
+	healthCalls int
+	healthErr   error
 }
 
 func (c *mockServerlessCreateClient) GetListing(string) (*api.Listing, error) {
@@ -144,11 +154,27 @@ func (c *mockServerlessCreateClient) CreateEndpointGQL(input *api.EndpointCreate
 	return &api.Endpoint{ID: "endpoint-1", Name: input.Name}, nil
 }
 
+func (c *mockServerlessCreateClient) GetEndpointHealth(string) (*api.EndpointHealth, error) {
+	c.healthCalls++
+	if c.healthErr != nil {
+		return nil, c.healthErr
+	}
+	idx := c.healthCalls - 1
+	if idx >= len(c.health) {
+		if len(c.health) == 0 {
+			return &api.EndpointHealth{}, nil
+		}
+		idx = len(c.health) - 1
+	}
+	return &api.EndpointHealth{Workers: c.health[idx]}, nil
+}
+
 func mockCreateCommand(changedFlags ...string) *cobra.Command {
 	cmd := &cobra.Command{}
 	cmd.Flags().String("compute-type", "GPU", "")
 	cmd.Flags().Int("gpu-count", 1, "")
 	cmd.Flags().String("output", "json", "")
+	cmd.Flags().String("wait-timeout", defaultWaitTimeout, "")
 	for _, name := range changedFlags {
 		cmd.Flags().Lookup(name).Changed = true
 	}
@@ -317,6 +343,165 @@ func TestRunCreate_HubDeploymentConstraints(t *testing.T) {
 			}
 			tc.wantInput(t, client.createInput)
 		})
+	}
+}
+
+func TestCreateCmd_WaitFlags(t *testing.T) {
+	flags := createCmd.Flags()
+
+	if flags.Lookup("wait") == nil {
+		t.Error("expected --wait flag")
+	}
+	waitTimeout := flags.Lookup("wait-timeout")
+	if waitTimeout == nil {
+		t.Fatal("expected --wait-timeout flag")
+	}
+	if waitTimeout.DefValue != "10m" {
+		t.Errorf("--wait-timeout default = %q, want 10m", waitTimeout.DefValue)
+	}
+}
+
+// --wait means "a worker is ready". At workersMin 0 runpod never starts one, so
+// the flag combination can only time out; it must be refused *before* the
+// endpoint is created rather than after burning the whole timeout.
+func TestRunCreate_WaitRequiresWarmWorker(t *testing.T) {
+	snapshotCreateFlags(t)
+	createWait = true
+	createWorkersMin = 0
+
+	client := &mockServerlessCreateClient{}
+	oldFactory := newServerlessCreateClient
+	newServerlessCreateClient = func() (serverlessCreateClient, error) { return client, nil }
+	t.Cleanup(func() { newServerlessCreateClient = oldFactory })
+
+	err := runCreate(mockCreateCommand(), nil)
+	if err == nil || !strings.Contains(err.Error(), "--wait needs --workers-min 1 or more") {
+		t.Fatalf("error = %v, want the workers-min explanation", err)
+	}
+	if client.createInput != nil {
+		t.Fatal("the endpoint must not be created when --wait can never succeed")
+	}
+	if client.healthCalls != 0 {
+		t.Fatalf("health was polled %d times, want 0", client.healthCalls)
+	}
+}
+
+func TestRunCreate_Wait(t *testing.T) {
+	cases := []struct {
+		name        string
+		workersMin  int
+		waitTimeout string
+		health      []api.EndpointHealthWorkers
+		wantPolls   int
+		wantErr     string
+		wantCode    string
+		wantStderr  string
+	}{
+		{
+			name:        "returns as soon as a worker is ready",
+			workersMin:  1,
+			waitTimeout: "10m",
+			health: []api.EndpointHealthWorkers{
+				{Initializing: 1},
+				{Ready: 1, Idle: 1},
+			},
+			wantPolls:  2,
+			wantStderr: "ready after",
+		},
+		{
+			name:        "times out with the worker counts and the endpoint id",
+			workersMin:  1,
+			waitTimeout: "1ms",
+			health:      []api.EndpointHealthWorkers{{Throttled: 1}},
+			wantErr:     "endpoint endpoint-1 was created",
+			wantCode:    waitfor.CodeTimeout,
+			wantStderr:  "waiting for a ready worker on endpoint endpoint-1",
+		},
+		{
+			name:        "rejects an unparseable timeout before creating anything",
+			workersMin:  1,
+			waitTimeout: "soon",
+			wantErr:     `invalid --wait-timeout: invalid duration "soon"`,
+		},
+	}
+
+	oldInterval := waitPollInterval
+	waitPollInterval = time.Millisecond
+	t.Cleanup(func() { waitPollInterval = oldInterval })
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshotCreateFlags(t)
+			createWait = true
+			createWorkersMin = tc.workersMin
+			createWaitTimeout = tc.waitTimeout
+
+			client := &mockServerlessCreateClient{health: tc.health}
+			oldFactory := newServerlessCreateClient
+			newServerlessCreateClient = func() (serverlessCreateClient, error) { return client, nil }
+			t.Cleanup(func() { newServerlessCreateClient = oldFactory })
+
+			cmd := mockCreateCommand()
+			var stderr bytes.Buffer
+			cmd.SetErr(&stderr)
+
+			err := runCreate(cmd, nil)
+
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if client.healthCalls != tc.wantPolls {
+					t.Errorf("health polled %d times, want %d", client.healthCalls, tc.wantPolls)
+				}
+			} else {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("error = %v, want it to contain %q", err, tc.wantErr)
+				}
+				if tc.wantCode != "" {
+					var waitErr *waitfor.Error
+					if !errors.As(err, &waitErr) {
+						t.Fatalf("expected a *waitfor.Error, got %#v", err)
+					}
+					if waitErr.ErrorCode() != tc.wantCode {
+						t.Errorf("code = %q, want %q", waitErr.ErrorCode(), tc.wantCode)
+					}
+					if !strings.Contains(err.Error(), "throttled 1") {
+						t.Errorf("the timeout error must carry the last known state: %v", err)
+					}
+				}
+			}
+
+			if tc.wantStderr != "" && !strings.Contains(stderr.String(), tc.wantStderr) {
+				t.Errorf("stderr = %q, want it to contain %q", stderr.String(), tc.wantStderr)
+			}
+		})
+	}
+}
+
+// --wait-timeout on its own would silently not wait; say so instead.
+func TestRunCreate_WaitTimeoutWithoutWait(t *testing.T) {
+	snapshotCreateFlags(t)
+	createWait = false
+	createWaitTimeout = "30s"
+
+	client := &mockServerlessCreateClient{}
+	oldFactory := newServerlessCreateClient
+	newServerlessCreateClient = func() (serverlessCreateClient, error) { return client, nil }
+	t.Cleanup(func() { newServerlessCreateClient = oldFactory })
+
+	cmd := mockCreateCommand("wait-timeout")
+	var stderr bytes.Buffer
+	cmd.SetErr(&stderr)
+
+	if err := runCreate(cmd, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "--wait-timeout has no effect without --wait") {
+		t.Errorf("stderr = %q, want the ignored-flag note", stderr.String())
+	}
+	if client.healthCalls != 0 {
+		t.Errorf("health polled %d times, want 0", client.healthCalls)
 	}
 }
 
