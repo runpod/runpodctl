@@ -1,6 +1,7 @@
 package sshconnect
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -46,10 +47,13 @@ func TestNotReadyMessage(t *testing.T) {
 		// remedy differs per case, and telling someone to destroy a paid pod --
 		// or to add a flag it already carries -- is the failure mode to avoid.
 		{
-			name:     "running without 22 declared points at pod update",
+			// --ports is a wholesale replacement, so the suggested command must
+			// carry the ports the pod already publishes or following it silently
+			// unpublishes them.
+			name:     "running without 22 declared keeps the existing ports in the suggested command",
 			state:    podstate.State{Status: podstate.StatusRunning},
-			declared: []string{"8888/http"},
-			want:     "pod not ready: pod does not publish 22/tcp; add it with 'runpodctl pod update <pod-id> --ports 22/tcp'",
+			declared: []string{"8888/http", "7777/tcp"},
+			want:     "pod not ready: pod does not publish 22/tcp; add it with 'runpodctl pod update <pod-id> --ports 8888/http,7777/tcp,22/tcp' (--ports replaces the whole list, and changing it may restart the container)",
 		},
 		{
 			name:         "running with 22 declared but not publicly routable offers no bogus remedy",
@@ -74,7 +78,7 @@ func TestNotReadyMessage(t *testing.T) {
 		{
 			name:  "running with no declared ports at all points at pod update",
 			state: podstate.State{Status: podstate.StatusRunning},
-			want:  "pod not ready: pod does not publish 22/tcp; add it with 'runpodctl pod update <pod-id> --ports 22/tcp'",
+			want:  "pod not ready: pod does not publish 22/tcp; add it with 'runpodctl pod update <pod-id> --ports 22/tcp' (--ports replaces the whole list, and changing it may restart the container)",
 		},
 	}
 
@@ -107,6 +111,29 @@ func TestNotReadyMessageNeverSuggestsARedundantFlag(t *testing.T) {
 		if strings.Contains(msg, "recreate") {
 			t.Errorf("suggested recreating a running pod: %q", msg)
 		}
+	}
+}
+
+// TestNotReadyMessageSuggestionIsNotDestructive is the regression guard for the
+// second half of the same advice bug: `pod update --ports` replaces the pod's
+// port list wholesale (cmd/pod/update.go sets req.Ports to exactly what was
+// passed; runpod-backend's editJob writes `ports: input.ports`), so a suggested
+// command naming only 22/tcp silently unpublishes every other port. The message
+// must also not imply the change is free.
+func TestNotReadyMessageSuggestionIsNotDestructive(t *testing.T) {
+	declared := []string{"8888/http", "7777/tcp", "1234/udp"}
+	msg := NotReadyMessage(podstate.State{Status: podstate.StatusRunning}, declared, nil)
+
+	for _, existing := range declared {
+		if !strings.Contains(msg, existing) {
+			t.Errorf("suggested command drops the already-declared port %q: %q", existing, msg)
+		}
+	}
+	if !strings.Contains(msg, "--ports replaces the whole list") {
+		t.Errorf("message does not warn that --ports is a replacement: %q", msg)
+	}
+	if !strings.Contains(msg, "may restart the container") {
+		t.Errorf("message does not warn that the change may restart the container: %q", msg)
 	}
 }
 
@@ -189,5 +216,38 @@ func TestListConnectionsSkipsDeadPods(t *testing.T) {
 	}
 	if conns[0]["id"] != "up" {
 		t.Errorf("listed the wrong pod: %v", conns[0])
+	}
+}
+
+// TestListConnectionsEmptyIsAnArrayNotNull pins the json shape of the case this
+// filter made common: an account whose pods are all stopped must serialise as
+// {"connections": []}, not {"connections": null}, since an agent parsing the
+// output has to be able to iterate it unconditionally.
+func TestListConnectionsEmptyIsAnArrayNotNull(t *testing.T) {
+	stale := &api.LegacyRuntime{Ports: []*api.LegacyPort{port(22, 40022, true)}}
+	pods := []*api.LegacyPod{
+		{ID: "stopped", Name: "stopped", DesiredStatus: "EXITED", LastStatusChange: "Exited by user: x", Runtime: stale},
+		{ID: "gone", Name: "gone", DesiredStatus: "TERMINATED", Runtime: stale},
+	}
+
+	conns := ListConnections(pods, KeyInfo{})
+	if conns == nil {
+		t.Fatal("ListConnections returned nil, which serialises as null")
+	}
+	if len(conns) != 0 {
+		t.Fatalf("expected nothing reachable, got %v", conns)
+	}
+
+	encoded, err := json.Marshal(map[string]interface{}{"connections": conns})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(encoded) != `{"connections":[]}` {
+		t.Errorf("json shape changed: got %s, want {\"connections\":[]}", encoded)
+	}
+
+	// and with no pods at all, same shape.
+	if empty := ListConnections(nil, KeyInfo{}); empty == nil {
+		t.Error("ListConnections(nil) returned nil, which serialises as null")
 	}
 }

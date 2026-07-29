@@ -14,8 +14,9 @@ import (
 // The running case is the one that needs care. The container is genuinely up, so
 // what is missing is a *publicly routable* port 22 — which BuildConnection
 // requires — and there are three different reasons for that, with three
-// different remedies. Getting this wrong is expensive: telling someone to
-// recreate a paid pod with a flag it already has is worse than saying nothing.
+// different remedies. Getting this wrong is expensive: this text is default-on
+// advice that agents follow literally, so a remedy that destroys state or that
+// the pod does not need is worse than saying nothing. See addSSHPortCommand.
 //
 // declaredPorts is the pod's requested port list ("22/tcp", "8888/http", ...)
 // and runtimePorts is what the host actually mapped; either may be empty.
@@ -32,11 +33,8 @@ func NotReadyMessage(state podstate.State, declaredPorts []string, runtimePorts 
 
 func sshPortDetail(declaredPorts []string, runtimePorts []*api.LegacyPort) string {
 	if !declaresSSHPort(declaredPorts) {
-		// non-destructive and verified live: `pod update --ports 22/tcp` on a
-		// pod that was created without it produced a public 22 mapping within
-		// seconds, no restart and no recreate. never tell someone to destroy a
-		// paid pod for this.
-		return "pod does not publish 22/tcp; add it with 'runpodctl pod update <pod-id> --ports 22/tcp'"
+		return "pod does not publish 22/tcp; add it with '" + addSSHPortCommand(declaredPorts) + "'" +
+			" (--ports replaces the whole list, and changing it may restart the container)"
 	}
 	for _, port := range runtimePorts {
 		if port != nil && port.PrivatePort == 22 {
@@ -47,6 +45,34 @@ func sshPortDetail(declaredPorts []string, runtimePorts []*api.LegacyPort) strin
 		}
 	}
 	return "port 22 is declared but the host has not published a mapping for it yet"
+}
+
+// addSSHPortCommand builds the command that adds 22/tcp *without* dropping the
+// ports the pod already publishes.
+//
+// `--ports` is not additive: cmd/pod/update.go sets `req.Ports` to exactly what
+// was passed (unlike `--env`, which merges against the existing pod), and the
+// backend writes it through verbatim (`ports: input.ports` in
+// runpod-backend/model/src/pod/editJob.ts:161). So the naive advice
+// "--ports 22/tcp" silently unpublishes the http port the pod was created for.
+// The suggested command therefore always carries the existing list too.
+//
+// The restart caveat is on the message for the same reason: editJob bumps
+// `version: { increment: 1 }`, the host names containers `{podId}-{version}`
+// (host/pkg/dockpose/api.go:215), and docker port bindings are fixed at create
+// time, so a new public port implies a new container. We observed desiredStatus
+// stay RUNNING and the port appear within seconds, which a recreate against a
+// cached image looks exactly like — so the message says "may restart" rather
+// than claiming either way.
+func addSSHPortCommand(declaredPorts []string) string {
+	wanted := make([]string, 0, len(declaredPorts)+1)
+	for _, entry := range declaredPorts {
+		if entry = strings.TrimSpace(entry); entry != "" {
+			wanted = append(wanted, entry)
+		}
+	}
+	wanted = append(wanted, "22/tcp")
+	return "runpodctl pod update <pod-id> --ports " + strings.Join(wanted, ",")
 }
 
 // declaresSSHPort reports whether the pod asked for tcp 22. Entries look like
