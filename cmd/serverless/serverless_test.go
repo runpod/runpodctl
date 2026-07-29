@@ -2,8 +2,11 @@ package serverless
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"os"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -135,9 +138,11 @@ type mockServerlessCreateClient struct {
 	createInput   *api.EndpointCreateGQLInput
 	// health is served to --wait; healthCalls counts the polls so a test can
 	// prove the wait ran (or did not).
-	health      []api.EndpointHealthWorkers
-	healthCalls int
-	healthErr   error
+	health          []api.EndpointHealthWorkers
+	healthCalls     int
+	healthErr       error
+	healthErrsFirst int
+	healthErrFirst  error
 }
 
 func (c *mockServerlessCreateClient) GetListing(string) (*api.Listing, error) {
@@ -158,6 +163,11 @@ func (c *mockServerlessCreateClient) GetEndpointHealth(string) (*api.EndpointHea
 	c.healthCalls++
 	if c.healthErr != nil {
 		return nil, c.healthErr
+	}
+	// healthErrsFirst fails the first n polls, standing in for the invoke service
+	// not knowing the endpoint id yet.
+	if c.healthCalls <= c.healthErrsFirst {
+		return nil, c.healthErrFirst
 	}
 	idx := c.healthCalls - 1
 	if idx >= len(c.health) {
@@ -368,6 +378,13 @@ func TestRunCreate_WaitRequiresWarmWorker(t *testing.T) {
 	snapshotCreateFlags(t)
 	createWait = true
 	createWorkersMin = 0
+	// the guard is supposed to return before any wait happens; keep the wait cheap
+	// anyway so that if it ever stops guarding, this test fails in milliseconds
+	// instead of hanging on the 10m default until `go test` panics.
+	createWaitTimeout = "1ms"
+	oldInterval := waitPollInterval
+	waitPollInterval = time.Millisecond
+	t.Cleanup(func() { waitPollInterval = oldInterval })
 
 	client := &mockServerlessCreateClient{}
 	oldFactory := newServerlessCreateClient
@@ -476,6 +493,132 @@ func TestRunCreate_Wait(t *testing.T) {
 				t.Errorf("stderr = %q, want it to contain %q", stderr.String(), tc.wantStderr)
 			}
 		})
+	}
+}
+
+// The invoke service that serves /health is not the service that created the
+// endpoint, and it 404s an id it has not learned yet (confirmed against prod).
+// A wait that aborted on that first poll reported not_found for an endpoint that
+// exists and is billing a warm worker — and not_found reads as "the create
+// failed", so an agent would have created a second one.
+func TestRunCreate_WaitSurvivesTransientHealthFailures(t *testing.T) {
+	snapshotCreateFlags(t)
+	createWait = true
+	createWorkersMin = 1
+	createWaitTimeout = "10m"
+
+	oldInterval := waitPollInterval
+	waitPollInterval = time.Millisecond
+	t.Cleanup(func() { waitPollInterval = oldInterval })
+
+	client := &mockServerlessCreateClient{
+		health:          []api.EndpointHealthWorkers{{Ready: 1}},
+		healthErrsFirst: 2,
+		healthErrFirst:  &api.APIError{Message: "endpoint not found", Code: "not_found", Status: 404},
+	}
+	oldFactory := newServerlessCreateClient
+	newServerlessCreateClient = func() (serverlessCreateClient, error) { return client, nil }
+	t.Cleanup(func() { newServerlessCreateClient = oldFactory })
+
+	cmd := mockCreateCommand()
+	var stderr bytes.Buffer
+	cmd.SetErr(&stderr)
+
+	if err := runCreate(cmd, nil); err != nil {
+		t.Fatalf("a transient health failure must not end the wait: %v", err)
+	}
+	if client.healthCalls != 3 {
+		t.Errorf("health polled %d times, want 3 (two failures then ready)", client.healthCalls)
+	}
+	if !strings.Contains(stderr.String(), "ready after") {
+		t.Errorf("stderr = %q, want the readiness line", stderr.String())
+	}
+}
+
+// Credentials will not fix themselves, so that one does end the wait rather than
+// re-poll a doomed call for ten minutes.
+func TestRunCreate_WaitAbortsOnUnauthorized(t *testing.T) {
+	snapshotCreateFlags(t)
+	createWait = true
+	createWorkersMin = 1
+	createWaitTimeout = "10m"
+
+	oldInterval := waitPollInterval
+	waitPollInterval = time.Hour // a second poll would hang the test
+	t.Cleanup(func() { waitPollInterval = oldInterval })
+
+	client := &mockServerlessCreateClient{
+		healthErr: &api.APIError{Message: "unauthorized", Code: "unauthorized", Status: 401},
+	}
+	oldFactory := newServerlessCreateClient
+	newServerlessCreateClient = func() (serverlessCreateClient, error) { return client, nil }
+	t.Cleanup(func() { newServerlessCreateClient = oldFactory })
+
+	err := runCreate(mockCreateCommand(), nil)
+	if err == nil {
+		t.Fatal("expected the unauthorized error to end the wait")
+	}
+	if client.healthCalls != 1 {
+		t.Errorf("health polled %d times, want 1", client.healthCalls)
+	}
+	// the endpoint still exists, so its id must be recoverable as data.
+	if id := resourceIDOf(err); id != "endpoint-1" {
+		t.Errorf("error id = %q, want endpoint-1", id)
+	}
+}
+
+// resourceIDOf reads the machine-readable resource id off an error, the way
+// internal/output does when it emits the json error object.
+func resourceIDOf(err error) string {
+	var ider interface{ ErrorResourceID() string }
+	if errors.As(err, &ider) {
+		return ider.ErrorResourceID()
+	}
+	return ""
+}
+
+// ctrl-c during a wait must not lose the endpoint, so the wait has to be
+// registered for SIGINT/SIGTERM specifically.
+func TestWaitForReadyWorkerHandlesInterrupts(t *testing.T) {
+	oldNotify := notifyWaitSignals
+	t.Cleanup(func() { notifyWaitSignals = oldNotify })
+
+	var registered []os.Signal
+	notifyWaitSignals = func(parent context.Context, signals ...os.Signal) (context.Context, context.CancelFunc) {
+		registered = signals
+		ctx, cancel := context.WithCancel(parent)
+		cancel() // stand in for the signal arriving during the wait
+		return ctx, cancel
+	}
+
+	client := &mockServerlessCreateClient{health: []api.EndpointHealthWorkers{{Initializing: 1}}}
+	cmd := mockCreateCommand()
+	var stderr bytes.Buffer
+	cmd.SetErr(&stderr)
+
+	err := waitForReadyWorker(cmd, client, "endpoint-1", time.Minute)
+	var waitErr *waitfor.Error
+	if !errors.As(err, &waitErr) {
+		t.Fatalf("expected a *waitfor.Error, got %#v", err)
+	}
+	if waitErr.ErrorCode() != waitfor.CodeInterrupted {
+		t.Errorf("code = %q, want %q", waitErr.ErrorCode(), waitfor.CodeInterrupted)
+	}
+	if resourceIDOf(err) != "endpoint-1" {
+		t.Errorf("error id = %q, want endpoint-1", resourceIDOf(err))
+	}
+	if !strings.Contains(err.Error(), "runpodctl serverless delete endpoint-1") {
+		t.Errorf("error = %q, want the delete command", err.Error())
+	}
+
+	wantSignals := map[os.Signal]bool{os.Interrupt: false, syscall.SIGTERM: false}
+	for _, signal := range registered {
+		wantSignals[signal] = true
+	}
+	for signal, seen := range wantSignals {
+		if !seen {
+			t.Errorf("the wait must register for %v", signal)
+		}
 	}
 }
 

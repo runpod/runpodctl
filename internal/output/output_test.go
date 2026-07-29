@@ -184,6 +184,62 @@ func TestError_WithCodeAndStatus(t *testing.T) {
 	}
 }
 
+// A create that succeeded and then failed to become usable leaves a billed
+// resource behind. Its id has to be data, not prose an agent has to regex.
+func TestError_WithResourceID(t *testing.T) {
+	old := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	inner := codedError{msg: "timed out waiting for ssh on pod abc123", code: "wait_timeout"}
+	Error(WithResourceID("abc123", fmt.Errorf("%w; pod abc123 was created", inner)))
+
+	w.Close()
+	os.Stderr = old
+
+	var buf bytes.Buffer
+	buf.ReadFrom(r) //nolint:errcheck
+
+	var got map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("error output is not valid json: %v (%s)", err, buf.String())
+	}
+	if got["id"] != "abc123" {
+		t.Errorf("id = %v, want abc123", got["id"])
+	}
+	// the wrapped error's code must still win: the id is additive.
+	if got["code"] != "wait_timeout" {
+		t.Errorf("code = %v, want wait_timeout", got["code"])
+	}
+	if got["error"] != "timed out waiting for ssh on pod abc123; pod abc123 was created" {
+		t.Errorf("error = %v, want the wrapped message", got["error"])
+	}
+}
+
+// No id means no field: every other error keeps the exact shape it had.
+func TestWithResourceIDIsANoOpWithoutAnID(t *testing.T) {
+	err := errors.New("boom")
+	if got := WithResourceID("", err); got != err {
+		t.Errorf("WithResourceID with no id must return the error unchanged, got %#v", got)
+	}
+	if got := WithResourceID("abc123", nil); got != nil {
+		t.Errorf("WithResourceID(nil) = %#v, want nil", got)
+	}
+
+	old := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+	Error(err)
+	w.Close()
+	os.Stderr = old
+
+	var buf bytes.Buffer
+	buf.ReadFrom(r) //nolint:errcheck
+	if strings.Contains(buf.String(), `"id"`) {
+		t.Errorf("an unannotated error must carry no id field: %s", buf.String())
+	}
+}
+
 func TestError_NilIsNoOp(t *testing.T) {
 	old := os.Stderr
 	r, w, _ := os.Pipe()

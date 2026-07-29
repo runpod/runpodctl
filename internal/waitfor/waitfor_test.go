@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -77,12 +79,34 @@ func TestUntil(t *testing.T) {
 			wantLast:  "connection refused",
 		},
 		{
-			name:      "a poll error aborts and keeps the underlying error",
+			name:      "a fatal poll error aborts and keeps the underlying error",
 			polls:     []State{{Detail: "ignored"}},
-			pollErr:   errors.New("unauthorized"),
+			pollErr:   &FatalError{Code: "conflict", Err: errors.New("pod abc123 is exited")},
+			timeout:   time.Minute,
+			wantPolls: 1,
+			wantErr:   "waiting for ssh on pod abc123: pod abc123 is exited",
+		},
+		{
+			name:      "an unauthorized poll aborts: polling will not fix credentials",
+			polls:     []State{{Detail: "ignored"}},
+			pollErr:   &codedError{code: "unauthorized", msg: "unauthorized"},
 			timeout:   time.Minute,
 			wantPolls: 1,
 			wantErr:   "waiting for ssh on pod abc123: unauthorized",
+		},
+		{
+			// a transient api failure must not end a wait: the resource already
+			// exists and bills, and giving up here used to surface a transport code
+			// that tells an agent to retry the create and buy a second one.
+			name:      "a transient poll error keeps the wait going and lands in the timeout state",
+			polls:     []State{{Detail: "ignored"}},
+			pollErr:   &codedError{code: "server_error", msg: "graphql error: boom"},
+			timeout:   12 * time.Second,
+			interval:  5 * time.Second,
+			wantPolls: 4,
+			wantCode:  CodeTimeout,
+			wantErr:   "timed out after 12s waiting for ssh on pod abc123",
+			wantLast:  "graphql error: boom",
 		},
 		{
 			name: "cancellation reports wait_interrupted, not a timeout",
@@ -177,6 +201,111 @@ func TestUntil(t *testing.T) {
 	}
 }
 
+// codedError is a poll error carrying a stable code, like the ones internal/api
+// returns.
+type codedError struct {
+	code string
+	msg  string
+}
+
+func (e *codedError) Error() string     { return e.msg }
+func (e *codedError) ErrorCode() string { return e.code }
+
+// A single bad poll must not end the wait. The invoke service 404s an endpoint
+// id it has not propagated yet, and graphql answers 5xx now and then; both used
+// to abort the wait on the very first poll.
+func TestUntilRetriesAfterATransientPollError(t *testing.T) {
+	clock := newFakeClock()
+
+	polls := 0
+	var progress bytes.Buffer
+	state, err := Until(context.Background(), func(context.Context) (State, error) {
+		polls++
+		switch polls {
+		case 1:
+			return State{}, &codedError{code: "not_found", msg: "endpoint not found"}
+		case 2:
+			return State{}, errors.New("request failed: EOF")
+		default:
+			return State{Ready: true, Detail: "workers ready 1"}, nil
+		}
+	}, Options{
+		Label:         "a ready worker on endpoint ep1",
+		Timeout:       time.Minute,
+		Interval:      5 * time.Second,
+		ProgressEvery: time.Nanosecond,
+		Progress:      &progress,
+		Now:           clock.Now,
+		Sleep:         clock.sleepFunc(),
+	})
+	if err != nil {
+		t.Fatalf("a transient poll error must not end the wait: %v", err)
+	}
+	if !state.Ready {
+		t.Errorf("state = %+v, want ready", state)
+	}
+	if polls != 3 {
+		t.Errorf("polled %d times, want 3", polls)
+	}
+	// the reason has to reach the operator, just not as a fatal error. (the very
+	// first poll is before the progress cadence fires, so the second one is the
+	// one that shows up.)
+	if !strings.Contains(progress.String(), "request failed: EOF") {
+		t.Errorf("expected the poll failure in progress output: %q", progress.String())
+	}
+}
+
+// The tolerated poll error stays reachable as an error, so callers that need an
+// error chain across the wait (cmd/project's legacy ssh message) keep it.
+func TestUntilKeepsTheToleratedPollErrorOnState(t *testing.T) {
+	clock := newFakeClock()
+	sentinel := errors.New("no api key configured")
+
+	state, err := Until(context.Background(), func(context.Context) (State, error) {
+		return State{}, sentinel
+	}, Options{
+		Label:    "pod p1 to come online",
+		Timeout:  time.Second,
+		Interval: time.Second,
+		Now:      clock.Now,
+		Sleep:    clock.sleepFunc(),
+	})
+	if err == nil {
+		t.Fatal("expected a timeout")
+	}
+	if !errors.Is(state.Err, sentinel) {
+		t.Fatalf("state.Err = %v, want the sentinel", state.Err)
+	}
+}
+
+func TestIsFatalPollError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "explicitly fatal", err: &FatalError{Code: "conflict", Err: errors.New("x")}, want: true},
+		{name: "wrapped fatal", err: fmt.Errorf("waiting: %w", &FatalError{Code: "not_found", Err: errors.New("x")}), want: true},
+		{name: "unauthorized", err: &codedError{code: "unauthorized", msg: "x"}, want: true},
+		{name: "forbidden", err: &codedError{code: "forbidden", msg: "x"}, want: true},
+		{name: "no credentials", err: &codedError{code: "no_credentials", msg: "x"}, want: true},
+		{name: "bad request", err: &codedError{code: "bad_request", msg: "x"}, want: true},
+		{name: "not found is transient during propagation", err: &codedError{code: "not_found", msg: "x"}, want: false},
+		{name: "server error", err: &codedError{code: "server_error", msg: "x"}, want: false},
+		{name: "rate limited", err: &codedError{code: "rate_limited", msg: "x"}, want: false},
+		{name: "graphql error", err: &codedError{code: "graphql_error", msg: "x"}, want: false},
+		{name: "uncoded", err: errors.New("EOF"), want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isFatalPollError(tc.err); got != tc.want {
+				t.Errorf("isFatalPollError(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
 // The wait must not sleep past its own deadline: a 12s budget with a 5s interval
 // has to shorten the last sleep to 2s rather than overshoot to 15s.
 func TestUntilDoesNotSleepPastDeadline(t *testing.T) {
@@ -241,12 +370,51 @@ func TestUntilProgressCadence(t *testing.T) {
 	}
 }
 
+// A nil Progress writer must produce no output at all, on stdout least of all:
+// the legacy project path is the one caller that passes nil, and stdout there is
+// parsed output. Asserting "no error" would not have caught a stdout fallback.
 func TestUntilWithoutProgressWriterStaysSilent(t *testing.T) {
 	clock := newFakeClock()
-	if _, err := Until(context.Background(), func(context.Context) (State, error) {
-		return State{Ready: true}, nil
-	}, Options{Label: "x", Now: clock.Now, Sleep: clock.sleepFunc()}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+
+	realStdout, realStderr := os.Stdout, os.Stderr
+	stdoutR, stdoutW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	stderrR, stderrW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout, os.Stderr = stdoutW, stderrW
+	defer func() { os.Stdout, os.Stderr = realStdout, realStderr }()
+
+	_, waitErr := Until(context.Background(), func(context.Context) (State, error) {
+		return State{Detail: "not yet"}, nil
+	}, Options{
+		Label:    "ssh on pod abc123",
+		Timeout:  30 * time.Second,
+		Interval: 5 * time.Second,
+		Now:      clock.Now,
+		Sleep:    clock.sleepFunc(),
+	})
+
+	os.Stdout, os.Stderr = realStdout, realStderr
+	if err := stdoutW.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if err := stderrW.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if waitErr == nil {
+		t.Fatal("expected a timeout")
+	}
+	for name, reader := range map[string]*os.File{"stdout": stdoutR, "stderr": stderrR} {
+		captured := make([]byte, 1024)
+		n, _ := reader.Read(captured)
+		if n > 0 {
+			t.Errorf("a nil Progress writer wrote %d bytes to %s: %q", n, name, captured[:n])
+		}
 	}
 }
 

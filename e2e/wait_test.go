@@ -3,7 +3,10 @@
 package e2e
 
 import (
+	"bytes"
 	"encoding/json"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +23,91 @@ func deletePodOnCleanup(t *testing.T, podID string) {
 			t.Logf("cleaned up pod %s", podID)
 		}
 	})
+}
+
+// sweepPodsByName deletes every pod carrying the test's unique --name, and is
+// registered *before* the create so no assertion can run ahead of teardown.
+//
+// The id-based cleanups below only run once an id has been parsed out of the
+// output; every t.Fatalf before that point would otherwise leave a billed pod
+// running until a human noticed.
+func sweepPodsByName(t *testing.T, name string) {
+	t.Helper()
+	t.Cleanup(func() {
+		stdout, stderr, err := runCLI("pod", "list", "-a")
+		if err != nil {
+			t.Errorf("cleanup sweep could not list pods: %v\nstderr: %s", err, stderr)
+			return
+		}
+		var pods []map[string]interface{}
+		if err := json.Unmarshal([]byte(stdout), &pods); err != nil {
+			t.Errorf("cleanup sweep could not parse the pod list: %v\n%s", err, stdout)
+			return
+		}
+		for _, pod := range pods {
+			if podName, _ := pod["name"].(string); podName != name {
+				continue
+			}
+			id, _ := pod["id"].(string)
+			if id == "" {
+				continue
+			}
+			if _, deleteStderr, deleteErr := runCLI("pod", "delete", id); deleteErr != nil {
+				t.Errorf("cleanup sweep failed to delete pod %s: %v\nstderr: %s", id, deleteErr, deleteStderr)
+			} else {
+				t.Logf("cleanup sweep deleted pod %s (%s)", id, name)
+			}
+		}
+	})
+}
+
+// sweepEndpointsByName is the same guard for endpoints, which can hold a warm
+// worker and so bill even harder than a cpu pod.
+func sweepEndpointsByName(t *testing.T, name string) {
+	t.Helper()
+	t.Cleanup(func() {
+		stdout, stderr, err := runCLI("serverless", "list")
+		if err != nil {
+			t.Errorf("cleanup sweep could not list endpoints: %v\nstderr: %s", err, stderr)
+			return
+		}
+		var endpoints []map[string]interface{}
+		if err := json.Unmarshal([]byte(stdout), &endpoints); err != nil {
+			t.Errorf("cleanup sweep could not parse the endpoint list: %v\n%s", err, stdout)
+			return
+		}
+		for _, endpoint := range endpoints {
+			if endpointName, _ := endpoint["name"].(string); endpointName != name {
+				continue
+			}
+			id, _ := endpoint["id"].(string)
+			if id == "" {
+				continue
+			}
+			if _, deleteStderr, deleteErr := runCLI("serverless", "delete", id); deleteErr != nil {
+				t.Errorf("cleanup sweep failed to delete endpoint %s: %v\nstderr: %s", id, deleteErr, deleteStderr)
+			} else {
+				t.Logf("cleanup sweep deleted endpoint %s (%s)", id, name)
+			}
+		}
+	})
+}
+
+// resourceIDFromError reads the id off the json error object. The id is data, so
+// no test (and no agent) has to slice it out of the message prose.
+func resourceIDFromError(t *testing.T, stderr string) string {
+	t.Helper()
+	lines := strings.Split(strings.TrimSpace(stderr), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		var obj map[string]interface{}
+		if err := json.Unmarshal([]byte(lines[i]), &obj); err != nil {
+			continue
+		}
+		if id, _ := obj["id"].(string); id != "" {
+			return id
+		}
+	}
+	return ""
 }
 
 func decodeErrorObject(t *testing.T, stderr string) map[string]interface{} {
@@ -39,6 +127,7 @@ func decodeErrorObject(t *testing.T, stderr string) map[string]interface{} {
 // mistake for readiness.
 func TestCLI_PodCreateWaitTimeout(t *testing.T) {
 	name := "e2e-wait-timeout-" + time.Now().Format("20060102150405")
+	sweepPodsByName(t, name)
 	stdout, stderr, err := runCLI("pod", "create",
 		"--compute-type", "cpu",
 		"--image", "alpine:3.20",
@@ -79,10 +168,14 @@ func TestCLI_PodCreateWaitTimeout(t *testing.T) {
 		t.Errorf("the error must carry the last known state: %q", message)
 	}
 
-	// the pod id has to be in the error, because the pod was created and bills.
-	podID := podIDFromWaitError(message)
+	// the pod id has to be in the error as data, because the pod was created and
+	// bills: an agent must be able to delete it without parsing english.
+	podID := resourceIDFromError(t, stderr)
 	if podID == "" {
-		t.Fatalf("the error must name the created pod: %q", message)
+		t.Fatalf("the error object must carry the created pod's id: %s", stderr)
+	}
+	if !strings.Contains(message, podID) {
+		t.Errorf("the message should name the pod too, for humans: %q", message)
 	}
 	deletePodOnCleanup(t, podID)
 
@@ -94,19 +187,60 @@ func TestCLI_PodCreateWaitTimeout(t *testing.T) {
 	}
 }
 
-// podIDFromWaitError pulls the pod id out of "... pod <id> was created ...".
-func podIDFromWaitError(message string) string {
-	const marker = "pod "
-	idx := strings.Index(message, "; pod ")
-	if idx < 0 {
-		return ""
+// TestCLI_PodCreateWaitInterrupted proves the ctrl-c requirement: a signal during
+// a wait must not lose the pod that was already paid for. It reuses the cheapest
+// unsatisfiable case (an image with no sshd) so it never has to wait for a real
+// boot, and interrupts a few seconds in.
+func TestCLI_PodCreateWaitInterrupted(t *testing.T) {
+	name := "e2e-wait-sigint-" + time.Now().Format("20060102150405")
+	sweepPodsByName(t, name)
+
+	cmd := exec.Command(cliBinary(), "pod", "create",
+		"--compute-type", "cpu",
+		"--image", "alpine:3.20",
+		"--docker-args", "sleep infinity",
+		"--container-disk-in-gb", "5",
+		"--volume-in-gb", "0",
+		"--name", name,
+		"--wait", "--wait-timeout", "10m")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("failed to start the cli: %v", err)
 	}
-	rest := message[idx+2+len(marker):]
-	end := strings.Index(rest, " ")
-	if end < 0 {
-		return ""
+
+	// wait until the pod exists and the wait has started, then ctrl-c.
+	deadline := time.Now().Add(90 * time.Second)
+	for !strings.Contains(stderr.String(), "waiting for ssh on pod ") {
+		if time.Now().After(deadline) {
+			_ = cmd.Process.Kill()
+			t.Fatalf("the wait never started: %s", stderr.String())
+		}
+		time.Sleep(time.Second)
 	}
-	return rest[:end]
+	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+		t.Fatalf("failed to signal the cli: %v", err)
+	}
+
+	err := cmd.Wait()
+	if err == nil {
+		t.Fatalf("expected a non-zero exit after ctrl-c, got success:\n%s", stdout.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "" {
+		t.Errorf("stdout must stay empty on an interrupted wait, got %q", stdout.String())
+	}
+
+	obj := decodeErrorObject(t, stderr.String())
+	if code, _ := obj["code"].(string); code != "wait_interrupted" {
+		t.Errorf("code = %v, want wait_interrupted (stderr: %s)", obj["code"], stderr.String())
+	}
+	podID, _ := obj["id"].(string)
+	if podID == "" {
+		t.Fatalf("ctrl-c must not lose the pod id: %s", stderr.String())
+	}
+	deletePodOnCleanup(t, podID)
 }
 
 // TestCLI_PodCreateWait proves the success path: --wait blocks until ssh really
@@ -115,6 +249,7 @@ func podIDFromWaitError(message string) string {
 // publicly mapped port 22, so there would be nothing to connect to.
 func TestCLI_PodCreateWait(t *testing.T) {
 	name := "e2e-wait-ssh-" + time.Now().Format("20060102150405")
+	sweepPodsByName(t, name)
 	stdout, stderr, err := runCLI("pod", "create",
 		"--template-id", "runpod-torch-v21",
 		"--gpu-id", "NVIDIA RTX A4000",
@@ -126,8 +261,8 @@ func TestCLI_PodCreateWait(t *testing.T) {
 		if shouldSkipCommunityCreate(stdout + stderr) {
 			t.Skipf("no capacity for the test gpu: %s", strings.TrimSpace(stderr))
 		}
-		// a timeout still created the pod; delete it before failing.
-		if podID := podIDFromWaitError(stderr); podID != "" {
+		// a timeout still created the pod; the sweep above covers it either way.
+		if podID := resourceIDFromError(t, stderr); podID != "" {
 			deletePodOnCleanup(t, podID)
 		}
 		t.Fatalf("pod create --wait failed: %v\nstderr: %s", err, stderr)
@@ -233,10 +368,13 @@ func TestCLI_ServerlessCreateWait(t *testing.T) {
 		}
 	})
 
+	endpointName := "e2e-wait-ep-" + suffix
+	sweepEndpointsByName(t, endpointName)
+
 	stdout, stderr, err = runCLI("serverless", "create",
 		"--template-id", templateID,
 		"--gpu-id", "NVIDIA RTX A5000",
-		"--name", "e2e-wait-ep-"+suffix,
+		"--name", endpointName,
 		"--workers-min", "1",
 		"--workers-max", "1",
 		"--wait", "--wait-timeout", "7m")
@@ -246,7 +384,7 @@ func TestCLI_ServerlessCreateWait(t *testing.T) {
 	if jsonErr := json.Unmarshal([]byte(stdout), &endpoint); jsonErr == nil {
 		endpointID, _ = endpoint["id"].(string)
 	} else if err != nil {
-		endpointID = endpointIDFromWaitError(stderr)
+		endpointID = resourceIDFromError(t, stderr)
 	}
 	if endpointID != "" {
 		t.Cleanup(func() {
@@ -278,18 +416,4 @@ func TestCLI_ServerlessCreateWait(t *testing.T) {
 	if !strings.Contains(stderr, "workers ready") {
 		t.Errorf("expected the worker counts in the progress note: %s", stderr)
 	}
-}
-
-// endpointIDFromWaitError pulls the id out of "... endpoint <id> was created ...".
-func endpointIDFromWaitError(message string) string {
-	idx := strings.Index(message, "; endpoint ")
-	if idx < 0 {
-		return ""
-	}
-	rest := message[idx+len("; endpoint "):]
-	end := strings.Index(rest, " ")
-	if end < 0 {
-		return ""
-	}
-	return rest[:end]
 }

@@ -57,7 +57,7 @@ runpodctl pod create [flags]
       --terminate-after string     auto-terminate datetime (e.g., 2026-04-15T00:00:00Z)
       --volume-in-gb int           volume size in gb
       --volume-mount-path string   volume mount path (default "/workspace")
-      --wait                       block until ssh is reachable (tcp connect to the pod's public port 22 answers with an ssh banner; no key or handshake needed), then print the pod as 'pod get' does
+      --wait                       block until ssh is reachable (tcp connect to the pod's public port 22 answers with an ssh banner; no key or handshake needed), then print the pod as 'pod get' does. needs a publicly mapped port 22, so community cloud also needs --public-ip
       --wait-timeout string        max time to wait with --wait, e.g. 90s, 10m, 1h; on timeout the pod is kept and the error carries its id (default "10m")
 ```
 

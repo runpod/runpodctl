@@ -432,6 +432,10 @@ func resolveWaitTimeout(cmd *cobra.Command) (time.Duration, error) {
 	return timeout, nil
 }
 
+// notifyWaitSignals is signal.NotifyContext, injectable so a test can prove the
+// wait actually registers for ctrl-c.
+var notifyWaitSignals = signal.NotifyContext
+
 // waitForReadyWorker blocks until the endpoint has a worker that can take a job.
 // Progress goes to stderr so stdout stays a single json object.
 func waitForReadyWorker(cmd *cobra.Command, client serverlessCreateClient, endpointID string, timeout time.Duration) error {
@@ -440,7 +444,7 @@ func waitForReadyWorker(cmd *cobra.Command, client serverlessCreateClient, endpo
 		ctx = context.Background()
 	}
 	// ctrl-c stops the wait but must not lose the endpoint: the error names it.
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	ctx, stop := notifyWaitSignals(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	_, err := waitfor.Until(ctx, waitfor.EndpointWorkerPoller(client, endpointID), waitfor.Options{
@@ -450,7 +454,9 @@ func waitForReadyWorker(cmd *cobra.Command, client serverlessCreateClient, endpo
 		Progress: cmd.ErrOrStderr(),
 	})
 	if err != nil {
-		return fmt.Errorf("%w; endpoint %s was created: 'runpodctl serverless get %s' or 'runpodctl serverless delete %s'", err, endpointID, endpointID, endpointID)
+		// the id goes into the error object as data, not only into the prose: a
+		// caller must not have to regex a message to find the endpoint it now owns.
+		return output.WithResourceID(endpointID, fmt.Errorf("%w; endpoint %s was created: 'runpodctl serverless get %s' to inspect it, 'runpodctl serverless delete %s' to stop billing", err, endpointID, endpointID, endpointID))
 	}
 	return nil
 }

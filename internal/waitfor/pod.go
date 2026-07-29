@@ -18,12 +18,25 @@ type PodLister interface {
 	GetPods() ([]*api.LegacyPod, error)
 }
 
+// terminalPodStatuses are the desiredStatus values a pod never comes back from.
+// A pod in one of these will not become reachable however long you wait, so the
+// wait ends immediately rather than billing out the full budget.
+var terminalPodStatuses = map[string]bool{
+	"EXITED":     true,
+	"TERMINATED": true,
+	"DEAD":       true,
+}
+
 // PodSSHPoller polls until pod podID is running, has a public ssh port, and that
 // port answers with an ssh banner. Pass a nil probe to use ProbeSSH.
-func PodSSHPoller(lister PodLister, podID string, probe Prober) PollFunc {
+//
+// When addr is non-nil it receives the address the probe succeeded against, so a
+// caller can report it even if a later read of the pod fails.
+func PodSSHPoller(lister PodLister, podID string, probe Prober, addr *string) PollFunc {
 	if probe == nil {
 		probe = ProbeSSH
 	}
+	seen := false
 	return func(ctx context.Context) (State, error) {
 		pods, err := lister.GetPods()
 		if err != nil {
@@ -38,8 +51,25 @@ func PodSSHPoller(lister PodLister, podID string, probe Prober) PollFunc {
 			}
 		}
 		if pod == nil {
+			if seen {
+				// it was there and now it is not: terminated out of band, or the
+				// account ran out of credit. waiting for it is pointless, and claiming
+				// it is still billing would be a lie.
+				return State{}, &FatalError{
+					Code: "not_found",
+					Err:  fmt.Errorf("pod %s is no longer listed, so it was terminated or deleted while waiting", podID),
+				}
+			}
 			// a just-created pod can lag the list query; not an error.
 			return State{Detail: "pod not listed yet"}, nil
+		}
+		seen = true
+
+		if terminalPodStatuses[strings.ToUpper(pod.DesiredStatus)] {
+			return State{}, &FatalError{
+				Code: "conflict",
+				Err:  fmt.Errorf("pod %s is %s, so it will never become reachable", podID, strings.ToLower(pod.DesiredStatus)),
+			}
 		}
 		if !strings.EqualFold(pod.DesiredStatus, "RUNNING") {
 			return State{Detail: "pod status " + strings.ToLower(pod.DesiredStatus)}, nil
@@ -49,10 +79,13 @@ func PodSSHPoller(lister PodLister, podID string, probe Prober) PollFunc {
 		if !ok {
 			return State{Detail: "ssh port not allocated yet"}, nil
 		}
-		addr := net.JoinHostPort(ip, strconv.Itoa(port))
-		if err := probe(ctx, addr); err != nil {
-			return State{Detail: fmt.Sprintf("ssh port %s allocated but not reachable: %v", addr, err)}, nil
+		address := net.JoinHostPort(ip, strconv.Itoa(port))
+		if err := probe(ctx, address); err != nil {
+			return State{Detail: fmt.Sprintf("ssh port %s allocated but not reachable: %v", address, err)}, nil
 		}
-		return State{Ready: true, Detail: "ssh reachable at " + addr}, nil
+		if addr != nil {
+			*addr = address
+		}
+		return State{Ready: true, Detail: "ssh reachable at " + address}, nil
 	}
 }

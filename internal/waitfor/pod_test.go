@@ -51,8 +51,8 @@ func TestPodSSHPoller(t *testing.T) {
 		},
 		{
 			name:       "pod not running yet",
-			pods:       []*api.LegacyPod{podWithSSHPort("pod-1", "EXITED", 22, 51227, true)},
-			wantDetail: "pod status exited",
+			pods:       []*api.LegacyPod{podWithSSHPort("pod-1", "CREATED", 22, 51227, true)},
+			wantDetail: "pod status created",
 		},
 		{
 			name:       "no ssh port allocated",
@@ -112,7 +112,8 @@ func TestPodSSHPoller(t *testing.T) {
 				}
 			}
 
-			state, err := PodSSHPoller(&fakePodLister{pods: tc.pods}, "pod-1", probe)(context.Background())
+			var addr string
+			state, err := PodSSHPoller(&fakePodLister{pods: tc.pods}, "pod-1", probe, &addr)(context.Background())
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -125,16 +126,82 @@ func TestPodSSHPoller(t *testing.T) {
 			if probed != tc.wantProbed {
 				t.Errorf("probed %q, want %q", probed, tc.wantProbed)
 			}
+			// the address that answered has to come back out: the caller reports it
+			// when the follow-up read of the pod fails.
+			wantAddr := ""
+			if tc.wantReady {
+				wantAddr = tc.wantProbed
+			}
+			if addr != wantAddr {
+				t.Errorf("addr = %q, want %q", addr, wantAddr)
+			}
 		})
 	}
 }
 
-// A failing pod lookup must abort the wait rather than burn the whole budget on
-// an error that will not fix itself (e.g. a revoked api key).
+// A failing pod lookup surfaces the error so Until can decide whether it is
+// worth retrying; the poller itself does not classify transport failures.
 func TestPodSSHPollerReturnsListErrors(t *testing.T) {
-	_, err := PodSSHPoller(&fakePodLister{err: errors.New("unauthorized")}, "pod-1", nil)(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "unauthorized") {
+	_, err := PodSSHPoller(&fakePodLister{err: errors.New("boom")}, "pod-1", nil, nil)(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("expected the lister error to propagate, got %v", err)
+	}
+}
+
+// A pod that has exited will never become reachable, so the wait must end at
+// once instead of billing out the full --wait-timeout.
+func TestPodSSHPollerFailsFastOnTerminalStatus(t *testing.T) {
+	for _, status := range []string{"EXITED", "TERMINATED", "DEAD", "exited"} {
+		t.Run(status, func(t *testing.T) {
+			lister := &fakePodLister{pods: []*api.LegacyPod{podWithSSHPort("pod-1", status, 22, 51227, true)}}
+			_, err := PodSSHPoller(lister, "pod-1", nil, nil)(context.Background())
+			var fatal *FatalError
+			if !errors.As(err, &fatal) {
+				t.Fatalf("expected a fatal error for status %s, got %v", status, err)
+			}
+			if fatal.ErrorCode() != "conflict" {
+				t.Errorf("code = %q, want conflict", fatal.ErrorCode())
+			}
+			if !strings.Contains(err.Error(), "pod-1") {
+				t.Errorf("the error must name the pod: %v", err)
+			}
+			if !isFatalPollError(err) {
+				t.Error("a terminal pod status must be fatal to the wait loop")
+			}
+		})
+	}
+}
+
+// A pod that vanishes mid-wait (terminated out of band, or the account ran out
+// of credit) must not be waited on for the rest of the budget, and must not be
+// reported as "still billing".
+func TestPodSSHPollerFailsFastWhenPodDisappears(t *testing.T) {
+	lister := &fakePodLister{pods: []*api.LegacyPod{podWithSSHPort("pod-1", "RUNNING", 8888, 20000, true)}}
+	poll := PodSSHPoller(lister, "pod-1", nil, nil)
+
+	if _, err := poll(context.Background()); err != nil {
+		t.Fatalf("unexpected error on the first poll: %v", err)
+	}
+
+	lister.pods = nil
+	_, err := poll(context.Background())
+	var fatal *FatalError
+	if !errors.As(err, &fatal) {
+		t.Fatalf("expected a fatal error once the pod disappeared, got %v", err)
+	}
+	if fatal.ErrorCode() != "not_found" {
+		t.Errorf("code = %q, want not_found", fatal.ErrorCode())
+	}
+}
+
+// Before the pod has ever been listed, absence is list lag, not a dead pod.
+func TestPodSSHPollerToleratesListLag(t *testing.T) {
+	state, err := PodSSHPoller(&fakePodLister{}, "pod-1", nil, nil)(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if state.Ready || state.Detail != "pod not listed yet" {
+		t.Fatalf("state = %+v, want a not-ready list-lag state", state)
 	}
 }
 

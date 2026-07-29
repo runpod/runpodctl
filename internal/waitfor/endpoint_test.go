@@ -85,9 +85,15 @@ func TestEndpointWorkerPoller(t *testing.T) {
 	}
 }
 
+// The poller surfaces a health failure and lets Until decide whether it is worth
+// retrying (it is: /health 404s an endpoint id it has not propagated yet).
 func TestEndpointWorkerPollerReturnsHealthErrors(t *testing.T) {
-	client := &fakeHealthClient{err: errors.New("not_found")}
-	if _, err := EndpointWorkerPoller(client, "endpoint-1")(context.Background()); err == nil {
+	client := &fakeHealthClient{err: errors.New("endpoint not found")}
+	_, err := EndpointWorkerPoller(client, "endpoint-1")(context.Background())
+	if err == nil {
 		t.Fatal("expected the health error to propagate")
+	}
+	if isFatalPollError(err) {
+		t.Error("a health read failure must not be fatal to the wait")
 	}
 }

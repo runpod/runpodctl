@@ -156,10 +156,21 @@ what each one waits for, precisely:
   starts no worker until a request arrives, so "a worker is ready" could never
   become true; the cli refuses up front instead of timing out. a warm worker
   bills while it runs.
-- `pod create --wait` needs ssh, so it cannot be combined with `--ssh=false`. on
-  `--compute-type CPU` it warns: cpu pods are created over rest, which cannot
-  request runpod-managed ssh, so only an image that starts its own sshd will
-  become reachable.
+- `pod create --wait` needs ssh, so it cannot be combined with `--ssh=false`. two
+  combinations warn on stderr instead of failing, because they are satisfiable but
+  often are not:
+  - `--compute-type CPU` — cpu pods are created over rest, which cannot request
+    runpod-managed ssh, so only an image that starts its own sshd becomes
+    reachable.
+  - `--cloud-type COMMUNITY` without `--public-ip` — community cloud only maps a
+    public ssh port on a machine that has a public ip, and `--public-ip` is what
+    asks the scheduler for one.
+- a transient api failure during a wait does **not** end it: the poll error is
+  reported as the current state and polling continues to the deadline, because the
+  resource already exists and bills. only a failure that cannot resolve stops the
+  wait early — bad credentials (`unauthorized`, `forbidden`, `no_credentials`), a
+  rejected request (`bad_request`), a pod in a terminal state (`conflict`) or a pod
+  that disappeared mid-wait (`not_found`).
 
 ### file transfer
 
@@ -261,6 +272,7 @@ exit code is non-zero. branch on `code`, never on the message text:
 | `error` | human-readable message, unwrapped (never a nested json blob) |
 | `code` | stable, lowercase. present on every error from the resource commands (see the caveat below) |
 | `status` | http status, **only** when the failure came back from a rest call |
+| `id` | id of a resource the failure left behind, **only** when one exists — a `pod create --wait` that timed out has already bought a pod, and this is how you find it without parsing the message |
 
 `status` is deliberately absent when the api answered 200 with an empty result
 (graphql reports a missing resource that way), so `code` is the field to branch
@@ -276,8 +288,8 @@ codes the cli generates:
 | `graphql_error` | graphql returned an errors array (http 200) |
 | `no_credentials` | no api key configured — run `runpodctl doctor` or set `RUNPOD_API_KEY` |
 | `network_error` | the api could not be reached at all — dns, refused, tls, timeout. the only code that means "transient, retry" |
-| `wait_timeout` | `--wait` gave up before the resource was usable. the resource **was created and still bills** — its id and the last known state are in the message |
-| `wait_interrupted` | `--wait` was cancelled (ctrl-c / SIGTERM). same as above: the resource exists, its id is in the message |
+| `wait_timeout` | `--wait` gave up before the resource was usable. the resource **was created and still bills** — the last known state is in the message and the id is in `id` |
+| `wait_interrupted` | `--wait` was cancelled (ctrl-c / SIGTERM). same as above: the resource exists, and `id` names it |
 | `cli_error` | anything else local: validation, config, bad input (including a malformed `RUNPOD_API_URL`) |
 
 the api may also return its own code, which is passed through lowercased, so

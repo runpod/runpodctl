@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -131,6 +133,8 @@ func TestResolveWaitTimeout(t *testing.T) {
 		name         string
 		setup        func()
 		computeType  string
+		cloudType    string
+		publicIP     bool
 		changedFlags []string
 		want         time.Duration
 		wantErr      string
@@ -183,6 +187,31 @@ func TestResolveWaitTimeout(t *testing.T) {
 			want:        10 * time.Minute,
 			wantStderr:  "cpu pods are created through the rest api",
 		},
+		{
+			// no public ip means no publicly mapped port 22 to probe, so this wait
+			// can time out for a reason the flags do not make obvious.
+			name:        "community cloud without a public ip is called out",
+			setup:       func() { createWait = true },
+			computeType: "GPU",
+			cloudType:   "COMMUNITY",
+			want:        10 * time.Minute,
+			wantStderr:  "community cloud only maps a public ssh port",
+		},
+		{
+			name:        "community cloud with a public ip is fine",
+			setup:       func() { createWait = true },
+			computeType: "GPU",
+			cloudType:   "COMMUNITY",
+			publicIP:    true,
+			want:        10 * time.Minute,
+		},
+		{
+			name:        "secure cloud says nothing about public ips",
+			setup:       func() { createWait = true },
+			computeType: "GPU",
+			cloudType:   "SECURE",
+			want:        10 * time.Minute,
+		},
 	}
 
 	for _, tc := range cases {
@@ -193,7 +222,11 @@ func TestResolveWaitTimeout(t *testing.T) {
 			}
 			cmd, stderr := waitCommand(tc.changedFlags...)
 
-			got, err := resolveWaitTimeout(cmd, tc.computeType)
+			cloudType := tc.cloudType
+			if cloudType == "" {
+				cloudType = "SECURE"
+			}
+			got, err := resolveWaitTimeout(cmd, tc.computeType, cloudType, tc.publicIP)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("error = %v, want it to contain %q", err, tc.wantErr)
@@ -289,8 +322,13 @@ func TestWaitForPodSSH(t *testing.T) {
 		podSSHProbe = func(context.Context, string) error { return nil }
 
 		cmd, stderr := waitCommand()
-		if err := waitForPodSSH(cmd, "pod-1", time.Minute); err != nil {
+		addr, err := waitForPodSSH(cmd, "pod-1", time.Minute)
+		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
+		}
+		// the proven address comes back so a failed re-read can still report it.
+		if addr != "1.2.3.4:51227" {
+			t.Errorf("addr = %q, want 1.2.3.4:51227", addr)
 		}
 		if lister.calls != 1 {
 			t.Errorf("polled %d times, want 1", lister.calls)
@@ -308,7 +346,7 @@ func TestWaitForPodSSH(t *testing.T) {
 		}
 
 		cmd, stderr := waitCommand()
-		err := waitForPodSSH(cmd, "pod-1", 2*time.Millisecond)
+		_, err := waitForPodSSH(cmd, "pod-1", 2*time.Millisecond)
 		if err == nil {
 			t.Fatal("expected a timeout")
 		}
@@ -320,8 +358,11 @@ func TestWaitForPodSSH(t *testing.T) {
 		if waitErr.ErrorCode() != waitfor.CodeTimeout {
 			t.Errorf("code = %q, want %q", waitErr.ErrorCode(), waitfor.CodeTimeout)
 		}
+		if id := resourceIDOf(err); id != "pod-1" {
+			t.Errorf("error id = %q, want pod-1 as machine-readable data", id)
+		}
 		for _, want := range []string{
-			"pod pod-1 was created and is still billing",
+			"pod pod-1 was created",
 			"runpodctl pod delete pod-1",
 			"connection refused",
 		} {
@@ -337,9 +378,181 @@ func TestWaitForPodSSH(t *testing.T) {
 	t.Run("propagates a client failure", func(t *testing.T) {
 		newPodWaitLister = func() (waitfor.PodLister, error) { return nil, api.ErrNoCredentials }
 		cmd, _ := waitCommand()
-		err := waitForPodSSH(cmd, "pod-1", time.Minute)
+		_, err := waitForPodSSH(cmd, "pod-1", time.Minute)
 		if !errors.Is(err, api.ErrNoCredentials) {
 			t.Fatalf("expected the no_credentials sentinel, got %v", err)
+		}
+	})
+}
+
+// resourceIDOf reads the machine-readable resource id off an error, the way
+// internal/output does when it emits the json error object.
+func resourceIDOf(err error) string {
+	var ider interface{ ErrorResourceID() string }
+	if errors.As(err, &ider) {
+		return ider.ErrorResourceID()
+	}
+	return ""
+}
+
+// A wait that is cancelled (ctrl-c) must not lose the pod: same coded error,
+// same id, different code from a timeout.
+func TestWaitForPodSSHInterrupted(t *testing.T) {
+	oldLister, oldProbe, oldInterval := newPodWaitLister, podSSHProbe, waitPollInterval
+	t.Cleanup(func() { newPodWaitLister, podSSHProbe, waitPollInterval = oldLister, oldProbe, oldInterval })
+	waitPollInterval = time.Millisecond
+
+	lister := &fakePodLister{pods: []*api.LegacyPod{runningPodWithSSH("pod-1", false)}}
+	newPodWaitLister = func() (waitfor.PodLister, error) { return lister, nil }
+
+	oldNotify := notifyWaitSignals
+	t.Cleanup(func() { notifyWaitSignals = oldNotify })
+	var registered []os.Signal
+	notifyWaitSignals = func(parent context.Context, signals ...os.Signal) (context.Context, context.CancelFunc) {
+		registered = signals
+		ctx, cancel := context.WithCancel(parent)
+		cancel() // stand in for the signal arriving during the wait
+		return ctx, cancel
+	}
+
+	cmd, _ := waitCommand()
+	_, err := waitForPodSSH(cmd, "pod-1", time.Minute)
+	var waitErr *waitfor.Error
+	if !errors.As(err, &waitErr) {
+		t.Fatalf("expected a *waitfor.Error, got %#v", err)
+	}
+	if waitErr.ErrorCode() != waitfor.CodeInterrupted {
+		t.Errorf("code = %q, want %q", waitErr.ErrorCode(), waitfor.CodeInterrupted)
+	}
+	if resourceIDOf(err) != "pod-1" {
+		t.Errorf("a cancelled wait must still carry the pod id, got %q", resourceIDOf(err))
+	}
+	if !strings.Contains(err.Error(), "runpodctl pod delete pod-1") {
+		t.Errorf("error = %q, want the delete command", err.Error())
+	}
+
+	wantSignals := map[os.Signal]bool{os.Interrupt: false, syscall.SIGTERM: false}
+	for _, sig := range registered {
+		wantSignals[sig] = true
+	}
+	for sig, seen := range wantSignals {
+		if !seen {
+			t.Errorf("the wait must register for %v", sig)
+		}
+	}
+}
+
+// A pod that has exited can never become reachable, so the wait must end at once
+// rather than bill out the full timeout.
+func TestWaitForPodSSHFailsFastOnATerminalPod(t *testing.T) {
+	oldLister, oldProbe, oldInterval := newPodWaitLister, podSSHProbe, waitPollInterval
+	t.Cleanup(func() { newPodWaitLister, podSSHProbe, waitPollInterval = oldLister, oldProbe, oldInterval })
+	waitPollInterval = time.Hour // any poll after the first would hang the test
+
+	lister := &fakePodLister{pods: []*api.LegacyPod{{ID: "pod-1", DesiredStatus: "EXITED"}}}
+	newPodWaitLister = func() (waitfor.PodLister, error) { return lister, nil }
+
+	cmd, _ := waitCommand()
+	_, err := waitForPodSSH(cmd, "pod-1", time.Hour)
+	if err == nil {
+		t.Fatal("expected an error for an exited pod")
+	}
+	if lister.calls != 1 {
+		t.Errorf("polled %d times, want 1: a terminal status must stop the wait", lister.calls)
+	}
+	var fatal *waitfor.FatalError
+	if !errors.As(err, &fatal) || fatal.ErrorCode() != "conflict" {
+		t.Fatalf("expected a conflict-coded fatal error, got %#v", err)
+	}
+	if resourceIDOf(err) != "pod-1" {
+		t.Errorf("error id = %q, want pod-1", resourceIDOf(err))
+	}
+}
+
+// --wait prints the `pod get` shape rather than the create response, because the
+// ssh block is the entire product of waiting. A re-read that silently degrades
+// to {"ssh":{"error":...}} must not be reported as success.
+func TestPodDetailsWithSSH(t *testing.T) {
+	oldFetch, oldTries, oldBackoff := fetchPodDetailsFn, postWaitReadTries, postWaitReadBackoff
+	t.Cleanup(func() {
+		fetchPodDetailsFn, postWaitReadTries, postWaitReadBackoff = oldFetch, oldTries, oldBackoff
+	})
+	postWaitReadBackoff = 0
+
+	ready := &podDetails{
+		Pod: &api.Pod{ID: "pod-1"},
+		SSH: map[string]interface{}{"ssh_command": "ssh -i k root@1.2.3.4 -p 51227", "port": 51227},
+	}
+	degraded := &podDetails{Pod: &api.Pod{ID: "pod-1"}, SSH: map[string]interface{}{"error": "ssh info unavailable"}}
+
+	t.Run("returns the enriched read", func(t *testing.T) {
+		calls := 0
+		fetchPodDetailsFn = func(string, bool, bool) (*podDetails, error) {
+			calls++
+			return ready, nil
+		}
+		got, err := podDetailsWithSSH("pod-1", "1.2.3.4:51227")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got.SSH["ssh_command"] == nil {
+			t.Errorf("expected the live ssh command in the payload: %v", got.SSH)
+		}
+		if calls != 1 {
+			t.Errorf("read the pod %d times, want 1", calls)
+		}
+	})
+
+	t.Run("retries a degraded ssh block", func(t *testing.T) {
+		calls := 0
+		fetchPodDetailsFn = func(string, bool, bool) (*podDetails, error) {
+			calls++
+			if calls == 1 {
+				return degraded, nil
+			}
+			return ready, nil
+		}
+		got, err := podDetailsWithSSH("pod-1", "1.2.3.4:51227")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got.SSH["ssh_command"] == nil {
+			t.Errorf("expected the live ssh command after the retry: %v", got.SSH)
+		}
+		if calls != 2 {
+			t.Errorf("read the pod %d times, want 2", calls)
+		}
+	})
+
+	t.Run("a permanently degraded ssh block is an error, not a silent success", func(t *testing.T) {
+		fetchPodDetailsFn = func(string, bool, bool) (*podDetails, error) { return degraded, nil }
+		_, err := podDetailsWithSSH("pod-1", "1.2.3.4:51227")
+		if err == nil {
+			t.Fatal("expected an error rather than a payload with no ssh info")
+		}
+		for _, want := range []string{"pod-1", "1.2.3.4:51227", "ssh info unavailable", "runpodctl pod get pod-1"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error = %q, want it to contain %q", err.Error(), want)
+			}
+		}
+		if resourceIDOf(err) != "pod-1" {
+			t.Errorf("error id = %q, want pod-1", resourceIDOf(err))
+		}
+	})
+
+	t.Run("a failing read names the pod", func(t *testing.T) {
+		fetchPodDetailsFn = func(string, bool, bool) (*podDetails, error) {
+			return nil, errors.New("failed to get pod: boom")
+		}
+		_, err := podDetailsWithSSH("pod-1", "1.2.3.4:51227")
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !strings.Contains(err.Error(), "pod-1") || !strings.Contains(err.Error(), "boom") {
+			t.Errorf("error = %q, want the pod id and the cause", err.Error())
+		}
+		if resourceIDOf(err) != "pod-1" {
+			t.Errorf("error id = %q, want pod-1", resourceIDOf(err))
 		}
 	})
 }

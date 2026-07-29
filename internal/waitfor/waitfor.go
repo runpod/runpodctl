@@ -13,6 +13,7 @@ package waitfor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -45,15 +46,68 @@ type State struct {
 	// progress output and, crucially, in the timeout error: "the last known
 	// state" is the only thing an agent has to debug a wait that did not finish.
 	Detail string
+	// Err is the poll error behind Detail, when the state came from a tolerated
+	// failure rather than from a successful read. Callers that need to preserve an
+	// error chain across the wait (errors.Is/As on the underlying failure) read it
+	// from the returned State.
+	Err error
 }
 
 // PollFunc answers whether a resource is usable yet.
 //
 // A poll that simply cannot answer yet (resource not visible, port not
-// allocated, no worker started) must return a not-ready State with a Detail
-// explaining why. Returning an error aborts the whole wait, so reserve it for
-// failures that will not fix themselves (bad credentials, malformed response).
+// allocated, no worker started) should return a not-ready State with a Detail
+// explaining why. A returned error is treated as "not ready, and here is why"
+// unless it is fatal (see FatalError and Until): a wait must survive a transient
+// api failure, because the resource it is waiting on already exists and bills.
 type PollFunc func(ctx context.Context) (State, error)
+
+// FatalError marks a poll failure that will never resolve, so Until stops
+// immediately instead of retrying until the deadline. Use it for a resource that
+// cannot become ready (a pod that has exited, one that no longer exists), not
+// for an api that happened to answer badly.
+type FatalError struct {
+	// Code is the stable machine-readable code to emit. It must come from the
+	// existing vocabulary in internal/api/client.go.
+	Code string
+	Err  error
+}
+
+// Error implements the error interface.
+func (e *FatalError) Error() string { return e.Err.Error() }
+
+// Unwrap exposes the underlying error.
+func (e *FatalError) Unwrap() error { return e.Err }
+
+// ErrorCode returns the stable code for the failure.
+func (e *FatalError) ErrorCode() string { return e.Code }
+
+// fatalPollCodes are the error codes that no amount of polling fixes: the
+// request will be rejected identically every time. Everything else (network
+// failures, 5xx, rate limits, graphql hiccups, and the invoke service 404ing an
+// endpoint id it has not learned yet) is transient by default and must not end a
+// wait — the resource exists and is billing, so giving up early is the expensive
+// answer, and reporting it with a transport code would tell an agent to retry
+// the create and buy a second one.
+var fatalPollCodes = map[string]bool{
+	"unauthorized":   true,
+	"forbidden":      true,
+	"no_credentials": true,
+	"bad_request":    true,
+}
+
+// isFatalPollError reports whether err should end the wait immediately.
+func isFatalPollError(err error) bool {
+	var fatal *FatalError
+	if errors.As(err, &fatal) {
+		return true
+	}
+	var coder interface{ ErrorCode() string }
+	if errors.As(err, &coder) {
+		return fatalPollCodes[coder.ErrorCode()]
+	}
+	return false
+}
 
 // Options configures Until. The zero value is usable: every field falls back to
 // a default, and a nil Progress silences progress output.
@@ -149,9 +203,14 @@ func Until(ctx context.Context, poll PollFunc, opts Options) (State, error) {
 	for {
 		state, err := poll(ctx)
 		if err != nil {
-			// keep the underlying code (unauthorized, not_found, ...) and still
-			// name the resource, so the id is never lost.
-			return last, fmt.Errorf("waiting for %s: %w", opts.Label, err)
+			if isFatalPollError(err) {
+				// keep the underlying code (unauthorized, conflict, ...) and still
+				// name the resource, so the id is never lost.
+				return last, fmt.Errorf("waiting for %s: %w", opts.Label, err)
+			}
+			// a transient failure is just an unknown state: keep waiting, and carry
+			// the reason into progress and into the timeout error.
+			state = State{Detail: err.Error(), Err: err}
 		}
 		last = state
 		elapsed := now().Sub(start)

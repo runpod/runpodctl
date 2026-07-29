@@ -100,7 +100,7 @@ func init() {
 	createCmd.Flags().StringVar(&createStopAfter, "stop-after", "", "auto-stop datetime (e.g., 2026-04-15T00:00:00Z)")
 	createCmd.Flags().StringVar(&createTerminateAfter, "terminate-after", "", "auto-terminate datetime (e.g., 2026-04-15T00:00:00Z)")
 	createCmd.Flags().StringVar(&createCompliance, "compliance", "", "comma-separated compliance requirements (e.g., HIPAA,SOC_2_TYPE_2)")
-	createCmd.Flags().BoolVar(&createWait, "wait", false, "block until ssh is reachable (tcp connect to the pod's public port 22 answers with an ssh banner; no key or handshake needed), then print the pod as 'pod get' does")
+	createCmd.Flags().BoolVar(&createWait, "wait", false, "block until ssh is reachable (tcp connect to the pod's public port 22 answers with an ssh banner; no key or handshake needed), then print the pod as 'pod get' does. needs a publicly mapped port 22, so community cloud also needs --public-ip")
 	createCmd.Flags().StringVar(&createWaitTimeout, "wait-timeout", defaultWaitTimeout, "max time to wait with --wait, e.g. 90s, 10m, 1h; on timeout the pod is kept and the error carries its id")
 }
 
@@ -163,7 +163,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	waitTimeout, err := resolveWaitTimeout(cmd, computeType)
+	waitTimeout, err := resolveWaitTimeout(cmd, computeType, cloudType, supportPublicIP)
 	if err != nil {
 		return err
 	}
@@ -192,16 +192,15 @@ func runCreate(cmd *cobra.Command, args []string) error {
 			// the pod exists but we cannot address it; say so rather than waiting.
 			return idErr
 		}
-		if waitErr := waitForPodSSH(cmd, podID, waitTimeout); waitErr != nil {
+		addr, waitErr := waitForPodSSH(cmd, podID, waitTimeout)
+		if waitErr != nil {
 			return waitErr
 		}
 		// re-read: the create response (either shape) has no live ssh info, and
 		// handing back a pod you can connect to is the entire point of --wait.
-		details, detailsErr := fetchPodDetails(podID, false, false)
+		details, detailsErr := podDetailsWithSSH(podID, addr)
 		if detailsErr != nil {
-			// ssh came up but the re-read did not: name the pod so the id is not
-			// lost between a successful create and a failed read.
-			return fmt.Errorf("pod %s is ready but reading it back failed: %w", podID, detailsErr)
+			return detailsErr
 		}
 		return output.Print(details, &output.Config{Format: format})
 	}
@@ -212,7 +211,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 // resolveWaitTimeout validates the --wait flag combination and returns the
 // timeout to use. It runs before the pod is created so an unsatisfiable
 // combination costs nothing.
-func resolveWaitTimeout(cmd *cobra.Command, computeType string) (time.Duration, error) {
+func resolveWaitTimeout(cmd *cobra.Command, computeType, cloudType string, supportPublicIP bool) (time.Duration, error) {
 	if !createWait {
 		if cmd.Flags().Changed("wait-timeout") {
 			fmt.Fprintln(cmd.ErrOrStderr(), "note: --wait-timeout has no effect without --wait; ignoring")
@@ -237,22 +236,36 @@ func resolveWaitTimeout(cmd *cobra.Command, computeType string) (time.Duration, 
 		fmt.Fprintln(cmd.ErrOrStderr(), "note: cpu pods are created through the rest api, which cannot request runpod-managed ssh; --wait only succeeds if the image starts sshd itself")
 	}
 
+	if cloudType == "COMMUNITY" && !supportPublicIP {
+		// ssh readiness needs port 22 mapped to a public ip. on community cloud
+		// that only happens on a machine with a public ip, which is what
+		// --public-ip asks the scheduler for; without it the pod can land
+		// somewhere that never publishes a port and the wait can only time out.
+		// a warning rather than a refusal: the pod may still land on a machine
+		// that does publish one, and refusing would remove a working combination.
+		fmt.Fprintln(cmd.ErrOrStderr(), "note: community cloud only maps a public ssh port on machines with a public ip; add --public-ip (or use --cloud-type SECURE) or --wait may never see one")
+	}
+
 	return timeout, nil
 }
 
 // injection points for the wait, so its tests neither sleep nor hit the network.
 var (
-	newPodWaitLister = func() (waitfor.PodLister, error) { return api.NewGraphQLClient() }
-	podSSHProbe      waitfor.Prober // nil means waitfor.ProbeSSH
-	waitPollInterval = waitfor.DefaultInterval
+	newPodWaitLister    = func() (waitfor.PodLister, error) { return api.NewGraphQLClient() }
+	podSSHProbe         waitfor.Prober // nil means waitfor.ProbeSSH
+	waitPollInterval    = waitfor.DefaultInterval
+	notifyWaitSignals   = signal.NotifyContext
+	fetchPodDetailsFn   = fetchPodDetails
+	postWaitReadTries   = 3
+	postWaitReadBackoff = 2 * time.Second
 )
 
-// waitForPodSSH blocks until the pod's ssh is reachable. Progress goes to
-// stderr; stdout stays a single json object.
-func waitForPodSSH(cmd *cobra.Command, podID string, timeout time.Duration) error {
+// waitForPodSSH blocks until the pod's ssh is reachable and returns the address
+// that answered. Progress goes to stderr; stdout stays a single json object.
+func waitForPodSSH(cmd *cobra.Command, podID string, timeout time.Duration) (string, error) {
 	lister, err := newPodWaitLister()
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	ctx := cmd.Context()
@@ -261,19 +274,60 @@ func waitForPodSSH(cmd *cobra.Command, podID string, timeout time.Duration) erro
 	}
 	// ctrl-c cancels the wait but must not lose the pod: the error below carries
 	// its id and the delete command, because the pod bills either way.
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	ctx, stop := notifyWaitSignals(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if _, err := waitfor.Until(ctx, waitfor.PodSSHPoller(lister, podID, podSSHProbe), waitfor.Options{
+	var addr string
+	if _, err := waitfor.Until(ctx, waitfor.PodSSHPoller(lister, podID, podSSHProbe, &addr), waitfor.Options{
 		Label:    "ssh on pod " + podID,
 		Timeout:  timeout,
 		Interval: waitPollInterval,
 		Progress: cmd.ErrOrStderr(),
 	}); err != nil {
-		return fmt.Errorf("%w; pod %s was created and is still billing: 'runpodctl pod get %s' or 'runpodctl pod delete %s'", err, podID, podID, podID)
+		// The id goes into the error object as data, not only into the prose: a
+		// caller must not have to regex a message to avoid leaking a billed pod.
+		// The wording stops short of asserting the pod is still running, because
+		// the wait may have ended precisely because it was terminated out of band.
+		return "", output.WithResourceID(podID, fmt.Errorf("%w; pod %s was created: 'runpodctl pod get %s' to inspect it, 'runpodctl pod delete %s' if it is still running (pods bill by the second)", err, podID, podID, podID))
 	}
 
-	return nil
+	return addr, nil
+}
+
+// podDetailsWithSSH re-reads the pod once ssh is up, retrying while the read
+// comes back without live ssh info.
+//
+// fetchPodDetails degrades to an {"error": ...} ssh blob when its graphql read
+// fails. For `pod get` that best-effort answer is right, but for
+// `pod create --wait` it would mean exiting 0 with the one field the flag exists
+// to produce missing — a caller reading .ssh.ssh_command would get nothing and no
+// signal. The failure is transient by nature (the wait just read that same list
+// successfully), so retry, and fail loudly rather than quietly if it persists.
+func podDetailsWithSSH(podID, addr string) (*podDetails, error) {
+	var reason error
+	for attempt := 1; attempt <= postWaitReadTries; attempt++ {
+		if attempt > 1 {
+			time.Sleep(postWaitReadBackoff)
+		}
+		details, err := fetchPodDetailsFn(podID, false, false)
+		switch {
+		case err != nil:
+			reason = err
+		case sshInfoMissing(details):
+			reason = fmt.Errorf("the pod read back without live ssh info: %s", sshInfoError(details))
+		default:
+			return details, nil
+		}
+	}
+
+	return nil, output.WithResourceID(podID, fmt.Errorf("pod %s is running and ssh answered at %s, but reading the pod back failed: %w; retry with 'runpodctl pod get %s'", podID, addrOrUnknown(addr), reason, podID))
+}
+
+func addrOrUnknown(addr string) string {
+	if addr == "" {
+		return "its public ssh port"
+	}
+	return addr
 }
 
 // podIDFrom pulls the pod id out of either create response shape: the rest path

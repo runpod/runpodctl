@@ -285,9 +285,14 @@ func PodSSHConnection(podId string) (*SSHConnection, error) {
 	var podIp string
 	var podPort int
 
+	// the two failure messages below are the legacy ones, verbatim, and the poll
+	// error is wrapped rather than flattened into a string so errors.Is/As still
+	// reaches the typed no_credentials sentinel.
+	var lastInfoErr error
 	if _, err := waitfor.Until(context.Background(), func(context.Context) (waitfor.State, error) {
 		ip, port, infoErr := getPodSSHInfo(podId)
 		if infoErr != nil {
+			lastInfoErr = infoErr
 			return waitfor.State{Detail: infoErr.Error()}, nil
 		}
 		podIp, podPort = ip, port
@@ -298,7 +303,10 @@ func PodSSHConnection(podId string) (*SSHConnection, error) {
 		Interval: pollInterval,
 		Progress: nil,
 	}); err != nil {
-		return nil, err
+		if lastInfoErr != nil {
+			return nil, fmt.Errorf("failed to get SSH info for pod %s: %w", podId, lastInfoErr)
+		}
+		return nil, fmt.Errorf("timeout waiting for pod %s to come online", podId)
 	}
 
 	// Configure the SSH client
