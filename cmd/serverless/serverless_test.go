@@ -29,7 +29,10 @@ func TestServerlessCmd_Structure(t *testing.T) {
 	}
 
 	// check subcommands exist
-	expectedSubcommands := []string{"list", "get <endpoint-id>", "create", "update <endpoint-id>", "delete <endpoint-id>"}
+	expectedSubcommands := []string{
+		"list", "get <endpoint-id>", "create", "update <endpoint-id>", "delete <endpoint-id>",
+		"health <endpoint-id>", "run <endpoint-id>", "status <endpoint-id> <job-id>",
+	}
 	for _, expected := range expectedSubcommands {
 		found := false
 		for _, cmd := range Cmd.Commands() {
