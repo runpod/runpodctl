@@ -1,8 +1,6 @@
 package hub
 
 import (
-	"fmt"
-
 	"github.com/runpod/runpodctl/internal/api"
 	"github.com/runpod/runpodctl/internal/output"
 
@@ -47,7 +45,6 @@ func runSearch(cmd *cobra.Command, args []string) error {
 
 	client, err := api.NewClient()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
@@ -64,13 +61,13 @@ func runSearch(cmd *cobra.Command, args []string) error {
 
 	listings, err := client.ListListings(opts)
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
-	if len(listings) == 0 {
-		fmt.Printf("no hub repos found matching %q\n", searchTerm)
-		return nil
+	// an empty result set is still data: emit [] rather than prose on stdout, so a
+	// caller piping this into a json parser does not break on "no X found".
+	if listings == nil {
+		listings = []api.Listing{}
 	}
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())

@@ -2,10 +2,12 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	internalapi "github.com/runpod/runpodctl/internal/api"
 	"github.com/spf13/viper"
 )
 
@@ -62,4 +64,29 @@ func TestQueryFallsBackToConfiguredAPIURL(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	defer res.Body.Close()
+}
+
+func TestErrNoCredentialsIsMatchableFromThisPackage(t *testing.T) {
+	// api is a public package, so callers outside the module must be able to
+	// errors.Is against the sentinel rather than string-matching the message.
+	// It must also be the SAME value the rest client returns, so one check covers
+	// every path.
+	t.Setenv("RUNPOD_API_KEY", "")
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	_, err := Query(Input{Query: "{ myself { id } }"})
+	if err == nil {
+		t.Fatal("expected an error with no api key configured")
+	}
+	if !errors.Is(err, ErrNoCredentials) {
+		t.Errorf("errors.Is(err, ErrNoCredentials) = false; err = %v", err)
+	}
+	if !errors.Is(err, internalapi.ErrNoCredentials) {
+		t.Error("the public sentinel must be the same value as internal/api's")
+	}
+	var apiErr *internalapi.APIError
+	if !errors.As(err, &apiErr) || apiErr.ErrorCode() != "no_credentials" {
+		t.Errorf("expected code no_credentials, got %v", err)
+	}
 }

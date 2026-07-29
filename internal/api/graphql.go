@@ -36,7 +36,10 @@ type GraphQLInput struct {
 func NewGraphQLClient() (*GraphQLClient, error) {
 	apiKey := configenv.APIKey()
 	if apiKey == "" {
-		return nil, fmt.Errorf("api key not found. run 'runpodctl config --apiKey=xxx' or set RUNPOD_API_KEY")
+		// same typed sentinel as the rest client: every missing-key path must
+		// report no_credentials, or an agent branching on that code silently
+		// misses pod create, pod get, template create/update and all of ssh.
+		return nil, ErrNoCredentials
 	}
 
 	apiURL := configenv.GraphQLURL()
@@ -89,7 +92,7 @@ func (c *GraphQLClient) Query(input GraphQLInput) ([]byte, error) {
 	}
 
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("graphql error: status %d: %s", resp.StatusCode, string(body))
+		return nil, parseGraphQLHTTPError(body, resp.StatusCode)
 	}
 
 	return body, nil
@@ -137,7 +140,7 @@ func (c *GraphQLClient) GetPublicSSHKeys() (string, []SSHKey, error) {
 	}
 
 	if len(data.Errors) > 0 {
-		return "", nil, fmt.Errorf("graphql error: %s", data.Errors[0].Message)
+		return "", nil, newGraphQLError(data.Errors[0].Message)
 	}
 
 	// Parse the public key string into a list of SSHKey structs
@@ -366,7 +369,11 @@ func (c *GraphQLClient) CreatePod(input *CreatePodGQLInput) (map[string]interfac
 	}
 
 	if len(data.Errors) > 0 {
-		return nil, fmt.Errorf("%s", data.Errors[0].Message)
+		// typed, so it carries graphql_error and — importantly — bails out of
+		// asUsageError before the string fallback. this was the only site where a
+		// server-controlled message could reach that fallback and be misread as a
+		// usage error; the other 18 already used newGraphQLError.
+		return nil, newGraphQLError(data.Errors[0].Message)
 	}
 
 	if data.Data.Pod == nil {
@@ -483,7 +490,7 @@ func (c *GraphQLClient) GetPods() ([]*LegacyPod, error) {
 	}
 
 	if len(data.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", data.Errors[0].Message)
+		return nil, newGraphQLError(data.Errors[0].Message)
 	}
 
 	return data.Data.Myself.Pods, nil
@@ -535,7 +542,7 @@ func (c *GraphQLClient) GetNetworkVolumes() ([]*LegacyNetworkVolume, error) {
 	}
 
 	if len(data.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", data.Errors[0].Message)
+		return nil, newGraphQLError(data.Errors[0].Message)
 	}
 
 	return data.Data.Myself.NetworkVolumes, nil

@@ -4,7 +4,7 @@ list available gpu types
 
 ### Synopsis
 
-list available gpu types with stock status
+list available gpu types with on-demand pricing and per-datacenter stock status
 
 ```
 runpodctl gpu list [flags]

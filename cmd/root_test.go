@@ -2,8 +2,11 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/runpod/runpodctl/internal/api"
 )
 
 func TestRootCmd_Structure(t *testing.T) {
@@ -104,6 +107,64 @@ func TestRootCmd_OutputFlag(t *testing.T) {
 	}
 }
 
+func TestRootCmd_SilencesCobraOutput(t *testing.T) {
+	root := GetRootCmd()
+	if !root.SilenceUsage {
+		t.Error("SilenceUsage should be true so runtime errors don't dump usage")
+	}
+	if !root.SilenceErrors {
+		t.Error("SilenceErrors should be true so Cobra doesn't re-print errors")
+	}
+}
+
+func TestAsUsageError(t *testing.T) {
+	root := GetRootCmd()
+
+	usageCases := []string{
+		`unknown command "foo" for "runpodctl"`,
+		"unknown flag: --bogus",
+		"accepts 1 arg(s), received 0",
+		"requires at least 1 arg(s), only received 0",
+		`invalid argument "x" for "--count"`,
+		// ValidateRequiredFlags bypasses SetFlagErrorFunc, so it must match here.
+		`required flag(s) "image", "name" not set`,
+	}
+	for _, msg := range usageCases {
+		if _, ok := asUsageError(root, errors.New(msg)); !ok {
+			t.Errorf("expected %q to be classified as a usage error", msg)
+		}
+	}
+
+	runtimeCases := []string{
+		"pod not found",
+		"api request failed with status 500",
+		"failed to create endpoint: server_error",
+	}
+	for _, msg := range runtimeCases {
+		if _, ok := asUsageError(root, errors.New(msg)); ok {
+			t.Errorf("expected %q NOT to be classified as a usage error", msg)
+		}
+	}
+
+	// typed api/graphql errors must never be classified as usage errors, even
+	// when the server message happens to start with a usage-ish word.
+	if _, ok := asUsageError(root, &api.APIError{Message: "invalid argument: region", Status: 400}); ok {
+		t.Error("a typed *api.APIError must not be classified as a usage error")
+	}
+	if _, ok := asUsageError(root, &api.GraphQLError{Message: "requires a valid gpu"}); ok {
+		t.Error("a typed *api.GraphQLError must not be classified as a usage error")
+	}
+
+	// an already-wrapped usageError is recognized regardless of message.
+	wrapped := &usageError{cmd: root, err: errors.New("some flag problem")}
+	if _, ok := asUsageError(root, wrapped); !ok {
+		t.Error("wrapped *usageError should be recognized")
+	}
+	if wrapped.ErrorCode() != "usage_error" {
+		t.Errorf("usageError code = %q, want 'usage_error'", wrapped.ErrorCode())
+	}
+}
+
 func TestRootCmd_HelpMentionsLegacy(t *testing.T) {
 	root := GetRootCmd()
 
@@ -121,5 +182,35 @@ func TestRootCmd_HelpMentionsLegacy(t *testing.T) {
 	}
 	if !strings.Contains(output, "get models") {
 		t.Error("help should mention legacy model command")
+	}
+}
+
+// TestModelValidationMessagesAreNotUsageErrors closes a gap the cmd/model tests
+// cannot see: they assert on output.Error directly, but Execute runs
+// asUsageError FIRST, and any message beginning with a cobra usage prefix gets
+// reclassified as usage_error and followed by a usage dump. A command author
+// rewording a validation error into "invalid argument: …" would silently change
+// its code and add ~1.3KB of usage text to stderr, with every cmd/model test
+// still green.
+func TestModelValidationMessagesAreNotUsageErrors(t *testing.T) {
+	root := GetRootCmd()
+
+	// the real messages returned by cmd/model's validation paths.
+	for _, msg := range []string{
+		`model-path "/x" does not exist`,
+		`model-path "/x" must be a directory`,
+		`model-path "/x" does not contain any files to upload`,
+		"--wait-for-hash requires --model-path",
+		"file-name is required when creating an upload",
+		"file-size is required when creating an upload",
+		"upload response missing upload session details",
+		"upload response missing model version uuid required by --wait-for-hash",
+		"unable to read model directory: stat /x: no such file or directory",
+		"unable to set graphql timeout: bad duration",
+		"upload completed but timed out waiting for the model hash; the model exists, do not re-upload: context deadline exceeded",
+	} {
+		if ue, ok := asUsageError(root, errors.New(msg)); ok {
+			t.Errorf("%q was classified as a usage error (%v) — it would print a usage dump and report usage_error", msg, ue)
+		}
 	}
 }

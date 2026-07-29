@@ -74,7 +74,6 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	client, err := api.NewClient()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
@@ -112,7 +111,6 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	template, err := client.CreateTemplate(req)
 	if err != nil {
-		output.Error(err)
 		return fmt.Errorf("failed to create template: %w", err)
 	}
 
@@ -130,7 +128,6 @@ func runCreate(cmd *cobra.Command, args []string) error {
 			} else {
 				labelErr = fmt.Errorf("failed to set port labels: %w", labelErr)
 			}
-			output.Error(labelErr)
 			return labelErr
 		}
 		template.PortsConfig = portLabels

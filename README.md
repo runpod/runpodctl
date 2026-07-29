@@ -24,6 +24,8 @@ _note: all pods automatically come with runpodctl installed with a pod-scoped ap
     - [serverless endpoints](#serverless-endpoints)
     - [file transfer](#file-transfer)
   - [output format](#output-format)
+    - [error format](#error-format)
+  - [environment variables](#environment-variables)
   - [legacy commands](#legacy-commands)
   - [release process](#release-process)
   - [acknowledgements](#acknowledgements)
@@ -136,6 +138,67 @@ runpodctl pod list                    # json (default)
 runpodctl pod list --output=table     # human-readable table
 runpodctl pod list --output=yaml      # yaml format
 ```
+
+### error format
+
+data goes to stdout; errors go to stderr as a single flat json object, and the
+exit code is non-zero. branch on `code`, never on the message text:
+
+```jsonc
+{"error":"failed to get endpoint: endpoint not found","code":"not_found","status":404}
+```
+
+| field | notes |
+| --- | --- |
+| `error` | human-readable message, unwrapped (never a nested json blob) |
+| `code` | stable, lowercase. present on every error from the resource commands (see the caveat below) |
+| `status` | http status, **only** when the failure came back from a rest call |
+
+`status` is deliberately absent when the api answered 200 with an empty result
+(graphql reports a missing resource that way), so `code` is the field to branch
+on — `if status == 404` misses every graphql not-found.
+
+codes the cli generates:
+
+| code | meaning |
+| --- | --- |
+| `usage_error` | your invocation was wrong (unknown command/flag, bad or missing args, missing required flags). usage text is printed after the json |
+| `not_found` | the resource does not exist |
+| `bad_request` `unauthorized` `forbidden` `conflict` `rate_limited` `server_error` `api_error` | derived from the rest status |
+| `graphql_error` | graphql returned an errors array (http 200) |
+| `no_credentials` | no api key configured — run `runpodctl doctor` or set `RUNPOD_API_KEY` |
+| `network_error` | the api could not be reached at all — dns, refused, tls, timeout. the only code that means "transient, retry" |
+| `cli_error` | anything else local: validation, config, bad input (including a malformed `RUNPOD_API_URL`) |
+
+the api may also return its own code, which is passed through lowercased, so
+treat the list as the set the cli generates rather than an exhaustive one.
+
+**known gaps.** the json error shape covers `pod`, `serverless`, `template`,
+`volume`, `registry`, `gpu`, `datacenter`, `billing`, `user`, `model`, `ssh`,
+`send`, `receive`, `hub` and `update`. these still print plaintext on stderr and
+carry no `code`:
+
+| surface | shape |
+| --- | --- |
+| legacy `get/create/remove/start/stop pod`, `create/remove pods`, `get cloud` | `Error: <msg>` via cobra, exit 1 |
+| `exec` | plaintext, exit 1 |
+| `project` | prints to **stdout** and exits 0 (bug, tracked as CON-816) |
+
+so a parser should tolerate a non-json line on stderr from those, and must not
+rely on the exit code for `project` until CON-816 lands.
+
+## environment variables
+
+| variable | default | what it sets |
+| --- | --- | --- |
+| `RUNPOD_API_KEY` | — | api key. also settable via `runpodctl doctor` or `~/.runpod/config.toml` |
+| `RUNPOD_API_URL` | `https://rest.runpod.io/v1` | rest control plane (config key `restApiUrl`) |
+| `RUNPOD_GRAPHQL_URL` | `https://api.runpod.io/graphql` | graphql control plane (config key `apiUrl`) |
+| `RUNPOD_INVOKE_URL` | `https://api.runpod.ai/v2` | base for the serverless invoke urls reported by `serverless create/get/list/update` (config key `invokeUrl`) |
+
+invoke is a separate service from the control plane: pointing `RUNPOD_API_URL`
+or `RUNPOD_GRAPHQL_URL` at a non-prod host does **not** move the invoke urls.
+override `RUNPOD_INVOKE_URL` explicitly when you need that.
 
 ## legacy commands
 

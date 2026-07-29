@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -51,29 +52,33 @@ const (
 // The GraphQL requests for uploading a model can take longer than the default
 // 10s, as the server needs to create pre-signed S3 URLs from R2, which can be
 // slow. So we bump it up to 1m so that we do not fail erroneously.
-func setModelGraphQLTimeout(cmd *cobra.Command) {
+//
+// Returns an error rather than exiting: cobra.CheckErr would print plaintext to
+// stderr and os.Exit(1), bypassing the single JSON error sink in cmd/root.go.
+func setModelGraphQLTimeout(cmd *cobra.Command) error {
 	timeoutFlag := cmd.InheritedFlags().Lookup(graphqlTimeoutFlagName)
 	if timeoutFlag != nil {
 		if timeoutFlag.Changed {
-			return
+			return nil
 		}
 
 		if err := timeoutFlag.Value.Set(modelGraphQLTimeoutValue.String()); err != nil {
-			cobra.CheckErr(fmt.Errorf("unable to set graphql timeout: %w", err))
+			return fmt.Errorf("unable to set graphql timeout: %w", err)
 		}
 
 		viper.Set(api.GraphQLTimeoutKey, modelGraphQLTimeoutValue)
-		return
+		return nil
 	}
 
 	// In the CLI-restructure flow, the inherited --graphql-timeout flag is removed.
 	// Preserve any explicit timeout already set in config/env, otherwise apply the
 	// safer model upload default.
 	if currentTimeout := viper.GetDuration(api.GraphQLTimeoutKey); currentTimeout > 0 {
-		return
+		return nil
 	}
 
 	viper.Set(api.GraphQLTimeoutKey, modelGraphQLTimeoutValue)
+	return nil
 }
 
 type completedPart struct {
@@ -153,7 +158,7 @@ var addCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(0),
 	Short: "add a model",
 	Long:  "add a model to the runpod model repository",
-	Run:   runAddModel,
+	RunE:  runAddModel,
 }
 
 var AddModelToRepoCmd = &cobra.Command{
@@ -162,7 +167,7 @@ var AddModelToRepoCmd = &cobra.Command{
 	Short:  "deprecated: use 'runpodctl model add'",
 	Long:   "",
 	Hidden: true,
-	Run:    runAddModel,
+	RunE:   runAddModel,
 }
 
 func init() {
@@ -190,8 +195,18 @@ func bindAddModelFlags(cmd *cobra.Command) {
 	cmd.Flags().BoolVarP(&addModelVerbose, "verbose", "v", false, "include upload details in wait-for-hash output")
 }
 
-func runAddModel(cmd *cobra.Command, args []string) {
-	setModelGraphQLTimeout(cmd)
+// wantsUploadSession reports whether the flags ask for an upload session. Used
+// both for the pre-flight validation and for the post-create branch so the two
+// cannot drift apart (they previously differed by --metadata).
+func wantsUploadSession() bool {
+	return addModelCreateUpload || addModelFileName != "" || addModelFileSize != "" ||
+		addModelPartSize != "" || addModelContentType != "" || len(addModelMetadata) > 0
+}
+
+func runAddModel(cmd *cobra.Command, args []string) error {
+	if err := setModelGraphQLTimeout(cmd); err != nil {
+		return err
+	}
 
 	var modelFiles []modelFile
 
@@ -199,16 +214,26 @@ func runAddModel(cmd *cobra.Command, args []string) {
 		modelPath := filepath.Clean(addModelDirectoryPath)
 		info, err := os.Stat(modelPath)
 		if err != nil {
-			cobra.CheckErr(fmt.Errorf("unable to read model directory: %w", err))
+			// not_found is reserved for resources the *api* does not have. a
+			// mistyped local path is user input, so it takes the cli_error
+			// fallback: an agent that saw not_found here would reasonably read it
+			// as "the model is missing server-side" and retry with a different
+			// name instead of fixing the path.
+			if errors.Is(err, fs.ErrNotExist) {
+				return fmt.Errorf("model-path %q does not exist", addModelDirectoryPath)
+			}
+			return fmt.Errorf("unable to read model directory: %w", err)
 		}
 		if !info.IsDir() {
-			cobra.CheckErr(fmt.Errorf("model-path %q must be a directory", addModelDirectoryPath))
+			return fmt.Errorf("model-path %q must be a directory", addModelDirectoryPath)
 		}
 
 		files, err := collectModelFiles(modelPath)
-		cobra.CheckErr(err)
+		if err != nil {
+			return err
+		}
 		if len(files) == 0 {
-			cobra.CheckErr(fmt.Errorf("model-path %q does not contain any files to upload", addModelDirectoryPath))
+			return fmt.Errorf("model-path %q does not contain any files to upload", addModelDirectoryPath)
 		}
 
 		modelFiles = files
@@ -226,7 +251,21 @@ func runAddModel(cmd *cobra.Command, args []string) {
 	}
 
 	if addModelWaitForHash && len(modelFiles) == 0 {
-		cobra.CheckErr(fmt.Errorf("--wait-for-hash requires --model-path"))
+		return fmt.Errorf("--wait-for-hash requires --model-path")
+	}
+
+	// validate the single-file upload flags BEFORE creating the model. these
+	// checks used to run after addModelToRepo, so a missing --file-name left a
+	// model created server-side while the cli reported a plain validation error —
+	// an agent reading that as "bad input, nothing happened" and retrying would
+	// create a duplicate.
+	if wantsUploadSession() && len(modelFiles) == 0 {
+		if addModelFileName == "" {
+			return fmt.Errorf("file-name is required when creating an upload")
+		}
+		if addModelFileSize == "" {
+			return fmt.Errorf("file-size is required when creating an upload")
+		}
 	}
 
 	input := &api.AddModelToRepoInput{
@@ -243,18 +282,12 @@ func runAddModel(cmd *cobra.Command, args []string) {
 
 	model, err := addModelToRepo(input)
 	if err != nil {
-		if handleModelRepoError(err) {
-			return
-		}
 
-		cobra.CheckErr(err)
-		return
+		return err
 	}
 
-	shouldCreateUpload := addModelCreateUpload || addModelFileName != "" || addModelFileSize != "" || addModelPartSize != "" || addModelContentType != "" || len(addModelMetadata) > 0
-	if !shouldCreateUpload {
-		printModelAddOutput(cmd, modelAddOutput{Model: model})
-		return
+	if !wantsUploadSession() {
+		return printModelAddOutput(cmd, modelAddOutput{Model: model})
 	}
 
 	uploadInput := &api.CreateModelRepoUploadInput{
@@ -270,7 +303,9 @@ func runAddModel(cmd *cobra.Command, args []string) {
 
 	if len(modelFiles) > 0 {
 		uploadedFiles, uploadModel, modelVersionUUID, err := uploadModelFiles(modelFiles, uploadInput)
-		cobra.CheckErr(err)
+		if err != nil {
+			return err
+		}
 		if uploadModel != nil {
 			model = uploadModel
 		}
@@ -278,7 +313,7 @@ func runAddModel(cmd *cobra.Command, args []string) {
 		result := modelAddOutput{Model: model, UploadedFiles: uploadedFiles, ModelSizeBytes: &modelSizeBytes}
 		if addModelWaitForHash {
 			if modelVersionUUID == "" {
-				cobra.CheckErr(fmt.Errorf("upload response missing model version uuid required by --wait-for-hash"))
+				return fmt.Errorf("upload response missing model version uuid required by --wait-for-hash")
 			}
 			ctx := context.Background()
 			var cancel context.CancelFunc
@@ -287,40 +322,45 @@ func runAddModel(cmd *cobra.Command, args []string) {
 				defer cancel()
 			}
 			ready, err := waitForUploadedModelHash(ctx, addModelOwner, addModelName, model, modelVersionUUID, modelHashPollInterval)
-			cobra.CheckErr(err)
+			if err != nil {
+				return err
+			}
 			result.ModelHash = ready.ModelHash
 			result.ModelURL = ready.ModelURL
 			printModelReadyURL(ready.ModelURL)
 			if !addModelVerbose {
-				printCompactModelAddOutput(cmd, model)
-				return
+				return printCompactModelAddOutput(cmd, model)
 			}
 		}
-		printModelAddOutput(cmd, result)
-		return
+		return printModelAddOutput(cmd, result)
 	}
 
 	if addModelFileName == "" {
-		cobra.CheckErr(fmt.Errorf("file-name is required when creating an upload"))
+		return fmt.Errorf("file-name is required when creating an upload")
 	}
 	if addModelFileSize == "" {
-		cobra.CheckErr(fmt.Errorf("file-size is required when creating an upload"))
+		return fmt.Errorf("file-size is required when creating an upload")
 	}
 
 	uploadInput.FileName = addModelFileName
 	uploadInput.FileSizeBytes = addModelFileSize
 
-	result, err := api.CreateModelRepoUpload(uploadInput)
-	cobra.CheckErr(err)
+	// use the package-var seam (as uploadModelFiles does) so this branch is
+	// stubbable in tests; calling api.CreateModelRepoUpload directly is why it had
+	// no coverage.
+	result, err := createModelRepoUpload(uploadInput)
+	if err != nil {
+		return err
+	}
 
 	if result.Upload == nil {
-		cobra.CheckErr(fmt.Errorf("upload response missing upload session details"))
+		return fmt.Errorf("upload response missing upload session details")
 	}
 	if result.Model != nil {
 		model = result.Model
 	}
 
-	printModelAddOutput(cmd, modelAddOutput{Model: model, Upload: result.Upload})
+	return printModelAddOutput(cmd, modelAddOutput{Model: model, Upload: result.Upload})
 }
 
 func collectModelFiles(dir string) ([]modelFile, error) {
@@ -446,7 +486,7 @@ func waitForUploadedModelHash(ctx context.Context, owner, name string, uploadedM
 
 	for {
 		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("timed out waiting for model hash: %w", err)
+			return nil, fmt.Errorf("upload completed but timed out waiting for the model hash; the model exists, do not re-upload: %w", err)
 		}
 
 		models, err := getModelsForAdd(&api.GetModelsInput{Name: name})
@@ -477,7 +517,7 @@ func waitForUploadedModelHash(ctx context.Context, owner, name string, uploadedM
 
 		fmt.Fprint(os.Stderr, ".")
 		if err := sleepModelHashPoll(ctx, pollInterval); err != nil {
-			return nil, fmt.Errorf("timed out waiting for model hash: %w", err)
+			return nil, fmt.Errorf("upload completed but timed out waiting for the model hash; the model exists, do not re-upload: %w", err)
 		}
 	}
 }
@@ -684,12 +724,15 @@ func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInp
 	return uploadedFiles, uploadModel, modelVersionUUID, nil
 }
 
-func printModelAddOutput(cmd *cobra.Command, result modelAddOutput) {
+// printModelAddOutput and printCompactModelAddOutput return the encode error to
+// the handler instead of calling cobra.CheckErr, which would print plaintext and
+// exit before the JSON sink in cmd/root.go ever ran.
+func printModelAddOutput(cmd *cobra.Command, result modelAddOutput) error {
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
-	cobra.CheckErr(output.Print(result, &output.Config{Format: format}))
+	return output.Print(result, &output.Config{Format: format})
 }
 
-func printCompactModelAddOutput(cmd *cobra.Command, model *api.Model) {
+func printCompactModelAddOutput(cmd *cobra.Command, model *api.Model) error {
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
 	compact := compactModel{}
 	if model != nil {
@@ -697,9 +740,9 @@ func printCompactModelAddOutput(cmd *cobra.Command, model *api.Model) {
 		compact.Name = strings.TrimSpace(model.Name)
 		compact.Owner = strings.TrimSpace(model.Owner)
 	}
-	cobra.CheckErr(output.Print(compactModelAddOutput{
+	return output.Print(compactModelAddOutput{
 		Model: compact,
-	}, &output.Config{Format: format}))
+	}, &output.Config{Format: format})
 }
 
 func completeModelUpload(upload *api.ModelRepoUpload, artifactPath string) error {

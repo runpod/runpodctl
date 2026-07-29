@@ -1,14 +1,21 @@
 package model
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/runpod/runpodctl/api"
+	internalapi "github.com/runpod/runpodctl/internal/api"
+	"github.com/runpod/runpodctl/internal/configenv"
+	"github.com/runpod/runpodctl/internal/output"
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 // captureStdStreams runs fn with os.Stdout and os.Stderr replaced by pipes and
@@ -59,63 +66,315 @@ func captureStdStreams(t *testing.T, fn func()) (stdout, stderr string) {
 	return stdoutBuf.String(), stderrBuf.String()
 }
 
-func TestHandleModelRepoError(t *testing.T) {
+// TestRunAddModelValidationErrorsCarryACodeAndPrintNothing pins the CON-683
+// contract on `model add`, which used to reach cobra.CheckErr on these paths:
+// plaintext "Error: …" on stderr plus os.Exit(1), bypassing the json sink. So a
+// single command emitted json+code on some failures and plaintext on others and
+// an agent could rely on neither shape.
+func TestRunAddModelValidationErrorsCarryACodeAndPrintNothing(t *testing.T) {
+	notADir := filepath.Join(t.TempDir(), "weights.bin")
+	if err := os.WriteFile(notADir, []byte("model"), 0600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	emptyDir := t.TempDir()
+
 	tests := []struct {
-		name           string
-		err            error
-		wantHandled    bool
-		wantStderrSub  string // empty = stderr must be empty
-		wantStdoutSub  string // empty = stdout must be empty
+		name     string
+		setup    func(t *testing.T)
+		wantCode string
+		wantMsg  string
 	}{
 		{
-			name:        "nil error is a no-op",
-			err:         nil,
-			wantHandled: false,
+			// a missing *local* path is cli_error, not not_found: not_found is
+			// reserved for resources the api does not have, so an agent can trust
+			// it to mean "server-side", not "you typed the path wrong".
+			name:     "missing model-path is a cli_error",
+			setup:    func(t *testing.T) { addModelDirectoryPath = filepath.Join(t.TempDir(), "absent") },
+			wantCode: "cli_error",
+			wantMsg:  "does not exist",
 		},
 		{
-			name:          "ErrModelRepoNotImplemented routes to stderr",
-			err:           api.ErrModelRepoNotImplemented,
-			wantHandled:   true,
-			wantStderrSub: api.ErrModelRepoNotImplemented.Error(),
+			name:     "model-path pointing at a file",
+			setup:    func(t *testing.T) { addModelDirectoryPath = notADir },
+			wantCode: "cli_error",
+			wantMsg:  "must be a directory",
 		},
 		{
-			name:          "feature-not-enabled message routes to stderr",
-			err:           errors.New("Model Repo feature is not enabled for this user"),
-			wantHandled:   true,
-			wantStderrSub: "Model Repo feature is not enabled for this user",
+			name:     "model-path with no files",
+			setup:    func(t *testing.T) { addModelDirectoryPath = emptyDir },
+			wantCode: "cli_error",
+			wantMsg:  "does not contain any files to upload",
 		},
 		{
-			name:        "unrelated error is not handled",
-			err:         errors.New("some other failure"),
-			wantHandled: false,
+			name:     "wait-for-hash without model-path",
+			setup:    func(t *testing.T) { addModelWaitForHash = true },
+			wantCode: "cli_error",
+			wantMsg:  "--wait-for-hash requires --model-path",
+		},
+		{
+			name: "create-upload without file-name",
+			setup: func(t *testing.T) {
+				addModelCreateUpload = true
+				old := addModelToRepo
+				t.Cleanup(func() { addModelToRepo = old })
+				addModelToRepo = func(*api.AddModelToRepoInput) (*api.Model, error) {
+					return &api.Model{ID: "model-id"}, nil
+				}
+			},
+			wantCode: "cli_error",
+			wantMsg:  "file-name is required when creating an upload",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var handled bool
+			resetAddModelGlobals(t)
+			addModelName = "test-model"
+			tt.setup(t)
+
+			cmd := newTestAddModelCommand()
+			var runErr error
 			stdout, stderr := captureStdStreams(t, func() {
-				handled = handleModelRepoError(tt.err)
+				runErr = runAddModel(cmd, nil)
 			})
 
-			if handled != tt.wantHandled {
-				t.Fatalf("handled = %v, want %v", handled, tt.wantHandled)
+			if runErr == nil {
+				t.Fatal("expected an error")
 			}
-
-			// CLAUDE.md: deprecation warnings / handled errors must go to stderr
-			// only; stdout must stay clean for JSON-consuming agents.
+			if !strings.Contains(runErr.Error(), tt.wantMsg) {
+				t.Fatalf("expected error containing %q, got %v", tt.wantMsg, runErr)
+			}
 			if stdout != "" {
-				t.Fatalf("stdout must remain empty, got %q", stdout)
+				t.Fatalf("stdout must stay empty on failure, got %q", stdout)
+			}
+			if stderr != "" {
+				t.Fatalf("the command must not print the error; the sink does. got %q", stderr)
 			}
 
-			if tt.wantStderrSub == "" {
-				if stderr != "" {
-					t.Fatalf("expected empty stderr, got %q", stderr)
-				}
-				return
+			sinkStdout, sinkStderr := captureStdStreams(t, func() {
+				output.Error(runErr)
+			})
+			if sinkStdout != "" {
+				t.Fatalf("the sink must not write to stdout, got %q", sinkStdout)
 			}
-			if !strings.Contains(stderr, tt.wantStderrSub) {
-				t.Fatalf("stderr = %q, want substring %q", stderr, tt.wantStderrSub)
+			if strings.Count(strings.TrimSpace(sinkStderr), "\n") != 0 {
+				t.Fatalf("expected exactly one json object on stderr, got %q", sinkStderr)
+			}
+			var obj struct {
+				Error string `json:"error"`
+				Code  string `json:"code"`
+			}
+			if err := json.Unmarshal([]byte(sinkStderr), &obj); err != nil {
+				t.Fatalf("stderr must be a json error object: %v (%q)", err, sinkStderr)
+			}
+			if obj.Code != tt.wantCode {
+				t.Fatalf("expected code %q, got %q (%q)", tt.wantCode, obj.Code, sinkStderr)
+			}
+		})
+	}
+}
+
+// TestLegacyCommandKeepsStdoutCleanWithoutAPIKey pins the deliberate exception
+// recorded under "pitfalls" in AGENTS.md. api/query.go — which backs the legacy
+// create/get/remove/start/stop pod commands as well as model — used to print
+// "API key not found" to *stdout* while also returning the error, so anything
+// piping runpodctl output into a json parser got that string mixed into the data
+// stream. stdout is the data channel; the error now travels back to the Execute
+// sink, which emits one flat json object with code no_credentials on stderr.
+//
+// Uses the hidden legacy alias (`runpodctl get models`) on purpose: it is the
+// pre-restructure surface AGENTS.md tells you not to change, so this is the path
+// where a regression would be least visible.
+func TestLegacyCommandKeepsStdoutCleanWithoutAPIKey(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	// empty env value plus a reset config means configenv.APIKey() is "", so
+	// api.Query short-circuits before any network call.
+	t.Setenv(configenv.APIKeyEnv, "")
+
+	cmd := &cobra.Command{Use: "models"}
+	cmd.Flags().String("output", "json", "")
+
+	var runErr error
+	stdout, stderr := captureStdStreams(t, func() {
+		runErr = GetModelsCmd.RunE(cmd, nil)
+	})
+
+	if runErr == nil {
+		t.Fatal("expected an error with no api key configured")
+	}
+	if stdout != "" {
+		t.Fatalf("stdout must stay a clean data channel, got %q", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("the command must not print the error; the sink does. got %q", stderr)
+	}
+
+	var apiErr *internalapi.APIError
+	if !errors.As(runErr, &apiErr) || apiErr.ErrorCode() != "no_credentials" {
+		t.Fatalf("expected a no_credentials api error, got %#v", runErr)
+	}
+
+	sinkStdout, sinkStderr := captureStdStreams(t, func() {
+		output.Error(runErr)
+	})
+	if sinkStdout != "" {
+		t.Fatalf("the sink must not write to stdout, got %q", sinkStdout)
+	}
+	if strings.Count(strings.TrimSpace(sinkStderr), "\n") != 0 {
+		t.Fatalf("expected exactly one json object on stderr, got %q", sinkStderr)
+	}
+	var obj struct {
+		Error string `json:"error"`
+		Code  string `json:"code"`
+	}
+	if err := json.Unmarshal([]byte(sinkStderr), &obj); err != nil {
+		t.Fatalf("stderr must be a json error object: %v (%q)", err, sinkStderr)
+	}
+	if obj.Code != "no_credentials" {
+		t.Fatalf("expected code no_credentials, got %q", obj.Code)
+	}
+	if obj.Error == "" {
+		t.Fatal("expected an error message on the json object")
+	}
+}
+
+// TestModelCommandsUseRunE pins the exit-code contract: a model command that
+// fails must return its error so cobra exits non-zero. They previously used
+// Run: with a swallowed error, so a real Model Repo failure exited 0 and any
+// script doing `runpodctl model add … && echo ok` printed ok.
+func TestModelCommandsUseRunE(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		cmd  *cobra.Command
+	}{
+		{"model list", listCmd},
+		{"model list (legacy alias)", GetModelsCmd},
+		{"model add", addCmd},
+		{"model add (legacy alias)", AddModelToRepoCmd},
+		{"model remove", removeCmd},
+		{"model remove (legacy alias)", RemoveModelCmd},
+	} {
+		if c.cmd == nil {
+			t.Errorf("%s: command is nil — the test can no longer see it", c.name)
+			continue
+		}
+		if c.cmd.RunE == nil {
+			t.Errorf("%s: RunE is nil — errors cannot propagate to the exit code", c.name)
+		}
+		if c.cmd.Run != nil {
+			t.Errorf("%s: Run is set; use RunE so errors reach the sink", c.name)
+		}
+	}
+}
+
+// TestRunAddModelPropagatesErrors covers what the validation table cannot: that
+// a failure from each stubbed dependency actually reaches the caller. An audit
+// mutated ten of these paths to `return nil` / `_ =` and every existing test
+// stayed green, so each case here is a mutation the suite previously missed.
+func TestRunAddModelPropagatesErrors(t *testing.T) {
+	boom := errors.New("boom")
+
+	tests := []struct {
+		name  string
+		setup func(t *testing.T)
+	}{
+		{
+			name: "addModelToRepo failure",
+			setup: func(t *testing.T) {
+				addModelName = "m"
+				addModelToRepo = func(*api.AddModelToRepoInput) (*api.Model, error) { return nil, boom }
+			},
+		},
+		{
+			name: "createModelRepoUpload failure on the create-upload branch",
+			setup: func(t *testing.T) {
+				addModelName = "m"
+				addModelCreateUpload = true
+				addModelFileName = "f.bin"
+				addModelFileSize = "10"
+				addModelToRepo = func(*api.AddModelToRepoInput) (*api.Model, error) {
+					return &api.Model{ID: "model-id"}, nil
+				}
+				createModelRepoUpload = func(*api.CreateModelRepoUploadInput) (*api.ModelRepoMutationResult, error) {
+					return nil, boom
+				}
+			},
+		},
+		{
+			name: "nil upload session is rejected",
+			setup: func(t *testing.T) {
+				addModelName = "m"
+				addModelCreateUpload = true
+				addModelFileName = "f.bin"
+				addModelFileSize = "10"
+				addModelToRepo = func(*api.AddModelToRepoInput) (*api.Model, error) {
+					return &api.Model{ID: "model-id"}, nil
+				}
+				createModelRepoUpload = func(*api.CreateModelRepoUploadInput) (*api.ModelRepoMutationResult, error) {
+					return &api.ModelRepoMutationResult{}, nil // Upload == nil
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resetAddModelGlobals(t)
+			oldAdd, oldCreate := addModelToRepo, createModelRepoUpload
+			t.Cleanup(func() { addModelToRepo, createModelRepoUpload = oldAdd, oldCreate })
+			tt.setup(t)
+
+			var err error
+			stdout, stderr := captureStdStreams(t, func() {
+				err = runAddModel(newTestAddModelCommand(), nil)
+			})
+
+			if err == nil {
+				t.Fatal("expected an error to propagate to the caller; a nil here means the cli exits 0 on a failure")
+			}
+			if stdout != "" {
+				t.Errorf("stdout must stay empty on failure, got %q", stdout)
+			}
+			if stderr != "" {
+				t.Errorf("the command must not print the error itself, got %q", stderr)
+			}
+		})
+	}
+}
+
+// TestCreateUploadValidationRunsBeforeCreatingTheModel pins the ordering fix: a
+// missing --file-name must fail BEFORE addModelToRepo is called, otherwise the
+// model is created server-side and the cli reports a plain validation error, so
+// an agent retrying creates a duplicate.
+func TestCreateUploadValidationRunsBeforeCreatingTheModel(t *testing.T) {
+	for _, missing := range []string{"file-name", "file-size"} {
+		t.Run(missing, func(t *testing.T) {
+			resetAddModelGlobals(t)
+			old := addModelToRepo
+			t.Cleanup(func() { addModelToRepo = old })
+
+			called := false
+			addModelToRepo = func(*api.AddModelToRepoInput) (*api.Model, error) {
+				called = true
+				return &api.Model{ID: "model-id"}, nil
+			}
+
+			addModelName = "m"
+			addModelCreateUpload = true
+			if missing == "file-size" {
+				addModelFileName = "f.bin"
+			}
+
+			err := runAddModel(newTestAddModelCommand(), nil)
+			if err == nil {
+				t.Fatal("expected a validation error")
+			}
+			if !strings.Contains(err.Error(), missing+" is required") {
+				t.Errorf("error = %v, want it to name %s", err, missing)
+			}
+			if called {
+				t.Error("addModelToRepo was called before validation — a model would be created server-side and then orphaned")
 			}
 		})
 	}

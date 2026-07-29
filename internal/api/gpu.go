@@ -15,13 +15,31 @@ type GpuType struct {
 	MemoryInGb     int    `json:"memoryInGb"`
 	SecureCloud    bool   `json:"secureCloud"`
 	CommunityCloud bool   `json:"communityCloud"`
+	// DO NOT rename these json tags to add a PerHr suffix. They are the *decode*
+	// contract for the graphql response (which returns securePrice /
+	// communityPrice), not an output shape — renaming them makes json.Unmarshal
+	// miss the fields and silently reports every price as 0. The user-facing names
+	// (securePricePerHr / communityPricePerHr) are set by cmd/gpu's own output
+	// struct, which is the only thing that marshals gpu data.
+	SecurePrice    float64 `json:"securePrice"`
+	CommunityPrice float64 `json:"communityPrice"`
+}
+
+// GpuDataCenterAvailability is a GPU's stock status in a single data center.
+type GpuDataCenterAvailability struct {
+	DataCenterID string `json:"dataCenterId"`
+	StockStatus  string `json:"stockStatus"`
 }
 
 // GpuTypeWithAvailability includes availability info
 type GpuTypeWithAvailability struct {
 	GpuType
+	// StockStatus is the best availability across all data centers.
 	StockStatus string `json:"stockStatus,omitempty"`
 	Available   bool   `json:"available"`
+	// DataCenterAvailability breaks availability down per data center so agents
+	// can pick a location that will actually schedule.
+	DataCenterAvailability []GpuDataCenterAvailability `json:"dataCenterAvailability,omitempty"`
 }
 
 // DataCenter represents a data center
@@ -81,6 +99,8 @@ func (c *Client) ListGpuTypes(includeUnavailable bool) ([]GpuTypeWithAvailabilit
 				memoryInGb
 				secureCloud
 				communityCloud
+				securePrice
+				communityPrice
 			}
 		}
 	`
@@ -104,7 +124,7 @@ func (c *Client) ListGpuTypes(includeUnavailable bool) ([]GpuTypeWithAvailabilit
 	}
 
 	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+		return nil, newGraphQLError(resp.Errors[0].Message)
 	}
 
 	// get availability from datacenters
@@ -123,8 +143,10 @@ func (c *Client) ListGpuTypes(includeUnavailable bool) ([]GpuTypeWithAvailabilit
 		return result, nil
 	}
 
-	// build availability map from datacenters
-	availabilityMap := make(map[string]string) // gpuTypeId -> best stock status
+	// build availability maps from datacenters: the best stock status overall
+	// and the per-data-center breakdown.
+	availabilityMap := make(map[string]string)               // gpuTypeId -> best stock status
+	perDCMap := make(map[string][]GpuDataCenterAvailability) // gpuTypeId -> per-dc availability
 	for _, dc := range dataCenters {
 		for _, avail := range dc.GpuAvailability {
 			current, exists := availabilityMap[avail.GpuTypeID]
@@ -132,13 +154,24 @@ func (c *Client) ListGpuTypes(includeUnavailable bool) ([]GpuTypeWithAvailabilit
 			if !exists || betterStock(avail.StockStatus, current) {
 				availabilityMap[avail.GpuTypeID] = avail.StockStatus
 			}
+			// list every data center the gpu appears in, but make an unreported
+			// status explicit ("none") rather than an empty string, so an agent
+			// can tell "offered here, currently no stock" from a missing entry.
+			stock := avail.StockStatus
+			if stock == "" {
+				stock = "none"
+			}
+			perDCMap[avail.GpuTypeID] = append(perDCMap[avail.GpuTypeID], GpuDataCenterAvailability{
+				DataCenterID: dc.ID,
+				StockStatus:  stock,
+			})
 		}
 	}
 
 	var result []GpuTypeWithAvailability
 	for _, gpu := range resp.Data.GpuTypes {
-		stockStatus, hasStock := availabilityMap[gpu.ID]
-		available := hasStock && stockStatus != ""
+		stockStatus, statusKnown := availabilityMap[gpu.ID]
+		available := statusKnown && hasStock(stockStatus)
 
 		// filter out GPUs with no availability unless includeUnavailable
 		if !includeUnavailable && !available {
@@ -151,18 +184,56 @@ func (c *Client) ListGpuTypes(includeUnavailable bool) ([]GpuTypeWithAvailabilit
 		}
 
 		result = append(result, GpuTypeWithAvailability{
-			GpuType:     gpu,
-			StockStatus: stockStatus,
-			Available:   available,
+			GpuType:                gpu,
+			StockStatus:            stockStatus,
+			Available:              available,
+			DataCenterAvailability: perDCMap[gpu.ID],
 		})
 	}
 
 	return result, nil
 }
 
+// stockOrder ranks the api's known stock levels. KEEP IN SYNC with the api
+// enum; TestStockRank pins the known set so a new value shows up as a test
+// failure in review rather than as a silently misranked gpu.
+var stockOrder = map[string]int{"high": 4, "medium": 3, "low": 2}
+
+// noStockStatuses are literal values that mean "offered here, nothing in stock".
+// They must rank BELOW low rather than land in the unknown bucket: an unknown
+// value ranks above absent, so a literal "none" would otherwise win the
+// top-level stockStatus and make available report true for a gpu with no stock.
+var noStockStatuses = map[string]bool{"none": true, "unavailable": true, "out of stock": true, "no stock": true}
+
+// stockRank scores a stock status for comparison. An unrecognized non-empty
+// status must outrank a genuinely absent one: previously every unknown value
+// fell through a map lookup to 0 and therefore tied with "no stock", so a new
+// api level (or a casing change) would lose to "Low" and the top-level
+// stockStatus would under-report a gpu that is in fact available.
+//
+// An unknown value cannot be ordered against the known ones, so it sits just
+// above "none". The per-datacenter breakdown carries every raw value, which is
+// where an agent that needs the truth should look.
+func stockRank(s string) int {
+	normalized := strings.ToLower(strings.TrimSpace(s))
+	if normalized == "" || noStockStatuses[normalized] {
+		return 0
+	}
+	if rank, ok := stockOrder[normalized]; ok {
+		return rank
+	}
+	return 1
+}
+
+// hasStock reports whether a stock status means anything is actually available.
+// Kept next to stockRank so the two cannot disagree: rank 0 means "nothing here",
+// and `available` must say the same.
+func hasStock(status string) bool {
+	return stockRank(status) > 0
+}
+
 func betterStock(a, b string) bool {
-	order := map[string]int{"High": 3, "Medium": 2, "Low": 1, "": 0}
-	return order[a] > order[b]
+	return stockRank(a) > stockRank(b)
 }
 
 // ServerlessGpuPool is a serverless gpu pool. saveEndpoint's gpuIds field
@@ -204,7 +275,7 @@ func (c *Client) ListServerlessGpuPools() ([]ServerlessGpuPool, error) {
 	}
 
 	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+		return nil, newGraphQLError(resp.Errors[0].Message)
 	}
 
 	return resp.Data.ServerlessGpuPools, nil
@@ -299,7 +370,7 @@ func (c *Client) ListDataCenters() ([]DataCenter, error) {
 	}
 
 	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+		return nil, newGraphQLError(resp.Errors[0].Message)
 	}
 
 	return resp.Data.DataCenters, nil
@@ -341,7 +412,7 @@ func (c *Client) GetUser() (*User, error) {
 	}
 
 	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+		return nil, newGraphQLError(resp.Errors[0].Message)
 	}
 
 	return resp.Data.Myself, nil

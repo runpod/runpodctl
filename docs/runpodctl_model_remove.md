@@ -13,10 +13,10 @@ runpodctl model remove [flags]
 ### Options
 
 ```
-  -h, --help           help for remove
-      --hash string    model version hash to remove
-      --name string    model name
-      --owner string   model owner
+      --hash string      model version hash to remove
+  -h, --help             help for remove
+      --name string      model name
+      --owner string     model owner
       --version string   model version uuid to remove
 ```
 

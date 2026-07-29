@@ -161,18 +161,19 @@ var updateCmd = &cobra.Command{
 	Use:   "update",
 	Short: "update runpodctl cli",
 	Long:  "update runpodctl cli to the latest version",
-	Run: func(c *cobra.Command, args []string) {
+	// RunE, not Run: a failed self-update previously printed to stdout and
+	// exited 0, so `runpodctl update && ...` continued as if it had succeeded.
+	RunE: func(c *cobra.Command, args []string) error {
 		// fetch newest github release
 		githubApiUrl := "https://api.github.com/repos/runpod/runpodctl/releases/latest"
 		apiResp, err := GetJson(githubApiUrl)
 		if err != nil {
-			fmt.Println("error fetching latest version info for runpodctl", err)
-			return
+			return fmt.Errorf("failed to fetch latest version info for runpodctl: %w", err)
 		}
 		latestVersion := apiResp.Version
 		if semver.Compare("v"+version, latestVersion) >= 0 {
 			fmt.Printf("runpodctl %s is already up to date\n", version)
-			return
+			return nil
 		}
 
 		// find download link for current platform
@@ -185,14 +186,12 @@ var updateCmd = &cobra.Command{
 			}
 		}
 		if downloadLink == "" {
-			fmt.Printf("platform %s-%s not supported in latest version\n", runtime.GOOS, runtime.GOARCH)
-			return
+			return fmt.Errorf("platform %s-%s not supported in latest version", runtime.GOOS, runtime.GOARCH)
 		}
 
 		ex, err := os.Executable()
 		if err != nil {
-			fmt.Println("error finding current executable:", err)
-			return
+			return fmt.Errorf("failed to find current executable: %w", err)
 		}
 		exPath := filepath.Dir(ex)
 
@@ -205,8 +204,7 @@ var updateCmd = &cobra.Command{
 		// download archive to a temp file
 		tmpFile, err := os.CreateTemp("", "runpodctl-update-*")
 		if err != nil {
-			fmt.Println("error creating temp file:", err)
-			return
+			return fmt.Errorf("failed to create temp file: %w", err)
 		}
 		archivePath := tmpFile.Name()
 		tmpFile.Close()
@@ -215,8 +213,7 @@ var updateCmd = &cobra.Command{
 		fmt.Printf("downloading runpodctl %s\n", latestVersion)
 		file, err := DownloadFile(downloadLink, archivePath)
 		if err != nil {
-			fmt.Println("error fetching the latest version of runpodctl:", err)
-			return
+			return fmt.Errorf("failed to fetch the latest version of runpodctl: %w", err)
 		}
 		file.Close()
 
@@ -226,19 +223,20 @@ var updateCmd = &cobra.Command{
 
 		if runtime.GOOS == "windows" {
 			if err := extractBinaryFromZip(archivePath, extractedPath); err != nil {
-				fmt.Println("error extracting update:", err)
-				return
+				return fmt.Errorf("failed to extract update: %w", err)
 			}
 			fmt.Println("to complete the update, run this command:")
 			fmt.Printf("move /Y \"%s\" \"%s\"\n", extractedPath, destPath)
 		} else {
 			if err := extractBinaryFromTarGz(archivePath, extractedPath); err != nil {
-				fmt.Println("error extracting update:", err)
-				return
+				return fmt.Errorf("failed to extract update: %w", err)
 			}
 			fmt.Printf("installing runpodctl %s to %s\n", latestVersion, destPath)
 			// need to run externally to current process because we're updating the running executable
-			exec.Command("mv", extractedPath, destPath).Run()
+			if err := exec.Command("mv", extractedPath, destPath).Run(); err != nil {
+				return fmt.Errorf("failed to install update to %s: %w", destPath, err)
+			}
 		}
+		return nil
 	},
 }

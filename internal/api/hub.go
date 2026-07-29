@@ -157,7 +157,7 @@ func (c *Client) ListListings(opts *ListingsOptions) ([]Listing, error) {
 	}
 
 	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+		return nil, newGraphQLError(resp.Errors[0].Message)
 	}
 
 	listings := resp.Data.Listings
@@ -250,11 +250,11 @@ func (c *Client) GetListing(listingID string) (*Listing, error) {
 	}
 
 	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+		return nil, newGraphQLError(resp.Errors[0].Message)
 	}
 
 	if resp.Data.Listing == nil {
-		return nil, fmt.Errorf("hub listing not found: %s", listingID)
+		return nil, NewNotFoundError("hub listing not found: %s", listingID)
 	}
 
 	return resp.Data.Listing, nil
@@ -294,11 +294,11 @@ func (c *Client) GetListingFromRepo(owner, name string) (*Listing, error) {
 	}
 
 	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
+		return nil, newGraphQLError(resp.Errors[0].Message)
 	}
 
 	if resp.Data.Listing == nil {
-		return nil, fmt.Errorf("hub listing not found: %s/%s", owner, name)
+		return nil, NewNotFoundError("hub listing not found: %s/%s", owner, name)
 	}
 
 	return resp.Data.Listing, nil

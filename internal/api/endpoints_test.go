@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/runpod/runpodctl/internal/configenv"
 	"github.com/spf13/viper"
 )
 
@@ -352,14 +353,14 @@ func TestUpdateEndpointModels_RoundTripsConfig(t *testing.T) {
 
 	// All existing config fields must be present in the mutation input.
 	checks := map[string]interface{}{
-		"id":           "ep-abc",
-		"name":         "my-ep",
-		"templateId":   "tpl-1",
-		"gpuIds":       "ADA_24",
-		"workersMax":   float64(5),
-		"idleTimeout":  float64(42),
-		"scalerType":   "REQUEST_COUNT",
-		"scalerValue":  float64(9),
+		"id":          "ep-abc",
+		"name":        "my-ep",
+		"templateId":  "tpl-1",
+		"gpuIds":      "ADA_24",
+		"workersMax":  float64(5),
+		"idleTimeout": float64(42),
+		"scalerType":  "REQUEST_COUNT",
+		"scalerValue": float64(9),
 	}
 	for field, want := range checks {
 		if got := gqlInput[field]; got != want {
@@ -401,5 +402,118 @@ func TestDeleteEndpoint(t *testing.T) {
 	err := client.DeleteEndpoint("ep-123")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInvokeURLs(t *testing.T) {
+	urls := invokeURLs("ep-abc")
+	if urls == nil {
+		t.Fatal("expected non-nil urls for a valid id")
+	}
+	if urls.Run != "https://api.runpod.ai/v2/ep-abc/run" {
+		t.Errorf("run = %q", urls.Run)
+	}
+	if urls.RunSync != "https://api.runpod.ai/v2/ep-abc/runsync" {
+		t.Errorf("runsync = %q", urls.RunSync)
+	}
+	if urls.Health != "https://api.runpod.ai/v2/ep-abc/health" {
+		t.Errorf("health = %q", urls.Health)
+	}
+	if invokeURLs("") != nil {
+		t.Error("expected nil urls for empty id")
+	}
+}
+
+func TestInvokeURLs_HonorsInvokeURLOverride(t *testing.T) {
+	// invoke is a separate service from the control plane, so it has its own
+	// override. sloppy values must not produce malformed urls.
+	tests := []struct {
+		name    string
+		env     string
+		wantRun string
+	}{
+		{"plain", "https://staging.example.com/v2", "https://staging.example.com/v2/ep-abc/run"},
+		{"trailing slash", "https://staging.example.com/v2/", "https://staging.example.com/v2/ep-abc/run"},
+		{"repeated trailing slashes", "https://staging.example.com/v2//", "https://staging.example.com/v2/ep-abc/run"},
+		{"surrounding whitespace", "  https://staging.example.com/v2  ", "https://staging.example.com/v2/ep-abc/run"},
+		{"slash only falls back to prod", "/", ServerlessInvokeBaseURL + "/ep-abc/run"},
+		{"empty falls back to prod", "", ServerlessInvokeBaseURL + "/ep-abc/run"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(configenv.InvokeURLEnv, tt.env)
+
+			urls := invokeURLs("ep-abc")
+			if urls == nil {
+				t.Fatal("expected non-nil urls for a valid id")
+			}
+			if urls.Run != tt.wantRun {
+				t.Errorf("run = %q, want %q", urls.Run, tt.wantRun)
+			}
+			if want := strings.TrimSuffix(tt.wantRun, "/run") + "/runsync"; urls.RunSync != want {
+				t.Errorf("runsync = %q, want %q", urls.RunSync, want)
+			}
+			if want := strings.TrimSuffix(tt.wantRun, "/run") + "/health"; urls.Health != want {
+				t.Errorf("health = %q, want %q", urls.Health, want)
+			}
+		})
+	}
+}
+
+func TestInvokeURLs_ConfigFileKey(t *testing.T) {
+	// the config-file path must work, not just the env var. save/restore the one
+	// key instead of viper.Reset() so this stays order-independent alongside the
+	// other tests in this package that set global viper keys.
+	prev := viper.Get("invokeUrl")
+	t.Cleanup(func() { viper.Set("invokeUrl", prev) })
+	t.Setenv(configenv.InvokeURLEnv, "")
+	viper.Set("invokeUrl", "https://from-config.example.com/v2")
+
+	urls := invokeURLs("ep-abc")
+	if urls == nil {
+		t.Fatal("expected non-nil urls for a valid id")
+	}
+	if urls.Run != "https://from-config.example.com/v2/ep-abc/run" {
+		t.Errorf("run = %q", urls.Run)
+	}
+}
+
+func TestGetEndpoint_PopulatesURLs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"id":"ep-9","name":"x"}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+	client, _ := NewClient()
+	client.baseURL = server.URL
+
+	ep, err := client.GetEndpoint("ep-9", false, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ep.URLs == nil || ep.URLs.Run != "https://api.runpod.ai/v2/ep-9/run" {
+		t.Errorf("expected populated invoke urls, got %+v", ep.URLs)
+	}
+}
+
+func TestListEndpoints_PopulatesURLs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`[{"id":"ep-1","name":"a"},{"id":"ep-2","name":"b"}]`))
+	}))
+	defer server.Close()
+
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+	client, _ := NewClient()
+	client.baseURL = server.URL
+
+	eps, err := client.ListEndpoints(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, ep := range eps {
+		if ep.URLs == nil || ep.URLs.RunSync != "https://api.runpod.ai/v2/"+ep.ID+"/runsync" {
+			t.Errorf("endpoint %s missing invoke urls: %+v", ep.ID, ep.URLs)
+		}
 	}
 }

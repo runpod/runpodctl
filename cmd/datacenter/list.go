@@ -18,13 +18,11 @@ var listCmd = &cobra.Command{
 func runList(cmd *cobra.Command, args []string) error {
 	client, err := api.NewClient()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
 	dataCenters, err := client.ListDataCenters()
 	if err != nil {
-		output.Error(err)
 		return err
 	}
 
