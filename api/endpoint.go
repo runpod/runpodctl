@@ -22,17 +22,17 @@ type CreateTemplateInput struct {
 	Readme            string    `json:"readme"`
 }
 type CreateEndpointInput struct {
-	Name            string `json:"name"`
-	TemplateId      string `json:"templateId"`
-	GpuIds          string `json:"gpuIds"`
-	NetworkVolumeId string `json:"networkVolumeId"`
-	Locations       string `json:"locations"`
-	IdleTimeout     int    `json:"idleTimeout"`
-	ScalerType      string `json:"scalerType"`
-	ScalerValue     int    `json:"scalerValue"`
-	WorkersMin      int    `json:"workersMin"`
-	WorkersMax      int    `json:"workersMax"`
-	FlashBootType   string `json:"flashBootType"`
+	Name            string   `json:"name"`
+	TemplateId      string   `json:"templateId"`
+	GpuIds          string   `json:"gpuIds"`
+	NetworkVolumeId string   `json:"networkVolumeId"`
+	Locations       string   `json:"locations"`
+	IdleTimeout     int      `json:"idleTimeout"`
+	ScalerType      string   `json:"scalerType"`
+	ScalerValue     int      `json:"scalerValue"`
+	WorkersMin      int      `json:"workersMin"`
+	WorkersMax      int      `json:"workersMax"`
+	FlashBootType   string   `json:"flashBootType"`
 	ModelReferences []string `json:"modelReferences"`
 }
 
