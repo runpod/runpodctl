@@ -106,6 +106,32 @@ func TestDerive(t *testing.T) {
 			wantStatus: StatusStopped,
 		},
 
+		// --- EXITED carrying a *terminate*: the path a real terminate takes.
+		// Every "Terminated by ..." writer in runpod-backend sets desiredStatus
+		// EXITED (terminatePod.ts:218/:276, terminateAllStoppedPods.ts:80,
+		// deleteCluster.ts:129/:210), so the attribution text is the only way to
+		// tell a destroy from a stop.
+		{
+			name: "exited carrying a user terminate is terminated, not stopped",
+			signals: Signals{
+				DesiredStatus:    "EXITED",
+				LastStatusChange: "Terminated by user: Wed Jul 29 2026 21:58:00 GMT+0000",
+				RuntimeProbed:    true,
+				RuntimeReported:  true,
+			},
+			wantStatus: StatusTerminated,
+			wantReason: ReasonTerminatedByUser,
+		},
+		{
+			name: "exited carrying a runpod terminate is terminated",
+			signals: Signals{
+				DesiredStatus:    "EXITED",
+				LastStatusChange: "Terminated by RunPod: Wed Jul 29 2026 21:58:00 GMT+0000",
+			},
+			wantStatus: StatusTerminated,
+			wantReason: ReasonTerminatedByRunpod,
+		},
+
 		// --- TERMINATED ---
 		{
 			name: "terminated by user",

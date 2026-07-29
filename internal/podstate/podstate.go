@@ -58,6 +58,27 @@
 // spot/community pod (`lastStatusChange` = "Outbid: <date>", written by
 // model/src/pod/resumePod.ts and model/src/utils/index.ts on both the EXITED
 // and TERMINATED paths), so that one gets its own reason.
+//
+// # Which desiredStatus a terminate actually writes
+//
+// Checked against every writer in runpod-backend, because the obvious mapping
+// (terminate -> TERMINATED) is wrong:
+//
+//   - a terminate writes desiredStatus **EXITED** with lastStatusChange
+//     "Terminated by {user,RunPod}: <date>" plus terminatedAt
+//     (model/src/pod/terminatePod.ts:218 and :276,
+//     terminateAllStoppedPods.ts:80, cluster/deleteCluster.ts:129 and :210).
+//     Nothing else writes that text, so the text is the only way to tell a
+//     destroy from a stop, and Derive reports StatusTerminated for it.
+//   - desiredStatus **TERMINATED** is written by exactly two places, both
+//     outbids (model/src/utils/index.ts:495, model/src/pod/resumePod.ts:570), so
+//     ReasonTerminatedOutbid is in practice the only reason that arrives beside
+//     a TERMINATED status.
+//   - either way terminatedAt is set, and graphql `myself.pods` filters
+//     `terminatedAt: null` (model/src/pod/getMyPods.ts:107 and :128), so a
+//     terminated pod usually disappears from the list surfaces instead of being
+//     reported. StatusTerminated is therefore a narrow-window value: handled
+//     because it is well-defined, not because it is common.
 package podstate
 
 import "strings"
@@ -85,8 +106,10 @@ const (
 	// pod's disk survives and it can be started again.
 	StatusStopped Status = "stopped"
 
-	// StatusTerminated means desiredStatus is TERMINATED. The pod is being or
-	// has been destroyed.
+	// StatusTerminated means the pod is being or has been destroyed: either
+	// desiredStatus is TERMINATED, or it is EXITED and lastStatusChange
+	// attributes a *termination* rather than a stop. The second case is the
+	// common one — see "Which desiredStatus a terminate actually writes" above.
 	StatusTerminated Status = "terminated"
 
 	// StatusUnknown means the state cannot be derived: either desiredStatus is
@@ -187,6 +210,18 @@ func Derive(s Signals) State {
 			return State{Status: StatusInitializing, Reason: ReasonAwaitingContainer}
 		}
 	case "EXITED":
+		// A terminate lands here, not on TERMINATED: every "Terminated by ..."
+		// writer in runpod-backend sets desiredStatus EXITED
+		// (model/src/pod/terminatePod.ts:218 and :276,
+		// terminateAllStoppedPods.ts:80, cluster/deleteCluster.ts:129 and :210),
+		// and only the outbid paths write TERMINATED. Reading the attribution
+		// text is the only way to tell a destroy from a stop on this status;
+		// without this the most common terminate reported `stopped` with no
+		// reason at all. Deliberately not routed through the outbid branch:
+		// EXITED + "Outbid:" is a real stop (model/src/utils/index.ts:481).
+		if terminated := actorReason(s.LastStatusChange, "terminated by ", ReasonTerminatedByUser, ReasonTerminatedByRunpod); terminated != "" {
+			return State{Status: StatusTerminated, Reason: terminated}
+		}
 		return State{
 			Status: StatusStopped,
 			Reason: stopReason(s.LastStatusChange, "exited by ", ReasonStoppedByUser, ReasonStoppedByRunpod, ReasonStoppedOutbid),
@@ -238,6 +273,19 @@ func (st State) Explain() string {
 // the same output — `pod get` and `pod list` both publish it — so an unknown
 // phrasing degrades to "no token" rather than to a wrong token.
 func stopReason(lastStatusChange any, prefix string, byUser, byRunpod, outbid Reason) Reason {
+	if actor := actorReason(lastStatusChange, prefix, byUser, byRunpod); actor != "" {
+		return actor
+	}
+	if text, ok := lastStatusChange.(string); ok && strings.Contains(strings.ToLower(text), "outbid") {
+		return outbid
+	}
+	return ""
+}
+
+// actorReason reads only the "<verb> by user" / "<verb> by Runpod" attribution,
+// with no outbid fallback, so a caller can ask "does this text name a particular
+// verb?" without an unrelated cause answering yes.
+func actorReason(lastStatusChange any, prefix string, byUser, byRunpod Reason) Reason {
 	text, ok := lastStatusChange.(string)
 	if !ok {
 		return ""
@@ -248,8 +296,6 @@ func stopReason(lastStatusChange any, prefix string, byUser, byRunpod, outbid Re
 		return byUser
 	case strings.Contains(lower, prefix+"runpod"):
 		return byRunpod
-	case strings.Contains(lower, "outbid"):
-		return outbid
 	default:
 		return ""
 	}
