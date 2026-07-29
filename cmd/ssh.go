@@ -9,6 +9,7 @@ import (
 	"github.com/runpod/runpodctl/cmd/ssh"
 	"github.com/runpod/runpodctl/internal/api"
 	"github.com/runpod/runpodctl/internal/output"
+	"github.com/runpod/runpodctl/internal/podstate"
 	"github.com/runpod/runpodctl/internal/sshconnect"
 
 	"github.com/spf13/cobra"
@@ -189,11 +190,24 @@ func runSSHInfoWithArgs(cmd *cobra.Command, args []string, allowAll bool) error 
 	pod, conn := sshconnect.FindPodConnection(pods, nameOrID, keyInfo)
 	if pod != nil {
 		if conn == nil {
+			// the same derivation `pod get` uses, so both commands explain a
+			// not-ready pod identically instead of saying only "pod not ready".
+			state := podstate.Derive(podstate.Signals{
+				DesiredStatus:    pod.DesiredStatus,
+				LastStatusChange: pod.LastStatusChange,
+				RuntimeProbed:    true,
+				RuntimeReported:  pod.Runtime != nil,
+			})
+			message := "pod not ready"
+			if reason := podstate.SSHUnavailableReason(state); reason != "" {
+				message += ": " + reason
+			}
 			return output.Print(map[string]interface{}{
-				"error":  "pod not ready",
-				"id":     pod.ID,
-				"name":   pod.Name,
-				"status": pod.DesiredStatus,
+				"error":         message,
+				"id":            pod.ID,
+				"name":          pod.Name,
+				"status":        pod.DesiredStatus,
+				"runtimeStatus": string(state.Status),
 			}, &output.Config{Format: format})
 		}
 		return output.Print(conn, &output.Config{Format: format})

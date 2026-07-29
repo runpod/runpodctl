@@ -4,7 +4,14 @@ list all pods
 
 ### Synopsis
 
-list all pods in your account
+list all pods in your account.
+
+defaults to running pods only; use --all to include stopped ones.
+
+runtimeStatus reports what each pod is actually doing, which desiredStatus
+cannot: running (container up), initializing (placed, container not up yet -
+image pull, create or boot), stopped, terminated, or unknown.
+runtimeStatusReason carries a stable token when there is more to say.
 
 ```
 runpodctl pod list [flags]

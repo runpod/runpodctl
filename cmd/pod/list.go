@@ -8,6 +8,7 @@ import (
 
 	"github.com/runpod/runpodctl/internal/api"
 	"github.com/runpod/runpodctl/internal/output"
+	"github.com/runpod/runpodctl/internal/podstate"
 
 	"github.com/spf13/cobra"
 )
@@ -15,21 +16,31 @@ import (
 var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "list all pods",
-	Long:  "list all pods in your account",
-	Args:  cobra.NoArgs,
-	RunE:  runList,
+	Long: `list all pods in your account.
+
+defaults to running pods only; use --all to include stopped ones.
+
+runtimeStatus reports what each pod is actually doing, which desiredStatus
+cannot: running (container up), initializing (placed, container not up yet -
+image pull, create or boot), stopped, terminated, or unknown.
+runtimeStatusReason carries a stable token when there is more to say.`,
+	Args: cobra.NoArgs,
+	RunE: runList,
 }
 
 type podListOutput struct {
-	ID            string      `json:"id"`
-	Name          string      `json:"name"`
-	DesiredStatus string      `json:"desiredStatus"`
-	ImageName     string      `json:"imageName"`
-	GpuID         string      `json:"gpuId,omitempty"`
-	GpuCount      int         `json:"gpuCount"`
-	VolumeInGb    int         `json:"volumeInGb"`
-	CostPerHr     float64     `json:"costPerHr,omitempty"`
-	CreatedAt     string      `json:"createdAt,omitempty"`
+	ID                  string  `json:"id"`
+	Name                string  `json:"name"`
+	DesiredStatus       string  `json:"desiredStatus"`
+	RuntimeStatus       string  `json:"runtimeStatus"`
+	RuntimeStatusReason string  `json:"runtimeStatusReason,omitempty"`
+	ImageName           string  `json:"imageName"`
+	GpuID               string  `json:"gpuId,omitempty"`
+	GpuCount            int     `json:"gpuCount"`
+	VolumeInGb          int     `json:"volumeInGb"`
+	CostPerHr           float64 `json:"costPerHr,omitempty"`
+	CreatedAt           string  `json:"createdAt,omitempty"`
+	UptimeSeconds       *int    `json:"uptimeSeconds,omitempty"`
 }
 
 var (
@@ -101,6 +112,8 @@ func runList(cmd *cobra.Command, args []string) error {
 		statusFilter = "RUNNING"
 	}
 
+	runtimes := fetchRuntimes()
+
 	items := make([]podListOutput, 0, len(pods))
 	for _, p := range pods {
 		if statusFilter != "" && !strings.EqualFold(p.DesiredStatus, statusFilter) {
@@ -119,21 +132,67 @@ func runList(cmd *cobra.Command, args []string) error {
 			createdAtStr = ct.UTC().Format(time.RFC3339)
 		}
 
+		signals := podstate.Signals{
+			DesiredStatus:    p.DesiredStatus,
+			LastStatusChange: p.LastStatusChange,
+		}
+		var uptime *int
+		if runtimes != nil {
+			signals.RuntimeProbed = true
+			if gqlPod, ok := runtimes[p.ID]; ok {
+				signals.RuntimeReported = gqlPod.Runtime != nil
+				if gqlPod.Runtime != nil {
+					uptime = gqlPod.Runtime.UptimeInSeconds
+				}
+			}
+		}
+		state := podstate.Derive(signals)
+
 		items = append(items, podListOutput{
-			ID:            p.ID,
-			Name:          p.Name,
-			DesiredStatus: p.DesiredStatus,
-			ImageName:     p.ImageName,
-			GpuID:         p.GpuTypeID,
-			GpuCount:      p.GpuCount,
-			VolumeInGb:    p.VolumeInGb,
-			CostPerHr:     p.CostPerHr,
-			CreatedAt:     createdAtStr,
+			ID:                  p.ID,
+			Name:                p.Name,
+			DesiredStatus:       p.DesiredStatus,
+			RuntimeStatus:       string(state.Status),
+			RuntimeStatusReason: string(state.Reason),
+			ImageName:           p.ImageName,
+			GpuID:               p.GpuTypeID,
+			GpuCount:            p.GpuCount,
+			VolumeInGb:          p.VolumeInGb,
+			CostPerHr:           p.CostPerHr,
+			CreatedAt:           createdAtStr,
+			UptimeSeconds:       uptime,
 		})
 	}
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
 	return output.Print(items, &output.Config{Format: format})
+}
+
+// fetchRuntimes returns runtime telemetry keyed by pod id, or nil when it could
+// not be obtained.
+//
+// `pod list` runs on rest /pods, which never returns `runtime`, so a second call
+// is unavoidable. It is deliberately the *bulk* graphql myPods query — one
+// request for every pod, never one per pod — and it is best-effort: a failure
+// downgrades runtimeStatus to unknown/runtime_unavailable rather than failing a
+// list that otherwise succeeded. nil (not an empty map) means "did not look",
+// which podstate treats differently from "no runtime reported".
+func fetchRuntimes() map[string]*api.LegacyPod {
+	gqlClient, err := api.NewGraphQLClient()
+	if err != nil {
+		return nil
+	}
+	pods, err := gqlClient.GetPods()
+	if err != nil {
+		return nil
+	}
+	byID := make(map[string]*api.LegacyPod, len(pods))
+	for _, p := range pods {
+		if p != nil {
+			byID[p.ID] = p
+		}
+	}
+	return byID
 }
 
 // parseDuration parses a duration string like "30m", "1h", "1h30m", "7d".

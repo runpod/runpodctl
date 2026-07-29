@@ -24,6 +24,7 @@ _note: all pods automatically come with runpodctl installed with a pod-scoped ap
     - [serverless endpoints](#serverless-endpoints)
     - [file transfer](#file-transfer)
   - [output format](#output-format)
+    - [pod runtime status](#pod-runtime-status)
     - [error format](#error-format)
   - [environment variables](#environment-variables)
   - [legacy commands](#legacy-commands)
@@ -138,6 +139,41 @@ runpodctl pod list                    # json (default)
 runpodctl pod list --output=table     # human-readable table
 runpodctl pod list --output=yaml      # yaml format
 ```
+
+### pod runtime status
+
+`desiredStatus` says what you asked for, never what is happening: a pod whose
+20 gb image is still downloading and a pod that has been serving for an hour are
+both `RUNNING`. `pod get` and `pod list` therefore also report a derived
+`runtimeStatus`, plus a `runtimeStatusReason` token when there is more to say.
+branch on these, not on the reason text.
+
+| `runtimeStatus` | meaning |
+| --- | --- |
+| `running` | `desiredStatus` is RUNNING and the platform reports runtime telemetry: the container is up. does **not** imply any port is reachable |
+| `initializing` | `desiredStatus` is RUNNING and no telemetry yet: placed on a machine, container not up. covers image pull, container create and boot — the platform does not distinguish them |
+| `stopped` | `desiredStatus` is EXITED. container gone, disk kept, `pod start` will bring it back |
+| `terminated` | `desiredStatus` is TERMINATED |
+| `unknown` | not derivable: either a `desiredStatus` the platform defines but does not surface in practice (CREATED, RESTARTING, PAUSED, DEAD), or the runtime lookup failed. read `desiredStatus`, which is in the same output |
+
+| `runtimeStatusReason` | meaning |
+| --- | --- |
+| `awaiting_container` | with `initializing`: waiting for the host to report a container |
+| `stopped_by_user` / `terminated_by_user` | you did it |
+| `stopped_by_runpod` / `terminated_by_runpod` | runpod did it. the platform records no machine-readable cause; in practice this is insufficient credit, a fatal image-pull failure, or host action |
+| `runtime_unavailable` | with `unknown`: the runtime lookup could not be made, so running and initializing cannot be told apart |
+
+there is deliberately no `pulling` value. the api exposes no pull state (see
+`internal/podstate` for the full trace of what it does expose), so `pulling`
+could only ever be a guess, and `initializing` covers the whole pre-container
+window honestly instead.
+
+`uptimeSeconds` is the container's uptime and is absent whenever no container is
+reporting, rather than being published as `0`.
+
+to poll a pod to readiness, wait for `runtimeStatus: running`; for ssh, wait for
+`ssh.ssh_command` to appear in `pod get` — a running container still needs port
+22 published, which only happens if the pod was created with it in `--ports`.
 
 ### error format
 
