@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -215,4 +216,64 @@ func TestGetPodsRequestsAndParsesRuntime(t *testing.T) {
 	if pods[1].Runtime != nil {
 		t.Errorf("expected nil runtime for the initializing pod, got %+v", pods[1].Runtime)
 	}
+}
+
+// TestLimitTimeout pins the `pod list` runtime-probe cap. Nothing else
+// constrains it: `pod list` had never touched graphql before CON-690, so if this
+// only-ever-shortens rule silently stops applying, an unresponsive graphql turns
+// a ~100ms list into a 30s stall for the sake of a decorative field.
+func TestLimitTimeout(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+
+	newClient := func(t *testing.T) *GraphQLClient {
+		t.Helper()
+		client, err := NewGraphQLClient()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if client.httpClient.Timeout != 30*time.Second {
+			t.Fatalf("expected the 30s default, got %v", client.httpClient.Timeout)
+		}
+		return client
+	}
+
+	t.Run("shortens", func(t *testing.T) {
+		client := newClient(t)
+		client.LimitTimeout(5 * time.Second)
+		if client.httpClient.Timeout != 5*time.Second {
+			t.Errorf("cap did not apply: got %v, want 5s", client.httpClient.Timeout)
+		}
+	})
+
+	t.Run("never lengthens", func(t *testing.T) {
+		client := newClient(t)
+		client.LimitTimeout(60 * time.Second)
+		if client.httpClient.Timeout != 30*time.Second {
+			t.Errorf("cap lengthened the timeout: got %v, want 30s", client.httpClient.Timeout)
+		}
+	})
+
+	t.Run("ignores non-positive", func(t *testing.T) {
+		client := newClient(t)
+		client.LimitTimeout(0)
+		client.LimitTimeout(-time.Second)
+		if client.httpClient.Timeout != 30*time.Second {
+			t.Errorf("got %v, want the 30s default untouched", client.httpClient.Timeout)
+		}
+	})
+
+	t.Run("keeps a tighter operator setting", func(t *testing.T) {
+		viper.Set("graphqlTimeout", 2*time.Second)
+		t.Cleanup(func() { viper.Set("graphqlTimeout", 0) })
+		client, err := NewGraphQLClient()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		client.LimitTimeout(5 * time.Second)
+		if client.httpClient.Timeout != 2*time.Second {
+			t.Errorf("clobbered a tighter configured timeout: got %v, want 2s", client.httpClient.Timeout)
+		}
+	})
 }
