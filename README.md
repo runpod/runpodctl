@@ -153,11 +153,17 @@ with `usage_error` before anything is sent.
 | stderr | progress notes and the error object, never job data |
 | exit codes | 0 when the job is `COMPLETED`, and when `--wait 0` / `--no-wait` submitted it successfully. 1 when the request fails, when `--wait` runs out (`timeout`), or when the job ends `FAILED` / `CANCELLED` / `TIMED_OUT` (`job_failed`) |
 
-`timeout` means the cli stopped waiting, not that the endpoint is broken: the job
-is still running server-side and the error message names the `serverless status`
-command to keep following it. the shared `timeout` config key bounds a single api
-call (30s by default) but is never allowed to outlast `--wait`, which bounds the
-job.
+`timeout` means the cli stopped waiting, not that the endpoint is broken. when the
+message names a `serverless status` command the job is still running server-side —
+poll it with that command rather than re-invoking. when it does not (a single api
+call ran out of time), nothing was left running and a retry is fine.
+
+two budgets, two levers: `--wait` bounds the whole job, and the shared `timeout`
+config key (30s by default) bounds one api call. a call made inside a wait is
+clamped to what is left of `--wait`, except that no single call is ever given less
+than 1s — a request with milliseconds left is doomed before it is sent, and
+clamping it would throw away a terminal status one round trip away. so a `--wait`
+below one second may overshoot by up to that much, and no more.
 
 `/runsync` is deliberately not used, even though `serverless get` still reports
 its url. it is not synchronous: the invoke api holds the connection for 90s and
@@ -355,10 +361,10 @@ codes the cli generates:
 | `not_found` | the api has no such resource. during a `--wait` it can also mean a resource that *was* created has gone (or never became visible), so check for an `id` field and clean up rather than assuming nothing exists |
 | `bad_request` `unauthorized` `forbidden` `conflict` `rate_limited` `server_error` `api_error` | derived from the rest status |
 | `graphql_error` | graphql returned an errors array (http 200) |
-| `timeout` | the cli stopped waiting (`serverless run/status --wait`, `model add --wait-for-hash`). the work may still be running server-side — poll it, do not retry |
+| `timeout` | the cli stopped waiting. two cases, told apart by the message: a `--wait` / `--wait-for-hash` budget ran out with the work still running server-side (the message names the command to poll it — do that, do not re-invoke), or a single api call exceeded the `timeout` config key (nothing is running; retry) |
 | `job_failed` | a serverless job reached a terminal status other than `COMPLETED`. the job payload is still on stdout |
 | `no_credentials` | no api key configured — run `runpodctl doctor` or set `RUNPOD_API_KEY` |
-| `network_error` | the api could not be reached at all — dns, refused, tls, timeout. the only code that means "transient, retry" |
+| `network_error` | the api could not be reached at all — dns, refused, tls, timeout. transient: retry |
 | `wait_timeout` | `--wait` gave up before the resource was usable. the resource **was created and still bills** — the last known state is in the message and the id is in `id` |
 | `wait_interrupted` | `--wait` was cancelled (ctrl-c / SIGTERM). same as above: the resource exists, and `id` names it |
 | `cli_error` | anything else local: validation, config, bad input (including a malformed `RUNPOD_API_URL`) |
