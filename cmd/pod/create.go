@@ -199,7 +199,9 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		// handing back a pod you can connect to is the entire point of --wait.
 		details, detailsErr := fetchPodDetails(podID, false, false)
 		if detailsErr != nil {
-			return detailsErr
+			// ssh came up but the re-read did not: name the pod so the id is not
+			// lost between a successful create and a failed read.
+			return fmt.Errorf("pod %s is ready but reading it back failed: %w", podID, detailsErr)
 		}
 		return output.Print(details, &output.Config{Format: format})
 	}
