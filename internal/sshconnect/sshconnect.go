@@ -70,31 +70,44 @@ func BuildSSHCommand(ip string, port int, keyInfo KeyInfo) string {
 	return "ssh root@" + ip + " -p " + strconv.Itoa(port)
 }
 
+// PublicSSHPort returns the pod's publicly reachable ssh address (private port
+// 22 mapped to a public port). ok is false while the pod has no runtime yet or
+// the port has not been allocated.
+//
+// Allocation is not readiness: the port can be listed minutes before sshd
+// accepts a connection (or forever, if the image runs no sshd), so callers that
+// need "ssh works" must probe the address as well.
+func PublicSSHPort(pod *api.LegacyPod) (ip string, port int, ok bool) {
+	if pod == nil || pod.Runtime == nil || pod.Runtime.Ports == nil {
+		return "", 0, false
+	}
+	for _, p := range pod.Runtime.Ports {
+		if p.IsIpPublic && p.PrivatePort == 22 {
+			return p.Ip, p.PublicPort, true
+		}
+	}
+	return "", 0, false
+}
+
 // BuildConnection builds a connection map for a single pod.
 func BuildConnection(pod *api.LegacyPod, keyInfo KeyInfo) map[string]interface{} {
-	if pod.Runtime == nil || pod.Runtime.Ports == nil {
+	ip, port, ok := PublicSSHPort(pod)
+	if !ok {
 		return nil
 	}
 
-	for _, port := range pod.Runtime.Ports {
-		if port.IsIpPublic && port.PrivatePort == 22 {
-			sshCommand := BuildSSHCommand(port.Ip, port.PublicPort, keyInfo)
-			conn := map[string]interface{}{
-				"id":          pod.ID,
-				"name":        pod.Name,
-				"ssh_command": sshCommand,
-				"ip":          port.Ip,
-				"port":        port.PublicPort,
-				"ssh_key":     keyInfo,
-			}
-			if !keyInfo.Exists || (keyInfo.InAccount != nil && !*keyInfo.InAccount) {
-				conn["setup"] = "runpodctl doctor"
-			}
-			return conn
-		}
+	conn := map[string]interface{}{
+		"id":          pod.ID,
+		"name":        pod.Name,
+		"ssh_command": BuildSSHCommand(ip, port, keyInfo),
+		"ip":          ip,
+		"port":        port,
+		"ssh_key":     keyInfo,
 	}
-
-	return nil
+	if !keyInfo.Exists || (keyInfo.InAccount != nil && !*keyInfo.InAccount) {
+		conn["setup"] = "runpodctl doctor"
+	}
+	return conn
 }
 
 // ListConnections builds connection maps for all pods that can actually be

@@ -142,48 +142,9 @@ func TestPodCmd_Help(t *testing.T) {
 	}
 }
 
-func TestParseDuration(t *testing.T) {
-	tests := []struct {
-		input   string
-		want    time.Duration
-		wantErr bool
-	}{
-		// valid inputs
-		{input: "1h", want: time.Hour},
-		{input: "7d", want: 7 * 24 * time.Hour},
-		{input: "30m", want: 30 * time.Minute},
-		{input: "1h30m", want: time.Hour + 30*time.Minute},
-		{input: "2h", want: 2 * time.Hour},
-		{input: "1d", want: 24 * time.Hour},
-
-		// invalid inputs
-		{input: "-1d", wantErr: true},
-		{input: "0h", wantErr: true},
-		{input: "0d", wantErr: true},
-		{input: "abc", wantErr: true},
-		{input: "", wantErr: true},
-		{input: "-2h", wantErr: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got, err := parseDuration(tt.input)
-			if tt.wantErr {
-				if err == nil {
-					t.Errorf("parseDuration(%q) expected error, got %v", tt.input, got)
-				}
-				return
-			}
-			if err != nil {
-				t.Errorf("parseDuration(%q) unexpected error: %v", tt.input, err)
-				return
-			}
-			if got != tt.want {
-				t.Errorf("parseDuration(%q) = %v, want %v", tt.input, got, tt.want)
-			}
-		})
-	}
-}
+// the --since duration parser moved to internal/duration when
+// --wait-timeout needed it too; its table lives in
+// internal/duration/duration_test.go now.
 
 func TestParseCreatedAt(t *testing.T) {
 	tests := []struct {
