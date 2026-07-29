@@ -113,7 +113,13 @@ func runRun(cmd *cobra.Command, args []string) error {
 // terminal. The job it returns is the last payload seen, so the caller can print
 // it even when the wait failed.
 func invokeJob(client invokeClient, endpointID string, input json.RawMessage, deadline time.Time, wait bool) (*api.Job, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), boundedRequestTimeout(deadline))
+	// inside a wait the submit must not outlive the budget; without one it gets the
+	// ordinary per-call timeout.
+	submitTimeout := requestTimeout()
+	if wait {
+		submitTimeout = boundedRequestTimeout(deadline)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), submitTimeout)
 	defer cancel()
 
 	job, err := client.Run(ctx, endpointID, input)

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -31,11 +32,23 @@ const e2eInvokeWait = 6 * time.Minute
 
 var (
 	buildOnce   sync.Once
+	buildDir    string
 	builtBinary string
 	buildErr    error
 )
 
-// invokeBinary builds the cli under test once per run into a temp dir.
+// TestMain owns the temp dir the cli under test is built into. It cannot be a
+// t.TempDir(): that belongs to whichever test happened to trigger the build first
+// and is deleted when that test ends, leaving every later test without a binary.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if buildDir != "" {
+		os.RemoveAll(buildDir)
+	}
+	os.Exit(code)
+}
+
+// invokeBinary builds the cli under test once per run.
 //
 // Deliberately not the ~/go/bin/runpodctl that runCLI in cli_test.go uses: that
 // is a shared path, and installing over it would clobber whatever else is using
@@ -50,7 +63,12 @@ func invokeBinary(t *testing.T) string {
 			buildErr = err
 			return
 		}
-		out := filepath.Join(t.TempDir(), "runpodctl-e2e")
+		buildDir, err = os.MkdirTemp("", "runpodctl-e2e")
+		if err != nil {
+			buildErr = err
+			return
+		}
+		out := filepath.Join(buildDir, "runpodctl")
 		cmd := exec.Command("go", "build", "-o", out, ".")
 		cmd.Dir = dir
 		if output, err := cmd.CombinedOutput(); err != nil {

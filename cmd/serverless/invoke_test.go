@@ -500,6 +500,26 @@ func TestBoundedRequestTimeout(t *testing.T) {
 	}
 }
 
+func TestFetchJobStatus_WithoutBudgetUsesTheFullPerCallTimeout(t *testing.T) {
+	// a command with no wait budget (a plain status check, --no-wait) must still get
+	// the ordinary per-call timeout. Clamping it to whatever is left of a budget
+	// that never existed would give one legitimate api call the minRequest floor.
+	viper.Set("timeout", 30*time.Second)
+	t.Cleanup(func() { viper.Set("timeout", nil) })
+	client := &mockInvokeClient{statusSteps: []jobStep{{job: mustJob(`{"id":"job-1","status":"IN_QUEUE"}`)}}}
+
+	if _, err := fetchJobStatus(client, "ep-1", "job-1", time.Now(), false); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(client.statusDeadlines) != 1 {
+		t.Fatalf("status deadlines = %v, want one entry", client.statusDeadlines)
+	}
+	if client.statusDeadlines[0] <= minRequest {
+		t.Errorf("request deadline = %s, want the full per-call timeout, not the %s floor",
+			client.statusDeadlines[0], minRequest)
+	}
+}
+
 func TestFetchJobStatus_RetriesTransientFailureWhileBudgetRemains(t *testing.T) {
 	fastPolling(t)
 	client := &mockInvokeClient{statusSteps: []jobStep{
@@ -512,7 +532,7 @@ func TestFetchJobStatus_RetriesTransientFailureWhileBudgetRemains(t *testing.T) 
 		err error
 	)
 	_, stderr := captureOutput(t, func() {
-		job, err = fetchJobStatus(client, "ep-1", "job-1", time.Now().Add(5*time.Second))
+		job, err = fetchJobStatus(client, "ep-1", "job-1", time.Now().Add(5*time.Second), true)
 	})
 	if err != nil {
 		t.Fatalf("a transient 502 must not abort the first check: %v", err)
@@ -532,7 +552,7 @@ func TestFetchJobStatus_NoBudgetFailsFast(t *testing.T) {
 	}}
 
 	// without --wait there is no budget to retry inside: one call, report it.
-	_, err := fetchJobStatus(client, "ep-1", "job-1", time.Now())
+	_, err := fetchJobStatus(client, "ep-1", "job-1", time.Now(), false)
 	if code := errorCode(t, err); code != "server_error" {
 		t.Fatalf("code = %q, want server_error (err %v)", code, err)
 	}
@@ -545,7 +565,7 @@ func TestFetchJobStatus_PermanentErrorFailsFastWithBudget(t *testing.T) {
 	fastPolling(t)
 	client := &mockInvokeClient{statusSteps: []jobStep{{err: &api.APIError{Message: "job not found", Status: 404}}}}
 
-	_, err := fetchJobStatus(client, "ep-1", "job-1", time.Now().Add(5*time.Second))
+	_, err := fetchJobStatus(client, "ep-1", "job-1", time.Now().Add(5*time.Second), true)
 	if code := errorCode(t, err); code != "not_found" {
 		t.Fatalf("code = %q, want not_found (err %v)", code, err)
 	}

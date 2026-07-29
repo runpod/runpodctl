@@ -54,7 +54,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	// with --wait, the first check follows the same transient-failure policy as the
 	// poll loop; without it, the deadline has already passed and this is a single
 	// fail-fast call.
-	job, err := fetchJobStatus(client, endpointID, jobID, deadline)
+	job, err := fetchJobStatus(client, endpointID, jobID, deadline, statusWait > 0)
 	if err != nil {
 		return fmt.Errorf("failed to get job status: %w", err)
 	}

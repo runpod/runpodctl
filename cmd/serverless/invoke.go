@@ -60,10 +60,15 @@ func requestTimeout() time.Duration {
 // away — so a wait bound may overshoot by this much, and no more.
 const minRequest = time.Second
 
-// boundedRequestTimeout is the per-request deadline inside a wait: the shared
-// per-call timeout, but never past the end of the wait budget. Without this the
-// wait bound is a lie — a hung submit or first /status check would run for the
-// full 30s per-call timeout even under --wait 1s.
+// boundedRequestTimeout is the per-request deadline for a call made *inside* a
+// wait: the shared per-call timeout, but never past the end of the wait budget.
+// Without this the wait bound is a lie — a hung submit or first /status check
+// would run for the full 30s per-call timeout even under --wait 1s.
+//
+// Only for calls inside a wait. A command with no wait budget (health,
+// --no-wait, a plain status check) must use requestTimeout() directly: its
+// deadline has already passed by this definition, and clamping it to the
+// minRequest floor would give a single legitimate api call one second.
 func boundedRequestTimeout(deadline time.Time) time.Duration {
 	timeout := requestTimeout()
 	if remaining := time.Until(deadline); remaining < timeout {
@@ -89,8 +94,14 @@ func waitForTerminal(client invokeClient, endpointID string, job *api.Job, deadl
 		return job, nil
 	}
 	if job.ID == "" {
-		// nothing to poll: without an id the job is unreachable.
-		return job, fmt.Errorf("invoke api reported status %s without a job id", job.Status)
+		// nothing to poll: without an id the job is unreachable. That is the api
+		// misbehaving, not a local mistake, so it gets an api code rather than the
+		// cli_error fallback.
+		return job, &api.APIError{
+			Message: fmt.Sprintf("invoke api reported status %s without a job id, so the job cannot be polled", job.Status),
+			Code:    "api_error",
+			Status:  http.StatusOK,
+		}
 	}
 
 	start := time.Now()
@@ -156,13 +167,21 @@ func pollJobStatus(client invokeClient, endpointID, jobID string, deadline time.
 	return client.JobStatus(ctx, endpointID, jobID)
 }
 
-// fetchJobStatus is the first /status call of a command. It applies the same
-// transient-failure policy as the wait loop while the budget lasts, because this
-// is the call an agent makes after a 'timeout' error told it to poll — losing the
-// job to a single 502 there would strand exactly the job the message was about. A
-// deadline that has already passed (no --wait) means one attempt, fail fast.
-func fetchJobStatus(client invokeClient, endpointID, jobID string, deadline time.Time) (*api.Job, error) {
-	for attempt := 0; ; attempt++ {
+// fetchJobStatus is the first /status call of a command.
+//
+// With a wait budget it applies the same transient-failure policy as the wait
+// loop, because this is the call an agent makes after a 'timeout' error told it to
+// poll — losing the job to a single 502 there would strand exactly the job the
+// message was about. Without one it is a single call on the full per-call timeout,
+// and any failure is reported as-is.
+func fetchJobStatus(client invokeClient, endpointID, jobID string, deadline time.Time, waiting bool) (*api.Job, error) {
+	if !waiting {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout())
+		defer cancel()
+		return client.JobStatus(ctx, endpointID, jobID)
+	}
+
+	for {
 		job, err := pollJobStatus(client, endpointID, jobID, deadline)
 		if err == nil {
 			return job, nil
