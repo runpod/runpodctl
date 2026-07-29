@@ -471,6 +471,128 @@ func TestPollJobStatus_LastPollKeepsAUsableTimeout(t *testing.T) {
 	}
 }
 
+func TestPollJobStatus_IsBoundedByTheWaitBudget(t *testing.T) {
+	// the upper bound, which is the guarantee --wait actually advertises. Without it
+	// a single hung poll runs for the full per-call timeout (30s) no matter what
+	// --wait says — the poll site runs many times per command, so this is the site
+	// that matters. TestPollJobStatus_LastPollKeepsAUsableTimeout only pins the floor.
+	viper.Set("timeout", 30*time.Second)
+	t.Cleanup(func() { viper.Set("timeout", nil) })
+	client := &mockInvokeClient{statusSteps: []jobStep{{job: mustJob(`{"id":"job-1","status":"IN_PROGRESS"}`)}}}
+
+	budget := 2 * time.Second
+	if _, err := pollJobStatus(client, "ep-1", "job-1", time.Now().Add(budget)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(client.statusDeadlines) != 1 {
+		t.Fatalf("status deadlines = %v, want one entry", client.statusDeadlines)
+	}
+	if client.statusDeadlines[0] > budget {
+		t.Errorf("poll deadline = %s, want at most the %s wait budget", client.statusDeadlines[0], budget)
+	}
+}
+
+func TestWaitForTerminal_EveryPollIsBoundedByTheWaitBudget(t *testing.T) {
+	fastPolling(t)
+	// the same bound asserted through the loop that ships, not just the helper: a
+	// call site that reached for requestTimeout() instead would pass the helper's
+	// own tests and still break the advertised bound by ~15x.
+	viper.Set("timeout", 30*time.Second)
+	t.Cleanup(func() { viper.Set("timeout", nil) })
+	client := &mockInvokeClient{statusSteps: []jobStep{
+		{job: mustJob(`{"id":"job-1","status":"IN_PROGRESS"}`)},
+		{job: mustJob(`{"id":"job-1","status":"COMPLETED"}`)},
+	}}
+
+	budget := 2 * time.Second
+	var err error
+	captureOutput(t, func() {
+		_, err = waitForTerminal(client, "ep-1", mustJob(`{"id":"job-1","status":"IN_QUEUE"}`), time.Now().Add(budget))
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(client.statusDeadlines) < 2 {
+		t.Fatalf("status deadlines = %v, want at least two polls", client.statusDeadlines)
+	}
+	for i, deadline := range client.statusDeadlines {
+		if deadline > budget {
+			t.Errorf("poll %d deadline = %s, want at most the %s wait budget", i, deadline, budget)
+		}
+	}
+}
+
+func TestWaitForTerminal_KeepsTheJobIDWhenAPollResponseDropsIt(t *testing.T) {
+	fastPolling(t)
+	// a /status body that carries a status but no id must not blank the id the wait
+	// is following: every later poll would go to /status/ with an empty id (a 404 in
+	// prod, which retryablePollError treats as fatal) and the timeout message would
+	// name an empty job.
+	client := &mockInvokeClient{statusSteps: []jobStep{
+		{job: mustJob(`{"status":"IN_PROGRESS"}`)},
+	}}
+
+	var err error
+	_, stderr := captureOutput(t, func() {
+		_, err = waitForTerminal(client, "ep-1", mustJob(`{"id":"job-1","status":"IN_QUEUE"}`), time.Now().Add(20*time.Millisecond))
+	})
+	if code := errorCode(t, err); code != "timeout" {
+		t.Fatalf("code = %q, want timeout (err %v)", code, err)
+	}
+	assertOnly(t, "status job ids", client.statusJobIDs, "job-1")
+	if !strings.Contains(err.Error(), "runpodctl serverless status ep-1 job-1") {
+		t.Errorf("timeout message lost the job id: %q", err.Error())
+	}
+	if strings.Contains(stderr, "job : ") {
+		t.Errorf("progress note lost the job id: %q", stderr)
+	}
+}
+
+func TestFetchJobStatus_BacksOffBetweenRetries(t *testing.T) {
+	// a flat retry interval would hammer a rate-limited endpoint at ~2 req/s for the
+	// whole budget; the wait loop already backs off, and there must be one policy.
+	fastPolling(t)
+	pollInitialInterval, pollMaxInterval = 20*time.Millisecond, time.Second
+	client := &mockInvokeClient{statusSteps: []jobStep{
+		{err: &api.APIError{Message: "too many requests", Status: 429}},
+		{err: &api.APIError{Message: "too many requests", Status: 429}},
+		{err: &api.APIError{Message: "too many requests", Status: 429}},
+		{job: mustJob(`{"id":"job-1","status":"COMPLETED"}`)},
+	}}
+
+	start := time.Now()
+	var err error
+	captureOutput(t, func() {
+		_, err = fetchJobStatus(client, "ep-1", "job-1", time.Now().Add(5*time.Second), true)
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// flat pacing would take 3 * 20ms; growing pacing takes 20 + 30 + 45ms.
+	if elapsed := time.Since(start); elapsed < 90*time.Millisecond {
+		t.Errorf("three retries took %s, want the growing interval (>= 95ms), not a flat %s",
+			elapsed, pollInitialInterval)
+	}
+}
+
+func TestNextPollInterval(t *testing.T) {
+	oldMax := pollMaxInterval
+	t.Cleanup(func() { pollMaxInterval = oldMax })
+	pollMaxInterval = 5 * time.Second
+
+	tests := []struct{ in, want time.Duration }{
+		{in: 500 * time.Millisecond, want: 750 * time.Millisecond},
+		{in: 4 * time.Second, want: 5 * time.Second},
+		{in: 5 * time.Second, want: 5 * time.Second},
+		{in: 10 * time.Second, want: 5 * time.Second},
+	}
+	for _, tt := range tests {
+		if got := nextPollInterval(tt.in); got != tt.want {
+			t.Errorf("nextPollInterval(%s) = %s, want %s", tt.in, got, tt.want)
+		}
+	}
+}
+
 func TestBoundedRequestTimeout(t *testing.T) {
 	viper.Set("timeout", 30*time.Second)
 	t.Cleanup(func() { viper.Set("timeout", nil) })

@@ -104,16 +104,22 @@ func waitForTerminal(client invokeClient, endpointID string, job *api.Job, deadl
 		}
 	}
 
+	// the job id is fixed for the whole wait. Re-reading it from each poll response
+	// would be wrong: a body that carries a status but no `id` would blank it, and
+	// every later poll would go to /status/ with an empty id (a 404 in prod, which
+	// retryablePollError treats as fatal) while the timeout message named an empty
+	// job. Only status and payload are taken from a poll response.
+	jobID := job.ID
 	start := time.Now()
 	interval := pollInitialInterval
 	reportedStatus := job.Status
 	lastReport := time.Now()
-	notef("waiting for job %s: %s", job.ID, job.Status)
+	notef("waiting for job %s: %s", jobID, job.Status)
 
 	for {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return job, waitTimeoutError(endpointID, job, time.Since(start))
+			return job, waitTimeoutError(endpointID, jobID, job.Status, time.Since(start))
 		}
 
 		sleep := interval
@@ -121,14 +127,9 @@ func waitForTerminal(client invokeClient, endpointID string, job *api.Job, deadl
 			sleep = remaining
 		}
 		time.Sleep(sleep)
-		if interval < pollMaxInterval {
-			interval += interval / 2
-			if interval > pollMaxInterval {
-				interval = pollMaxInterval
-			}
-		}
+		interval = nextPollInterval(interval)
 
-		next, err := pollJobStatus(client, endpointID, job.ID, deadline)
+		next, err := pollJobStatus(client, endpointID, jobID, deadline)
 		if err != nil {
 			if !retryablePollError(err) {
 				return job, fmt.Errorf("failed to get job status: %w", err)
@@ -139,24 +140,42 @@ func waitForTerminal(client invokeClient, endpointID string, job *api.Job, deadl
 				// the budget is gone, so the actionable answer is the wait timeout
 				// (which names the follow-up command), not the incidental transport
 				// failure of the last attempt — that goes out as a note instead.
-				notef("job %s: last status check failed (%v)", job.ID, err)
-				return job, waitTimeoutError(endpointID, job, time.Since(start))
+				notef("job %s: last status check failed (%v)", jobID, err)
+				return job, waitTimeoutError(endpointID, jobID, job.Status, time.Since(start))
 			}
-			notef("job %s: status check failed (%v), retrying", job.ID, err)
+			notef("job %s: status check failed (%v), retrying", jobID, err)
 			continue
 		}
 
 		job = next
 		if job.IsTerminal() {
-			notef("job %s: %s after %s", job.ID, job.Status, since(start))
+			// an empty status is "terminal" only because there is nothing left to
+			// poll; announcing it would print an empty status. jobOutcome reports it.
+			if job.Status != "" {
+				notef("job %s: %s after %s", jobID, job.Status, since(start))
+			}
 			return job, nil
 		}
 		if job.Status != reportedStatus || time.Since(lastReport) >= pollHeartbeat {
-			notef("waiting for job %s: %s (%s elapsed)", job.ID, job.Status, since(start))
+			notef("waiting for job %s: %s (%s elapsed)", jobID, job.Status, since(start))
 			reportedStatus = job.Status
 			lastReport = time.Now()
 		}
 	}
+}
+
+// nextPollInterval grows a poll interval towards pollMaxInterval. Both poll loops
+// in this file use it, so "how fast does the cli re-check a job" is one policy and
+// not two that drift apart.
+func nextPollInterval(interval time.Duration) time.Duration {
+	if interval >= pollMaxInterval {
+		return pollMaxInterval
+	}
+	interval += interval / 2
+	if interval > pollMaxInterval {
+		return pollMaxInterval
+	}
+	return interval
 }
 
 // pollJobStatus runs one /status call, bounded by both the per-request timeout
@@ -181,6 +200,7 @@ func fetchJobStatus(client invokeClient, endpointID, jobID string, deadline time
 		return client.JobStatus(ctx, endpointID, jobID)
 	}
 
+	interval := pollInitialInterval
 	for {
 		job, err := pollJobStatus(client, endpointID, jobID, deadline)
 		if err == nil {
@@ -191,23 +211,27 @@ func fetchJobStatus(client invokeClient, endpointID, jobID string, deadline time
 		}
 		notef("job %s: status check failed (%v), retrying", jobID, err)
 
-		sleep := pollInitialInterval
+		// same growing interval as the wait loop. A flat retry here would hammer a
+		// 429 or a failing endpoint at ~2 req/s for the whole budget — and a rate
+		// limit is the one failure the extra traffic makes worse.
+		sleep := interval
 		if remaining := time.Until(deadline); sleep > remaining {
 			sleep = remaining
 		}
 		if sleep > 0 {
 			time.Sleep(sleep)
 		}
+		interval = nextPollInterval(interval)
 	}
 }
 
 // waitTimeoutError reports that the cli stopped waiting, not that the job broke.
 // The message names the follow-up command, because the job is still running and
 // the useful next step is to poll it rather than to re-invoke.
-func waitTimeoutError(endpointID string, job *api.Job, waited time.Duration) error {
+func waitTimeoutError(endpointID, jobID, lastStatus string, waited time.Duration) error {
 	return api.NewTimeoutError(
 		"gave up waiting for job %s after %s (last status %s); the job is still running server-side, poll it with: runpodctl serverless status %s %s",
-		job.ID, humanDuration(waited), job.Status, endpointID, job.ID,
+		jobID, humanDuration(waited), lastStatus, endpointID, jobID,
 	)
 }
 
