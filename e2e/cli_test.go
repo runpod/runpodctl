@@ -16,13 +16,20 @@ import (
 	"unicode/utf8"
 )
 
+// cliBinary returns the runpodctl binary under test. It defaults to the
+// installed one, but RUNPODCTL_BIN points it at a local build so a worktree can
+// be e2e-tested without overwriting the shared install.
+func cliBinary() string {
+	if override := strings.TrimSpace(os.Getenv("RUNPODCTL_BIN")); override != "" {
+		return override
+	}
+	home, _ := os.UserHomeDir()
+	return home + "/go/bin/runpodctl"
+}
+
 // runCLI runs the runpodctl CLI and returns stdout, stderr, and error
 func runCLI(args ...string) (string, string, error) {
-	// use the binary from go/bin
-	home, _ := os.UserHomeDir()
-	binary := home + "/go/bin/runpodctl"
-
-	cmd := exec.Command(binary, args...)
+	cmd := exec.Command(cliBinary(), args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -32,11 +39,7 @@ func runCLI(args ...string) (string, string, error) {
 }
 
 func runCLIWithInput(dir string, input string, args ...string) (string, string, error) {
-	// use the binary from go/bin
-	home, _ := os.UserHomeDir()
-	binary := home + "/go/bin/runpodctl"
-
-	cmd := exec.Command(binary, args...)
+	cmd := exec.Command(cliBinary(), args...)
 	cmd.Dir = dir
 	if strings.TrimSpace(input) != "" {
 		cmd.Stdin = strings.NewReader(input)

@@ -10,37 +10,57 @@ import (
 
 func intPtr(v int) *int { return &v }
 
+var runningState = podstate.State{Status: podstate.StatusRunning}
+
 func TestRuntimeUptime(t *testing.T) {
 	tests := []struct {
 		name    string
+		state   podstate.State
 		runtime *api.LegacyRuntime
 		want    interface{}
 	}{
 		{
 			name:    "nil runtime yields nil so the field is omitted",
+			state:   runningState,
 			runtime: nil,
 			want:    nil,
 		},
 		{
 			name:    "runtime without uptime yields nil",
+			state:   runningState,
 			runtime: &api.LegacyRuntime{},
 			want:    nil,
 		},
 		{
 			name:    "runtime with uptime yields the value",
+			state:   runningState,
 			runtime: &api.LegacyRuntime{UptimeInSeconds: intPtr(261)},
 			want:    261,
 		},
 		{
 			name:    "a genuine zero uptime is reported, not swallowed",
+			state:   runningState,
 			runtime: &api.LegacyRuntime{UptimeInSeconds: intPtr(0)},
 			want:    0,
+		},
+		{
+			// observed live: an EXITED pod keeps reporting its last uptime.
+			name:    "stale uptime on a stopped pod is dropped",
+			state:   podstate.State{Status: podstate.StatusStopped, Reason: podstate.ReasonStoppedByUser},
+			runtime: &api.LegacyRuntime{UptimeInSeconds: intPtr(18)},
+			want:    nil,
+		},
+		{
+			name:    "uptime is not reported while initializing",
+			state:   podstate.State{Status: podstate.StatusInitializing, Reason: podstate.ReasonAwaitingContainer},
+			runtime: &api.LegacyRuntime{UptimeInSeconds: intPtr(3)},
+			want:    nil,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := runtimeUptime(tt.runtime); got != tt.want {
+			if got := runtimeUptime(tt.state, tt.runtime); got != tt.want {
 				t.Errorf("runtimeUptime() = %v (%T), want %v (%T)", got, got, tt.want, tt.want)
 			}
 		})
@@ -51,7 +71,7 @@ func TestRuntimeUptime(t *testing.T) {
 // publish "uptimeSeconds": 0 forever, because rest omits the field and the
 // deprecated graphql Pod.uptimeSeconds is 0 for every pod in prod.
 func TestRuntimeUptimeOmittedFromJSON(t *testing.T) {
-	pod := &api.Pod{ID: "abc", UptimeSeconds: runtimeUptime(nil)}
+	pod := &api.Pod{ID: "abc", UptimeSeconds: runtimeUptime(runningState, nil)}
 	raw, err := json.Marshal(pod)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -64,7 +84,7 @@ func TestRuntimeUptimeOmittedFromJSON(t *testing.T) {
 		t.Errorf("uptimeSeconds should be absent when no container is reporting, got %s", raw)
 	}
 
-	pod.UptimeSeconds = runtimeUptime(&api.LegacyRuntime{UptimeInSeconds: intPtr(42)})
+	pod.UptimeSeconds = runtimeUptime(runningState, &api.LegacyRuntime{UptimeInSeconds: intPtr(42)})
 	raw, err = json.Marshal(pod)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)

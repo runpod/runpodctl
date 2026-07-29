@@ -189,15 +189,17 @@ func runSSHInfoWithArgs(cmd *cobra.Command, args []string, allowAll bool) error 
 	nameOrID := args[0]
 	pod, conn := sshconnect.FindPodConnection(pods, nameOrID, keyInfo)
 	if pod != nil {
-		if conn == nil {
-			// the same derivation `pod get` uses, so both commands explain a
-			// not-ready pod identically instead of saying only "pod not ready".
-			state := podstate.Derive(podstate.Signals{
-				DesiredStatus:    pod.DesiredStatus,
-				LastStatusChange: pod.LastStatusChange,
-				RuntimeProbed:    true,
-				RuntimeReported:  pod.Runtime != nil,
-			})
+		// the same derivation `pod get` uses, so both commands explain a
+		// not-ready pod identically instead of saying only "pod not ready".
+		state := podstate.Derive(podstate.Signals{
+			DesiredStatus:    pod.DesiredStatus,
+			LastStatusChange: pod.LastStatusChange,
+			RuntimeProbed:    true,
+			RuntimeReported:  pod.Runtime != nil,
+		})
+		// A stopped pod keeps reporting stale runtime ports for a while, which
+		// is enough to build an ssh command that cannot possibly connect.
+		if conn == nil || state.Status != podstate.StatusRunning {
 			message := "pod not ready"
 			if reason := podstate.SSHUnavailableReason(state); reason != "" {
 				message += ": " + reason

@@ -136,17 +136,20 @@ func runList(cmd *cobra.Command, args []string) error {
 			DesiredStatus:    p.DesiredStatus,
 			LastStatusChange: p.LastStatusChange,
 		}
-		var uptime *int
+		var runtime *api.LegacyRuntime
 		if runtimes != nil {
 			signals.RuntimeProbed = true
 			if gqlPod, ok := runtimes[p.ID]; ok {
-				signals.RuntimeReported = gqlPod.Runtime != nil
-				if gqlPod.Runtime != nil {
-					uptime = gqlPod.Runtime.UptimeInSeconds
-				}
+				runtime = gqlPod.Runtime
+				signals.RuntimeReported = runtime != nil
 			}
 		}
 		state := podstate.Derive(signals)
+		var uptime *int
+		if state.Status == podstate.StatusRunning && runtime != nil {
+			// gated on running: stale telemetry outlives a stopped container.
+			uptime = runtime.UptimeInSeconds
+		}
 
 		items = append(items, podListOutput{
 			ID:                  p.ID,

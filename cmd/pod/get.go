@@ -69,10 +69,15 @@ func runGet(cmd *cobra.Command, args []string) error {
 					pod.LastStatusChange = sshPod.LastStatusChange
 					signals.LastStatusChange = sshPod.LastStatusChange
 				}
-				pod.UptimeSeconds = runtimeUptime(sshPod.Runtime)
-				if conn == nil {
+				state := podstate.Derive(signals)
+				pod.UptimeSeconds = runtimeUptime(state, sshPod.Runtime)
+				// A stopped pod keeps reporting stale runtime ports for a while,
+				// which is enough for FindPodConnection to hand back an ssh
+				// command that cannot possibly work. Only trust it while the
+				// container is actually up.
+				if conn == nil || state.Status != podstate.StatusRunning {
 					sshInfo = map[string]interface{}{
-						"error":  notReadyMessage(podstate.Derive(signals)),
+						"error":  notReadyMessage(state),
 						"id":     sshPod.ID,
 						"name":   sshPod.Name,
 						"status": sshPod.DesiredStatus,
@@ -108,13 +113,19 @@ func runGet(cmd *cobra.Command, args []string) error {
 	return output.Print(response, &output.Config{Format: format})
 }
 
-// runtimeUptime returns the only uptime the api actually reports. The deprecated
-// top-level Pod.uptimeSeconds is 0 for every pod in prod and rest omits the
-// field entirely, so the old merge published a permanent `"uptimeSeconds": 0`
-// even on a pod that had been up for minutes. Returning nil while the container
-// is not reporting leaves the field out, which is honest; 0 was not.
-func runtimeUptime(runtime *api.LegacyRuntime) interface{} {
-	if runtime == nil || runtime.UptimeInSeconds == nil {
+// runtimeUptime returns the only uptime the api actually reports, and only
+// while it means something.
+//
+// The deprecated top-level Pod.uptimeSeconds is 0 for every pod in prod and rest
+// omits the field entirely, so the old merge published a permanent
+// `"uptimeSeconds": 0` even on a pod that had been up for minutes. Returning nil
+// leaves the field out, which is honest; 0 was not.
+//
+// It is also gated on the pod being up: a stopped pod keeps reporting stale
+// telemetry (observed: uptimeInSeconds frozen at its last value on an EXITED
+// pod), and publishing that as uptime says the pod is running when it is not.
+func runtimeUptime(state podstate.State, runtime *api.LegacyRuntime) interface{} {
+	if state.Status != podstate.StatusRunning || runtime == nil || runtime.UptimeInSeconds == nil {
 		return nil
 	}
 	return *runtime.UptimeInSeconds
