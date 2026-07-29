@@ -194,9 +194,9 @@ func TestSSHInfo_RuntimeState(t *testing.T) {
 			wantErr: "pod not ready: no container reported yet (image pull, container create or boot)",
 		},
 		{
-			name:    "running pod that never asked for 22 is told to recreate",
+			name:    "running pod that never asked for 22 is pointed at pod update",
 			pods:    `[{"id":"p","name":"p","desiredStatus":"RUNNING","ports":"8888/http","runtime":{"ports":[{"ip":"1.2.3.4","isIpPublic":true,"privatePort":8888,"publicPort":40088,"type":"tcp"}]}}]`,
-			wantErr: "pod not ready: pod does not publish 22/tcp; recreate it with --ports 22/tcp",
+			wantErr: "pod not ready: pod does not publish 22/tcp; add it with 'runpodctl pod update <pod-id> --ports 22/tcp'",
 		},
 	}
 

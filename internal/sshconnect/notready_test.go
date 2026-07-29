@@ -43,16 +43,16 @@ func TestNotReadyMessage(t *testing.T) {
 		},
 
 		// --- running: the container is up, so the port is what is missing. the
-		// remedy differs per case and telling someone to recreate a paid pod
-		// with a flag it already carries is the failure mode to avoid.
+		// remedy differs per case, and telling someone to destroy a paid pod --
+		// or to add a flag it already carries -- is the failure mode to avoid.
 		{
-			name:     "running without 22 declared says to recreate",
+			name:     "running without 22 declared points at pod update",
 			state:    podstate.State{Status: podstate.StatusRunning},
 			declared: []string{"8888/http"},
-			want:     "pod not ready: pod does not publish 22/tcp; recreate it with --ports 22/tcp",
+			want:     "pod not ready: pod does not publish 22/tcp; add it with 'runpodctl pod update <pod-id> --ports 22/tcp'",
 		},
 		{
-			name:         "running with 22 declared but not publicly routable does not say to recreate",
+			name:         "running with 22 declared but not publicly routable offers no bogus remedy",
 			state:        podstate.State{Status: podstate.StatusRunning},
 			declared:     []string{"22/tcp", "8888/http"},
 			runtimePorts: []*api.LegacyPort{port(22, 40022, false), port(8888, 40088, false)},
@@ -72,9 +72,9 @@ func TestNotReadyMessage(t *testing.T) {
 			want:     "pod not ready: port 22 is declared but the host has not published a mapping for it yet",
 		},
 		{
-			name:  "running with no declared ports at all says to recreate",
+			name:  "running with no declared ports at all points at pod update",
 			state: podstate.State{Status: podstate.StatusRunning},
-			want:  "pod not ready: pod does not publish 22/tcp; recreate it with --ports 22/tcp",
+			want:  "pod not ready: pod does not publish 22/tcp; add it with 'runpodctl pod update <pod-id> --ports 22/tcp'",
 		},
 	}
 
@@ -101,8 +101,11 @@ func TestNotReadyMessageNeverSuggestsARedundantFlag(t *testing.T) {
 		{port(8888, 40088, true)},
 	} {
 		msg := NotReadyMessage(podstate.State{Status: podstate.StatusRunning}, []string{"22/tcp"}, runtimePorts)
-		if strings.Contains(msg, "--ports") {
-			t.Errorf("suggested --ports for a pod that already declares 22: %q", msg)
+		if strings.Contains(msg, "--ports 22/tcp") {
+			t.Errorf("told the caller to add a port the pod already declares: %q", msg)
+		}
+		if strings.Contains(msg, "recreate") {
+			t.Errorf("suggested recreating a running pod: %q", msg)
 		}
 	}
 }

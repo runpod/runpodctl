@@ -32,7 +32,11 @@ func NotReadyMessage(state podstate.State, declaredPorts []string, runtimePorts 
 
 func sshPortDetail(declaredPorts []string, runtimePorts []*api.LegacyPort) string {
 	if !declaresSSHPort(declaredPorts) {
-		return "pod does not publish 22/tcp; recreate it with --ports 22/tcp"
+		// non-destructive and verified live: `pod update --ports 22/tcp` on a
+		// pod that was created without it produced a public 22 mapping within
+		// seconds, no restart and no recreate. never tell someone to destroy a
+		// paid pod for this.
+		return "pod does not publish 22/tcp; add it with 'runpodctl pod update <pod-id> --ports 22/tcp'"
 	}
 	for _, port := range runtimePorts {
 		if port != nil && port.PrivatePort == 22 {

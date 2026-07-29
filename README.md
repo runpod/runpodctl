@@ -180,9 +180,10 @@ reporting, rather than being published as `0`.
 to poll a pod to readiness, wait for `runtimeStatus: running`; for ssh, wait for
 `ssh.ssh_command` to appear in `pod get`. a running container still needs a
 publicly routable port 22, and when it has none `ssh.error` says which case it
-is: the pod never asked for `22/tcp`, the host has not published the mapping
-yet, or the mapping exists but is not publicly routable on that machine (no
-public ip — nothing you can change on the pod).
+is: the pod never asked for `22/tcp` (fix it in place with
+`pod update <pod-id> --ports 22/tcp` — no restart needed), the host has not
+published the mapping yet, or the mapping exists but is not publicly routable on
+that machine (no public ip — nothing you can change on the pod).
 
 `pod list` gets its telemetry from one bulk graphql call regardless of pod count,
 never one per pod. that call is best-effort and capped at 5s: if it fails, every
