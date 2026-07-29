@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/runpod/runpodctl/api"
+	internalapi "github.com/runpod/runpodctl/internal/api"
 	"github.com/runpod/runpodctl/internal/output"
 
 	"github.com/schollz/progressbar/v3"
@@ -511,7 +512,7 @@ func waitForUploadedModelHash(ctx context.Context, owner, name string, uploadedM
 
 	for {
 		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("upload completed but timed out waiting for the model hash; the model exists, do not re-upload: %w", err)
+			return nil, internalapi.NewTimeoutError("upload completed but timed out waiting for the model hash; the model exists, do not re-upload: %v", err)
 		}
 
 		models, err := getModelsForAdd(&api.GetModelsInput{Name: name})
@@ -542,7 +543,7 @@ func waitForUploadedModelHash(ctx context.Context, owner, name string, uploadedM
 
 		fmt.Fprint(os.Stderr, ".")
 		if err := sleepModelHashPoll(ctx, pollInterval); err != nil {
-			return nil, fmt.Errorf("upload completed but timed out waiting for the model hash; the model exists, do not re-upload: %w", err)
+			return nil, internalapi.NewTimeoutError("upload completed but timed out waiting for the model hash; the model exists, do not re-upload: %v", err)
 		}
 	}
 }

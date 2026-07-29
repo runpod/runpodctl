@@ -18,14 +18,9 @@ import (
 // reach a terminal status. It is deliberately far larger than the control-plane
 // DefaultTimeout (30s): a cold endpoint has to pull the image and boot a worker
 // before the handler even starts, so 30s would report a failure on a perfectly
-// healthy first invocation.
+// healthy first invocation. Measured against a cold cpu worker on the public
+// mock image, the cold start alone was ~95s.
 const DefaultInvokeWait = 5 * time.Minute
-
-// runSyncRequestCap bounds a single /runsync http request. The invoke service
-// answers /runsync within ~90s and hands back a still-running job instead of
-// holding the connection open, so waiting much longer than that on one request
-// buys nothing — the remaining wait budget is spent polling /status instead.
-const runSyncRequestCap = 100 * time.Second
 
 // job statuses reported by the invoke api.
 const (
@@ -114,20 +109,20 @@ func (c *InvokeClient) do(ctx context.Context, method, path string, body interfa
 }
 
 // EndpointHealth returns the health payload for an endpoint (worker and job
-// counts). The api body is passed through verbatim so new fields reach the
-// caller without a cli release.
-func (c *InvokeClient) EndpointHealth(ctx context.Context, endpointID string) (map[string]interface{}, error) {
+// counts). The api body is returned as raw json so new fields reach the caller
+// without a cli release and no value is reshaped on the way through; it is only
+// validated as parseable json.
+func (c *InvokeClient) EndpointHealth(ctx context.Context, endpointID string) (json.RawMessage, error) {
 	data, err := c.do(ctx, http.MethodGet, "/"+endpointID+"/health", nil)
 	if err != nil {
 		return nil, err
 	}
 
-	var health map[string]interface{}
-	if err := json.Unmarshal(data, &health); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+	if !json.Valid(data) {
+		return nil, fmt.Errorf("failed to parse response: invoke api returned a non-json health body")
 	}
 
-	return health, nil
+	return json.RawMessage(data), nil
 }
 
 // jobRequest is the invoke wire body. The handler payload is always nested
@@ -136,26 +131,19 @@ type jobRequest struct {
 	Input json.RawMessage `json:"input"`
 }
 
-// Run submits a job asynchronously (POST /run) and returns immediately with the
-// queued job.
+// Run submits a job (POST /run) and returns immediately with the queued job,
+// whose id is what JobStatus needs.
+//
+// The cli deliberately never uses /runsync, even for "wait for the result".
+// /runsync is not synchronous: the invoke service holds the connection for 90s
+// and then answers with a still-running job, so a caller has to poll /status
+// anyway. Worse, until that response arrives there is no job id, so a request
+// that times out leaves a submitted, billed job that cannot be polled at all;
+// and a job submitted on /runsync gets a "sync-" id whose result is discarded 1
+// minute after it completes, against 30 minutes for /run. Submitting here costs
+// one extra round trip and makes both of those failure modes impossible.
 func (c *InvokeClient) Run(ctx context.Context, endpointID string, input json.RawMessage) (*Job, error) {
-	return c.submit(ctx, endpointID, "/run", input)
-}
-
-// RunSync submits a job and waits for the result inline (POST /runsync). The
-// invoke service gives up holding the connection after ~90s and answers with a
-// non-terminal job instead, so callers must be prepared to poll JobStatus. The
-// request is capped at runSyncRequestCap on top of the caller's deadline
-// (whichever is sooner wins), keeping the knowledge of that server-side limit in
-// one place.
-func (c *InvokeClient) RunSync(ctx context.Context, endpointID string, input json.RawMessage) (*Job, error) {
-	ctx, cancel := context.WithTimeout(ctx, runSyncRequestCap)
-	defer cancel()
-	return c.submit(ctx, endpointID, "/runsync", input)
-}
-
-func (c *InvokeClient) submit(ctx context.Context, endpointID, route string, input json.RawMessage) (*Job, error) {
-	data, err := c.do(ctx, http.MethodPost, "/"+endpointID+route, jobRequest{Input: input})
+	data, err := c.do(ctx, http.MethodPost, "/"+endpointID+"/run", jobRequest{Input: input})
 	if err != nil {
 		return nil, err
 	}
@@ -181,34 +169,70 @@ func parseJob(data []byte) (*Job, error) {
 }
 
 // Job is a serverless job as reported by the invoke api. ID and Status are the
-// only fields the cli branches on; everything else (notably `output`, whose
-// shape is entirely up to the handler) is kept in Payload and emitted verbatim,
-// so a typed struct here can never silently drop a field an agent needs.
+// only fields the cli branches on; the rest of the body — notably `output`,
+// whose shape is entirely up to the handler — is kept as the raw bytes the api
+// sent and emitted from there.
+//
+// The raw bytes matter: decoding an arbitrary handler payload into
+// map[string]interface{} and re-encoding it turns every number into a float64,
+// which silently corrupts any integer above 2^53 (an int64 id, a nanosecond
+// timestamp, a 64-bit seed). Keeping the body verbatim is the only way the
+// "emitted unchanged" promise actually holds.
 type Job struct {
-	ID      string
-	Status  string
-	Payload map[string]interface{}
+	ID     string
+	Status string
+
+	raw    json.RawMessage
+	fields map[string]json.RawMessage
 }
 
-// UnmarshalJSON keeps the whole api body in Payload while lifting the two
-// fields the cli needs.
+// UnmarshalJSON keeps the api body byte-for-byte while lifting the two fields
+// the cli needs. A field that is not a string where the cli expects one is left
+// empty rather than failing the whole decode.
 func (j *Job) UnmarshalJSON(data []byte) error {
-	var payload map[string]interface{}
-	if err := json.Unmarshal(data, &payload); err != nil {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
-	j.Payload = payload
-	j.ID, _ = payload["id"].(string)
-	j.Status, _ = payload["status"].(string)
+	j.raw = append(json.RawMessage(nil), data...)
+	j.fields = fields
+	_ = json.Unmarshal(fields["id"], &j.ID)
+	_ = json.Unmarshal(fields["status"], &j.Status)
 	return nil
 }
 
-// MarshalJSON emits the api body unchanged.
+// MarshalJSON emits the api body unchanged, byte for byte.
 func (j Job) MarshalJSON() ([]byte, error) {
-	if j.Payload == nil {
+	if len(j.raw) == 0 {
 		return []byte("null"), nil
 	}
-	return json.Marshal(j.Payload)
+	return j.raw, nil
+}
+
+// Raw returns the api body as received.
+func (j *Job) Raw() json.RawMessage { return j.raw }
+
+// Field returns a top-level field of the api body as raw json.
+func (j *Job) Field(name string) (json.RawMessage, bool) {
+	value, ok := j.fields[name]
+	return value, ok
+}
+
+// HasEnvelope reports whether the body actually describes a job, i.e. carries an
+// id or a status. The invoke api can answer 200 with a bare error object (no id,
+// no status); that is not a job, and treating it as a finished one would exit 0
+// on a failed request and hand back a job id that does not exist.
+func (j *Job) HasEnvelope() bool {
+	// a lifted value is enough on its own, which also keeps a Job built in code
+	// (rather than decoded from a response) from looking like an empty envelope.
+	if j.ID != "" || j.Status != "" {
+		return true
+	}
+	if _, ok := j.fields["id"]; ok {
+		return true
+	}
+	_, ok := j.fields["status"]
+	return ok
 }
 
 // IsTerminal reports whether the job has stopped moving and polling it again is
@@ -276,4 +300,16 @@ func (e *JobFailedError) ErrorCode() string { return "job_failed" }
 // NewJobFailedError builds a JobFailedError for a terminal, non-completed job.
 func NewJobFailedError(jobID, status string) *JobFailedError {
 	return &JobFailedError{JobID: jobID, Status: status}
+}
+
+// NewNoJobEnvelopeError reports a 200 response that does not describe a job (no
+// id and no status). It reuses the existing api_error code — the request nominally
+// succeeded but the api did not answer with a job, which is a failure of the api,
+// not of the cli or the caller. The body itself is still printed to stdout.
+func NewNoJobEnvelopeError() *APIError {
+	return &APIError{
+		Message: "invoke api returned a 200 response with no job id or status, so there is no job to report or poll",
+		Code:    "api_error",
+		Status:  http.StatusOK,
+	}
 }

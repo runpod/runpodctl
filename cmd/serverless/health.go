@@ -39,5 +39,5 @@ func runHealth(cmd *cobra.Command, args []string) error {
 	}
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
-	return output.Print(health, &output.Config{Format: format})
+	return output.PrintRaw(health, &output.Config{Format: format})
 }

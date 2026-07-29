@@ -349,3 +349,137 @@ func TestFallbackCode_LocalWaitTimeoutIsNotNetwork(t *testing.T) {
 		t.Errorf("fallbackCode(http client timeout) = %q, want network_error", got)
 	}
 }
+
+// captureStdout runs fn with os.Stdout replaced by a pipe and returns what it
+// wrote.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+
+	fn()
+
+	w.Close()
+	os.Stdout = old
+
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(r); err != nil {
+		t.Fatal(err)
+	}
+	return buf.String()
+}
+
+func TestPrintRaw_JSONIsNumberFaithful(t *testing.T) {
+	// these are the values a map[string]interface{} round trip destroys: every
+	// number becomes a float64, so anything above 2^53 comes out wrong.
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "64-bit seed", raw: `{"seed":12345678901234567890}`, want: "12345678901234567890"},
+		{name: "nanosecond timestamp", raw: `{"jobNumber":1753800000000000123}`, want: "1753800000000000123"},
+		{name: "just above 2^53", raw: `{"n":9007199254740993}`, want: "9007199254740993"},
+		{name: "high precision float", raw: `{"n":0.1000000000000000055511151231257827}`, want: "0.1000000000000000055511151231257827"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := captureStdout(t, func() {
+				if err := PrintRaw([]byte(tt.raw), &Config{Format: FormatJSON}); err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			})
+			if !strings.Contains(out, tt.want) {
+				t.Errorf("PrintRaw(%s) = %s, want it to contain %s", tt.raw, out, tt.want)
+			}
+		})
+	}
+}
+
+func TestPrintRaw_DoesNotRenameGPUKeys(t *testing.T) {
+	// Print rewrites gpuTypeId -> gpuId for the cli's own control-plane structs.
+	// A serverless handler's output is not ours to rewrite.
+	raw := `{"output":{"gpuTypeId":"NVIDIA A40","gpuTypeIds":["NVIDIA A40"]}}`
+
+	out := captureStdout(t, func() {
+		if err := PrintRaw([]byte(raw), &Config{Format: FormatJSON}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+	if !strings.Contains(out, `"gpuTypeId"`) || !strings.Contains(out, `"gpuTypeIds"`) {
+		t.Errorf("handler keys were renamed: %s", out)
+	}
+	if strings.Contains(out, `"gpuId"`) || strings.Contains(out, `"gpuIds"`) {
+		t.Errorf("gpu-key normalisation must not apply to raw payloads: %s", out)
+	}
+
+	// contrast: Print still normalises, which is what the control-plane paths want.
+	normalised := captureStdout(t, func() {
+		if err := Print(map[string]interface{}{"gpuTypeId": "NVIDIA A40"}, &Config{Format: FormatJSON}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+	if !strings.Contains(normalised, `"gpuId"`) {
+		t.Errorf("Print should still normalise gpu keys: %s", normalised)
+	}
+}
+
+func TestPrintRaw_SortsKeys(t *testing.T) {
+	out := captureStdout(t, func() {
+		if err := PrintRaw([]byte(`{"zeta":1,"alpha":2,"mid":3}`), &Config{Format: FormatJSON}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+	if got := strings.Index(out, "alpha"); got > strings.Index(out, "mid") {
+		t.Errorf("keys are not sorted: %s", out)
+	}
+}
+
+func TestPrintRaw_YAML(t *testing.T) {
+	out := captureStdout(t, func() {
+		if err := PrintRaw([]byte(`{"zeta":1,"alpha":{"big":1753800000000000123},"list":[1,"two",true,null]}`), &Config{Format: FormatYAML}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+	// numbers stay unquoted literals rather than becoming quoted json.Number
+	// strings or rounded floats.
+	if !strings.Contains(out, "big: 1753800000000000123") {
+		t.Errorf("yaml lost the integer literal: %s", out)
+	}
+	// deterministic key order: yaml.Marshal over a Go map would be random.
+	if strings.Index(out, "alpha:") > strings.Index(out, "zeta:") {
+		t.Errorf("yaml keys are not sorted: %s", out)
+	}
+	if !strings.Contains(out, "- two") {
+		t.Errorf("yaml lost the list: %s", out)
+	}
+}
+
+func TestPrintRaw_NonJSONFallsBackToBytes(t *testing.T) {
+	out := captureStdout(t, func() {
+		if err := PrintRaw([]byte("<html>gateway timeout</html>"), &Config{Format: FormatJSON}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+	if !strings.Contains(out, "<html>gateway timeout</html>") {
+		t.Errorf("expected the raw bytes, got %s", out)
+	}
+	if !strings.HasSuffix(out, "\n") {
+		t.Errorf("expected a trailing newline, got %q", out)
+	}
+}
+
+func TestPrintRaw_NilConfigDefaultsToJSON(t *testing.T) {
+	out := captureStdout(t, func() {
+		if err := PrintRaw([]byte(`{"a":1}`), nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+	if !strings.Contains(out, `"a": 1`) {
+		t.Errorf("expected indented json, got %s", out)
+	}
+}

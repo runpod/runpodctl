@@ -22,20 +22,22 @@ var runCmd = &cobra.Command{
 	Short: "invoke an endpoint and wait for the result",
 	Long: `invoke a serverless endpoint with a json payload and wait for the job to finish.
 
-the payload is sent as {"input": <your json>}; pass only the handler payload.
+the payload must be a json object and is sent as {"input": <your json>}; pass
+only the handler payload.
 
-by default the job goes to /runsync. the invoke api stops holding that connection
-after about 90 seconds, so a longer job is picked up on /status automatically —
---async only changes the submit route, not whether the cli waits.
+the job is submitted on /run and then polled on /status until it is terminal.
+/runsync is deliberately not used: it only holds the connection for 90 seconds
+and then hands back a still-running job, and until it answers there is no job id
+to poll, so a slow response would leave a running job unreachable.
 
 waiting is bounded by --wait (default 5m). when it runs out the job is still
 running server-side: the last payload is printed on stdout, a "timeout" error on
 stderr names the 'serverless status' command to poll it, and the exit code is 1.
 
-exit codes: 0 when the job is COMPLETED, 1 when the request fails, when the wait
-budget runs out, or when the job ends FAILED / CANCELLED / TIMED_OUT. the job
-payload (including the worker's own error) is still printed on stdout in every
-one of those cases.
+exit codes: 0 when the job is COMPLETED, and when --wait 0 / --no-wait submitted
+it successfully. 1 when the request fails, when the wait budget runs out, or when
+the job ends FAILED / CANCELLED / TIMED_OUT. the job payload (including the
+worker's own error) is still printed on stdout in every one of those cases.
 
 examples:
   # invoke and wait for the result
@@ -45,10 +47,10 @@ examples:
   runpodctl serverless run <endpoint-id> --input-file payload.json
   cat payload.json | runpodctl serverless run <endpoint-id> --input -
 
-  # queue on /run and poll until it finishes
-  runpodctl serverless run <endpoint-id> --input '{}' --async
+  # give a cold or slow endpoint longer
+  runpodctl serverless run <endpoint-id> --input '{}' --wait 15m
 
-  # queue on /run and get the job id back immediately
+  # submit and get the job id back immediately
   runpodctl serverless run <endpoint-id> --input '{}' --no-wait
   runpodctl serverless status <endpoint-id> <job-id>`,
 	Args: cobra.ExactArgs(1),
@@ -58,7 +60,6 @@ examples:
 var (
 	runInput     string
 	runInputFile string
-	runAsync     bool
 	runNoWait    bool
 	runWait      time.Duration
 )
@@ -66,9 +67,8 @@ var (
 func init() {
 	runCmd.Flags().StringVar(&runInput, "input", "", "json payload for the handler; '-' reads stdin")
 	runCmd.Flags().StringVar(&runInputFile, "input-file", "", "read the json payload from a file; '-' reads stdin")
-	runCmd.Flags().BoolVar(&runAsync, "async", false, "submit on /run instead of /runsync, then poll /status until the job is terminal")
-	runCmd.Flags().BoolVar(&runNoWait, "no-wait", false, "submit on /run and print the job id without waiting (implies --async)")
-	runCmd.Flags().DurationVar(&runWait, "wait", api.DefaultInvokeWait, "how long to wait for a terminal job status (e.g. 90s, 10m)")
+	runCmd.Flags().BoolVar(&runNoWait, "no-wait", false, "submit and print the job id without waiting (same as --wait 0)")
+	runCmd.Flags().DurationVar(&runWait, "wait", api.DefaultInvokeWait, "how long to wait for a terminal job status; 0 does not wait (e.g. 90s, 10m)")
 }
 
 func runRun(cmd *cobra.Command, args []string) error {
@@ -78,8 +78,15 @@ func runRun(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if runWait <= 0 && !runNoWait {
-		return clierr.Usagef("--wait must be greater than 0")
+	if runWait < 0 {
+		return clierr.Usagef("--wait cannot be negative")
+	}
+	wait := runWait
+	if runNoWait {
+		// --no-wait is the discoverable spelling of "do not poll"; keeping it as
+		// exactly --wait 0 means there is one waiting code path, and --wait 0 means
+		// the same thing on 'run' and on 'status'.
+		wait = 0
 	}
 
 	client, err := newInvokeClient()
@@ -88,11 +95,11 @@ func runRun(cmd *cobra.Command, args []string) error {
 	}
 
 	cfg := &output.Config{Format: output.ParseFormat(cmd.Flag("output").Value.String())}
-	deadline := time.Now().Add(runWait)
+	deadline := time.Now().Add(wait)
 
-	job, waitErr := invokeJob(client, endpointID, input, deadline)
+	job, waitErr := invokeJob(client, endpointID, input, deadline, wait > 0)
 	if job != nil {
-		if printErr := output.Print(job, cfg); printErr != nil {
+		if printErr := output.PrintRaw(job.Raw(), cfg); printErr != nil {
 			return printErr
 		}
 	}
@@ -102,42 +109,37 @@ func runRun(cmd *cobra.Command, args []string) error {
 	return jobOutcome(job)
 }
 
-// invokeJob submits the job and, unless --no-wait was passed, waits for it to
-// reach a terminal status. The job it returns is the last payload seen, so the
-// caller can print it even when the wait failed.
-func invokeJob(client invokeClient, endpointID string, input json.RawMessage, deadline time.Time) (*api.Job, error) {
-	if runAsync || runNoWait {
-		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout())
-		defer cancel()
-		job, err := client.Run(ctx, endpointID, input)
-		if err != nil {
-			return nil, fmt.Errorf("failed to submit job: %w", err)
-		}
-		if runNoWait {
-			// submission succeeded, which is the whole contract of --no-wait: the
-			// job is queued and the id on stdout is what 'serverless status' needs.
-			notef("submitted job %s (%s); poll it with: runpodctl serverless status %s %s", job.ID, job.Status, endpointID, job.ID)
-			return job, nil
-		}
-		return waitForTerminal(client, endpointID, job, deadline)
-	}
-
-	// runsync: the api holds the connection until the job finishes or ~90s pass,
-	// whichever comes first. RunSync caps the request itself; the deadline here is
-	// the caller's overall budget.
-	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+// invokeJob submits the job on /run and, when asked to wait, polls until it is
+// terminal. The job it returns is the last payload seen, so the caller can print
+// it even when the wait failed.
+func invokeJob(client invokeClient, endpointID string, input json.RawMessage, deadline time.Time, wait bool) (*api.Job, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), boundedRequestTimeout(deadline))
 	defer cancel()
-	job, err := client.RunSync(ctx, endpointID, input)
+
+	job, err := client.Run(ctx, endpointID, input)
 	if err != nil {
 		var timeoutErr *api.TimeoutError
 		if errors.As(err, &timeoutErr) {
-			// no job id ever came back, so there is nothing to poll — say so
-			// instead of pointing at a status command the caller cannot run.
+			// the submit itself timed out, so we never got an id: the job may or may
+			// not exist. Say that plainly instead of pointing at a status command
+			// there is no id for, or implying a blind re-invoke is safe.
 			return nil, api.NewTimeoutError(
-				"runsync request timed out before returning a job id, so the job cannot be polled; rerun with --async to get a job id up front",
+				"submitting the job timed out before the invoke api answered, so it is unknown whether the job was created and there is no job id to poll; check 'runpodctl serverless health %s' for queued or running work before invoking again",
+				endpointID,
 			)
 		}
-		return nil, fmt.Errorf("failed to invoke endpoint: %w", err)
+		return nil, fmt.Errorf("failed to submit job: %w", err)
+	}
+
+	if !wait {
+		// submission succeeded, which is the whole contract of --no-wait: the job is
+		// queued and the id on stdout is what 'serverless status' needs. Without an
+		// id there is nothing to follow up on, so say nothing rather than printing a
+		// command with a hole in it (jobOutcome turns that into a failure).
+		if job.ID != "" {
+			notef("submitted job %s (%s); poll it with: runpodctl serverless status %s %s", job.ID, job.Status, endpointID, job.ID)
+		}
+		return job, nil
 	}
 	return waitForTerminal(client, endpointID, job, deadline)
 }
@@ -187,15 +189,40 @@ func resolveJobInput(stdin io.Reader, inline, file string) (json.RawMessage, err
 		return nil, clierr.Usagef("payload from %s is not valid json: %v", source, err)
 	}
 
+	// the invoke api decodes the request body into a struct whose "input" is a json
+	// object, so an array or a scalar is rejected server-side with a 400. catching
+	// that here costs nothing and turns a round trip into a local usage_error that
+	// names the flag.
+	obj, isObject := parsed.(map[string]interface{})
+	if !isObject && parsed != nil {
+		return nil, clierr.Usagef("payload from %s must be a json object (the invoke api nests it under \"input\"), got %s", source, jsonKind(parsed))
+	}
+
 	// a payload that is *only* an "input" key is almost always the whole request
 	// envelope pasted in from curl, which would be sent as {"input":{"input":…}}
 	// and reach the handler double-wrapped. warn rather than unwrap: guessing
 	// would break a handler whose payload genuinely has one "input" field.
-	if obj, ok := parsed.(map[string]interface{}); ok && len(obj) == 1 {
+	if len(obj) == 1 {
 		if _, wrapped := obj["input"]; wrapped {
 			notef(`note: payload from %s is just {"input":…}; it is sent as {"input": <payload>}, so pass only the handler payload`, source)
 		}
 	}
 
 	return json.RawMessage(trimmed), nil
+}
+
+// jsonKind names a json value's type for a usage error.
+func jsonKind(value interface{}) string {
+	switch value.(type) {
+	case []interface{}:
+		return "an array"
+	case string:
+		return "a string"
+	case float64:
+		return "a number"
+	case bool:
+		return "a boolean"
+	default:
+		return "a scalar"
+	}
 }

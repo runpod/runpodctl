@@ -15,6 +15,7 @@ import (
 	"github.com/runpod/runpodctl/internal/api"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 // jobStep is one scripted answer from the fake invoke api.
@@ -33,43 +34,76 @@ func mustJob(payload string) *api.Job {
 
 // mockInvokeClient scripts the invoke api so the run/status/health commands can
 // be exercised without touching the live service.
+//
+// It records every identifier it is handed and honours the context deadline. That
+// matters: a mock that ignores its arguments cannot tell a working command from
+// one that passes the endpoint id where the job id belongs, or that hands the api
+// an already-expired deadline — both of which are invisible in coverage and fatal
+// in production.
 type mockInvokeClient struct {
-	health      map[string]interface{}
+	health      json.RawMessage
 	healthErr   error
 	runStep     jobStep
-	runSyncStep jobStep
 	statusSteps []jobStep
 
-	healthCalls  int
-	runCalls     int
-	runSyncCalls int
-	statusCalls  int
-	lastInput    json.RawMessage
+	healthCalls int
+	runCalls    int
+	statusCalls int
+	lastInput   json.RawMessage
+	// every endpoint id / job id the command asked for, in call order.
+	healthEndpoints []string
+	runEndpoints    []string
+	statusEndpoints []string
+	statusJobIDs    []string
 	// statusDeadlines records the per-call deadline handed to JobStatus, so a
 	// test can assert the last poll of a wait still gets a usable timeout.
 	statusDeadlines []time.Duration
+	runDeadlines    []time.Duration
 }
 
-func (m *mockInvokeClient) EndpointHealth(_ context.Context, _ string) (map[string]interface{}, error) {
+// contextErr fails a call whose deadline is already spent, the way a real http
+// client would.
+func contextErr(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return api.NewTimeoutError("invoke request timed out: %v", err)
+	}
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= 0 {
+		return api.NewTimeoutError("invoke request timed out: deadline already passed")
+	}
+	return nil
+}
+
+func (m *mockInvokeClient) EndpointHealth(ctx context.Context, endpointID string) (json.RawMessage, error) {
 	m.healthCalls++
+	m.healthEndpoints = append(m.healthEndpoints, endpointID)
+	if err := contextErr(ctx); err != nil {
+		return nil, err
+	}
 	return m.health, m.healthErr
 }
 
-func (m *mockInvokeClient) Run(_ context.Context, _ string, input json.RawMessage) (*api.Job, error) {
+func (m *mockInvokeClient) Run(ctx context.Context, endpointID string, input json.RawMessage) (*api.Job, error) {
 	m.runCalls++
+	m.runEndpoints = append(m.runEndpoints, endpointID)
 	m.lastInput = input
+	if deadline, ok := ctx.Deadline(); ok {
+		m.runDeadlines = append(m.runDeadlines, time.Until(deadline))
+	}
+	if err := contextErr(ctx); err != nil {
+		return nil, err
+	}
 	return m.runStep.job, m.runStep.err
 }
 
-func (m *mockInvokeClient) RunSync(_ context.Context, _ string, input json.RawMessage) (*api.Job, error) {
-	m.runSyncCalls++
-	m.lastInput = input
-	return m.runSyncStep.job, m.runSyncStep.err
-}
-
-func (m *mockInvokeClient) JobStatus(ctx context.Context, _ string, _ string) (*api.Job, error) {
+func (m *mockInvokeClient) JobStatus(ctx context.Context, endpointID, jobID string) (*api.Job, error) {
+	m.statusEndpoints = append(m.statusEndpoints, endpointID)
+	m.statusJobIDs = append(m.statusJobIDs, jobID)
 	if deadline, ok := ctx.Deadline(); ok {
 		m.statusDeadlines = append(m.statusDeadlines, time.Until(deadline))
+	}
+	if err := contextErr(ctx); err != nil {
+		m.statusCalls++
+		return nil, err
 	}
 	step := m.statusSteps[len(m.statusSteps)-1]
 	if m.statusCalls < len(m.statusSteps) {
@@ -77,6 +111,22 @@ func (m *mockInvokeClient) JobStatus(ctx context.Context, _ string, _ string) (*
 	}
 	m.statusCalls++
 	return step.job, step.err
+}
+
+// assertOnly checks that a recorded argument list is exactly the same value
+// repeated, which is what every command in this package should produce.
+func assertOnly(t *testing.T, what string, got []string, want string) {
+	t.Helper()
+	if len(got) == 0 {
+		t.Errorf("%s: no calls recorded, want %q", what, want)
+		return
+	}
+	for _, value := range got {
+		if value != want {
+			t.Errorf("%s = %q, want every call to use %q", what, got, want)
+			return
+		}
+	}
 }
 
 // installMockInvokeClient swaps the client factory for the duration of a test.
@@ -297,10 +347,7 @@ func TestJobOutcome(t *testing.T) {
 
 func TestRunHealth(t *testing.T) {
 	client := installMockInvokeClient(t, &mockInvokeClient{
-		health: map[string]interface{}{
-			"jobs":    map[string]interface{}{"inQueue": 0},
-			"workers": map[string]interface{}{"idle": 1},
-		},
+		health: json.RawMessage(`{"jobs":{"inQueue":0},"workers":{"idle":1}}`),
 	})
 
 	var err error
@@ -313,11 +360,45 @@ func TestRunHealth(t *testing.T) {
 	if client.healthCalls != 1 {
 		t.Errorf("health calls = %d, want 1", client.healthCalls)
 	}
+	// the id the caller passed is the id that must be queried.
+	assertOnly(t, "health endpoint ids", client.healthEndpoints, "ep-1")
 	if !strings.Contains(stdout, `"idle": 1`) {
 		t.Errorf("health payload missing from stdout: %q", stdout)
 	}
 	if stderr != "" {
 		t.Errorf("expected clean stderr, got %q", stderr)
+	}
+}
+
+func TestRunHealth_RespectsRequestTimeout(t *testing.T) {
+	// a sub-millisecond per-call timeout must actually reach the api call, so a
+	// gutted requestTimeout() cannot pass unnoticed.
+	viper.Set("timeout", time.Nanosecond)
+	t.Cleanup(func() { viper.Set("timeout", nil) })
+	installMockInvokeClient(t, &mockInvokeClient{health: json.RawMessage(`{}`)})
+
+	var err error
+	_, _ = captureOutput(t, func() {
+		err = runHealth(mockInvokeCommand(""), []string{"ep-1"})
+	})
+	if code := errorCode(t, err); code != "timeout" {
+		t.Fatalf("code = %q, want timeout (err %v)", code, err)
+	}
+}
+
+func TestRunHealth_NonJSONBodyIsNotSwallowed(t *testing.T) {
+	// PrintRaw falls back to the bytes as-is rather than failing the command.
+	installMockInvokeClient(t, &mockInvokeClient{health: json.RawMessage(`<html>oops`)})
+
+	var err error
+	stdout, _ := captureOutput(t, func() {
+		err = runHealth(mockInvokeCommand(""), []string{"ep-1"})
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(stdout, "<html>oops") {
+		t.Errorf("expected the raw body on stdout, got %q", stdout)
 	}
 }
 
@@ -385,7 +466,98 @@ func TestPollJobStatus_LastPollKeepsAUsableTimeout(t *testing.T) {
 	if len(client.statusDeadlines) != 1 {
 		t.Fatalf("status deadlines = %v, want one entry", client.statusDeadlines)
 	}
-	if client.statusDeadlines[0] < minPollRequest/2 {
-		t.Errorf("poll deadline = %s, want at least %s", client.statusDeadlines[0], minPollRequest)
+	if client.statusDeadlines[0] < minRequest/2 {
+		t.Errorf("poll deadline = %s, want at least %s", client.statusDeadlines[0], minRequest)
+	}
+}
+
+func TestBoundedRequestTimeout(t *testing.T) {
+	viper.Set("timeout", 30*time.Second)
+	t.Cleanup(func() { viper.Set("timeout", nil) })
+
+	tests := []struct {
+		name    string
+		budget  time.Duration
+		wantMax time.Duration
+	}{
+		// a --wait smaller than the per-call timeout must shrink the call, or the
+		// command runs long past the bound it advertises.
+		{name: "budget below per-call timeout", budget: 2 * time.Second, wantMax: 2 * time.Second},
+		{name: "budget above per-call timeout", budget: 10 * time.Minute, wantMax: 30 * time.Second},
+		// but never below the floor, or the request is doomed before it is sent.
+		{name: "budget already gone", budget: 0, wantMax: minRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := boundedRequestTimeout(time.Now().Add(tt.budget))
+			if got > tt.wantMax {
+				t.Errorf("timeout = %s, want at most %s", got, tt.wantMax)
+			}
+			if got < minRequest {
+				t.Errorf("timeout = %s, want at least the %s floor", got, minRequest)
+			}
+		})
+	}
+}
+
+func TestFetchJobStatus_RetriesTransientFailureWhileBudgetRemains(t *testing.T) {
+	fastPolling(t)
+	client := &mockInvokeClient{statusSteps: []jobStep{
+		{err: &api.APIError{Message: "bad gateway", Status: 502}},
+		{job: mustJob(`{"id":"job-1","status":"COMPLETED"}`)},
+	}}
+
+	var (
+		job *api.Job
+		err error
+	)
+	_, stderr := captureOutput(t, func() {
+		job, err = fetchJobStatus(client, "ep-1", "job-1", time.Now().Add(5*time.Second))
+	})
+	if err != nil {
+		t.Fatalf("a transient 502 must not abort the first check: %v", err)
+	}
+	if !job.Succeeded() {
+		t.Errorf("job status = %q, want COMPLETED", job.Status)
+	}
+	if !strings.Contains(stderr, "retrying") {
+		t.Errorf("expected a retry note on stderr, got %q", stderr)
+	}
+}
+
+func TestFetchJobStatus_NoBudgetFailsFast(t *testing.T) {
+	client := &mockInvokeClient{statusSteps: []jobStep{
+		{err: &api.APIError{Message: "bad gateway", Status: 502}},
+		{job: mustJob(`{"id":"job-1","status":"COMPLETED"}`)},
+	}}
+
+	// without --wait there is no budget to retry inside: one call, report it.
+	_, err := fetchJobStatus(client, "ep-1", "job-1", time.Now())
+	if code := errorCode(t, err); code != "server_error" {
+		t.Fatalf("code = %q, want server_error (err %v)", code, err)
+	}
+	if client.statusCalls != 1 {
+		t.Errorf("status calls = %d, want 1 (no retry without a budget)", client.statusCalls)
+	}
+}
+
+func TestFetchJobStatus_PermanentErrorFailsFastWithBudget(t *testing.T) {
+	fastPolling(t)
+	client := &mockInvokeClient{statusSteps: []jobStep{{err: &api.APIError{Message: "job not found", Status: 404}}}}
+
+	_, err := fetchJobStatus(client, "ep-1", "job-1", time.Now().Add(5*time.Second))
+	if code := errorCode(t, err); code != "not_found" {
+		t.Fatalf("code = %q, want not_found (err %v)", code, err)
+	}
+	if client.statusCalls != 1 {
+		t.Errorf("status calls = %d, want 1 (a 404 will never fix itself)", client.statusCalls)
+	}
+}
+
+func TestJobOutcome_NoEnvelopeIsAFailure(t *testing.T) {
+	// a 200 carrying a bare error object is not a finished job.
+	err := jobOutcome(mustJob(`{"error":"endpoint is misconfigured"}`))
+	if code := errorCode(t, err); code != "api_error" {
+		t.Fatalf("code = %q, want api_error (err %v)", code, err)
 	}
 }

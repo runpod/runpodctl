@@ -52,6 +52,10 @@ func TestRunStatus_SingleCheck(t *testing.T) {
 			if client.statusCalls != 1 {
 				t.Errorf("status calls = %d, want 1 without --wait", client.statusCalls)
 			}
+			// argv order is <endpoint-id> <job-id>; swapping them would 404 in
+			// production, so pin it here.
+			assertOnly(t, "status endpoint ids", client.statusEndpoints, "ep-1")
+			assertOnly(t, "status job ids", client.statusJobIDs, "job-1")
 			// the payload is the artifact in every case, including a failed job.
 			if !strings.Contains(stdout, `"id": "job-1"`) {
 				t.Errorf("job payload missing from stdout: %q", stdout)
@@ -120,6 +124,76 @@ func TestRunStatus_APIErrorKeepsCode(t *testing.T) {
 	}
 	if strings.TrimSpace(stdout) != "" {
 		t.Errorf("errors must not reach stdout, got %q", stdout)
+	}
+}
+
+func TestRunStatus_WaitRetriesTransientFailureOnTheFirstCheck(t *testing.T) {
+	// this is the command a 'timeout' error tells an agent to run, so one 502 must
+	// not throw the job away when there is still budget to retry in.
+	snapshotStatusFlags(t)
+	fastPolling(t)
+	statusWait = 5 * time.Second
+	installMockInvokeClient(t, &mockInvokeClient{statusSteps: []jobStep{
+		{err: &api.APIError{Message: "bad gateway", Status: 502}},
+		{job: mustJob(`{"id":"job-1","status":"COMPLETED","output":"ok"}`)},
+	}})
+
+	var err error
+	stdout, stderr := captureOutput(t, func() {
+		err = runStatus(mockInvokeCommand(""), []string{"ep-1", "job-1"})
+	})
+	if err != nil {
+		t.Fatalf("a transient 502 on the first check must be retried: %v", err)
+	}
+	if !strings.Contains(stdout, `"output": "ok"`) {
+		t.Errorf("final payload missing from stdout: %q", stdout)
+	}
+	if !strings.Contains(stderr, "retrying") {
+		t.Errorf("expected a retry note on stderr, got %q", stderr)
+	}
+}
+
+func TestRunStatus_WithoutWaitFailsFastOnTransientFailure(t *testing.T) {
+	// no --wait means no budget: report the failure instead of quietly retrying.
+	snapshotStatusFlags(t)
+	client := installMockInvokeClient(t, &mockInvokeClient{statusSteps: []jobStep{
+		{err: &api.APIError{Message: "bad gateway", Status: 502}},
+		{job: mustJob(`{"id":"job-1","status":"COMPLETED"}`)},
+	}})
+
+	var err error
+	stdout, _ := captureOutput(t, func() {
+		err = runStatus(mockInvokeCommand(""), []string{"ep-1", "job-1"})
+	})
+	if code := errorCode(t, err); code != "server_error" {
+		t.Fatalf("code = %q, want server_error (err %v)", code, err)
+	}
+	if client.statusCalls != 1 {
+		t.Errorf("status calls = %d, want 1", client.statusCalls)
+	}
+	if strings.TrimSpace(stdout) != "" {
+		t.Errorf("errors must not reach stdout, got %q", stdout)
+	}
+}
+
+func TestRunStatus_PayloadIsEmittedVerbatim(t *testing.T) {
+	snapshotStatusFlags(t)
+	installMockInvokeClient(t, &mockInvokeClient{statusSteps: []jobStep{
+		{job: mustJob(`{"id":"job-1","status":"COMPLETED","output":{"jobNumber":1753800000000000123,"gpuTypeIds":["NVIDIA A40"]}}`)},
+	}})
+
+	var err error
+	stdout, _ := captureOutput(t, func() {
+		err = runStatus(mockInvokeCommand(""), []string{"ep-1", "job-1"})
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(stdout, "1753800000000000123") {
+		t.Errorf("a 64-bit integer was reshaped: %q", stdout)
+	}
+	if !strings.Contains(stdout, `"gpuTypeIds"`) {
+		t.Errorf("handler keys must not be renamed: %q", stdout)
 	}
 }
 

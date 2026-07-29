@@ -3,10 +3,13 @@
 package e2e
 
 import (
-	"context"
+	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,13 +23,107 @@ import (
 // works but is 4.6GB, so it cold-starts far slower.
 const mockWorkerImage = "runpod/mock-worker:latest"
 
-// e2eInvokeDeadline bounds the whole wait for a job. A cold CPU worker spends
-// ~90s pulling the image and booting before the handler runs, which is why the
-// cli default (api.DefaultInvokeWait) is minutes rather than the 30s control-plane
+// e2eInvokeWait is the --wait handed to the cli. A cold cpu worker spends ~90s
+// pulling the image and booting before the handler runs, which is why the cli
+// default (api.DefaultInvokeWait) is minutes rather than the 30s control-plane
 // timeout.
-const e2eInvokeDeadline = 6 * time.Minute
+const e2eInvokeWait = 6 * time.Minute
 
-func TestE2E_EndpointHealth(t *testing.T) {
+var (
+	buildOnce   sync.Once
+	builtBinary string
+	buildErr    error
+)
+
+// invokeBinary builds the cli under test once per run into a temp dir.
+//
+// Deliberately not the ~/go/bin/runpodctl that runCLI in cli_test.go uses: that
+// is a shared path, and installing over it would clobber whatever else is using
+// it (including a concurrent test run from another worktree). These tests must
+// exercise the binary, not internal/api, because the whole point of this ticket
+// is command-level behaviour — exit codes and the stdout/stderr split.
+func invokeBinary(t *testing.T) string {
+	t.Helper()
+	buildOnce.Do(func() {
+		dir, err := filepath.Abs("..")
+		if err != nil {
+			buildErr = err
+			return
+		}
+		out := filepath.Join(t.TempDir(), "runpodctl-e2e")
+		cmd := exec.Command("go", "build", "-o", out, ".")
+		cmd.Dir = dir
+		if output, err := cmd.CombinedOutput(); err != nil {
+			buildErr = errors.New(string(output))
+			return
+		}
+		builtBinary = out
+	})
+	if buildErr != nil {
+		t.Fatalf("failed to build the cli: %v", buildErr)
+	}
+	return builtBinary
+}
+
+// cliResult is the full observable outcome of one cli invocation.
+type cliResult struct {
+	stdout   string
+	stderr   string
+	exitCode int
+}
+
+// errorObject is the flat error shape the cli emits on stderr.
+type errorObject struct {
+	Error  string `json:"error"`
+	Code   string `json:"code"`
+	Status int    `json:"status"`
+}
+
+// stderrError decodes the last line of stderr as the cli's error object. Progress
+// notes share the stream, so only the final line is the error.
+func (r cliResult) stderrError(t *testing.T) errorObject {
+	t.Helper()
+	lines := strings.Split(strings.TrimSpace(r.stderr), "\n")
+	var obj errorObject
+	last := lines[len(lines)-1]
+	if err := json.Unmarshal([]byte(last), &obj); err != nil {
+		t.Fatalf("stderr does not end with a json error object: %q", r.stderr)
+	}
+	return obj
+}
+
+// stdoutJSON decodes stdout, asserting the cli emitted exactly one json document
+// and nothing else.
+func (r cliResult) stdoutJSON(t *testing.T) map[string]interface{} {
+	t.Helper()
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(r.stdout), &payload); err != nil {
+		t.Fatalf("stdout is not a single json document: %q", r.stdout)
+	}
+	return payload
+}
+
+func runInvokeCLI(t *testing.T, args ...string) cliResult {
+	t.Helper()
+	cmd := exec.Command(invokeBinary(t), args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	result := cliResult{stdout: stdout.String(), stderr: stderr.String()}
+	var exitErr *exec.ExitError
+	switch {
+	case err == nil:
+	case errors.As(err, &exitErr):
+		result.exitCode = exitErr.ExitCode()
+	default:
+		t.Fatalf("failed to run the cli: %v", err)
+	}
+	return result
+}
+
+func TestE2E_ServerlessHealth(t *testing.T) {
 	client, err := api.NewClient()
 	if err != nil {
 		t.Fatalf("failed to create client: %v", err)
@@ -39,57 +136,93 @@ func TestE2E_EndpointHealth(t *testing.T) {
 		t.Skip("no endpoints on this account to check health for")
 	}
 
-	invoke, err := api.NewInvokeClient()
-	if err != nil {
-		t.Fatalf("failed to create invoke client: %v", err)
+	result := runInvokeCLI(t, "serverless", "health", endpoints[0].ID)
+	if result.exitCode != 0 {
+		t.Fatalf("exit = %d, want 0 (stderr %q)", result.exitCode, result.stderr)
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	health, err := invoke.EndpointHealth(ctx, endpoints[0].ID)
-	if err != nil {
-		t.Fatalf("failed to get health for %s: %v", endpoints[0].ID, err)
-	}
+	health := result.stdoutJSON(t)
 	for _, key := range []string{"jobs", "workers"} {
 		if _, ok := health[key]; !ok {
-			t.Errorf("health payload has no %q: %+v", key, health)
+			t.Errorf("health payload has no %q: %v", key, health)
 		}
 	}
-	t.Logf("health for %s: %+v", endpoints[0].ID, health)
+	if strings.TrimSpace(result.stderr) != "" {
+		t.Errorf("health is a plain read, stderr should be empty: %q", result.stderr)
+	}
+	t.Logf("health for %s: %s", endpoints[0].ID, strings.TrimSpace(result.stdout))
 }
 
-func TestE2E_EndpointHealthNotFound(t *testing.T) {
-	invoke, err := api.NewInvokeClient()
+func TestE2E_ServerlessHealthNotFound(t *testing.T) {
+	result := runInvokeCLI(t, "serverless", "health", "e2e-does-not-exist-1234")
+
+	if result.exitCode == 0 {
+		t.Fatalf("a bogus endpoint id must exit non-zero (stdout %q)", result.stdout)
+	}
+	// errors never reach stdout.
+	if strings.TrimSpace(result.stdout) != "" {
+		t.Errorf("stdout must stay empty on an error, got %q", result.stdout)
+	}
+	if obj := result.stderrError(t); obj.Code != "not_found" {
+		t.Errorf("code = %q, want not_found (error %q)", obj.Code, obj.Error)
+	}
+}
+
+func TestE2E_ServerlessStatusNotFound(t *testing.T) {
+	client, err := api.NewClient()
 	if err != nil {
-		t.Fatalf("failed to create invoke client: %v", err)
+		t.Fatalf("failed to create client: %v", err)
+	}
+	endpoints, err := client.ListEndpoints(nil)
+	if err != nil {
+		t.Fatalf("failed to list endpoints: %v", err)
+	}
+	if len(endpoints) == 0 {
+		t.Skip("no endpoints on this account")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	_, err = invoke.EndpointHealth(ctx, "e2e-does-not-exist-1234")
-	var apiErr *api.APIError
-	if !errors.As(err, &apiErr) {
-		t.Fatalf("expected an *api.APIError for a bogus endpoint id, got %v", err)
+	result := runInvokeCLI(t, "serverless", "status", endpoints[0].ID, "e2e-no-such-job-1234")
+	if result.exitCode == 0 {
+		t.Fatal("a bogus job id must exit non-zero")
 	}
-	if apiErr.ErrorCode() != "not_found" {
-		t.Errorf("code = %q, want not_found (message %q)", apiErr.ErrorCode(), apiErr.Error())
+	if obj := result.stderrError(t); obj.Code != "not_found" {
+		t.Errorf("code = %q, want not_found (error %q)", obj.Code, obj.Error)
+	}
+}
+
+func TestE2E_ServerlessRunRejectsBadInputLocally(t *testing.T) {
+	// no api call should happen at all, so a bogus endpoint id is fine and free.
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "malformed json", args: []string{"serverless", "run", "ep-does-not-matter", "--input", `{"a":`}},
+		{name: "not an object", args: []string{"serverless", "run", "ep-does-not-matter", "--input", `[1,2,3]`}},
+		{name: "no input flag", args: []string{"serverless", "run", "ep-does-not-matter"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := runInvokeCLI(t, tt.args...)
+			if result.exitCode == 0 {
+				t.Fatalf("expected a non-zero exit, got stdout %q", result.stdout)
+			}
+			if obj := result.stderrError(t); obj.Code != "usage_error" {
+				t.Errorf("code = %q, want usage_error (error %q)", obj.Code, obj.Error)
+			}
+			if strings.TrimSpace(result.stdout) != "" {
+				t.Errorf("stdout must stay empty, got %q", result.stdout)
+			}
+		})
 	}
 }
 
 // TestE2E_ServerlessInvokeLifecycle creates a throwaway cpu endpoint on the
-// public mock worker, invokes it three ways and deletes everything it made.
+// public mock worker, drives the cli against it and deletes everything it made.
 // workersMin is 0, so the endpoint costs nothing while idle and the invocations
 // cost a fraction of a cent.
 func TestE2E_ServerlessInvokeLifecycle(t *testing.T) {
 	client, err := api.NewClient()
 	if err != nil {
 		t.Fatalf("failed to create client: %v", err)
-	}
-	invoke, err := api.NewInvokeClient()
-	if err != nil {
-		t.Fatalf("failed to create invoke client: %v", err)
 	}
 
 	suffix := time.Now().Format("20060102150405")
@@ -130,99 +263,119 @@ func TestE2E_ServerlessInvokeLifecycle(t *testing.T) {
 	})
 	t.Logf("created endpoint %s on %s", endpoint.ID, mockWorkerImage)
 
-	deadline := time.Now().Add(e2eInvokeDeadline)
+	wait := e2eInvokeWait.String()
 
-	t.Run("runsync", func(t *testing.T) {
-		// the first invocation is a cold start: /runsync usually hands back a
-		// still-running job long before the handler finishes, which is why the cli
-		// keeps polling /status on this path too.
-		ctx, cancel := context.WithDeadline(context.Background(), deadline)
-		defer cancel()
+	// the first invocation is the cold start, so it carries the long wait.
+	t.Run("run waits for the result", func(t *testing.T) {
+		result := runInvokeCLI(t, "serverless", "run", endpoint.ID,
+			"--input", `{"mock_return":"con-688 run"}`, "--wait", wait)
+		if result.exitCode != 0 {
+			t.Fatalf("exit = %d, want 0 (stderr %q)", result.exitCode, result.stderr)
+		}
+		job := result.stdoutJSON(t)
+		if job["status"] != api.JobStatusCompleted {
+			t.Fatalf("status = %v, want COMPLETED (payload %v)", job["status"], job)
+		}
+		if job["output"] != "con-688 run" {
+			t.Errorf("output = %v, want the handler payload echoed back", job["output"])
+		}
+		// progress notes belong on stderr, never mixed into the payload.
+		if strings.Contains(result.stdout, "waiting for job") {
+			t.Errorf("progress notes leaked into stdout: %q", result.stdout)
+		}
+		t.Logf("job %v completed", job["id"])
+	})
 
-		job, err := invoke.RunSync(ctx, endpoint.ID, json.RawMessage(`{"mock_return":"con-688 runsync"}`))
-		if err != nil {
-			t.Fatalf("runsync failed: %v", err)
+	t.Run("no-wait returns the job id then status follows it", func(t *testing.T) {
+		submitted := runInvokeCLI(t, "serverless", "run", endpoint.ID,
+			"--input", `{"mock_return":"con-688 no-wait"}`, "--no-wait")
+		if submitted.exitCode != 0 {
+			t.Fatalf("exit = %d, want 0 (stderr %q)", submitted.exitCode, submitted.stderr)
 		}
-		job, err = e2eWaitForJob(t, invoke, endpoint.ID, job, deadline)
-		if err != nil {
-			t.Fatalf("runsync job never finished: %v", err)
+		job := submitted.stdoutJSON(t)
+		jobID, _ := job["id"].(string)
+		if jobID == "" {
+			t.Fatalf("--no-wait must return a job id, got %v", job)
 		}
-		if !job.Succeeded() {
-			t.Fatalf("job status = %q, want COMPLETED (payload %+v)", job.Status, job.Payload)
+		// the follow-up command must be spelled out for the caller.
+		if !strings.Contains(submitted.stderr, "serverless status "+endpoint.ID+" "+jobID) {
+			t.Errorf("expected the follow-up command on stderr, got %q", submitted.stderr)
 		}
-		if got := job.Payload["output"]; got != "con-688 runsync" {
-			t.Errorf("output = %v, want the handler payload echoed back", got)
+
+		followed := runInvokeCLI(t, "serverless", "status", endpoint.ID, jobID, "--wait", wait)
+		if followed.exitCode != 0 {
+			t.Fatalf("exit = %d, want 0 (stderr %q)", followed.exitCode, followed.stderr)
+		}
+		if status := followed.stdoutJSON(t)["status"]; status != api.JobStatusCompleted {
+			t.Fatalf("status = %v, want COMPLETED", status)
+		}
+		t.Logf("job %s completed via status", jobID)
+	})
+
+	t.Run("input from stdin", func(t *testing.T) {
+		cmd := exec.Command(invokeBinary(t), "serverless", "run", endpoint.ID, "--input", "-", "--wait", wait)
+		cmd.Stdin = strings.NewReader(`{"mock_return":"con-688 stdin"}`)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("stdin payload failed: %v (stderr %q)", err, stderr.String())
+		}
+		result := cliResult{stdout: stdout.String(), stderr: stderr.String()}
+		if output := result.stdoutJSON(t)["output"]; output != "con-688 stdin" {
+			t.Errorf("output = %v, want the stdin payload echoed back", output)
 		}
 	})
 
-	t.Run("async", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		job, err := invoke.Run(ctx, endpoint.ID, json.RawMessage(`{"mock_return":"con-688 async"}`))
-		if err != nil {
-			t.Fatalf("run failed: %v", err)
+	t.Run("failed job exits 1 with the payload on stdout", func(t *testing.T) {
+		result := runInvokeCLI(t, "serverless", "run", endpoint.ID,
+			"--input", `{"mock_error":true}`, "--wait", wait)
+		if result.exitCode != 1 {
+			t.Fatalf("exit = %d, want 1 (stderr %q)", result.exitCode, result.stderr)
 		}
-		if job.ID == "" {
-			t.Fatal("/run returned no job id")
+		job := result.stdoutJSON(t)
+		if job["status"] != api.JobStatusFailed {
+			t.Fatalf("status = %v, want FAILED (payload %v)", job["status"], job)
 		}
-		// what --no-wait hands back: a queued job, nothing more.
-		if job.IsTerminal() {
-			t.Logf("job %s was already %s on submit", job.ID, job.Status)
+		// the worker's own error is the useful artifact and stays on stdout...
+		if _, ok := job["error"]; !ok {
+			t.Errorf("expected the worker error in the payload, got %v", job)
 		}
-
-		job, err = e2eWaitForJob(t, invoke, endpoint.ID, job, time.Now().Add(e2eInvokeDeadline))
-		if err != nil {
-			t.Fatalf("async job never finished: %v", err)
-		}
-		if !job.Succeeded() {
-			t.Fatalf("job status = %q, want COMPLETED (payload %+v)", job.Status, job.Payload)
+		// ...while the coded error object goes to stderr.
+		if obj := result.stderrError(t); obj.Code != "job_failed" {
+			t.Errorf("code = %q, want job_failed (error %q)", obj.Code, obj.Error)
 		}
 	})
 
-	t.Run("failed job", func(t *testing.T) {
-		// a handler exception is a terminal, non-completed job: the cli exits
-		// non-zero with code job_failed while still printing this payload.
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
+	t.Run("wait budget too small is an actionable timeout", func(t *testing.T) {
+		// the handler sleeps well past the budget, so the cli must stop waiting and
+		// hand back a job that is still running plus the command to poll it.
+		result := runInvokeCLI(t, "serverless", "run", endpoint.ID,
+			"--input", `{"mock_delay":25}`, "--wait", "5s")
+		if result.exitCode != 1 {
+			t.Fatalf("exit = %d, want 1 (stderr %q)", result.exitCode, result.stderr)
+		}
+		job := result.stdoutJSON(t)
+		jobID, _ := job["id"].(string)
+		if jobID == "" {
+			t.Fatalf("the last known payload must carry the job id, got %v", job)
+		}
+		obj := result.stderrError(t)
+		if obj.Code != "timeout" {
+			t.Fatalf("code = %q, want timeout (error %q)", obj.Code, obj.Error)
+		}
+		if !strings.Contains(obj.Error, "serverless status "+endpoint.ID+" "+jobID) {
+			t.Errorf("timeout error is not actionable: %q", obj.Error)
+		}
 
-		job, err := invoke.RunSync(ctx, endpoint.ID, json.RawMessage(`{"mock_error":true}`))
-		if err != nil {
-			t.Fatalf("runsync failed: %v", err)
+		// follow the advice verbatim: it must work.
+		followed := runInvokeCLI(t, "serverless", "status", endpoint.ID, jobID, "--wait", wait)
+		if followed.exitCode != 0 {
+			t.Fatalf("following the timeout advice failed: exit %d (stderr %q)", followed.exitCode, followed.stderr)
 		}
-		job, err = e2eWaitForJob(t, invoke, endpoint.ID, job, time.Now().Add(e2eInvokeDeadline))
-		if err != nil {
-			t.Fatalf("failing job never finished: %v", err)
+		if status := followed.stdoutJSON(t)["status"]; status != api.JobStatusCompleted {
+			t.Errorf("status = %v, want COMPLETED", status)
 		}
-		if job.Status != api.JobStatusFailed {
-			t.Fatalf("job status = %q, want FAILED (payload %+v)", job.Status, job.Payload)
-		}
-		if _, ok := job.Payload["error"]; !ok {
-			t.Errorf("expected the worker error in the payload, got %+v", job.Payload)
-		}
-		if outcome := api.NewJobFailedError(job.ID, job.Status); outcome.ErrorCode() != "job_failed" {
-			t.Errorf("code = %q, want job_failed", outcome.ErrorCode())
-		}
+		t.Logf("timed-out job %s followed to completion", jobID)
 	})
-}
-
-// e2eWaitForJob polls until the job is terminal, mirroring what the cli does.
-func e2eWaitForJob(t *testing.T, invoke *api.InvokeClient, endpointID string, job *api.Job, deadline time.Time) (*api.Job, error) {
-	t.Helper()
-	for !job.IsTerminal() {
-		if time.Now().After(deadline) {
-			return job, fmt.Errorf("job %s still %s at the deadline", job.ID, job.Status)
-		}
-		time.Sleep(2 * time.Second)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		next, err := invoke.JobStatus(ctx, endpointID, job.ID)
-		cancel()
-		if err != nil {
-			return job, err
-		}
-		job = next
-	}
-	t.Logf("job %s finished as %s", job.ID, job.Status)
-	return job, nil
 }

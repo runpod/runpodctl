@@ -133,30 +133,40 @@ runpodctl serverless run <id> --input '{"prompt":"hello"}'
 runpodctl serverless run <id> --input-file payload.json
 cat payload.json | runpodctl serverless run <id> --input -
 
-# queue on /run and poll until it finishes
-runpodctl serverless run <id> --input '{}' --async
+# give a cold or slow endpoint longer
+runpodctl serverless run <id> --input '{}' --wait 15m
 
-# queue on /run and get the job id back immediately
+# submit and get the job id back immediately
 runpodctl serverless run <id> --input '{}' --no-wait
 runpodctl serverless status <id> <job-id> --wait 5m
 ```
 
-the payload is sent as `{"input": <your json>}`; pass only the handler payload. it
-is parsed locally first, so a quoting mistake fails with `usage_error` before
-anything is sent.
+the payload must be a json object and is sent as `{"input": <your json>}`; pass
+only the handler payload. it is parsed locally first, so a quoting mistake fails
+with `usage_error` before anything is sent.
 
 | behavior | detail |
 | --- | --- |
-| waiting | `run` waits for a terminal job status, bounded by `--wait` (default 5m). the default route is `/runsync`, which the api stops holding open after ~90s — the job is then followed on `/status` automatically, so `--async` only changes the submit route |
-| `--no-wait` | submits on `/run` and prints the queued job (exit 0). follow it with `serverless status` |
+| waiting | `run` submits on `/run` and polls `/status` until the job is terminal, bounded by `--wait` (default 5m) |
+| `--no-wait` | submits and prints the queued job without polling (same as `--wait 0`, exit 0). follow it with `serverless status` |
 | stdout | always the job payload as json — including a `FAILED` job's `error`, and the last known payload when the wait ran out |
 | stderr | progress notes and the error object, never job data |
-| exit codes | 0 when the job is `COMPLETED` (or still queued for `--no-wait` / a plain `status` check), 1 when the request fails, when `--wait` runs out (`timeout`), or when the job ends `FAILED` / `CANCELLED` / `TIMED_OUT` (`job_failed`) |
+| exit codes | 0 when the job is `COMPLETED`, and when `--wait 0` / `--no-wait` submitted it successfully. 1 when the request fails, when `--wait` runs out (`timeout`), or when the job ends `FAILED` / `CANCELLED` / `TIMED_OUT` (`job_failed`) |
 
 `timeout` means the cli stopped waiting, not that the endpoint is broken: the job
 is still running server-side and the error message names the `serverless status`
-command to keep following it. the shared `timeout` config key still bounds a
-single api call (30s by default); `--wait` bounds the job.
+command to keep following it. the shared `timeout` config key bounds a single api
+call (30s by default) but is never allowed to outlast `--wait`, which bounds the
+job.
+
+`/runsync` is deliberately not used, even though `serverless get` still reports
+its url. it is not synchronous: the invoke api holds the connection for 90s and
+then answers with a still-running job, so the cli has to poll `/status` either
+way. Submitting there also has two failure modes `/run` does not — until the
+response arrives there is no job id, so a slow response strands a billed job that
+cannot be polled at all, and a job submitted on `/runsync` has its result
+discarded 1 minute after it completes instead of 30 minutes. `/run` costs one
+extra round trip and avoids both.
 
 other resources: `template` (alias: `tpl`), `volume` (alias: `vol`), `registry` (alias: `reg`)
 
@@ -345,7 +355,7 @@ codes the cli generates:
 | `not_found` | the api has no such resource. during a `--wait` it can also mean a resource that *was* created has gone (or never became visible), so check for an `id` field and clean up rather than assuming nothing exists |
 | `bad_request` `unauthorized` `forbidden` `conflict` `rate_limited` `server_error` `api_error` | derived from the rest status |
 | `graphql_error` | graphql returned an errors array (http 200) |
-| `timeout` | the cli stopped waiting (`serverless run --wait`). the work may still be running server-side — poll it, do not re-invoke |
+| `timeout` | the cli stopped waiting (`serverless run/status --wait`, `model add --wait-for-hash`). the work may still be running server-side — poll it, do not retry |
 | `job_failed` | a serverless job reached a terminal status other than `COMPLETED`. the job payload is still on stdout |
 | `no_credentials` | no api key configured — run `runpodctl doctor` or set `RUNPOD_API_KEY` |
 | `network_error` | the api could not be reached at all — dns, refused, tls, timeout. the only code that means "transient, retry" |

@@ -1,11 +1,14 @@
 package output
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net"
 	"net/url"
 	"os"
+	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -38,6 +41,97 @@ func Print(data interface{}, cfg *Config) error {
 		return printYAML(data)
 	default:
 		return printJSON(data)
+	}
+}
+
+// PrintRaw outputs a json document that came straight off the wire, without the
+// gpu-key normalisation Print applies and without turning numbers into float64.
+//
+// It exists for payloads whose content is not ours: a serverless handler's job
+// output and the invoke api's health body. Print is built for the cli's own
+// typed control-plane structs, where rewriting gpuTypeId -> gpuId is wanted;
+// doing that to third-party data silently renames a handler's own keys, and the
+// map round trip it uses corrupts any integer above 2^53. Keys are still sorted
+// (stable output across api versions) but key names and number literals are
+// reproduced exactly.
+func PrintRaw(raw []byte, cfg *Config) error {
+	if cfg == nil {
+		cfg = DefaultConfig
+	}
+
+	value, err := decodeRawJSON(raw)
+	if err != nil {
+		// not json: hand the bytes over untouched rather than failing the command,
+		// so whatever the api said is still visible.
+		_, writeErr := os.Stdout.Write(ensureTrailingNewline(raw))
+		return writeErr
+	}
+
+	if cfg.Format == FormatYAML {
+		return printYAML(yamlValue(value))
+	}
+	// json.Number marshals back as its original literal, so this is byte-faithful
+	// for numbers while still sorting object keys.
+	return printJSON(value)
+}
+
+// decodeRawJSON decodes a single json document, keeping numbers as their exact
+// literals (json.Number) instead of float64.
+func decodeRawJSON(raw []byte) (interface{}, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value interface{}
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
+func ensureTrailingNewline(raw []byte) []byte {
+	if len(raw) > 0 && raw[len(raw)-1] == '\n' {
+		return raw
+	}
+	return append(append([]byte(nil), raw...), '\n')
+}
+
+// yamlValue converts a decoded json value into a yaml node, so that yaml output
+// keeps the same guarantees as the json path: object keys sorted (Go map
+// iteration order is random, which yaml.Marshal would otherwise expose) and
+// numbers emitted as their original literals rather than as quoted json.Number
+// strings or rounded floats.
+func yamlValue(value interface{}) *yaml.Node {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		node := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		for _, key := range keys {
+			node.Content = append(node.Content,
+				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+				yamlValue(typed[key]),
+			)
+		}
+		return node
+	case []interface{}:
+		node := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+		for _, item := range typed {
+			node.Content = append(node.Content, yamlValue(item))
+		}
+		return node
+	case json.Number:
+		tag := "!!int"
+		if strings.ContainsAny(typed.String(), ".eE") {
+			tag = "!!float"
+		}
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: tag, Value: typed.String()}
+	default:
+		node := &yaml.Node{}
+		// let yaml infer the tag for strings, bools and null.
+		_ = node.Encode(typed)
+		return node
 	}
 }
 

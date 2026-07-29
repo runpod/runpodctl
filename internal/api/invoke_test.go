@@ -76,9 +76,22 @@ func TestInvokeClient_EndpointHealth(t *testing.T) {
 	if !strings.HasPrefix(gotUserAgent, "runpod-cli/") {
 		t.Errorf("user-agent = %q, want the shared runpod-cli agent", gotUserAgent)
 	}
-	workers, ok := health["workers"].(map[string]interface{})
-	if !ok || workers["idle"] != float64(1) {
-		t.Errorf("health payload not passed through: %+v", health)
+	// the body is handed back as the exact bytes the api sent.
+	if string(health) != `{"jobs":{"completed":2,"inQueue":0},"workers":{"idle":1,"ready":1}}` {
+		t.Errorf("health body not passed through verbatim: %s", health)
+	}
+}
+
+func TestInvokeClient_EndpointHealthRejectsNonJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<html>gateway</html>`))
+	}))
+	defer server.Close()
+
+	client := newTestInvokeClient(t, server.URL)
+
+	if _, err := client.EndpointHealth(context.Background(), "ep-1"); err == nil {
+		t.Fatal("expected a parse error for a non-json health body")
 	}
 }
 
@@ -123,56 +136,34 @@ func TestInvokeClient_ErrorsUseSharedCodes(t *testing.T) {
 	}
 }
 
-func TestInvokeClient_SubmitRoutesAndBody(t *testing.T) {
-	tests := []struct {
-		name     string
-		call     func(*InvokeClient) (*Job, error)
-		wantPath string
-	}{
-		{
-			name: "run",
-			call: func(c *InvokeClient) (*Job, error) {
-				return c.Run(context.Background(), "ep-1", json.RawMessage(`{"prompt":"hi"}`))
-			},
-			wantPath: "/ep-1/run",
-		},
-		{
-			name: "runsync",
-			call: func(c *InvokeClient) (*Job, error) {
-				return c.RunSync(context.Background(), "ep-1", json.RawMessage(`{"prompt":"hi"}`))
-			},
-			wantPath: "/ep-1/runsync",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var gotPath, gotMethod, gotBody string
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				gotPath, gotMethod = r.URL.Path, r.Method
-				body, _ := io.ReadAll(r.Body)
-				gotBody = string(body)
-				w.Write([]byte(`{"id":"job-1","status":"IN_QUEUE"}`))
-			}))
-			defer server.Close()
+func TestInvokeClient_RunSubmitsOnRunWithNestedInput(t *testing.T) {
+	var gotPath, gotMethod, gotBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotMethod = r.URL.Path, r.Method
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.Write([]byte(`{"id":"job-1","status":"IN_QUEUE"}`))
+	}))
+	defer server.Close()
 
-			job, err := tt.call(newTestInvokeClient(t, server.URL))
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if gotPath != tt.wantPath {
-				t.Errorf("path = %q, want %q", gotPath, tt.wantPath)
-			}
-			if gotMethod != http.MethodPost {
-				t.Errorf("method = %q, want POST", gotMethod)
-			}
-			// the handler payload must be nested under "input" exactly once.
-			if gotBody != `{"input":{"prompt":"hi"}}` {
-				t.Errorf("body = %q, want {\"input\":{\"prompt\":\"hi\"}}", gotBody)
-			}
-			if job.ID != "job-1" || job.Status != JobStatusInQueue {
-				t.Errorf("job = %+v, want id job-1 status IN_QUEUE", job)
-			}
-		})
+	job, err := newTestInvokeClient(t, server.URL).Run(context.Background(), "ep-1", json.RawMessage(`{"prompt":"hi"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// /runsync is deliberately never called: a request that times out on it leaves
+	// a billed job with no id to poll, and its result expires after 1 minute.
+	if gotPath != "/ep-1/run" {
+		t.Errorf("path = %q, want /ep-1/run", gotPath)
+	}
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	// the handler payload must be nested under "input" exactly once.
+	if gotBody != `{"input":{"prompt":"hi"}}` {
+		t.Errorf("body = %q, want {\"input\":{\"prompt\":\"hi\"}}", gotBody)
+	}
+	if job.ID != "job-1" || job.Status != JobStatusInQueue {
+		t.Errorf("job = %+v, want id job-1 status IN_QUEUE", job)
 	}
 }
 
@@ -214,6 +205,83 @@ func TestInvokeClient_JobStatusPreservesPayload(t *testing.T) {
 	}
 	if decoded["executionTime"] != float64(42) {
 		t.Errorf("executionTime dropped: %s", encoded)
+	}
+}
+
+func TestJobMarshalIsByteFaithful(t *testing.T) {
+	// re-encoding must reproduce the api body exactly. Decoding a handler payload
+	// into map[string]interface{} and marshalling it back would turn these
+	// integers into float64 and quietly corrupt them.
+	bodies := []string{
+		`{"id":"job-1","status":"COMPLETED","output":{"seed":12345678901234567890}}`,
+		`{"id":"job-1","status":"COMPLETED","output":{"jobNumber":1753800000000000123}}`,
+		`{"id":"job-1","status":"COMPLETED","output":{"nested":[{"big":9007199254740993}]}}`,
+	}
+	for _, body := range bodies {
+		t.Run(body, func(t *testing.T) {
+			var job Job
+			if err := json.Unmarshal([]byte(body), &job); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			encoded, err := json.Marshal(&job)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if string(encoded) != body {
+				t.Errorf("marshalled job = %s, want the api body verbatim %s", encoded, body)
+			}
+		})
+	}
+}
+
+func TestJobHasEnvelope(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{name: "id and status", body: `{"id":"job-1","status":"IN_QUEUE"}`, want: true},
+		{name: "status only", body: `{"status":"IN_QUEUE"}`, want: true},
+		{name: "id only", body: `{"id":"job-1"}`, want: true},
+		// a 200 carrying a bare error object is not a job.
+		{name: "error body", body: `{"error":"could not queue job"}`, want: false},
+		{name: "empty object", body: `{}`, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var job Job
+			if err := json.Unmarshal([]byte(tt.body), &job); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got := job.HasEnvelope(); got != tt.want {
+				t.Errorf("HasEnvelope() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestJobUnmarshalToleratesNonStringIDs(t *testing.T) {
+	// a surprising type must not fail the whole decode: the payload is still the
+	// artifact the caller wants to see.
+	var job Job
+	if err := json.Unmarshal([]byte(`{"id":42,"status":null,"output":"ok"}`), &job); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if job.ID != "" || job.Status != "" {
+		t.Errorf("job = %+v, want empty lifted fields", job)
+	}
+	if !job.HasEnvelope() {
+		t.Error("a body with id/status keys still has an envelope")
+	}
+	if output, ok := job.Field("output"); !ok || string(output) != `"ok"` {
+		t.Errorf("Field(output) = %s, %v", output, ok)
+	}
+}
+
+func TestNoJobEnvelopeErrorUsesAPIErrorCode(t *testing.T) {
+	err := NewNoJobEnvelopeError()
+	if err.ErrorCode() != "api_error" {
+		t.Errorf("code = %q, want api_error", err.ErrorCode())
 	}
 }
 

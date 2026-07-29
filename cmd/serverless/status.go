@@ -1,7 +1,6 @@
 package serverless
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -17,8 +16,8 @@ var statusCmd = &cobra.Command{
 	Long: `get the status of a job previously submitted to an endpoint (/status/<job-id>).
 
 this is the follow-up for 'serverless run --no-wait' and for a run that hit its
---wait budget. one check by default; pass --wait to keep polling until the job is
-terminal.
+--wait budget. one check by default (--wait 0); pass --wait to keep polling until
+the job is terminal.
 
 exit codes: 0 when the job is COMPLETED or still queued/running, 1 when the job
 ended FAILED / CANCELLED / TIMED_OUT or when --wait ran out. the job payload is
@@ -50,20 +49,22 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	cfg := &output.Config{Format: output.ParseFormat(cmd.Flag("output").Value.String())}
+	deadline := time.Now().Add(statusWait)
 
-	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout())
-	defer cancel()
-	job, err := client.JobStatus(ctx, endpointID, jobID)
+	// with --wait, the first check follows the same transient-failure policy as the
+	// poll loop; without it, the deadline has already passed and this is a single
+	// fail-fast call.
+	job, err := fetchJobStatus(client, endpointID, jobID, deadline)
 	if err != nil {
 		return fmt.Errorf("failed to get job status: %w", err)
 	}
 
 	var waitErr error
 	if statusWait > 0 {
-		job, waitErr = waitForTerminal(client, endpointID, job, time.Now().Add(statusWait))
+		job, waitErr = waitForTerminal(client, endpointID, job, deadline)
 	}
 
-	if printErr := output.Print(job, cfg); printErr != nil {
+	if printErr := output.PrintRaw(job.Raw(), cfg); printErr != nil {
 		return printErr
 	}
 	if waitErr != nil {
