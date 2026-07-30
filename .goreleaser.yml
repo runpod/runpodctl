@@ -41,6 +41,12 @@ upx:
 universal_binaries:
   - id: default
     replace: true
+    # sign + notarize after lipo merges the per-arch builds; signing before the
+    # merge produces an invalid signature. snapshots ad-hoc sign and skip the
+    # notary submission so local builds need no credentials.
+    hooks:
+      post:
+        - cmd: quill sign-and-notarize "{{ .Path }}" --dry-run={{ .IsSnapshot }} --ad-hoc={{ .IsSnapshot }}
 
 archives:
   - id: default
