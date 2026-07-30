@@ -46,7 +46,10 @@ universal_binaries:
     # notary submission so local builds need no credentials.
     hooks:
       post:
+        # output: true so quill's notary submission id and rejection reasons
+        # reach the job log — goreleaser swallows hook output otherwise
         - cmd: quill sign-and-notarize "{{ .Path }}" --dry-run={{ .IsSnapshot }} --ad-hoc={{ .IsSnapshot }}
+          output: true
 
 archives:
   - id: default

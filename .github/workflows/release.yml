@@ -14,6 +14,10 @@ jobs:
     name: release
     runs-on: ubuntu-latest
     concurrency: release-${{ github.ref }}
+    # quill waits for a conclusive notary verdict with no bound of its own;
+    # without this a stalled apple submission holds the concurrency lock for
+    # the default 6h and blocks any retry
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -36,8 +40,10 @@ jobs:
         with:
           go-version: "1.26.5"
 
+      # pinned: an unpinned installer makes releases non-reproducible and lets
+      # an upstream regression break signing without a change on our side
       - name: Install quill
-        run: curl -sSfL https://get.anchore.io/quill | sudo sh -s -- -b /usr/local/bin
+        run: curl -sSfL https://get.anchore.io/quill | sudo sh -s -- -b /usr/local/bin v0.7.1
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
