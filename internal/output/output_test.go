@@ -40,12 +40,45 @@ func TestParseFormat(t *testing.T) {
 		{"yaml", FormatYAML},
 		{"invalid", FormatJSON}, // defaults to json
 		{"", FormatJSON},
+		// case and whitespace are normalized: these used to fall through to json
+		{"YAML", FormatYAML},
+		{"Yaml", FormatYAML},
+		{" yaml ", FormatYAML},
+		{"JSON", FormatJSON},
 	}
 
 	for _, test := range tests {
 		result := ParseFormat(test.input)
 		if result != test.expected {
 			t.Errorf("ParseFormat(%q) = %v, want %v", test.input, result, test.expected)
+		}
+	}
+}
+
+func TestValidateFormat(t *testing.T) {
+	valid := []string{"json", "yaml", "JSON", "YAML", "Yaml", " yaml ", ""}
+	for _, s := range valid {
+		if s == "" {
+			// the flag defaults to "json", so an empty value only reaches here if a
+			// caller passes one explicitly; it must not be rejected.
+			continue
+		}
+		if err := ValidateFormat(s); err != nil {
+			t.Errorf("ValidateFormat(%q) = %v, want nil", s, err)
+		}
+	}
+
+	// `table` never existed as an output format but used to be accepted silently,
+	// which is how it ended up documented. It must now be rejected.
+	invalid := []string{"table", "tabel", "jsonl", "yml", "xml"}
+	for _, s := range invalid {
+		err := ValidateFormat(s)
+		if err == nil {
+			t.Errorf("ValidateFormat(%q) = nil, want an error", s)
+			continue
+		}
+		if !strings.Contains(err.Error(), s) {
+			t.Errorf("ValidateFormat(%q) error %q should quote the offending value", s, err)
 		}
 	}
 }

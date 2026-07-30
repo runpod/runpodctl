@@ -273,10 +273,16 @@ runpodctl pod list                    # json (default)
 runpodctl pod list --output=yaml      # yaml format
 ```
 
-there is no table format. the value is matched case-sensitively and an
-unrecognized one is not an error — it falls back to json silently, so
-`--output=table` and `--output=YAML` both return json. (the legacy `get pod` and
-`get cloud` commands print a table unconditionally and ignore `--output`.)
+there is no table format. the value is case-insensitive (`YAML` works), and an
+unrecognized one is rejected rather than silently falling back to json:
+
+```jsonc
+// runpodctl gpu list --output=table
+{"error":"invalid --output \"table\": supported formats are json and yaml","code":"usage_error"}
+```
+
+(the legacy `get pod` and `get cloud` commands print a table unconditionally and
+ignore `--output`.)
 
 ### pod runtime status
 

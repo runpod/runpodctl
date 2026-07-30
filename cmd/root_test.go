@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/runpod/runpodctl/internal/api"
 )
 
@@ -104,6 +106,74 @@ func TestRootCmd_OutputFlag(t *testing.T) {
 	}
 	if flag.Usage != "output format (json, yaml)" {
 		t.Errorf("expected usage 'output format (json, yaml)', got %s", flag.Usage)
+	}
+}
+
+func TestOutputFlagRejectsUnsupportedFormat(t *testing.T) {
+	root := GetRootCmd()
+	if root.PersistentPreRunE == nil {
+		t.Fatal("expected a root PersistentPreRunE to validate --output")
+	}
+
+	original := outputFormat
+	t.Cleanup(func() { outputFormat = original })
+
+	// `table` was never a real format but used to be accepted silently and return
+	// json, which is how it ended up in the README.
+	for _, bad := range []string{"table", "yml", "jsonl"} {
+		outputFormat = bad
+		err := root.PersistentPreRunE(root, nil)
+		if err == nil {
+			t.Errorf("--output=%s: expected an error, got nil", bad)
+			continue
+		}
+		var ue *usageError
+		if !errors.As(err, &ue) {
+			t.Errorf("--output=%s: expected a *usageError (code usage_error), got %T", bad, err)
+			continue
+		}
+		if ue.ErrorCode() != "usage_error" {
+			t.Errorf("--output=%s: code = %q, want usage_error", bad, ue.ErrorCode())
+		}
+	}
+
+	for _, ok := range []string{"json", "yaml", "YAML", " yaml "} {
+		outputFormat = ok
+		if err := root.PersistentPreRunE(root, nil); err != nil {
+			t.Errorf("--output=%q: expected nil, got %v", ok, err)
+		}
+	}
+}
+
+// TestOutputFlagValidationCoverage pins the commands that define their own
+// PersistentPreRun(E). Cobra runs only the closest one, so any command listed
+// here shadows the root --output guard. The two current entries do not honor
+// --output, so nothing is lost; a NEW entry appearing here means that command
+// silently skips validation and must call output.ValidateFormat itself.
+func TestOutputFlagValidationCoverage(t *testing.T) {
+	allowed := map[string]bool{
+		"exec":   true, // legacy, prints its own deprecation notice; no --output
+		"config": true, // local config editing; no --output
+	}
+
+	var shadowing []string
+	var walk func(*cobra.Command)
+	walk = func(c *cobra.Command) {
+		for _, sub := range c.Commands() {
+			if sub.PersistentPreRun != nil || sub.PersistentPreRunE != nil {
+				if !allowed[sub.Name()] {
+					shadowing = append(shadowing, sub.CommandPath())
+				}
+			}
+			walk(sub)
+		}
+	}
+	walk(GetRootCmd())
+
+	if len(shadowing) > 0 {
+		t.Errorf("these commands shadow the root --output validation and must call "+
+			"output.ValidateFormat themselves (or be added to the allowlist with a reason): %v",
+			shadowing)
 	}
 }
 
