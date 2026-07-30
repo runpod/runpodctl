@@ -3,9 +3,11 @@ package output
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/url"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -134,14 +136,37 @@ func Error(err error) {
 	encoder.Encode(obj) //nolint:errcheck
 }
 
-// ParseFormat parses a format string into a Format
+// ParseFormat parses a format string into a Format. Case and surrounding
+// whitespace are normalized, so `--output=YAML` is the yaml the caller asked for
+// rather than a silent fall-through to json.
+//
+// It still defaults an unrecognized value to json rather than failing, because
+// every command calls it with the flag value already parsed and has no way to
+// report an error from here. ValidateFormat is what rejects a bad value, and it
+// runs once in the root PersistentPreRunE before any command body — so by the
+// time this is reached the value is known to be json or yaml.
 func ParseFormat(s string) Format {
-	switch s {
+	switch normalizeFormat(s) {
 	case "yaml":
 		return FormatYAML
 	default:
 		return FormatJSON
 	}
+}
+
+// ValidateFormat reports whether s names a supported output format. Without it
+// an unrecognized --output silently produced json, which meant a typo (or a
+// format that never existed, e.g. `table`) looked like it had been honored.
+func ValidateFormat(s string) error {
+	switch normalizeFormat(s) {
+	case string(FormatJSON), string(FormatYAML):
+		return nil
+	}
+	return fmt.Errorf("invalid --output %q: supported formats are json and yaml", s)
+}
+
+func normalizeFormat(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
 }
 
 func normalizeGPUKeys(data interface{}) interface{} {
