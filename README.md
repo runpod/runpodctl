@@ -266,13 +266,17 @@ runpodctl receive 8338-galileo-collect-fidel
 
 ## output format
 
-default output is json (optimized for agents). use `--output` flag for alternatives:
+default output is json (optimized for agents). `--output` takes `json` or `yaml`:
 
 ```bash
 runpodctl pod list                    # json (default)
-runpodctl pod list --output=table     # human-readable table
 runpodctl pod list --output=yaml      # yaml format
 ```
+
+there is no table format. the value is matched case-sensitively and an
+unrecognized one is not an error — it falls back to json silently, so
+`--output=table` and `--output=YAML` both return json. (the legacy `get pod` and
+`get cloud` commands print a table unconditionally and ignore `--output`.)
 
 ### pod runtime status
 
@@ -384,11 +388,11 @@ carry no `code`:
 | surface | shape |
 | --- | --- |
 | legacy `get/create/remove/start/stop pod`, `create/remove pods`, `get cloud` | `Error: <msg>` via cobra, exit 1 |
-| `exec` | plaintext, exit 1 |
+| `exec` | progress on **stdout**, error plaintext on stderr, and exits **0** — it uses `Run`, not `RunE`, so the error never reaches the sink. also polls up to 5 minutes (`maxPollTime`) for the pod's ssh info before giving up |
 | `project` | prints to **stdout** and exits 0 (bug, tracked as CON-816) |
 
 so a parser should tolerate a non-json line on stderr from those, and must not
-rely on the exit code for `project` until CON-816 lands.
+rely on the exit code for `exec` or `project` until CON-816 lands.
 
 ## environment variables
 
