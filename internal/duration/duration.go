@@ -24,7 +24,15 @@ func Parse(s string) (time.Duration, error) {
 		if n <= 0 {
 			return 0, fmt.Errorf("invalid duration %q: must be positive", s)
 		}
-		return time.Duration(n) * 24 * time.Hour, nil
+		// check the product, not just the operand: time.Duration is int64
+		// nanoseconds, so 106752d and up wrap to a negative value. A caller that
+		// only guards its own input against <= 0 would then silently substitute a
+		// default (waitfor.Until) or put a --since cutoff in the future.
+		d := time.Duration(n) * 24 * time.Hour
+		if d <= 0 {
+			return 0, fmt.Errorf("invalid duration %q: out of range (max 106751d)", s)
+		}
+		return d, nil
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil {

@@ -296,23 +296,29 @@ func TestCLI_PodCreateWait(t *testing.T) {
 	}
 }
 
-// TestCLI_ServerlessCreateWaitRequiresWarmWorker costs nothing: the refusal has
-// to happen before the endpoint is created.
-func TestCLI_ServerlessCreateWaitRequiresWarmWorker(t *testing.T) {
+// TestCLI_ServerlessCreateWaitAtZeroMinWorkersWarns costs nothing: the template
+// id does not exist, so the create fails before anything is provisioned. What it
+// proves is that --wait at --workers-min 0 warns rather than refusing — runpod
+// does fill a standby pool at 0 min workers (ai-api finalEndpoint floors
+// workersStandby to 5 whenever workersMax > 1), so the wait is satisfiable.
+func TestCLI_ServerlessCreateWaitAtZeroMinWorkersWarns(t *testing.T) {
 	before := listEndpointIDs(t)
 
 	stdout, stderr, err := runCLI("serverless", "create",
 		"--template-id", "e2e-does-not-exist",
 		"--gpu-id", "NVIDIA RTX A5000",
-		"--wait")
+		"--wait", "--wait-timeout", "5s")
 	if err == nil {
-		t.Fatalf("expected --wait to be refused at workers-min 0, got: %s", stdout)
+		t.Fatalf("expected the create to fail on a missing template, got: %s", stdout)
 	}
 	if strings.TrimSpace(stdout) != "" {
 		t.Errorf("stdout must stay empty, got %q", stdout)
 	}
-	if !strings.Contains(stderr, "--wait needs --workers-min 1 or more") {
-		t.Errorf("expected the workers-min explanation, got: %s", stderr)
+	if !strings.Contains(stderr, "--workers-min 0") {
+		t.Errorf("expected the workers-min note on stderr, got: %s", stderr)
+	}
+	if strings.Contains(stderr, "--wait needs --workers-min") {
+		t.Errorf("--wait must no longer be refused at 0 min workers: %s", stderr)
 	}
 
 	after := listEndpointIDs(t)

@@ -20,8 +20,16 @@ func TestParse(t *testing.T) {
 		{input: "1d", want: 24 * time.Hour},
 		{input: "90s", want: 90 * time.Second},
 		{input: "5s", want: 5 * time.Second},
+		// the largest day count that still fits in an int64 nanosecond duration.
+		{input: "106751d", want: 106751 * 24 * time.Hour},
 
 		// invalid inputs
+		// int64 nanoseconds overflow at 106752 days: the product wraps negative, and
+		// a caller that only guards its own input against <= 0 would silently
+		// substitute a default instead of rejecting the flag.
+		{input: "106752d", wantErr: true},
+		{input: "200000d", wantErr: true},
+		{input: "9999999999d", wantErr: true},
 		{input: "-1d", wantErr: true},
 		{input: "0h", wantErr: true},
 		{input: "0d", wantErr: true},

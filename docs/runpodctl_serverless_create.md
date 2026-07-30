@@ -27,7 +27,7 @@ examples:
   # create from a hub repo and attach a model
   runpodctl serverless create --hub-id <id> --gpu-id "NVIDIA GeForce RTX 4090" --model-reference https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct:main
 
-  # block until a worker is ready (needs a warm worker, which bills while it runs)
+  # block until a worker is ready (--workers-min 1 starts one now, and bills for it)
   runpodctl serverless create --template-id <id> --gpu-id "NVIDIA GeForce RTX 4090" --workers-min 1 --wait
 
   # override or add env vars (hub defaults are included automatically)
@@ -59,7 +59,7 @@ runpodctl serverless create [flags]
       --scale-by string               autoscale strategy: delay (seconds of queue wait) or requests (pending request count)
       --scale-threshold int           trigger point for autoscaler (delay: seconds, requests: count) (default -1)
       --template-id string            template id (required if no --hub-id)
-      --wait                          block until the endpoint's health reports a ready worker; requires --workers-min 1 or more
+      --wait                          block until the endpoint's health reports a worker ready or running. a ready worker may be flashboot-cached, so the first request still resumes it; --workers-min 1 is the fastest way to get one
       --wait-timeout string           max time to wait with --wait, e.g. 90s, 10m, 1h; on timeout the endpoint is kept and the error carries its id (default "10m")
       --workers-max int               maximum number of workers (default 3)
       --workers-min int               minimum number of workers

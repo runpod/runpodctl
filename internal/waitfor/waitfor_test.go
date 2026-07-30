@@ -211,6 +211,18 @@ type codedError struct {
 func (e *codedError) Error() string     { return e.msg }
 func (e *codedError) ErrorCode() string { return e.code }
 
+// statusError is a poll error carrying an http status as well as a code, like
+// *api.APIError and *api.GraphQLError do.
+type statusError struct {
+	code   string
+	status int
+	msg    string
+}
+
+func (e *statusError) Error() string     { return e.msg }
+func (e *statusError) ErrorCode() string { return e.code }
+func (e *statusError) HTTPStatus() int   { return e.status }
+
 // A single bad poll must not end the wait. The invoke service 404s an endpoint
 // id it has not propagated yet, and graphql answers 5xx now and then; both used
 // to abort the wait on the very first poll.
@@ -293,8 +305,18 @@ func TestIsFatalPollError(t *testing.T) {
 		{name: "not found is transient during propagation", err: &codedError{code: "not_found", msg: "x"}, want: false},
 		{name: "server error", err: &codedError{code: "server_error", msg: "x"}, want: false},
 		{name: "rate limited", err: &codedError{code: "rate_limited", msg: "x"}, want: false},
-		{name: "graphql error", err: &codedError{code: "graphql_error", msg: "x"}, want: false},
+		{name: "graphql error with no status is transient", err: &codedError{code: "graphql_error", msg: "x"}, want: false},
 		{name: "uncoded", err: errors.New("EOF"), want: false},
+		// the pod wait's only api call is graphql, and every graphql failure carries
+		// the constant code "graphql_error" — so the fatal decision there can only
+		// come from the http status. prod graphql answers a bad key with 401.
+		{name: "graphql 401", err: &statusError{code: "graphql_error", status: 401, msg: "unauthorized"}, want: true},
+		{name: "graphql 403", err: &statusError{code: "graphql_error", status: 403, msg: "forbidden"}, want: true},
+		{name: "graphql 400", err: &statusError{code: "graphql_error", status: 400, msg: "bad request"}, want: true},
+		{name: "wrapped graphql 401", err: fmt.Errorf("getting pods: %w", &statusError{code: "graphql_error", status: 401, msg: "x"}), want: true},
+		{name: "graphql 404 stays transient", err: &statusError{code: "graphql_error", status: 404, msg: "x"}, want: false},
+		{name: "graphql 429 stays transient", err: &statusError{code: "graphql_error", status: 429, msg: "x"}, want: false},
+		{name: "graphql 502 stays transient", err: &statusError{code: "graphql_error", status: 502, msg: "x"}, want: false},
 	}
 
 	for _, tc := range cases {

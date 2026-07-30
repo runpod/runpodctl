@@ -371,16 +371,15 @@ func TestCreateCmd_WaitFlags(t *testing.T) {
 	}
 }
 
-// --wait means "a worker is ready". At workersMin 0 runpod never starts one, so
-// the flag combination can only time out; it must be refused *before* the
-// endpoint is created rather than after burning the whole timeout.
-func TestRunCreate_WaitRequiresWarmWorker(t *testing.T) {
+// --wait at --workers-min 0 warns but still runs. ai-api floors workersStandby
+// to 5 whenever workersMax > 1 (pkg/graphql/aiapi.go finalEndpoint), Sync then
+// launches cache workers to fill it (pkg/worker/sync.go) and /health counts a
+// cached worker as ready (pkg/api/health.go), so the wait is satisfiable — this
+// used to be refused on the false premise that nothing is ever provisioned.
+func TestRunCreate_WaitAtZeroMinWorkersWarnsAndStillWaits(t *testing.T) {
 	snapshotCreateFlags(t)
 	createWait = true
 	createWorkersMin = 0
-	// the guard is supposed to return before any wait happens; keep the wait cheap
-	// anyway so that if it ever stops guarding, this test fails in milliseconds
-	// instead of hanging on the 10m default until `go test` panics.
 	createWaitTimeout = "1ms"
 	oldInterval := waitPollInterval
 	waitPollInterval = time.Millisecond
@@ -391,15 +390,22 @@ func TestRunCreate_WaitRequiresWarmWorker(t *testing.T) {
 	newServerlessCreateClient = func() (serverlessCreateClient, error) { return client, nil }
 	t.Cleanup(func() { newServerlessCreateClient = oldFactory })
 
-	err := runCreate(mockCreateCommand(), nil)
-	if err == nil || !strings.Contains(err.Error(), "--wait needs --workers-min 1 or more") {
-		t.Fatalf("error = %v, want the workers-min explanation", err)
+	cmd := mockCreateCommand()
+	var stderr bytes.Buffer
+	cmd.SetErr(&stderr)
+
+	err := runCreate(cmd, nil)
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("error = %v, want a wait timeout (the wait must run, not be refused)", err)
 	}
-	if client.createInput != nil {
-		t.Fatal("the endpoint must not be created when --wait can never succeed")
+	if !strings.Contains(stderr.String(), "--workers-min 0") {
+		t.Errorf("stderr = %q, want a note about --workers-min 0", stderr.String())
 	}
-	if client.healthCalls != 0 {
-		t.Fatalf("health was polled %d times, want 0", client.healthCalls)
+	if client.createInput == nil {
+		t.Error("the endpoint must still be created")
+	}
+	if client.healthCalls == 0 {
+		t.Error("health must still be polled")
 	}
 }
 
@@ -422,8 +428,11 @@ func TestRunCreate_Wait(t *testing.T) {
 				{Initializing: 1},
 				{Ready: 1, Idle: 1},
 			},
-			wantPolls:  2,
-			wantStderr: "ready after",
+			wantPolls: 2,
+			// the success line has to name which counter satisfied the wait: ready and
+			// running are both accepted, and running is true of a merely-scheduled
+			// worker, so an unattributed "ready after" is not evidence of anything.
+			wantStderr: "ready after 0s: workers ready 1, running 0",
 		},
 		{
 			name:        "times out with the worker counts and the endpoint id",
@@ -541,10 +550,13 @@ func TestRunCreate_WaitAbortsOnUnauthorized(t *testing.T) {
 	snapshotCreateFlags(t)
 	createWait = true
 	createWorkersMin = 1
-	createWaitTimeout = "10m"
+	// a tiny budget as well as a huge interval: healthCalls == 1 still proves the
+	// fail-fast, but a regression fails in 300ms instead of hanging on the 10m
+	// default until `go test` panics.
+	createWaitTimeout = "300ms"
 
 	oldInterval := waitPollInterval
-	waitPollInterval = time.Hour // a second poll would hang the test
+	waitPollInterval = time.Hour
 	t.Cleanup(func() { waitPollInterval = oldInterval })
 
 	client := &mockServerlessCreateClient{

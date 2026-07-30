@@ -128,7 +128,7 @@ until it is actually usable instead, so there is no poll loop to write.
 # returns when ssh answers, not when the pod is scheduled
 runpodctl pod create --image <img> --gpu-id "NVIDIA GeForce RTX 4090" --wait
 
-# returns when the endpoint has a worker that can take a job
+# returns when the endpoint's health reports a ready or running worker
 runpodctl serverless create --template-id <id> --workers-min 1 --wait
 
 # give up sooner than the 10m default
@@ -140,7 +140,7 @@ what each one waits for, precisely:
 | command | ready means |
 | --- | --- |
 | `pod create --wait` | the pod's public port 22 accepts a tcp connection **and** answers with an ssh protocol banner. no key and no handshake, so it works before `runpodctl doctor` has ever run — it proves sshd is up, not that your key is installed. port 22 merely *appearing* in `runtime.ports` is not enough: prod allocates that port for images that run no sshd at all |
-| `serverless create --wait` | the endpoint's `/health` reports at least one worker `ready` or `running` |
+| `serverless create --wait` | the endpoint's `/health` reports at least one worker `ready` or `running`. neither counter is quite "a hot handler", and `/health` exposes no stronger one: a `ready` worker is flashboot-cached (its record reads `desiredStatus: EXITED`), so the first request resumes it, and `running` is written when a worker is *scheduled*, before its container exists. `running` still has to count, because a `--workers-min` worker stays `RUNNING` for its whole life and never appears in `ready` |
 
 - progress goes to **stderr** on a 15s cadence; stdout stays exactly one json
   object, so `... 2>/dev/null | jq` sees a single payload.
@@ -152,10 +152,10 @@ what each one waits for, precisely:
   need the id to debug or clean up. the exit code is non-zero and the error
   carries the id, the last known state and the delete command, with code
   `wait_timeout` / `wait_interrupted`.
-- `serverless create --wait` requires `--workers-min 1` or more. at `0` runpod
-  starts no worker until a request arrives, so "a worker is ready" could never
-  become true; the cli refuses up front instead of timing out. a warm worker
-  bills while it runs.
+- `serverless create --wait` warns at `--workers-min 0` but still waits. runpod
+  does fill a standby pool at 0 min workers whenever `--workers-max` is above 1,
+  and `/health` counts those cached workers as `ready` — it is just slower and less
+  certain than `--workers-min 1`, which starts (and bills for) a worker right away.
 - `pod create --wait` needs ssh, so it cannot be combined with `--ssh=false`. two
   combinations warn on stderr instead of failing, because they are satisfiable but
   often are not:
@@ -168,9 +168,16 @@ what each one waits for, precisely:
 - a transient api failure during a wait does **not** end it: the poll error is
   reported as the current state and polling continues to the deadline, because the
   resource already exists and bills. only a failure that cannot resolve stops the
-  wait early — bad credentials (`unauthorized`, `forbidden`, `no_credentials`), a
-  rejected request (`bad_request`), a pod in a terminal state (`conflict`) or a pod
-  that disappeared mid-wait (`not_found`).
+  wait early:
+  - bad credentials or a rejected request — http `400`/`401`/`403`, or the codes
+    `unauthorized` / `forbidden` / `no_credentials` / `bad_request`. the pod wait
+    reads graphql, whose failures all carry the code `graphql_error`, so there the
+    decision is made on the http status and the emitted code stays `graphql_error`.
+  - a pod in a terminal state (`conflict`), or a resource that two consecutive
+    reads no longer list (`not_found` — one missing read is treated as an unknown
+    state, not a deletion).
+  - `404`, `429` and `5xx` stay transient on purpose: `/health` 404s an endpoint id
+    the invoke service has not propagated yet.
 
 ### file transfer
 

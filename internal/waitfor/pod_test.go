@@ -174,7 +174,8 @@ func TestPodSSHPollerFailsFastOnTerminalStatus(t *testing.T) {
 
 // A pod that vanishes mid-wait (terminated out of band, or the account ran out
 // of credit) must not be waited on for the rest of the budget, and must not be
-// reported as "still billing".
+// reported as "still billing" — but it takes two consecutive misses, because one
+// short list read is an unknown state like any other tolerated anomaly.
 func TestPodSSHPollerFailsFastWhenPodDisappears(t *testing.T) {
 	lister := &fakePodLister{pods: []*api.LegacyPod{podWithSSHPort("pod-1", "RUNNING", 8888, 20000, true)}}
 	poll := PodSSHPoller(lister, "pod-1", nil, nil)
@@ -184,13 +185,60 @@ func TestPodSSHPollerFailsFastWhenPodDisappears(t *testing.T) {
 	}
 
 	lister.pods = nil
-	_, err := poll(context.Background())
+	state, err := poll(context.Background())
+	if err != nil {
+		t.Fatalf("the first miss must be tolerated, got %v", err)
+	}
+	if state.Ready {
+		t.Error("a missing pod must not read as ready")
+	}
+	if !strings.Contains(state.Detail, "not listed") {
+		t.Errorf("detail = %q, want it to mention the pod was not listed", state.Detail)
+	}
+
+	_, err = poll(context.Background())
 	var fatal *FatalError
 	if !errors.As(err, &fatal) {
-		t.Fatalf("expected a fatal error once the pod disappeared, got %v", err)
+		t.Fatalf("expected a fatal error once the pod disappeared twice, got %v", err)
 	}
 	if fatal.ErrorCode() != "not_found" {
 		t.Errorf("code = %q, want not_found", fatal.ErrorCode())
+	}
+}
+
+// A single short list read is transient: the pod coming back must reset the miss
+// counter, so a wait is never ended by one blip.
+func TestPodSSHPollerRecoversFromASingleMissedRead(t *testing.T) {
+	pod := podWithSSHPort("pod-1", "RUNNING", 22, 20000, true)
+	lister := &fakePodLister{pods: []*api.LegacyPod{pod}}
+	poll := PodSSHPoller(lister, "pod-1", func(context.Context, string) error { return nil }, nil)
+
+	if _, err := poll(context.Background()); err != nil {
+		t.Fatalf("unexpected error on the first poll: %v", err)
+	}
+	lister.pods = nil
+	if _, err := poll(context.Background()); err != nil {
+		t.Fatalf("the first miss must be tolerated, got %v", err)
+	}
+	lister.pods = []*api.LegacyPod{pod}
+	if _, err := poll(context.Background()); err != nil {
+		t.Fatalf("unexpected error after the pod reappeared: %v", err)
+	}
+	lister.pods = nil
+	if _, err := poll(context.Background()); err != nil {
+		t.Fatalf("the miss counter must reset when the pod reappears, got %v", err)
+	}
+}
+
+// graphql lists are nullable; a null entry must not panic the poller.
+func TestPodSSHPollerSkipsNullListEntries(t *testing.T) {
+	lister := &fakePodLister{pods: []*api.LegacyPod{nil, podWithSSHPort("pod-1", "RUNNING", 22, 20000, true)}}
+	state, err := PodSSHPoller(lister, "pod-1", func(context.Context, string) error { return nil }, nil)(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !state.Ready {
+		t.Errorf("state = %+v, want ready", state)
 	}
 }
 

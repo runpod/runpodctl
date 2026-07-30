@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"time"
 )
 
@@ -96,6 +97,23 @@ var fatalPollCodes = map[string]bool{
 	"bad_request":    true,
 }
 
+// fatalPollStatuses are the http statuses that mean the *request* is wrong, so
+// every retry is answered identically.
+//
+// Codes alone are not enough: the pod wait's only api call is graphql GetPods(),
+// and every graphql failure is an *api.GraphQLError whose ErrorCode() is the
+// constant "graphql_error" — so none of fatalPollCodes above is reachable on
+// that path. Prod graphql answers a bad key with http 401 (probed), which
+// without this check would burn the entire wait budget while the pod bills and
+// then report wait_timeout instead of the auth failure. 404/429/5xx stay
+// transient on purpose; so does a graphql 200 whose body carries an errors
+// array, which has no status to judge.
+var fatalPollStatuses = map[int]bool{
+	http.StatusBadRequest:   true,
+	http.StatusUnauthorized: true,
+	http.StatusForbidden:    true,
+}
+
 // isFatalPollError reports whether err should end the wait immediately.
 func isFatalPollError(err error) bool {
 	var fatal *FatalError
@@ -103,8 +121,12 @@ func isFatalPollError(err error) bool {
 		return true
 	}
 	var coder interface{ ErrorCode() string }
-	if errors.As(err, &coder) {
-		return fatalPollCodes[coder.ErrorCode()]
+	if errors.As(err, &coder) && fatalPollCodes[coder.ErrorCode()] {
+		return true
+	}
+	var statuser interface{ HTTPStatus() int }
+	if errors.As(err, &statuser) && fatalPollStatuses[statuser.HTTPStatus()] {
+		return true
 	}
 	return false
 }
@@ -216,7 +238,11 @@ func Until(ctx context.Context, poll PollFunc, opts Options) (State, error) {
 		elapsed := now().Sub(start)
 
 		if state.Ready {
-			printf("%s ready after %s", opts.Label, elapsed.Round(time.Second))
+			// the detail goes on the success line too, not only the failure ones: a
+			// readiness predicate can be satisfied by more than one signal (the
+			// endpoint poll accepts ready *or* running workers), and without it
+			// neither an operator nor a test can tell which one fired.
+			printf("%s ready after %s: %s", opts.Label, elapsed.Round(time.Second), detailOr(state.Detail))
 			return state, nil
 		}
 

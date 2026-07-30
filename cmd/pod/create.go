@@ -309,7 +309,10 @@ func podDetailsWithSSH(podID, addr string) (*podDetails, error) {
 		if attempt > 1 {
 			time.Sleep(postWaitReadBackoff)
 		}
-		details, err := fetchPodDetailsFn(podID, false, false)
+		// includeMachine: the graphql create response this replaces selected
+		// machine { gpuDisplayName location }, so without it --wait would hand back
+		// strictly less than a plain create did.
+		details, err := fetchPodDetailsFn(podID, true, false)
 		switch {
 		case err != nil:
 			reason = err

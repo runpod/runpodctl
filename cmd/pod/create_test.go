@@ -333,8 +333,10 @@ func TestWaitForPodSSH(t *testing.T) {
 		if lister.calls != 1 {
 			t.Errorf("polled %d times, want 1", lister.calls)
 		}
-		if !strings.Contains(stderr.String(), "ssh on pod pod-1 ready after") {
-			t.Errorf("progress must go to stderr: %q", stderr.String())
+		// the success line names the address that answered, so the run is
+		// self-evidencing rather than just "ready".
+		if !strings.Contains(stderr.String(), "ssh on pod pod-1 ready after 0s: ssh reachable at 1.2.3.4:51227") {
+			t.Errorf("progress must go to stderr and name the address: %q", stderr.String())
 		}
 	})
 
@@ -447,13 +449,16 @@ func TestWaitForPodSSHInterrupted(t *testing.T) {
 func TestWaitForPodSSHFailsFastOnATerminalPod(t *testing.T) {
 	oldLister, oldProbe, oldInterval := newPodWaitLister, podSSHProbe, waitPollInterval
 	t.Cleanup(func() { newPodWaitLister, podSSHProbe, waitPollInterval = oldLister, oldProbe, oldInterval })
-	waitPollInterval = time.Hour // any poll after the first would hang the test
+	waitPollInterval = time.Hour // any poll after the first would sleep out the budget
 
 	lister := &fakePodLister{pods: []*api.LegacyPod{{ID: "pod-1", DesiredStatus: "EXITED"}}}
 	newPodWaitLister = func() (waitfor.PodLister, error) { return lister, nil }
 
 	cmd, _ := waitCommand()
-	_, err := waitForPodSSH(cmd, "pod-1", time.Hour)
+	// a tiny timeout as well as a huge interval: the fail-fast still proves itself
+	// with calls == 1, but a regression fails in 300ms with a wait_timeout instead
+	// of hanging until `go test` panics after 10 minutes.
+	_, err := waitForPodSSH(cmd, "pod-1", 300*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected an error for an exited pod")
 	}

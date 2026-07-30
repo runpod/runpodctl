@@ -49,7 +49,7 @@ examples:
   # create from a hub repo and attach a model
   runpodctl serverless create --hub-id <id> --gpu-id "NVIDIA GeForce RTX 4090" --model-reference https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct:main
 
-  # block until a worker is ready (needs a warm worker, which bills while it runs)
+  # block until a worker is ready (--workers-min 1 starts one now, and bills for it)
   runpodctl serverless create --template-id <id> --gpu-id "NVIDIA GeForce RTX 4090" --workers-min 1 --wait
 
   # override or add env vars (hub defaults are included automatically)
@@ -123,7 +123,7 @@ func init() {
 	createCmd.Flags().IntVar(&createExecutionTimeout, "execution-timeout", -1, "max seconds per request")
 	createCmd.Flags().StringVar(&createNetworkVolumeIDs, "network-volume-ids", "", "comma-separated network volume ids for multi-region")
 	createCmd.Flags().StringArrayVar(&createModelReferences, "model-reference", nil, "hugging face model url with a ref to cache on the endpoint, e.g. https://huggingface.co/<org>/<model>:main; works with --template-id or --hub-id, gpu only (repeatable)")
-	createCmd.Flags().BoolVar(&createWait, "wait", false, "block until the endpoint's health reports a ready worker; requires --workers-min 1 or more")
+	createCmd.Flags().BoolVar(&createWait, "wait", false, "block until the endpoint's health reports a worker ready or running. a ready worker may be flashboot-cached, so the first request still resumes it; --workers-min 1 is the fastest way to get one")
 	createCmd.Flags().StringVar(&createWaitTimeout, "wait-timeout", defaultWaitTimeout, "max time to wait with --wait, e.g. 90s, 10m, 1h; on timeout the endpoint is kept and the error carries its id")
 }
 
@@ -417,18 +417,23 @@ func resolveWaitTimeout(cmd *cobra.Command) (time.Duration, error) {
 		return 0, nil
 	}
 
-	// "wait for a ready worker" is unsatisfiable by construction at workersMin 0:
-	// runpod provisions no worker until a request arrives, so the wait could only
-	// ever time out. auto-raising workersMin would silently start billing a warm
-	// gpu the user did not ask for, so refuse and say why instead.
-	if createWorkersMin < 1 {
-		return 0, fmt.Errorf("--wait needs --workers-min 1 or more: at 0 min workers runpod starts no worker until a request arrives, so none ever becomes ready (a warm worker bills while it runs)")
-	}
-
 	timeout, err := duration.Parse(createWaitTimeout)
 	if err != nil {
 		return 0, fmt.Errorf("invalid --wait-timeout: %w", err)
 	}
+
+	// --workers-min 0 is satisfiable, so it warns rather than refusing: ai-api
+	// floors workersStandby to 5 whenever workersMax > 1 regardless of workersMin
+	// (pkg/graphql/aiapi.go finalEndpoint), worker.Sync then launches cache
+	// workers to fill standby (pkg/worker/sync.go), and /health counts a cached
+	// worker as ready (pkg/api/health.go). Verified live: six endpoints on a prod
+	// account, all with workersMin unset, report ready 1-5 with running 0.
+	// It is still slower and less certain than an explicit warm worker, hence the
+	// note; refusing would break the flag's most common invocation.
+	if createWorkersMin < 1 {
+		fmt.Fprintln(cmd.ErrOrStderr(), "note: at --workers-min 0 no worker is guaranteed to start; runpod only fills a standby pool when --workers-max is above 1, so --wait may take longer or time out. --workers-min 1 starts (and bills) a worker immediately")
+	}
+
 	return timeout, nil
 }
 
@@ -436,8 +441,9 @@ func resolveWaitTimeout(cmd *cobra.Command) (time.Duration, error) {
 // wait actually registers for ctrl-c.
 var notifyWaitSignals = signal.NotifyContext
 
-// waitForReadyWorker blocks until the endpoint has a worker that can take a job.
-// Progress goes to stderr so stdout stays a single json object.
+// waitForReadyWorker blocks until the endpoint's /health reports a worker ready
+// or running (see waitfor.EndpointWorkerPoller for what each counter actually
+// proves). Progress goes to stderr so stdout stays a single json object.
 func waitForReadyWorker(cmd *cobra.Command, client serverlessCreateClient, endpointID string, timeout time.Duration) error {
 	ctx := cmd.Context()
 	if ctx == nil {

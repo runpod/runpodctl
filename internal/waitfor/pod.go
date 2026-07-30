@@ -27,6 +27,13 @@ var terminalPodStatuses = map[string]bool{
 	"DEAD":       true,
 }
 
+// missesBeforeGone is how many consecutive reads must omit the resource before a
+// wait calls it deleted. One is not enough: the same read is tolerated as
+// "unknown" for every other kind of anomaly, and an eventually-consistent list
+// query that briefly omits a live pod would otherwise produce a not_found whose
+// message asserts the pod was terminated.
+const missesBeforeGone = 2
+
 // PodSSHPoller polls until pod podID is running, has a public ssh port, and that
 // port answers with an ssh banner. Pass a nil probe to use ProbeSSH.
 //
@@ -37,6 +44,7 @@ func PodSSHPoller(lister PodLister, podID string, probe Prober, addr *string) Po
 		probe = ProbeSSH
 	}
 	seen := false
+	missed := 0
 	return func(ctx context.Context) (State, error) {
 		pods, err := lister.GetPods()
 		if err != nil {
@@ -52,9 +60,17 @@ func PodSSHPoller(lister PodLister, podID string, probe Prober, addr *string) Po
 		}
 		if pod == nil {
 			if seen {
-				// it was there and now it is not: terminated out of band, or the
-				// account ran out of credit. waiting for it is pointless, and claiming
-				// it is still billing would be a lie.
+				missed++
+				if missed < missesBeforeGone {
+					// one short list is an unknown state, not a verdict: every other
+					// anomaly here (5xx, malformed json, a network blip) is tolerated to
+					// the deadline because the pod exists and bills, and declaring it
+					// deleted on a single read would state that as fact.
+					return State{Detail: "pod not listed in the last read"}, nil
+				}
+				// gone from two reads in a row: terminated out of band, or the account
+				// ran out of credit. waiting for it is pointless, and claiming it is
+				// still billing would be a lie.
 				return State{}, &FatalError{
 					Code: "not_found",
 					Err:  fmt.Errorf("pod %s is no longer listed, so it was terminated or deleted while waiting", podID),
@@ -64,6 +80,7 @@ func PodSSHPoller(lister PodLister, podID string, probe Prober, addr *string) Po
 			return State{Detail: "pod not listed yet"}, nil
 		}
 		seen = true
+		missed = 0
 
 		if terminalPodStatuses[strings.ToUpper(pod.DesiredStatus)] {
 			return State{}, &FatalError{
