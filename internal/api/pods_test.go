@@ -94,6 +94,96 @@ func TestGetPod(t *testing.T) {
 	}
 }
 
+func TestGetPod_IncludeNetworkVolumeSurvivesToOutput(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("includeNetworkVolume"); got != "true" {
+			t.Errorf("expected includeNetworkVolume=true, got %q", r.URL.RawQuery)
+		}
+		w.Write([]byte(`{
+			"id": "pod-123",
+			"name": "my-pod",
+			"networkVolumeId": "vol-123",
+			"networkVolume": {
+				"id": "vol-123",
+				"name": "my-volume",
+				"dataCenterId": "US-TX-1",
+				"size": 10
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+
+	client, _ := NewClient()
+	client.baseURL = server.URL
+
+	pod, err := client.GetPod("pod-123", false, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	printed, err := json.Marshal(pod)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got map[string]interface{}
+	if err := json.Unmarshal(printed, &got); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got["networkVolumeId"] != "vol-123" {
+		t.Errorf("expected networkVolumeId vol-123, got %v", got["networkVolumeId"])
+	}
+
+	volume, ok := got["networkVolume"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("network volume missing from pod output: %s", printed)
+	}
+	if volume["name"] != "my-volume" {
+		t.Errorf("expected my-volume, got %v", volume["name"])
+	}
+	if volume["dataCenterId"] != "US-TX-1" {
+		t.Errorf("expected US-TX-1, got %v", volume["dataCenterId"])
+	}
+	if volume["size"] != float64(10) {
+		t.Errorf("expected size 10, got %v", volume["size"])
+	}
+}
+
+func TestGetPod_OmitsNetworkVolumeWhenAbsent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"id": "pod-123", "name": "my-pod"}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+
+	client, _ := NewClient()
+	client.baseURL = server.URL
+
+	pod, err := client.GetPod("pod-123", false, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	printed, err := json.Marshal(pod)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got map[string]interface{}
+	if err := json.Unmarshal(printed, &got); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, present := got["networkVolumeId"]; present {
+		t.Errorf("expected networkVolumeId to be omitted for a pod without a network volume, got %s", printed)
+	}
+	if _, present := got["networkVolume"]; present {
+		t.Errorf("expected networkVolume to be omitted for a pod without a network volume, got %s", printed)
+	}
+}
+
 func TestCreatePod(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
