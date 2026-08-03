@@ -147,18 +147,23 @@ unrecognized one is rejected rather than silently falling back to json:
 ```
 
 validation applies to every command that runs, including the ones that don't
-honor the flag: the legacy `get pod`, `get cloud` and `get models` print a table
-unconditionally and ignore the *value* of `--output`, but `get pod --output=table`
-is still rejected. so is an invalid `--output` on `exec` and `config` — that is
-what stops `config` from saving your api key and generating and uploading an ssh
-key on an invocation that should have failed.
+honor the flag. `get pod` and `get cloud` print a table, and the legacy
+`create/remove/start/stop pod` and `create/remove pods` print plaintext; all of
+them ignore the *value* of `--output`, but `get pod --output=table` is still
+rejected. (`get models` is not in that set — it honors `--output` like any
+current command.) an invalid `--output` on `exec` or `config` is rejected too.
 
 the paths that never emit data are exempt, because cobra resolves them before any
 validation runs: `--help` anywhere on the line, `help <cmd>`, a bare parent like
 `runpodctl pod`, `--version`/`-v`, and shell completion all still work with a bad
-`--output`. note also that a default `~/.runpod/config.toml` is created on first
-run before the flag is checked, so a rejected invocation can still create that
-file — it just won't contain anything you passed.
+`--output`.
+
+being rejected does not mean nothing was written. `initConfig` runs ahead of the
+whole hook chain, so on a first run it still creates `~/.runpod/config.toml` — and
+because `config` binds `--apiKey` into viper at init, a rejected
+`config --apiKey=… --output=table` persists that key anyway. what rejection does
+prevent is the `config` body: no ssh keypair is generated and none is uploaded.
+an already-readable config is left alone.
 
 ### error format
 
@@ -202,11 +207,13 @@ carry no `code`:
 | surface | shape |
 | --- | --- |
 | legacy `get/create/remove/start/stop pod`, `create/remove pods`, `get cloud` | `Error: <msg>` via cobra, exit 1 |
-| `exec` | progress on **stdout**, error plaintext on stderr, and exits **0** — it uses `Run`, not `RunE`, so the error never reaches the sink. also polls up to 5 minutes (`maxPollTime`) for the pod's ssh info before giving up |
-| `project` | prints to **stdout** and exits 0 (bug, tracked as CON-816) |
+| `exec` | *runtime* errors only: progress on **stdout**, error plaintext on stderr, and exits **0** — it uses `Run`, not `RunE`, so the error never reaches the sink. also polls up to 5 minutes (`maxPollTime`) for the pod's ssh info before giving up. a bad `--output` is the exception: that is a usage error, so it gets the json shape and exit 1 |
+| `project` | prints to **stdout** and exits 0 |
 
 so a parser should tolerate a non-json line on stderr from those, and must not
-rely on the exit code for `exec` or `project` until CON-816 lands.
+rely on the exit code for a runtime failure in `exec` or `project`. `project` is
+slated for deletion rather than repair (CON-874, which supersedes CON-816);
+`exec`'s exit code has no ticket yet.
 
 ## environment variables
 
