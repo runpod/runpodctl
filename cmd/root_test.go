@@ -145,35 +145,74 @@ func TestOutputFlagRejectsUnsupportedFormat(t *testing.T) {
 	}
 }
 
-// TestOutputFlagValidationCoverage pins the commands that define their own
-// PersistentPreRun(E). Cobra runs only the closest one, so any command listed
-// here shadows the root --output guard. The two current entries do not honor
-// --output, so nothing is lost; a NEW entry appearing here means that command
-// silently skips validation and must call output.ValidateFormat itself.
-func TestOutputFlagValidationCoverage(t *testing.T) {
-	allowed := map[string]bool{
-		"exec":   true, // legacy, prints its own deprecation notice; no --output
-		"config": true, // local config editing; no --output
+// TestOutputValidationSurvivesShadowingHook covers the case a subcommand's own
+// PersistentPreRun(E) used to bypass: without cobra.EnableTraverseRunHooks only
+// the closest hook runs, so `exec` and `config` (both define one for their
+// deprecation notice) reached their bodies with an unvalidated --output. For
+// `config` that meant writing the config file and uploading an ssh key on an
+// invocation that should have been rejected.
+//
+// The stand-in command below keeps the test off those real bodies; a regression
+// makes it run instead of hanging on the network or mutating local state.
+func TestOutputValidationSurvivesShadowingHook(t *testing.T) {
+	if !cobra.EnableTraverseRunHooks {
+		t.Fatal("cobra.EnableTraverseRunHooks must stay set, otherwise a subcommand that defines PersistentPreRun(E) shadows the root --output guard")
 	}
 
-	var shadowing []string
-	var walk func(*cobra.Command)
-	walk = func(c *cobra.Command) {
-		for _, sub := range c.Commands() {
-			if sub.PersistentPreRun != nil || sub.PersistentPreRunE != nil {
-				if !allowed[sub.Name()] {
-					shadowing = append(shadowing, sub.CommandPath())
-				}
-			}
-			walk(sub)
-		}
-	}
-	walk(GetRootCmd())
+	root := GetRootCmd()
+	original := outputFormat
+	t.Cleanup(func() {
+		outputFormat = original
+		//nolint:errcheck // restoring the flag so later tests see the default
+		root.PersistentFlags().Set("output", "json")
+		root.SetArgs(nil)
+		root.SetOut(nil)
+		root.SetErr(nil)
+	})
 
-	if len(shadowing) > 0 {
-		t.Errorf("these commands shadow the root --output validation and must call "+
-			"output.ValidateFormat themselves (or be added to the allowlist with a reason): %v",
-			shadowing)
+	var ownHookRan, bodyRan bool
+	shadow := &cobra.Command{
+		Use:    "shadow-hook-test",
+		Hidden: true,
+		// shadows the root hook, the way exec and config do
+		PersistentPreRun: func(*cobra.Command, []string) { ownHookRan = true },
+		RunE: func(*cobra.Command, []string) error {
+			bodyRan = true
+			return nil
+		},
+	}
+	root.AddCommand(shadow)
+	t.Cleanup(func() { root.RemoveCommand(shadow) })
+
+	var out, errOut bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&errOut)
+
+	root.SetArgs([]string{"shadow-hook-test", "--output=table"})
+	err := root.Execute()
+	if bodyRan {
+		t.Error("command body ran with --output=table; the root validation was skipped")
+	}
+	var ue *usageError
+	if !errors.As(err, &ue) {
+		t.Fatalf("expected a *usageError, got %T (%v)", err, err)
+	}
+	if ue.ErrorCode() != "usage_error" {
+		t.Errorf("code = %q, want usage_error", ue.ErrorCode())
+	}
+
+	// traversing must add the root hook, not replace the subcommand's own — exec
+	// and config print their deprecation notice from theirs.
+	ownHookRan, bodyRan = false, false
+	root.SetArgs([]string{"shadow-hook-test", "--output=yaml"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("--output=yaml: expected nil, got %v", err)
+	}
+	if !ownHookRan {
+		t.Error("the subcommand's own PersistentPreRun did not run")
+	}
+	if !bodyRan {
+		t.Error("the subcommand body did not run")
 	}
 }
 

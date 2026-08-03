@@ -86,17 +86,17 @@ func init() {
 	rootCmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
 		return &usageError{cmd: c, err: err}
 	})
+	// by default cobra runs only the *closest* PersistentPreRun(E), so a
+	// subcommand that defines one (exec and config both do, for their deprecation
+	// notices) would shadow the --output guard below and run its body with an
+	// unvalidated value. traversing runs the root hook first, then the
+	// subcommand's, for every command in the tree.
+	cobra.EnableTraverseRunHooks = true
 	// reject an unsupported --output before any command body runs, so a typo
 	// fails loudly instead of silently returning json. wrapped as a usageError
 	// because it is an invocation mistake, not a runtime failure — the message
 	// deliberately names the flag rather than starting with a word in
 	// usageErrorPrefixes, so classification comes from the type, not the string.
-	//
-	// NOTE: cobra runs only the closest PersistentPreRun(E), so a subcommand that
-	// defines its own shadows this. `exec` and `config` do; neither honors
-	// --output, so nothing is lost, but a new subcommand that defines one must
-	// call output.ValidateFormat itself. TestOutputFlagValidationCoverage pins the
-	// current set so a new shadowing command shows up as a test failure.
 	rootCmd.PersistentPreRunE = func(c *cobra.Command, _ []string) error {
 		if err := output.ValidateFormat(outputFormat); err != nil {
 			return &usageError{cmd: c, err: err}
