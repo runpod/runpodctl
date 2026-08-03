@@ -159,12 +159,25 @@ func TestOutputValidationSurvivesShadowingHook(t *testing.T) {
 		t.Fatal("cobra.EnableTraverseRunHooks must stay set, otherwise a subcommand that defines PersistentPreRun(E) shadows the root --output guard")
 	}
 
+	// This is the only test in the package that runs a *runnable* command, which
+	// means it is the only one that reaches cobra.OnInitialize(initConfig) —
+	// cobra's --help path returns before the initializers. initConfig writes
+	// ~/.runpod/config.toml when it cannot read one, so without redirecting HOME
+	// `go test` would create (or, on an unreadable config, overwrite and thereby
+	// destroy the api key in) the real one. USERPROFILE covers windows, where
+	// os.UserHomeDir reads that instead.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
 	root := GetRootCmd()
-	original := outputFormat
 	t.Cleanup(func() {
-		outputFormat = original
+		// pflag writes through to &outputFormat, so setting the flag restores the
+		// var too — assigning outputFormat separately would be redundant. Reset
+		// Changed as well, so a later test can't mistake this for a user-set flag.
 		//nolint:errcheck // restoring the flag so later tests see the default
 		root.PersistentFlags().Set("output", "json")
+		root.PersistentFlags().Lookup("output").Changed = false
 		root.SetArgs(nil)
 		root.SetOut(nil)
 		root.SetErr(nil)
@@ -213,6 +226,14 @@ func TestOutputValidationSurvivesShadowingHook(t *testing.T) {
 	}
 	if !bodyRan {
 		t.Error("the subcommand body did not run")
+	}
+
+	// `help <cmd>` stays reachable with a bad --output. It is the one help path
+	// that runs as a normal command, so it is the only one the guard could break;
+	// `--help` and a bare parent return before the hooks on their own.
+	root.SetArgs([]string{"help", "pod", "--output=table"})
+	if err := root.Execute(); err != nil {
+		t.Errorf("help with an invalid --output should still print help, got %v", err)
 	}
 }
 

@@ -98,6 +98,14 @@ func init() {
 	// deliberately names the flag rather than starting with a word in
 	// usageErrorPrefixes, so classification comes from the type, not the string.
 	rootCmd.PersistentPreRunE = func(c *cobra.Command, _ []string) error {
+		// `help <cmd>` is exempt: it emits help text, never json or yaml, and every
+		// other help path already skips this guard because cobra returns before the
+		// hooks for --help. rejecting only this one spelling would mean a bad
+		// --output somewhere in your history stops you from reading the help that
+		// tells you which values are valid.
+		if c.Name() == "help" {
+			return nil
+		}
 		if err := output.ValidateFormat(outputFormat); err != nil {
 			return &usageError{cmd: c, err: err}
 		}
