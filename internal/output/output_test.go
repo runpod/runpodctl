@@ -56,16 +56,20 @@ func TestParseFormat(t *testing.T) {
 }
 
 func TestValidateFormat(t *testing.T) {
-	valid := []string{"json", "yaml", "JSON", "YAML", "Yaml", " yaml ", ""}
+	valid := []string{"json", "yaml", "JSON", "YAML", "Yaml", " yaml "}
 	for _, s := range valid {
-		if s == "" {
-			// the flag defaults to "json", so an empty value only reaches here if a
-			// caller passes one explicitly; it must not be rejected.
-			continue
-		}
 		if err := ValidateFormat(s); err != nil {
 			t.Errorf("ValidateFormat(%q) = %v, want nil", s, err)
 		}
+	}
+
+	// the flag defaults to "json", so "" is never the value of an omitted flag —
+	// it only happens when someone writes `--output=`, which is a mistake and is
+	// rejected like any other unsupported value. (checked separately from the
+	// table below because the "error quotes the value" assertion there is vacuous
+	// for the empty string.)
+	if err := ValidateFormat(""); err == nil {
+		t.Error(`ValidateFormat("") = nil, want an error: an explicit --output= is a usage mistake`)
 	}
 
 	// `table` never existed as an output format but used to be accepted silently,
