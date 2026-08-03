@@ -3,6 +3,8 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -234,6 +236,64 @@ func TestOutputValidationSurvivesShadowingHook(t *testing.T) {
 	root.SetArgs([]string{"help", "pod", "--output=table"})
 	if err := root.Execute(); err != nil {
 		t.Errorf("help with an invalid --output should still print help, got %v", err)
+	}
+}
+
+// TestExecAndConfigRejectInvalidOutput drives the two real commands that were
+// bypassing the guard, not a stand-in. The test above proves the mechanism, and
+// since EnableTraverseRunHooks is a package global the mechanism necessarily
+// covers these — but nothing otherwise pins that they are still registered under
+// a root that carries the hook, or that neither has grown a local --output flag
+// or DisableFlagParsing, both of which would silently reopen the hole.
+//
+// Safe to run because validation happens before either body: `config` would
+// otherwise generate an ssh keypair and upload it, and `exec` would poll for five
+// minutes, so a regression here shows up as a slow failure rather than a wrong
+// pass. HOME is redirected because initConfig writes a config file regardless of
+// the outcome — see TestOutputValidationSurvivesShadowingHook.
+func TestExecAndConfigRejectInvalidOutput(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	root := GetRootCmd()
+	t.Cleanup(func() {
+		//nolint:errcheck // restoring the flag so later tests see the default
+		root.PersistentFlags().Set("output", "json")
+		root.PersistentFlags().Lookup("output").Changed = false
+		root.SetArgs(nil)
+		root.SetOut(nil)
+		root.SetErr(nil)
+	})
+
+	var out, errOut bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&errOut)
+
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"config", []string{"config", "--apiKey=must-not-be-used", "--output=table"}},
+		{"exec python", []string{"exec", "python", "--output=table", "/nonexistent.py"}},
+	} {
+		root.SetArgs(tc.args)
+		err := root.Execute()
+		var ue *usageError
+		if !errors.As(err, &ue) {
+			t.Errorf("%s with --output=table: expected a *usageError, got %T (%v)", tc.name, err, err)
+			continue
+		}
+		if ue.ErrorCode() != "usage_error" {
+			t.Errorf("%s: code = %q, want usage_error", tc.name, ue.ErrorCode())
+		}
+	}
+
+	// the ssh keypair is the part of config's body that rejection actually
+	// prevents; the api key is persisted by initConfig either way, which is why
+	// this asserts on the key directory rather than on config.toml.
+	if entries, err := os.ReadDir(filepath.Join(home, ".runpod", "ssh")); err == nil && len(entries) > 0 {
+		t.Errorf("config generated ssh keys despite being rejected: %v", entries)
 	}
 }
 
