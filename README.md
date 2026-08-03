@@ -404,19 +404,22 @@ treat the list as the set the cli generates rather than an exhaustive one.
 
 **known gaps.** the json error shape covers `pod`, `serverless`, `template`,
 `volume`, `registry`, `gpu`, `datacenter`, `billing`, `user`, `model`, `ssh`,
-`send`, `receive`, `hub` and `update`. these still print plaintext on stderr and
-carry no `code`:
+`send`, `receive`, `hub`, `update` and `exec`. these still print plaintext on
+stderr and carry no `code`:
 
 | surface | shape |
 | --- | --- |
 | legacy `get/create/remove/start/stop pod`, `create/remove pods`, `get cloud` | `Error: <msg>` via cobra, exit 1 |
-| `exec` | *runtime* errors only: progress on **stdout**, error plaintext on stderr, and exits **0** — it uses `Run`, not `RunE`, so the error never reaches the sink. also polls up to 5 minutes (`maxPollTime`) for the pod's ssh info before giving up. a bad `--output` is the exception: that is a usage error, so it gets the json shape and exit 1 |
 | `project` | prints to **stdout** and exits 0 |
 
 so a parser should tolerate a non-json line on stderr from those, and must not
-rely on the exit code for a runtime failure in `exec` or `project`. `project` is
-slated for deletion rather than repair (CON-874, which supersedes CON-816);
-`exec`'s exit code has no ticket yet.
+rely on the exit code for `project`, which is slated for deletion rather than
+repair (CON-874, superseding CON-816).
+
+`exec` still keeps its progress output (`Running remote Python shell...`,
+`Waiting for Pod to come online... `) on **stdout** for backwards compatibility,
+and polls up to 5 minutes (`maxPollTime`) for the pod's ssh info before giving up.
+its errors are json with a `code` and exit 1.
 
 ## environment variables
 
