@@ -172,6 +172,7 @@ type ModelVersionStatusMutationResult struct {
 type AddModelToRepoInput struct {
 	Owner               string                 `json:"owner,omitempty"`
 	Name                string                 `json:"name"`
+	HuggingFaceModel    string                 `json:"huggingFaceModel,omitempty"`
 	Provider            string                 `json:"provider,omitempty"`
 	CredentialType      string                 `json:"credentialType,omitempty"`
 	CredentialReference string                 `json:"credentialReference,omitempty"`
@@ -242,6 +243,7 @@ func AddModelToRepo(input *AddModelToRepoInput) (*Model, error) {
 	}
 
 	addString("owner", input.Owner)
+	addString("huggingFaceModel", input.HuggingFaceModel)
 	addString("provider", input.Provider)
 	addString("credentialType", input.CredentialType)
 	addString("credentialReference", input.CredentialReference)

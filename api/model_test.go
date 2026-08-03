@@ -63,6 +63,69 @@ func TestAddModelToRepoSendsProviderWhenProvided(t *testing.T) {
 	}
 }
 
+func TestAddModelToRepoSendsHuggingFaceMirrorInput(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+
+	var requestInput map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input Input
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		var ok bool
+		requestInput, ok = input.Variables["input"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("expected input variables, got %#v", input.Variables["input"])
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": map[string]interface{}{
+				"addModelToRepo": map[string]interface{}{
+					"success": true,
+					"model": map[string]interface{}{
+						"id": "model-id", "owner": "user-id", "name": "Tiny-LLM", "provider": "LOCAL",
+						"versions": []map[string]interface{}{{"hash": "version-hash", "status": "PENDING_TRANSFER"}},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+	t.Setenv("RUNPOD_GRAPHQL_URL", server.URL)
+
+	model, err := AddModelToRepo(&AddModelToRepoInput{
+		Owner:            "destination-owner",
+		Name:             "tiny-llm",
+		HuggingFaceModel: "arnir0/Tiny-LLM",
+		Metadata:         map[string]interface{}{"purpose": "test"},
+	})
+	if err != nil {
+		t.Fatalf("AddModelToRepo returned error: %v", err)
+	}
+	if got := requestInput["huggingFaceModel"]; got != "arnir0/Tiny-LLM" {
+		t.Fatalf("expected huggingFaceModel in request, got %#v", got)
+	}
+	if got := requestInput["name"]; got != "tiny-llm" {
+		t.Fatalf("expected destination name in request, got %#v", got)
+	}
+	if got := requestInput["owner"]; got != "destination-owner" {
+		t.Fatalf("expected destination owner in request, got %#v", got)
+	}
+	if _, ok := requestInput["provider"]; ok {
+		t.Fatalf("did not expect provider in request, got %#v", requestInput)
+	}
+	metadata, ok := requestInput["metadata"].(map[string]interface{})
+	if !ok || metadata["purpose"] != "test" {
+		t.Fatalf("expected metadata in request, got %#v", requestInput["metadata"])
+	}
+	if len(model.Versions) != 1 || model.Versions[0].Hash != "version-hash" || model.Versions[0].Status != "PENDING_TRANSFER" {
+		t.Fatalf("expected returned pending transfer version, got %#v", model.Versions)
+	}
+}
+
 func TestGetModelsRequestsVersionIdentifiers(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)

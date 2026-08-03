@@ -29,4 +29,3 @@ runpodctl model remove [flags]
 ### SEE ALSO
 
 * [runpodctl model](runpodctl_model.md)	 - manage model repository
-

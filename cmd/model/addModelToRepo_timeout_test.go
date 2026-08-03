@@ -336,6 +336,202 @@ func TestRunAddModelNonUploadLeavesProviderUnset(t *testing.T) {
 	}
 }
 
+func TestRunAddModelHuggingFaceMirrorUsesOnlyAddMutation(t *testing.T) {
+	resetAddModelGlobals(t)
+	oldAddModelToRepo := addModelToRepo
+	oldCreateModelRepoUpload := createModelRepoUpload
+	t.Cleanup(func() {
+		addModelToRepo = oldAddModelToRepo
+		createModelRepoUpload = oldCreateModelRepoUpload
+	})
+
+	addModelOwner = "destination-owner"
+	addModelName = "tiny-llm"
+	addModelHuggingFaceModel = "arnir0/Tiny-LLM"
+	addModelMetadata = map[string]string{"purpose": "test"}
+
+	var addInput *api.AddModelToRepoInput
+	addModelToRepo = func(input *api.AddModelToRepoInput) (*api.Model, error) {
+		copy := *input
+		addInput = &copy
+		return &api.Model{ID: "model-id", Owner: "destination-owner", Name: "tiny-llm", Provider: "LOCAL", Versions: []*api.ModelVersion{{Hash: "version-hash", Status: "PENDING_TRANSFER"}}}, nil
+	}
+	createModelRepoUpload = func(input *api.CreateModelRepoUploadInput) (*api.ModelRepoMutationResult, error) {
+		t.Fatal("mirror must not create an upload session")
+		return nil, nil
+	}
+
+	cmd := newTestAddModelCommand()
+	var runErr error
+	stdout, _ := captureStdStreams(t, func() { runErr = runAddModel(cmd, nil) })
+	if runErr != nil {
+		t.Fatalf("runAddModel returned error: %v", runErr)
+	}
+
+	if addInput == nil {
+		t.Fatal("expected addModelToRepo to be called")
+	}
+	if addInput.HuggingFaceModel != "arnir0/Tiny-LLM" {
+		t.Fatalf("expected hugging face model, got %q", addInput.HuggingFaceModel)
+	}
+	if addInput.Provider != "" {
+		t.Fatalf("expected mirror provider to be unset, got %q", addInput.Provider)
+	}
+	if addInput.Owner != "destination-owner" {
+		t.Fatalf("expected destination owner to pass through, got %q", addInput.Owner)
+	}
+	if got := addInput.Metadata["purpose"]; got != "test" {
+		t.Fatalf("expected mirror metadata to pass through, got %#v", addInput.Metadata)
+	}
+
+	var output modelAddOutput
+	if err := json.Unmarshal([]byte(stdout), &output); err != nil {
+		t.Fatalf("decode output: %v\n%s", err, stdout)
+	}
+	if output.Model == nil || len(output.Model.Versions) != 1 {
+		t.Fatalf("expected returned mirror version, got %#v", output.Model)
+	}
+	if got := output.Model.Versions[0].Hash; got != "version-hash" {
+		t.Fatalf("expected mirror version hash, got %q", got)
+	}
+	if got := output.Model.Versions[0].Status; got != "PENDING_TRANSFER" {
+		t.Fatalf("expected mirror version status PENDING_TRANSFER, got %q", got)
+	}
+}
+
+func TestRunAddModelHuggingFaceMirrorOwnerIsOptional(t *testing.T) {
+	resetAddModelGlobals(t)
+	oldAddModelToRepo := addModelToRepo
+	oldCreateModelRepoUpload := createModelRepoUpload
+	t.Cleanup(func() {
+		addModelToRepo = oldAddModelToRepo
+		createModelRepoUpload = oldCreateModelRepoUpload
+	})
+
+	addModelName = "tiny-llm"
+	addModelHuggingFaceModel = "arnir0/Tiny-LLM"
+
+	addModelToRepo = func(input *api.AddModelToRepoInput) (*api.Model, error) {
+		if input.Owner != "" {
+			t.Fatalf("expected omitted destination owner, got %q", input.Owner)
+		}
+		return &api.Model{ID: "model-id", Name: "tiny-llm", Provider: "LOCAL"}, nil
+	}
+	createModelRepoUpload = func(input *api.CreateModelRepoUploadInput) (*api.ModelRepoMutationResult, error) {
+		t.Fatal("mirror must not create an upload session")
+		return nil, nil
+	}
+
+	var runErr error
+	captureStdStreams(t, func() { runErr = runAddModel(newTestAddModelCommand(), nil) })
+	if runErr != nil {
+		t.Fatalf("runAddModel returned error: %v", runErr)
+	}
+}
+
+func TestRunAddModelRejectsMirrorUploadCombinationsBeforeMutation(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func()
+	}{
+		{name: "model path", setup: func() { addModelDirectoryPath = "model" }},
+		{name: "create upload", setup: func() { addModelCreateUpload = true }},
+		{name: "file name", setup: func() { addModelFileName = "weights.bin" }},
+		{name: "file size", setup: func() { addModelFileSize = "1" }},
+		{name: "part size", setup: func() { addModelPartSize = "1" }},
+		{name: "content type", setup: func() { addModelContentType = "application/octet-stream" }},
+		{name: "wait for hash", setup: func() { addModelWaitForHash = true }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resetAddModelGlobals(t)
+			oldAddModelToRepo := addModelToRepo
+			oldCreateModelRepoUpload := createModelRepoUpload
+			t.Cleanup(func() {
+				addModelToRepo = oldAddModelToRepo
+				createModelRepoUpload = oldCreateModelRepoUpload
+			})
+
+			addModelHuggingFaceModel = "arnir0/Tiny-LLM"
+			tt.setup()
+			addModelToRepo = func(input *api.AddModelToRepoInput) (*api.Model, error) {
+				t.Fatal("invalid mirror flags must be rejected before addModelToRepo")
+				return nil, nil
+			}
+			createModelRepoUpload = func(input *api.CreateModelRepoUploadInput) (*api.ModelRepoMutationResult, error) {
+				t.Fatal("invalid mirror flags must be rejected before createModelRepoUpload")
+				return nil, nil
+			}
+
+			if err := runAddModel(newTestAddModelCommand(), nil); err == nil {
+				t.Fatal("expected incompatible flags error")
+			}
+		})
+	}
+}
+
+func TestRunAddModelMetadataWithoutMirrorStillRequestsUpload(t *testing.T) {
+	resetAddModelGlobals(t)
+	oldAddModelToRepo := addModelToRepo
+	t.Cleanup(func() { addModelToRepo = oldAddModelToRepo })
+
+	addModelName = "local-model"
+	addModelMetadata = map[string]string{"purpose": "test"}
+	addModelToRepo = func(input *api.AddModelToRepoInput) (*api.Model, error) {
+		t.Fatal("metadata-only upload must validate upload details before mutation")
+		return nil, nil
+	}
+
+	err := runAddModel(newTestAddModelCommand(), nil)
+	if err == nil || !strings.Contains(err.Error(), "file-name is required") {
+		t.Fatalf("expected metadata to retain local upload validation, got %v", err)
+	}
+}
+
+func TestRunAddModelLocalUploadWithMetadataRemainsUnchanged(t *testing.T) {
+	resetAddModelGlobals(t)
+	oldAddModelToRepo := addModelToRepo
+	oldCreateModelRepoUpload := createModelRepoUpload
+	t.Cleanup(func() {
+		addModelToRepo = oldAddModelToRepo
+		createModelRepoUpload = oldCreateModelRepoUpload
+	})
+
+	addModelName = "local-model"
+	addModelFileName = "weights.bin"
+	addModelFileSize = "10"
+	addModelMetadata = map[string]string{"purpose": "test"}
+
+	var addInput *api.AddModelToRepoInput
+	var uploadInput *api.CreateModelRepoUploadInput
+	addModelToRepo = func(input *api.AddModelToRepoInput) (*api.Model, error) {
+		copy := *input
+		addInput = &copy
+		return &api.Model{ID: "model-id", Name: "local-model", Provider: "LOCAL"}, nil
+	}
+	createModelRepoUpload = func(input *api.CreateModelRepoUploadInput) (*api.ModelRepoMutationResult, error) {
+		copy := *input
+		uploadInput = &copy
+		return &api.ModelRepoMutationResult{
+			Model:  &api.Model{ID: "model-id", Name: "local-model", Provider: "LOCAL"},
+			Upload: &api.ModelRepoUpload{SessionID: "session-id"},
+		}, nil
+	}
+
+	var runErr error
+	captureStdStreams(t, func() { runErr = runAddModel(newTestAddModelCommand(), nil) })
+	if runErr != nil {
+		t.Fatalf("runAddModel returned error: %v", runErr)
+	}
+	if addInput == nil || addInput.Provider != "LOCAL" || addInput.Metadata["purpose"] != "test" {
+		t.Fatalf("expected local add input with provider and metadata, got %#v", addInput)
+	}
+	if uploadInput == nil || uploadInput.Metadata["purpose"] != "test" {
+		t.Fatalf("expected local upload session with metadata, got %#v", uploadInput)
+	}
+}
+
 func TestUploadModelFilesUsesModelVersionUUIDAfterFirstFile(t *testing.T) {
 	oldCreateModelRepoUpload := createModelRepoUpload
 	oldCompleteModelUploadFile := completeModelUploadFile
@@ -738,6 +934,7 @@ func resetAddModelGlobals(t *testing.T) {
 
 	oldOwner := addModelOwner
 	oldName := addModelName
+	oldHuggingFaceModel := addModelHuggingFaceModel
 	oldCredentialReference := addModelCredentialReference
 	oldCredentialType := addModelCredentialType
 	oldStatus := addModelStatus
@@ -754,6 +951,7 @@ func resetAddModelGlobals(t *testing.T) {
 	t.Cleanup(func() {
 		addModelOwner = oldOwner
 		addModelName = oldName
+		addModelHuggingFaceModel = oldHuggingFaceModel
 		addModelCredentialReference = oldCredentialReference
 		addModelCredentialType = oldCredentialType
 		addModelStatus = oldStatus
@@ -771,6 +969,7 @@ func resetAddModelGlobals(t *testing.T) {
 
 	addModelOwner = ""
 	addModelName = ""
+	addModelHuggingFaceModel = ""
 	addModelCredentialReference = ""
 	addModelCredentialType = ""
 	addModelStatus = ""

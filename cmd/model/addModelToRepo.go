@@ -27,6 +27,7 @@ import (
 var (
 	addModelOwner               string
 	addModelName                string
+	addModelHuggingFaceModel    string
 	addModelCredentialReference string
 	addModelCredentialType      string
 	addModelStatus              string
@@ -158,7 +159,9 @@ var addCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(0),
 	Short: "add a model",
 	Long:  "add a model to the runpod model repository",
-	RunE:  runAddModel,
+	Example: `  # --name is the destination; --huggingface-model is the source
+  runpodctl model add --name tiny-llm --huggingface-model arnir0/Tiny-LLM`,
+	RunE: runAddModel,
 }
 
 var AddModelToRepoCmd = &cobra.Command{
@@ -180,6 +183,7 @@ func init() {
 func bindAddModelFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&addModelOwner, "owner", "", "model owner namespace (user or team owner id)")
 	cmd.Flags().StringVar(&addModelName, "name", "", "model name")
+	cmd.Flags().StringVar(&addModelHuggingFaceModel, "huggingface-model", "", "hugging face model to mirror (owner/repo)")
 	cmd.Flags().StringVar(&addModelCredentialReference, "credential-reference", "", "credential reference (if required)")
 	cmd.Flags().StringVar(&addModelCredentialType, "credential-type", "", "credential type (if required)")
 	cmd.Flags().StringVar(&addModelStatus, "model-status", "", "initial model status")
@@ -195,16 +199,24 @@ func bindAddModelFlags(cmd *cobra.Command) {
 	cmd.Flags().BoolVarP(&addModelVerbose, "verbose", "v", false, "include upload details in wait-for-hash output")
 }
 
-// wantsUploadSession reports whether the flags ask for an upload session. Used
-// both for the pre-flight validation and for the post-create branch so the two
-// cannot drift apart (they previously differed by --metadata).
+func isHuggingFaceMirror() bool {
+	return strings.TrimSpace(addModelHuggingFaceModel) != ""
+}
+
+// wantsUploadSession reports whether the flags ask for a local upload session.
+// Metadata retains its legacy upload behavior except when it belongs to a
+// server-side Hugging Face mirror.
 func wantsUploadSession() bool {
 	return addModelCreateUpload || addModelFileName != "" || addModelFileSize != "" ||
-		addModelPartSize != "" || addModelContentType != "" || len(addModelMetadata) > 0
+		addModelPartSize != "" || addModelContentType != "" ||
+		(len(addModelMetadata) > 0 && !isHuggingFaceMirror())
 }
 
 func runAddModel(cmd *cobra.Command, args []string) error {
 	if err := setModelGraphQLTimeout(cmd); err != nil {
+		return err
+	}
+	if err := validateAddModelFlags(); err != nil {
 		return err
 	}
 
@@ -271,6 +283,7 @@ func runAddModel(cmd *cobra.Command, args []string) error {
 	input := &api.AddModelToRepoInput{
 		Owner:               addModelOwner,
 		Name:                addModelName,
+		HuggingFaceModel:    addModelHuggingFaceModel,
 		CredentialReference: addModelCredentialReference,
 		CredentialType:      addModelCredentialType,
 		ModelStatus:         addModelStatus,
@@ -361,6 +374,18 @@ func runAddModel(cmd *cobra.Command, args []string) error {
 	}
 
 	return printModelAddOutput(cmd, modelAddOutput{Model: model, Upload: result.Upload})
+}
+
+func validateAddModelFlags() error {
+	if !isHuggingFaceMirror() {
+		return nil
+	}
+
+	if addModelDirectoryPath != "" || addModelCreateUpload || addModelFileName != "" || addModelFileSize != "" || addModelPartSize != "" || addModelContentType != "" || addModelWaitForHash {
+		return fmt.Errorf("--huggingface-model cannot be combined with local upload flags")
+	}
+
+	return nil
 }
 
 func collectModelFiles(dir string) ([]modelFile, error) {
