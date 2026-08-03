@@ -281,8 +281,12 @@ unrecognized one is rejected rather than silently falling back to json:
 {"error":"invalid --output \"table\": supported formats are json and yaml","code":"usage_error"}
 ```
 
-(the legacy `get pod` and `get cloud` commands print a table unconditionally and
-ignore `--output`.)
+validation applies to every command, including the ones that don't honor the
+flag: the legacy `get pod`, `get cloud` and `get models` print a table
+unconditionally and ignore the *value* of `--output`, but `get pod --output=table`
+is still rejected. so is an invalid `--output` on `exec` and `config`, which is
+what keeps `config` from writing its config file and uploading an ssh key on an
+invocation that should have failed.
 
 ### pod runtime status
 
