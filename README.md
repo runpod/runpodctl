@@ -281,12 +281,19 @@ unrecognized one is rejected rather than silently falling back to json:
 {"error":"invalid --output \"table\": supported formats are json and yaml","code":"usage_error"}
 ```
 
-validation applies to every command, including the ones that don't honor the
-flag: the legacy `get pod`, `get cloud` and `get models` print a table
+validation applies to every command that runs, including the ones that don't
+honor the flag: the legacy `get pod`, `get cloud` and `get models` print a table
 unconditionally and ignore the *value* of `--output`, but `get pod --output=table`
-is still rejected. so is an invalid `--output` on `exec` and `config`, which is
-what keeps `config` from writing its config file and uploading an ssh key on an
-invocation that should have failed.
+is still rejected. so is an invalid `--output` on `exec` and `config` — that is
+what stops `config` from saving your api key and generating and uploading an ssh
+key on an invocation that should have failed.
+
+the paths that never emit data are exempt, because cobra resolves them before any
+validation runs: `--help` anywhere on the line, `help <cmd>`, a bare parent like
+`runpodctl pod`, `--version`/`-v`, and shell completion all still work with a bad
+`--output`. note also that a default `~/.runpod/config.toml` is created on first
+run before the flag is checked, so a rejected invocation can still create that
+file — it just won't contain anything you passed.
 
 ### pod runtime status
 
