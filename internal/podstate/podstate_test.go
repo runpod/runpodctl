@@ -232,6 +232,7 @@ func TestExplain(t *testing.T) {
 	tests := []struct {
 		name  string
 		state State
+		podID string
 		want  string
 	}{
 		{
@@ -242,7 +243,13 @@ func TestExplain(t *testing.T) {
 			want:  "no container reported yet (image pull, container create or boot)",
 		},
 		{
-			name:  "stopped points at pod start",
+			name:  "stopped points at pod start with the real pod id",
+			state: State{Status: StatusStopped, Reason: ReasonStoppedByUser},
+			podID: "abc123",
+			want:  "pod is stopped; start it with 'runpodctl pod start abc123'",
+		},
+		{
+			name:  "stopped without a pod id keeps the placeholder",
 			state: State{Status: StatusStopped, Reason: ReasonStoppedByUser},
 			want:  "pod is stopped; start it with 'runpodctl pod start <pod-id>'",
 		},
@@ -267,8 +274,8 @@ func TestExplain(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.state.Explain(); got != tt.want {
-				t.Errorf("Explain() = %q, want %q", got, tt.want)
+			if got := tt.state.Explain(tt.podID); got != tt.want {
+				t.Errorf("Explain(%q) = %q, want %q", tt.podID, got, tt.want)
 			}
 		})
 	}

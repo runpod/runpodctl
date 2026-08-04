@@ -89,7 +89,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 						runtimePorts = sshPod.Runtime.Ports
 					}
 					sshInfo = map[string]interface{}{
-						"error":  sshconnect.NotReadyMessage(state, declared, runtimePorts),
+						"error":  sshconnect.NotReadyMessage(sshPod.ID, state, declared, runtimePorts),
 						"id":     sshPod.ID,
 						"name":   sshPod.Name,
 						"status": sshPod.DesiredStatus,

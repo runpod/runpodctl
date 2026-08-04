@@ -18,12 +18,14 @@ import (
 // advice that agents follow literally, so a remedy that destroys state or that
 // the pod does not need is worse than saying nothing. See addSSHPortCommand.
 //
-// declaredPorts is the pod's requested port list ("22/tcp", "8888/http", ...)
-// and runtimePorts is what the host actually mapped; either may be empty.
-func NotReadyMessage(state podstate.State, declaredPorts []string, runtimePorts []*api.LegacyPort) string {
-	detail := state.Explain()
+// podID is interpolated into suggested commands so an agent can run them
+// verbatim; declaredPorts is the pod's requested port list ("22/tcp",
+// "8888/http", ...) and runtimePorts is what the host actually mapped; any of
+// them may be empty.
+func NotReadyMessage(podID string, state podstate.State, declaredPorts []string, runtimePorts []*api.LegacyPort) string {
+	detail := state.Explain(podID)
 	if state.Status == podstate.StatusRunning {
-		detail = sshPortDetail(declaredPorts, runtimePorts)
+		detail = sshPortDetail(podID, declaredPorts, runtimePorts)
 	}
 	if detail == "" {
 		return "pod not ready"
@@ -31,9 +33,9 @@ func NotReadyMessage(state podstate.State, declaredPorts []string, runtimePorts 
 	return "pod not ready: " + detail
 }
 
-func sshPortDetail(declaredPorts []string, runtimePorts []*api.LegacyPort) string {
+func sshPortDetail(podID string, declaredPorts []string, runtimePorts []*api.LegacyPort) string {
 	if !declaresSSHPort(declaredPorts) {
-		return "pod does not publish 22/tcp; add it with '" + addSSHPortCommand(declaredPorts) + "'" +
+		return "pod does not publish 22/tcp; add it with '" + addSSHPortCommand(podID, declaredPorts) + "'" +
 			" (--ports replaces the whole list, and changing it may restart the container)"
 	}
 	for _, port := range runtimePorts {
@@ -64,7 +66,7 @@ func sshPortDetail(declaredPorts []string, runtimePorts []*api.LegacyPort) strin
 // stay RUNNING and the port appear within seconds, which a recreate against a
 // cached image looks exactly like — so the message says "may restart" rather
 // than claiming either way.
-func addSSHPortCommand(declaredPorts []string) string {
+func addSSHPortCommand(podID string, declaredPorts []string) string {
 	wanted := make([]string, 0, len(declaredPorts)+1)
 	for _, entry := range declaredPorts {
 		if entry = strings.TrimSpace(entry); entry != "" {
@@ -72,7 +74,11 @@ func addSSHPortCommand(declaredPorts []string) string {
 		}
 	}
 	wanted = append(wanted, "22/tcp")
-	return "runpodctl pod update <pod-id> --ports " + strings.Join(wanted, ",")
+	id := strings.TrimSpace(podID)
+	if id == "" {
+		id = "<pod-id>"
+	}
+	return "runpodctl pod update " + id + " --ports " + strings.Join(wanted, ",")
 }
 
 // declaresSSHPort reports whether the pod asked for tcp 22. Entries look like

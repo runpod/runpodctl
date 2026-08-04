@@ -16,6 +16,7 @@ func port(private, public int, isPublic bool) *api.LegacyPort {
 func TestNotReadyMessage(t *testing.T) {
 	tests := []struct {
 		name         string
+		podID        string
 		state        podstate.State
 		declared     []string
 		runtimePorts []*api.LegacyPort
@@ -27,7 +28,13 @@ func TestNotReadyMessage(t *testing.T) {
 			want:  "pod not ready: no container reported yet (image pull, container create or boot)",
 		},
 		{
-			name:  "stopped points at pod start",
+			name:  "stopped points at pod start with the real pod id",
+			podID: "abc123",
+			state: podstate.State{Status: podstate.StatusStopped, Reason: podstate.ReasonStoppedByUser},
+			want:  "pod not ready: pod is stopped; start it with 'runpodctl pod start abc123'",
+		},
+		{
+			name:  "stopped without a pod id keeps the placeholder",
 			state: podstate.State{Status: podstate.StatusStopped, Reason: podstate.ReasonStoppedByUser},
 			want:  "pod not ready: pod is stopped; start it with 'runpodctl pod start <pod-id>'",
 		},
@@ -51,9 +58,10 @@ func TestNotReadyMessage(t *testing.T) {
 			// carry the ports the pod already publishes or following it silently
 			// unpublishes them.
 			name:     "running without 22 declared keeps the existing ports in the suggested command",
+			podID:    "abc123",
 			state:    podstate.State{Status: podstate.StatusRunning},
 			declared: []string{"8888/http", "7777/tcp"},
-			want:     "pod not ready: pod does not publish 22/tcp; add it with 'runpodctl pod update <pod-id> --ports 8888/http,7777/tcp,22/tcp' (--ports replaces the whole list, and changing it may restart the container)",
+			want:     "pod not ready: pod does not publish 22/tcp; add it with 'runpodctl pod update abc123 --ports 8888/http,7777/tcp,22/tcp' (--ports replaces the whole list, and changing it may restart the container)",
 		},
 		{
 			name:         "running with 22 declared but not publicly routable offers no bogus remedy",
@@ -84,7 +92,7 @@ func TestNotReadyMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := NotReadyMessage(tt.state, tt.declared, tt.runtimePorts)
+			got := NotReadyMessage(tt.podID, tt.state, tt.declared, tt.runtimePorts)
 			if got != tt.want {
 				t.Errorf("NotReadyMessage() = %q, want %q", got, tt.want)
 			}
@@ -104,7 +112,7 @@ func TestNotReadyMessageNeverSuggestsARedundantFlag(t *testing.T) {
 		{port(22, 40022, false)},
 		{port(8888, 40088, true)},
 	} {
-		msg := NotReadyMessage(podstate.State{Status: podstate.StatusRunning}, []string{"22/tcp"}, runtimePorts)
+		msg := NotReadyMessage("abc123", podstate.State{Status: podstate.StatusRunning}, []string{"22/tcp"}, runtimePorts)
 		if strings.Contains(msg, "--ports 22/tcp") {
 			t.Errorf("told the caller to add a port the pod already declares: %q", msg)
 		}
@@ -122,7 +130,7 @@ func TestNotReadyMessageNeverSuggestsARedundantFlag(t *testing.T) {
 // must also not imply the change is free.
 func TestNotReadyMessageSuggestionIsNotDestructive(t *testing.T) {
 	declared := []string{"8888/http", "7777/tcp", "1234/udp"}
-	msg := NotReadyMessage(podstate.State{Status: podstate.StatusRunning}, declared, nil)
+	msg := NotReadyMessage("abc123", podstate.State{Status: podstate.StatusRunning}, declared, nil)
 
 	for _, existing := range declared {
 		if !strings.Contains(msg, existing) {

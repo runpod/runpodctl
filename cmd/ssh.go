@@ -201,7 +201,7 @@ func runSSHInfoWithArgs(cmd *cobra.Command, args []string, allowAll bool) error 
 			if pod.Runtime != nil {
 				runtimePorts = pod.Runtime.Ports
 			}
-			message := sshconnect.NotReadyMessage(state, sshconnect.SplitPorts(pod.Ports), runtimePorts)
+			message := sshconnect.NotReadyMessage(pod.ID, state, sshconnect.SplitPorts(pod.Ports), runtimePorts)
 			return output.Print(map[string]interface{}{
 				"error":         message,
 				"id":            pod.ID,

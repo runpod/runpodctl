@@ -247,18 +247,27 @@ func (st State) IsKnownDown() bool {
 // Explain describes the state in one lowercase clause, or "" when the state
 // says nothing worth adding. It explains the *pod*, never a particular way of
 // reaching it: ssh-specific advice lives with the ssh code, in
-// internal/sshconnect.
-func (st State) Explain() string {
+// internal/sshconnect. podID is interpolated into suggested commands so an
+// agent can run them verbatim; "" falls back to the <pod-id> placeholder.
+func (st State) Explain(podID string) string {
 	switch st.Status {
 	case StatusInitializing:
 		return "no container reported yet (image pull, container create or boot)"
 	case StatusStopped:
-		return "pod is stopped; start it with 'runpodctl pod start <pod-id>'"
+		return "pod is stopped; start it with 'runpodctl pod start " + orPlaceholder(podID) + "'"
 	case StatusTerminated:
 		return "pod is terminated"
 	default:
 		return ""
 	}
+}
+
+// orPlaceholder keeps suggested commands readable when a caller has no pod id.
+func orPlaceholder(podID string) string {
+	if podID = strings.TrimSpace(podID); podID == "" {
+		return "<pod-id>"
+	}
+	return podID
 }
 
 // stopReason reads what little cause lastStatusChange records: the
