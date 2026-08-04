@@ -174,7 +174,7 @@ func TestSSHInfo_RuntimeState(t *testing.T) {
 		{
 			name:    "stopped pod with stale ports is refused with a reason",
 			pods:    `[{"id":"p","name":"p","desiredStatus":"EXITED","lastStatusChange":"Exited by user: x","ports":"22/tcp","runtime":{"uptimeInSeconds":261,"ports":[` + sshPortJSON + `]}}]`,
-			wantErr: "pod not ready: pod is stopped; start it with 'runpodctl pod start <pod-id>'",
+			wantErr: "pod not ready: pod is stopped; start it with 'runpodctl pod start p'",
 		},
 		{
 			name:    "terminated pod with stale ports is refused",
@@ -197,7 +197,7 @@ func TestSSHInfo_RuntimeState(t *testing.T) {
 			// the suggested command keeps 8888/http: --ports replaces the list.
 			name:    "running pod that never asked for 22 is pointed at pod update, keeping its ports",
 			pods:    `[{"id":"p","name":"p","desiredStatus":"RUNNING","ports":"8888/http","runtime":{"ports":[{"ip":"1.2.3.4","isIpPublic":true,"privatePort":8888,"publicPort":40088,"type":"tcp"}]}}]`,
-			wantErr: "pod not ready: pod does not publish 22/tcp; add it with 'runpodctl pod update <pod-id> --ports 8888/http,22/tcp' (--ports replaces the whole list, and changing it may restart the container)",
+			wantErr: "pod not ready: pod does not publish 22/tcp; add it with 'runpodctl pod update p --ports 8888/http,22/tcp' (--ports replaces the whole list, and changing it may restart the container)",
 		},
 	}
 

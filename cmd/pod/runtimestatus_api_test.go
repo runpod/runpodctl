@@ -389,7 +389,7 @@ func TestRunGet_RuntimeStatus(t *testing.T) {
 			id:         "p",
 			wantStatus: "stopped",
 			wantReason: "stopped_by_user",
-			wantSSHErr: "pod not ready: pod is stopped; start it with 'runpodctl pod start <pod-id>'",
+			wantSSHErr: "pod not ready: pod is stopped; start it with 'runpodctl pod start p'",
 			wantUptime: nil,
 		},
 		{
@@ -406,7 +406,7 @@ func TestRunGet_RuntimeStatus(t *testing.T) {
 			id:         "p",
 			wantStatus: "stopped",
 			wantReason: "stopped_by_user",
-			wantSSHErr: "pod not ready: pod is stopped; start it with 'runpodctl pod start <pod-id>'",
+			wantSSHErr: "pod not ready: pod is stopped; start it with 'runpodctl pod start p'",
 			wantUptime: nil,
 		},
 		{
