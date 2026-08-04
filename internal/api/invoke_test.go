@@ -186,12 +186,9 @@ func TestInvokeClient_JobStatusPreservesPayload(t *testing.T) {
 		t.Errorf("expected a completed job, got status %q", job.Status)
 	}
 
-	// re-marshalling must reproduce the api body, including fields the cli has no
+	// Raw() must reproduce the api body, including fields the cli has no
 	// struct field for — agents consume `output` and whatever else the api adds.
-	encoded, err := json.Marshal(job)
-	if err != nil {
-		t.Fatalf("failed to marshal job: %v", err)
-	}
+	encoded := job.Raw()
 	var decoded map[string]interface{}
 	if err := json.Unmarshal(encoded, &decoded); err != nil {
 		t.Fatalf("failed to decode marshalled job: %v", err)
@@ -208,10 +205,11 @@ func TestInvokeClient_JobStatusPreservesPayload(t *testing.T) {
 	}
 }
 
-func TestJobMarshalIsByteFaithful(t *testing.T) {
-	// re-encoding must reproduce the api body exactly. Decoding a handler payload
-	// into map[string]interface{} and marshalling it back would turn these
-	// integers into float64 and quietly corrupt them.
+func TestJobRawIsByteFaithful(t *testing.T) {
+	// Raw() must reproduce the api body exactly — it is what both print sites
+	// hand to PrintRaw. Decoding a handler payload into map[string]interface{}
+	// and re-encoding it would turn these integers into float64 and quietly
+	// corrupt them.
 	bodies := []string{
 		`{"id":"job-1","status":"COMPLETED","output":{"seed":12345678901234567890}}`,
 		`{"id":"job-1","status":"COMPLETED","output":{"jobNumber":1753800000000000123}}`,
@@ -223,12 +221,8 @@ func TestJobMarshalIsByteFaithful(t *testing.T) {
 			if err := json.Unmarshal([]byte(body), &job); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			encoded, err := json.Marshal(&job)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if string(encoded) != body {
-				t.Errorf("marshalled job = %s, want the api body verbatim %s", encoded, body)
+			if string(job.Raw()) != body {
+				t.Errorf("Raw() = %s, want the api body verbatim %s", job.Raw(), body)
 			}
 		})
 	}
@@ -272,9 +266,6 @@ func TestJobUnmarshalToleratesNonStringIDs(t *testing.T) {
 	}
 	if !job.HasEnvelope() {
 		t.Error("a body with id/status keys still has an envelope")
-	}
-	if output, ok := job.Field("output"); !ok || string(output) != `"ok"` {
-		t.Errorf("Field(output) = %s, %v", output, ok)
 	}
 }
 
@@ -340,16 +331,6 @@ func TestJobIsTerminal(t *testing.T) {
 				t.Errorf("Succeeded() = %v, want %v", job.Succeeded(), tt.wantSuccess)
 			}
 		})
-	}
-}
-
-func TestJobMarshalNilPayload(t *testing.T) {
-	data, err := json.Marshal(&Job{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if string(data) != "null" {
-		t.Errorf("marshalled empty job = %s, want null", data)
 	}
 }
 

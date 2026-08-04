@@ -201,22 +201,8 @@ func (j *Job) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// MarshalJSON emits the api body unchanged, byte for byte.
-func (j Job) MarshalJSON() ([]byte, error) {
-	if len(j.raw) == 0 {
-		return []byte("null"), nil
-	}
-	return j.raw, nil
-}
-
 // Raw returns the api body as received.
 func (j *Job) Raw() json.RawMessage { return j.raw }
-
-// Field returns a top-level field of the api body as raw json.
-func (j *Job) Field(name string) (json.RawMessage, bool) {
-	value, ok := j.fields[name]
-	return value, ok
-}
 
 // HasEnvelope reports whether the body actually describes a job, i.e. carries an
 // id or a status. The invoke api can answer 200 with a bare error object (no id,

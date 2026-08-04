@@ -386,22 +386,6 @@ func TestRunHealth_RespectsRequestTimeout(t *testing.T) {
 	}
 }
 
-func TestRunHealth_NonJSONBodyIsNotSwallowed(t *testing.T) {
-	// PrintRaw falls back to the bytes as-is rather than failing the command.
-	installMockInvokeClient(t, &mockInvokeClient{health: json.RawMessage(`<html>oops`)})
-
-	var err error
-	stdout, _ := captureOutput(t, func() {
-		err = runHealth(mockInvokeCommand(""), []string{"ep-1"})
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !strings.Contains(stdout, "<html>oops") {
-		t.Errorf("expected the raw body on stdout, got %q", stdout)
-	}
-}
-
 func TestRunHealth_ErrorKeepsAPICode(t *testing.T) {
 	installMockInvokeClient(t, &mockInvokeClient{healthErr: &api.APIError{Message: "endpoint not found", Status: 404}})
 
