@@ -323,14 +323,7 @@ func podDetailsWithSSH(podID, addr string) (*podDetails, error) {
 		}
 	}
 
-	return nil, output.WithResourceID(podID, fmt.Errorf("pod %s is running and ssh answered at %s, but reading the pod back failed: %w; retry with 'runpodctl pod get %s'", podID, addrOrUnknown(addr), reason, podID))
-}
-
-func addrOrUnknown(addr string) string {
-	if addr == "" {
-		return "its public ssh port"
-	}
-	return addr
+	return nil, output.WithResourceID(podID, fmt.Errorf("pod %s is running and ssh answered at %s, but reading the pod back failed: %w; retry with 'runpodctl pod get %s'", podID, addr, reason, podID))
 }
 
 // podIDFrom pulls the pod id out of either create response shape: the rest path

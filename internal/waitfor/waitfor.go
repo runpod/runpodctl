@@ -47,11 +47,6 @@ type State struct {
 	// progress output and, crucially, in the timeout error: "the last known
 	// state" is the only thing an agent has to debug a wait that did not finish.
 	Detail string
-	// Err is the poll error behind Detail, when the state came from a tolerated
-	// failure rather than from a successful read. Callers that need to preserve an
-	// error chain across the wait (errors.Is/As on the underlying failure) read it
-	// from the returned State.
-	Err error
 }
 
 // PollFunc answers whether a resource is usable yet.
@@ -232,7 +227,7 @@ func Until(ctx context.Context, poll PollFunc, opts Options) (State, error) {
 			}
 			// a transient failure is just an unknown state: keep waiting, and carry
 			// the reason into progress and into the timeout error.
-			state = State{Detail: err.Error(), Err: err}
+			state = State{Detail: err.Error()}
 		}
 		last = state
 		elapsed := now().Sub(start)

@@ -45,7 +45,7 @@ func EndpointWorkerPoller(client EndpointHealthGetter, endpointID string) PollFu
 			if seen && isNotFoundStatus(err) {
 				missed++
 				if missed < missesBeforeGone {
-					return State{Detail: "endpoint health unreadable in the last poll: " + err.Error(), Err: err}, nil
+					return State{Detail: "endpoint health unreadable in the last poll: " + err.Error()}, nil
 				}
 				// the invoke service knew this endpoint and now does not: it was
 				// deleted out of band. without this the wait burns the whole budget,

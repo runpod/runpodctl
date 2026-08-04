@@ -267,29 +267,6 @@ func TestUntilRetriesAfterATransientPollError(t *testing.T) {
 	}
 }
 
-// The tolerated poll error stays reachable as an error, so callers that need an
-// error chain across the wait (cmd/project's legacy ssh message) keep it.
-func TestUntilKeepsTheToleratedPollErrorOnState(t *testing.T) {
-	clock := newFakeClock()
-	sentinel := errors.New("no api key configured")
-
-	state, err := Until(context.Background(), func(context.Context) (State, error) {
-		return State{}, sentinel
-	}, Options{
-		Label:    "pod p1 to come online",
-		Timeout:  time.Second,
-		Interval: time.Second,
-		Now:      clock.Now,
-		Sleep:    clock.sleepFunc(),
-	})
-	if err == nil {
-		t.Fatal("expected a timeout")
-	}
-	if !errors.Is(state.Err, sentinel) {
-		t.Fatalf("state.Err = %v, want the sentinel", state.Err)
-	}
-}
-
 func TestIsFatalPollError(t *testing.T) {
 	cases := []struct {
 		name string
@@ -451,5 +428,39 @@ func TestUntilDefaults(t *testing.T) {
 	}
 	if polls != 1 {
 		t.Fatalf("polled %d times, want 1", polls)
+	}
+}
+
+// TestUntilAppliesDefaults pins the zero-Options behaviour with an injected
+// clock: a never-ready poll must run on DefaultInterval and give up at
+// DefaultTimeout, and progress must fire on DefaultProgressEvery — otherwise
+// the exported defaults are decoration.
+func TestUntilAppliesDefaults(t *testing.T) {
+	clock := newFakeClock()
+	var progress strings.Builder
+	polls := 0
+
+	_, err := Until(context.Background(), func(context.Context) (State, error) {
+		polls++
+		return State{Detail: "not there yet"}, nil
+	}, Options{
+		Label:    "pod p1",
+		Now:      clock.Now,
+		Sleep:    clock.sleepFunc(),
+		Progress: &progress,
+	})
+	if err == nil {
+		t.Fatal("expected a timeout")
+	}
+	if !strings.Contains(err.Error(), "timed out after "+DefaultTimeout.String()) {
+		t.Errorf("timeout error = %q, want it to name DefaultTimeout %s", err, DefaultTimeout)
+	}
+	// one poll at t=0, then one per DefaultInterval until the budget is gone.
+	if wantPolls := int(DefaultTimeout/DefaultInterval) + 1; polls != wantPolls {
+		t.Errorf("polled %d times, want %d (DefaultTimeout / DefaultInterval + 1)", polls, wantPolls)
+	}
+	wantLines := strings.Count(progress.String(), "not there yet")
+	if want := int(DefaultTimeout / DefaultProgressEvery); wantLines != want {
+		t.Errorf("progress fired %d times, want %d (DefaultTimeout / DefaultProgressEvery)", wantLines, want)
 	}
 }
