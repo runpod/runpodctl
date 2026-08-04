@@ -254,7 +254,7 @@ func (st State) Explain(podID string) string {
 	case StatusInitializing:
 		return "no container reported yet (image pull, container create or boot)"
 	case StatusStopped:
-		return "pod is stopped; start it with 'runpodctl pod start " + orPlaceholder(podID) + "'"
+		return "pod is stopped; start it with 'runpodctl pod start " + IDOrPlaceholder(podID) + "'"
 	case StatusTerminated:
 		return "pod is terminated"
 	default:
@@ -262,8 +262,9 @@ func (st State) Explain(podID string) string {
 	}
 }
 
-// orPlaceholder keeps suggested commands readable when a caller has no pod id.
-func orPlaceholder(podID string) string {
+// IDOrPlaceholder keeps suggested commands readable when a caller has no pod
+// id: an empty id falls back to the <pod-id> placeholder.
+func IDOrPlaceholder(podID string) string {
 	if podID = strings.TrimSpace(podID); podID == "" {
 		return "<pod-id>"
 	}

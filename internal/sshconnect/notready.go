@@ -74,11 +74,7 @@ func addSSHPortCommand(podID string, declaredPorts []string) string {
 		}
 	}
 	wanted = append(wanted, "22/tcp")
-	id := strings.TrimSpace(podID)
-	if id == "" {
-		id = "<pod-id>"
-	}
-	return "runpodctl pod update " + id + " --ports " + strings.Join(wanted, ",")
+	return "runpodctl pod update " + podstate.IDOrPlaceholder(podID) + " --ports " + strings.Join(wanted, ",")
 }
 
 // declaresSSHPort reports whether the pod asked for tcp 22. Entries look like

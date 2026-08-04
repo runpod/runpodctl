@@ -164,40 +164,42 @@ func TestSSHInfo_RuntimeState(t *testing.T) {
 		name       string
 		pods       string
 		wantErr    string // "" means a real connection is expected
-		wantStatus string
+		wantStatus string // asserted on the not-ready payload; connections carry no runtimeStatus
 	}{
 		{
-			name:       "running pod yields a connection",
-			pods:       `[{"id":"p","name":"p","desiredStatus":"RUNNING","ports":"22/tcp","runtime":{"uptimeInSeconds":5,"ports":[` + sshPortJSON + `]}}]`,
-			wantStatus: "running",
+			name: "running pod yields a connection",
+			pods: `[{"id":"p","name":"p","desiredStatus":"RUNNING","ports":"22/tcp","runtime":{"uptimeInSeconds":5,"ports":[` + sshPortJSON + `]}}]`,
 		},
 		{
-			name:    "stopped pod with stale ports is refused with a reason",
-			pods:    `[{"id":"p","name":"p","desiredStatus":"EXITED","lastStatusChange":"Exited by user: x","ports":"22/tcp","runtime":{"uptimeInSeconds":261,"ports":[` + sshPortJSON + `]}}]`,
-			wantErr: "pod not ready: pod is stopped; start it with 'runpodctl pod start p'",
+			name:       "stopped pod with stale ports is refused with a reason",
+			pods:       `[{"id":"p","name":"p","desiredStatus":"EXITED","lastStatusChange":"Exited by user: x","ports":"22/tcp","runtime":{"uptimeInSeconds":261,"ports":[` + sshPortJSON + `]}}]`,
+			wantErr:    "pod not ready: pod is stopped; start it with 'runpodctl pod start p'",
+			wantStatus: "stopped",
 		},
 		{
-			name:    "terminated pod with stale ports is refused",
-			pods:    `[{"id":"p","name":"p","desiredStatus":"TERMINATED","lastStatusChange":"Outbid: x","ports":"22/tcp","runtime":{"ports":[` + sshPortJSON + `]}}]`,
-			wantErr: "pod not ready: pod is terminated",
+			name:       "terminated pod with stale ports is refused",
+			pods:       `[{"id":"p","name":"p","desiredStatus":"TERMINATED","lastStatusChange":"Outbid: x","ports":"22/tcp","runtime":{"ports":[` + sshPortJSON + `]}}]`,
+			wantErr:    "pod not ready: pod is terminated",
+			wantStatus: "terminated",
 		},
 		{
 			// unknown is not evidence the pod is down: a connection built from
 			// live ports must not be thrown away on the strength of it.
-			name:       "a state this cli does not model keeps its live connection",
-			pods:       `[{"id":"p","name":"p","desiredStatus":"RESTARTING","ports":"22/tcp","runtime":{"ports":[` + sshPortJSON + `]}}]`,
-			wantStatus: "unknown",
+			name: "a state this cli does not model keeps its live connection",
+			pods: `[{"id":"p","name":"p","desiredStatus":"RESTARTING","ports":"22/tcp","runtime":{"ports":[` + sshPortJSON + `]}}]`,
 		},
 		{
-			name:    "initializing pod says why",
-			pods:    `[{"id":"p","name":"p","desiredStatus":"RUNNING","ports":"22/tcp","runtime":null}]`,
-			wantErr: "pod not ready: no container reported yet (image pull, container create or boot)",
+			name:       "initializing pod says why",
+			pods:       `[{"id":"p","name":"p","desiredStatus":"RUNNING","ports":"22/tcp","runtime":null}]`,
+			wantErr:    "pod not ready: no container reported yet (image pull, container create or boot)",
+			wantStatus: "initializing",
 		},
 		{
 			// the suggested command keeps 8888/http: --ports replaces the list.
-			name:    "running pod that never asked for 22 is pointed at pod update, keeping its ports",
-			pods:    `[{"id":"p","name":"p","desiredStatus":"RUNNING","ports":"8888/http","runtime":{"ports":[{"ip":"1.2.3.4","isIpPublic":true,"privatePort":8888,"publicPort":40088,"type":"tcp"}]}}]`,
-			wantErr: "pod not ready: pod does not publish 22/tcp; add it with 'runpodctl pod update p --ports 8888/http,22/tcp' (--ports replaces the whole list, and changing it may restart the container)",
+			name:       "running pod that never asked for 22 is pointed at pod update, keeping its ports",
+			pods:       `[{"id":"p","name":"p","desiredStatus":"RUNNING","ports":"8888/http","runtime":{"ports":[{"ip":"1.2.3.4","isIpPublic":true,"privatePort":8888,"publicPort":40088,"type":"tcp"}]}}]`,
+			wantErr:    "pod not ready: pod does not publish 22/tcp; add it with 'runpodctl pod update p --ports 8888/http,22/tcp' (--ports replaces the whole list, and changing it may restart the container)",
+			wantStatus: "running",
 		},
 	}
 
@@ -214,8 +216,13 @@ func TestSSHInfo_RuntimeState(t *testing.T) {
 				if _, ok := got["ssh_command"]; !ok {
 					t.Errorf("expected an ssh_command, got %v", got)
 				}
-			} else if _, ok := got["ssh_command"]; ok {
-				t.Errorf("must not offer an ssh_command for an unreachable pod: %v", got)
+			} else {
+				if _, ok := got["ssh_command"]; ok {
+					t.Errorf("must not offer an ssh_command for an unreachable pod: %v", got)
+				}
+				if gotStatus, _ := got["runtimeStatus"].(string); gotStatus != tt.wantStatus {
+					t.Errorf("runtimeStatus = %q, want %q", gotStatus, tt.wantStatus)
+				}
 			}
 		})
 	}
