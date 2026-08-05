@@ -24,6 +24,7 @@ _note: all pods automatically come with runpodctl installed with a pod-scoped ap
     - [serverless endpoints](#serverless-endpoints)
     - [file transfer](#file-transfer)
   - [output format](#output-format)
+    - [pod runtime status](#pod-runtime-status)
     - [error format](#error-format)
   - [environment variables](#environment-variables)
   - [legacy commands](#legacy-commands)
@@ -138,6 +139,69 @@ runpodctl pod list                    # json (default)
 runpodctl pod list --output=table     # human-readable table
 runpodctl pod list --output=yaml      # yaml format
 ```
+
+### pod runtime status
+
+`desiredStatus` says what you asked for, never what is happening: a pod whose
+20 gb image is still downloading and a pod that has been serving for an hour are
+both `RUNNING`. `pod get` and `pod list` therefore also report a derived
+`runtimeStatus`, plus a `runtimeStatusReason` token when there is more to say.
+branch on these, not on the reason text.
+
+| `runtimeStatus` | meaning |
+| --- | --- |
+| `running` | `desiredStatus` is RUNNING and the platform reports runtime telemetry: the container is up. does **not** imply any port is reachable |
+| `initializing` | `desiredStatus` is RUNNING and no telemetry is being reported. usually placed on a machine with the container not up yet — image pull, container create or boot, which the platform does not distinguish — but the same absence is what an upstream telemetry lookup failure looks like, so read it as "no container reported", not "the container is provably down". either way: keep polling |
+| `stopped` | `desiredStatus` is EXITED and `lastStatusChange` does not name a termination. container gone, disk kept, `pod start` will bring it back |
+| `terminated` | the pod is being destroyed: `desiredStatus` is TERMINATED, **or** it is EXITED and `lastStatusChange` says "terminated by ...". the second is the normal case — a terminate writes EXITED, not TERMINATED — and a terminated pod drops out of `pod list` shortly after, so this is a narrow window |
+| `unknown` | not derivable: either a `desiredStatus` the platform defines but does not surface in practice (CREATED, RESTARTING, PAUSED, DEAD), or the runtime lookup failed. read `desiredStatus`, which is in the same output |
+
+| `runtimeStatusReason` | meaning |
+| --- | --- |
+| `awaiting_container` | with `initializing`: no container is being reported for a pod that should be running |
+| `stopped_by_user` / `terminated_by_user` | you did it |
+| `stopped_by_runpod` / `terminated_by_runpod` | runpod did it. the platform records no machine-readable cause; in practice this is insufficient credit, a fatal image-pull failure, or host action |
+| `stopped_outbid` / `terminated_outbid` | a spot/community pod lost its machine to a higher bid. the only involuntary stop with a real recorded cause; retry elsewhere or at on-demand pricing |
+| `runtime_unavailable` | with `unknown`: the runtime lookup could not be made, so running and initializing cannot be told apart |
+
+the token is a lossy read of the backend's free-text `lastStatusChange`, which
+`pod get` and `pod list` both also publish — so a phrasing this cli does not
+recognise leaves `runtimeStatusReason` absent rather than wrong, and the raw text
+is still there.
+
+`runtimeStatus` is derived from the graphql snapshot the runtime telemetry came
+from, while `desiredStatus` is rest's. the two surfaces can briefly disagree, so
+a single `pod get` can show `desiredStatus: RUNNING` next to
+`runtimeStatus: stopped`. that is deliberate: gating telemetry on the *other*
+surface's status is how a stopped pod's stale ports get handed back as a working
+ssh command. when they disagree, trust `runtimeStatus`.
+
+there is deliberately no `pulling` value. the api exposes no pull state (see
+`internal/podstate` for the full trace of what it does expose), so `pulling`
+could only ever be a guess, and `initializing` covers the whole pre-container
+window honestly instead.
+
+`uptimeSeconds` is the container's uptime and is absent whenever no container is
+reporting, rather than being published as `0`.
+
+to poll a pod to readiness, wait for `runtimeStatus: running`; for ssh, wait for
+`ssh.ssh_command` to appear in `pod get`. a running container still needs a
+publicly routable port 22, and when it has none `ssh.error` says which case it
+is: the pod never asked for `22/tcp`, the host has not published the mapping yet,
+or the mapping exists but is not publicly routable on that machine (no public ip
+— nothing you can change on the pod).
+
+in the first case the message hands you a `pod update ... --ports` command with
+your existing ports already in it, because **`--ports` replaces the pod's whole
+port list** rather than adding to it (unlike `--env`, which merges). changing the
+port list also bumps the pod's version, which can restart the container, so
+processes and container-local state outside the volume may not survive it.
+
+`pod list` gets its telemetry from one bulk graphql call regardless of pod count,
+never one per pod. it is skipped entirely when no listed pod is `RUNNING` (a
+stopped pod's telemetry is stale and never consulted anyway). that call is
+best-effort and capped at 5s: if it fails, every pod comes back `unknown` /
+`runtime_unavailable` and the list still succeeds.
 
 ### error format
 

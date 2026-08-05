@@ -60,6 +60,15 @@ func NewGraphQLClient() (*GraphQLClient, error) {
 	}, nil
 }
 
+// LimitTimeout lowers this client's http timeout for best-effort side-calls
+// whose result is optional. It only ever shortens: an operator who configured a
+// tighter graphqlTimeout keeps theirs.
+func (c *GraphQLClient) LimitTimeout(d time.Duration) {
+	if d > 0 && d < c.httpClient.Timeout {
+		c.httpClient.Timeout = d
+	}
+}
+
 // Query executes a GraphQL query
 func (c *GraphQLClient) Query(input GraphQLInput) ([]byte, error) {
 	if input.Variables == nil {
@@ -412,9 +421,19 @@ type LegacyMachine struct {
 	Location       string `json:"location"`
 }
 
-// LegacyRuntime is the runtime structure from GraphQL API
+// LegacyRuntime is the runtime structure from GraphQL API.
+//
+// This is the entire public runtime surface: there is no pulling/starting/ready
+// enum anywhere on it. `runtime` itself being null is the only signal that the
+// container is not up yet (the resolver returns null when the host daemon has
+// nothing for the pod). See internal/podstate.
 type LegacyRuntime struct {
 	Ports []*LegacyPort `json:"ports"`
+	// UptimeInSeconds is the real container uptime. Note the name: the
+	// deprecated top-level Pod.uptimeSeconds is a different field and is always
+	// 0 in prod, despite its deprecation notice pointing at a
+	// "runtime.uptimeSeconds" that does not exist.
+	UptimeInSeconds *int `json:"uptimeInSeconds"`
 }
 
 // LegacyPort is the port structure from GraphQL API
@@ -455,6 +474,7 @@ func (c *GraphQLClient) GetPods() ([]*LegacyPod, error) {
 				  location
 				}
 				runtime {
+				  uptimeInSeconds
 				  ports {
 					ip
 					isIpPublic

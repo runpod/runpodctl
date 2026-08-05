@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -16,13 +17,20 @@ import (
 	"unicode/utf8"
 )
 
+// cliBinary returns the runpodctl binary under test. It defaults to the
+// installed one, but RUNPODCTL_BIN points it at a local build so a worktree can
+// be e2e-tested without overwriting the shared install.
+func cliBinary() string {
+	if override := strings.TrimSpace(os.Getenv("RUNPODCTL_BIN")); override != "" {
+		return override
+	}
+	home, _ := os.UserHomeDir()
+	return home + "/go/bin/runpodctl"
+}
+
 // runCLI runs the runpodctl CLI and returns stdout, stderr, and error
 func runCLI(args ...string) (string, string, error) {
-	// use the binary from go/bin
-	home, _ := os.UserHomeDir()
-	binary := home + "/go/bin/runpodctl"
-
-	cmd := exec.Command(binary, args...)
+	cmd := exec.Command(cliBinary(), args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -32,11 +40,7 @@ func runCLI(args ...string) (string, string, error) {
 }
 
 func runCLIWithInput(dir string, input string, args ...string) (string, string, error) {
-	// use the binary from go/bin
-	home, _ := os.UserHomeDir()
-	binary := home + "/go/bin/runpodctl"
-
-	cmd := exec.Command(binary, args...)
+	cmd := exec.Command(cliBinary(), args...)
 	cmd.Dir = dir
 	if strings.TrimSpace(input) != "" {
 		cmd.Stdin = strings.NewReader(input)
@@ -78,6 +82,54 @@ func parseStringSlice(value interface{}) []string {
 	default:
 		return nil
 	}
+}
+
+// communityGpuTypesByPrice returns available community gpu ids cheapest first.
+//
+// pickCommunityGpuType returns whatever the api happens to list first, which is
+// an A100 80GB at $1.19/hr as of writing; anything that provisions a pod purely
+// to observe cli behaviour should not pay 7x for a gpu the assertion never
+// touches. `available: true` is also not a capacity guarantee — the cheapest
+// types are frequently sold out — so callers should walk the list rather than
+// skip on the first failure.
+func communityGpuTypesByPrice(t *testing.T) []struct {
+	ID    string
+	Price float64
+} {
+	t.Helper()
+
+	stdout, stderr, err := runCLI("gpu", "list")
+	if err != nil {
+		t.Skipf("skipping - can't list gpus: %v\nstderr: %s", err, stderr)
+	}
+
+	var gpus []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &gpus); err != nil {
+		t.Skipf("skipping - can't parse gpu list: %v", err)
+	}
+
+	var candidates []struct {
+		ID    string
+		Price float64
+	}
+	for _, gpu := range gpus {
+		community, _ := gpu["communityCloud"].(bool)
+		available, _ := gpu["available"].(bool)
+		id, _ := gpu["gpuId"].(string)
+		price, ok := gpu["communityPricePerHr"].(float64)
+		if !community || !available || strings.TrimSpace(id) == "" || !ok || price <= 0 {
+			continue
+		}
+		candidates = append(candidates, struct {
+			ID    string
+			Price float64
+		}{id, price})
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].Price < candidates[j].Price })
+	if len(candidates) == 0 {
+		t.Skip("skipping - no priced community gpu types available")
+	}
+	return candidates
 }
 
 func pickCommunityGpuType(t *testing.T) string {
@@ -1872,4 +1924,200 @@ func TestCLI_HelpCoverage(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCLI_PodRuntimeStatusTransition walks a real pod from creation to a
+// container-up state and asserts the derived runtimeStatus tracks it (CON-690).
+// It also checks the stopped case, since "not running" values are otherwise
+// never exercised against the live api.
+func TestCLI_PodRuntimeStatusTransition(t *testing.T) {
+	name := "e2e-runtime-status-" + time.Now().Format("20060102150405")
+
+	// cheapest first, walking down the list: "available" is not capacity, and a
+	// skip here would mean the transition never gets tested at all.
+	var stdout, stderr string
+	var err error
+	created := false
+	for i, candidate := range communityGpuTypesByPrice(t) {
+		if i >= 4 {
+			break
+		}
+		stdout, stderr, err = runCLI("pod", "create",
+			"--cloud-type", "community",
+			"--image", "runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404",
+			"--gpu-id", candidate.ID,
+			"--volume-in-gb", "0",
+			"--container-disk-in-gb", "20",
+			"--ports", "22/tcp",
+			"--name", name,
+		)
+		if err == nil {
+			t.Logf("created on %s at $%.2f/hr", candidate.ID, candidate.Price)
+			created = true
+			break
+		}
+		if !shouldSkipCommunityCreate(stdout + stderr) {
+			t.Fatalf("failed to create pod on %s: %v\nstderr: %s", candidate.ID, err, stderr)
+		}
+		t.Logf("no capacity on %s at $%.2f/hr, trying the next one", candidate.ID, candidate.Price)
+	}
+	if !created {
+		t.Skipf("community pods unavailable on every candidate gpu: %s", strings.TrimSpace(stderr))
+	}
+
+	var createResponse map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &createResponse); err != nil {
+		t.Fatalf("create output is not valid json: %v\noutput: %s", err, stdout)
+	}
+	podID, ok := createResponse["id"].(string)
+	if !ok || strings.TrimSpace(podID) == "" {
+		t.Fatal("expected pod id in create response")
+	}
+
+	// pods bill by the second: delete unconditionally, even on failure.
+	t.Cleanup(func() {
+		if _, _, err := runCLI("pod", "delete", podID); err != nil {
+			t.Logf("warning: failed to delete test pod %s: %v", podID, err)
+		} else {
+			t.Logf("cleaned up pod %s", podID)
+		}
+	})
+
+	// poll fast: the whole point is to catch the initializing -> running
+	// transition, and a slow poll can step straight over it.
+	seen := map[string]bool{}
+	initializingReason := ""
+	initializingSSHError := ""
+	var last map[string]interface{}
+	deadline := time.Now().Add(6 * time.Minute)
+	for time.Now().Before(deadline) {
+		details := podGetJSON(t, podID)
+		status, _ := details["runtimeStatus"].(string)
+		if status == "" {
+			t.Fatalf("runtimeStatus missing from pod get: %v", details)
+		}
+		seen[status] = true
+		last = details
+		if status == "running" {
+			break
+		}
+		if status != "initializing" {
+			// unknown means the runtime lookup itself failed, which is not a
+			// startup state and would make the rest of the test vacuous.
+			t.Fatalf("unexpected runtimeStatus %q while starting up: %v", status, details)
+		}
+		initializingReason, _ = details["runtimeStatusReason"].(string)
+		if ssh, ok := details["ssh"].(map[string]interface{}); ok {
+			initializingSSHError, _ = ssh["error"].(string)
+		}
+		time.Sleep(time.Second)
+	}
+
+	if status, _ := last["runtimeStatus"].(string); status != "running" {
+		t.Fatalf("pod never reported runtimeStatus running (saw %v)", keysOf(seen))
+	}
+	if seen["initializing"] {
+		if initializingReason != "awaiting_container" {
+			t.Errorf("initializing runtimeStatusReason = %q, want awaiting_container", initializingReason)
+		}
+		// the ticket's actual complaint: "pod not ready" with no reason.
+		if !strings.Contains(initializingSSHError, "no container reported yet") {
+			t.Errorf("initializing ssh error should say why, got %q", initializingSSHError)
+		}
+	}
+	// a running pod has no reason to explain and must report real uptime.
+	if reason, ok := last["runtimeStatusReason"]; ok {
+		t.Errorf("running pod should carry no runtimeStatusReason, got %v", reason)
+	}
+	if _, ok := last["uptimeSeconds"]; !ok {
+		t.Errorf("running pod should report uptimeSeconds, got %v", last)
+	}
+
+	// pod list must agree, and must carry the field on the bulk path too.
+	stdout, stderr, err = runCLI("pod", "list")
+	if err != nil {
+		t.Fatalf("pod list failed: %v\nstderr: %s", err, stderr)
+	}
+	var listed []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &listed); err != nil {
+		t.Fatalf("pod list output is not valid json: %v\noutput: %s", err, stdout)
+	}
+	found := false
+	for _, item := range listed {
+		if id, _ := item["id"].(string); id != podID {
+			continue
+		}
+		found = true
+		if status, _ := item["runtimeStatus"].(string); status != "running" {
+			t.Errorf("pod list runtimeStatus = %q, want running", status)
+		}
+		if _, ok := item["lastStatusChange"].(string); !ok {
+			t.Errorf("pod list should carry lastStatusChange: %v", item)
+		}
+	}
+	if !found {
+		t.Errorf("pod %s missing from pod list", podID)
+	}
+
+	// stopped: a user-initiated stop must be attributed as such, and must not be
+	// reported as running even though stale runtime telemetry lingers.
+	if _, stderr, err := runCLI("pod", "stop", podID); err != nil {
+		t.Fatalf("pod stop failed: %v\nstderr: %s", err, stderr)
+	}
+	stopped := podGetJSON(t, podID)
+	if status, _ := stopped["runtimeStatus"].(string); status != "stopped" {
+		t.Errorf("stopped pod runtimeStatus = %v, want stopped (%v)", stopped["runtimeStatus"], stopped)
+	}
+	if reason, _ := stopped["runtimeStatusReason"].(string); reason != "stopped_by_user" {
+		t.Errorf("stopped pod runtimeStatusReason = %q, want stopped_by_user", reason)
+	}
+	if _, ok := stopped["uptimeSeconds"]; ok {
+		t.Errorf("stopped pod must not report stale uptimeSeconds: %v", stopped["uptimeSeconds"])
+	}
+	// stale runtime ports outlive the container, so this must not be an
+	// ssh command that cannot connect.
+	stoppedSSH, ok := stopped["ssh"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("stopped pod has no ssh block: %v", stopped)
+	}
+	if _, ok := stoppedSSH["ssh_command"]; ok {
+		t.Errorf("stopped pod must not offer an ssh command: %v", stoppedSSH)
+	}
+	if msg, _ := stoppedSSH["error"].(string); !strings.Contains(msg, "pod is stopped") {
+		t.Errorf("stopped pod ssh error = %q, want it to say the pod is stopped", msg)
+	}
+
+	// the initializing -> running transition is the state this ticket exists for,
+	// so a run that never saw "initializing" has not exercised it and must not
+	// read as a clean pass. it is a skip rather than a failure because the usual
+	// cause is benign -- a boot faster than the first poll, e.g. a cached image on
+	// the host -- and it comes last so every other assertion above still runs and
+	// still fails the test on its own. the test cannot tell that benign cause
+	// apart from a derivation that stopped reporting initializing at all, so read
+	// the skip, do not assume it.
+	if !seen["initializing"] {
+		t.Skipf("never observed initializing (saw %v): either the pod booted faster than the first poll, or the state is no longer derived -- the transition under test was not exercised", keysOf(seen))
+	}
+}
+
+func podGetJSON(t *testing.T, podID string) map[string]interface{} {
+	t.Helper()
+
+	stdout, stderr, err := runCLI("pod", "get", podID)
+	if err != nil {
+		t.Fatalf("pod get %s failed: %v\nstderr: %s", podID, err, stderr)
+	}
+	var details map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &details); err != nil {
+		t.Fatalf("pod get output is not valid json: %v\noutput: %s", err, stdout)
+	}
+	return details
+}
+
+func keysOf(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }

@@ -4,7 +4,14 @@ get pod details
 
 ### Synopsis
 
-get details for a specific pod by id
+get details for a specific pod by id.
+
+runtimeStatus reports what the pod is actually doing, which desiredStatus
+cannot: running (container up and reporting), initializing (no container
+reported yet - image pull, create or boot), stopped, terminated, or unknown
+(not derivable, read desiredStatus). runtimeStatusReason carries a stable
+token when there is more to say, and lastStatusChange carries the backend's
+raw text.
 
 ```
 runpodctl pod get <pod-id> [flags]

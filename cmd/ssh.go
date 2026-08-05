@@ -188,12 +188,26 @@ func runSSHInfoWithArgs(cmd *cobra.Command, args []string, allowAll bool) error 
 	nameOrID := args[0]
 	pod, conn := sshconnect.FindPodConnection(pods, nameOrID, keyInfo)
 	if pod != nil {
-		if conn == nil {
+		// the same derivation `pod get` uses, so both commands explain a
+		// not-ready pod identically instead of saying only "pod not ready".
+		state := sshconnect.PodState(pod)
+		// A stopped pod keeps reporting stale runtime ports for a while, which
+		// is enough to build an ssh command that cannot possibly connect. The
+		// gate is "known down", not "not running": an unknown state is no
+		// evidence the pod is down, so a connection built from live ports is
+		// still worth returning.
+		if conn == nil || state.IsKnownDown() {
+			var runtimePorts []*api.LegacyPort
+			if pod.Runtime != nil {
+				runtimePorts = pod.Runtime.Ports
+			}
+			message := sshconnect.NotReadyMessage(pod.ID, state, sshconnect.SplitPorts(pod.Ports), runtimePorts)
 			return output.Print(map[string]interface{}{
-				"error":  "pod not ready",
-				"id":     pod.ID,
-				"name":   pod.Name,
-				"status": pod.DesiredStatus,
+				"error":         message,
+				"id":            pod.ID,
+				"name":          pod.Name,
+				"status":        pod.DesiredStatus,
+				"runtimeStatus": string(state.Status),
 			}, &output.Config{Format: format})
 		}
 		return output.Print(conn, &output.Config{Format: format})

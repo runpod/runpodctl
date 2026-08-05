@@ -1,0 +1,106 @@
+package sshconnect
+
+import (
+	"strings"
+
+	"github.com/runpod/runpodctl/internal/api"
+	"github.com/runpod/runpodctl/internal/podstate"
+)
+
+// NotReadyMessage explains why no ssh connection could be built, replacing the
+// bare "pod not ready" that used to be the only thing an agent got while an
+// image was pulling (CON-690).
+//
+// The running case is the one that needs care. The container is genuinely up, so
+// what is missing is a *publicly routable* port 22 — which BuildConnection
+// requires — and there are three different reasons for that, with three
+// different remedies. Getting this wrong is expensive: this text is default-on
+// advice that agents follow literally, so a remedy that destroys state or that
+// the pod does not need is worse than saying nothing. See addSSHPortCommand.
+//
+// podID is interpolated into suggested commands so an agent can run them
+// verbatim; declaredPorts is the pod's requested port list ("22/tcp",
+// "8888/http", ...) and runtimePorts is what the host actually mapped; any of
+// them may be empty.
+func NotReadyMessage(podID string, state podstate.State, declaredPorts []string, runtimePorts []*api.LegacyPort) string {
+	detail := state.Explain(podID)
+	if state.Status == podstate.StatusRunning {
+		detail = sshPortDetail(podID, declaredPorts, runtimePorts)
+	}
+	if detail == "" {
+		return "pod not ready"
+	}
+	return "pod not ready: " + detail
+}
+
+func sshPortDetail(podID string, declaredPorts []string, runtimePorts []*api.LegacyPort) string {
+	if !declaresSSHPort(declaredPorts) {
+		return "pod does not publish 22/tcp; add it with '" + addSSHPortCommand(podID, declaredPorts) + "'" +
+			" (--ports replaces the whole list, and changing it may restart the container)"
+	}
+	for _, port := range runtimePorts {
+		if port != nil && port.PrivatePort == 22 {
+			// host maps any binding that is not on 0.0.0.0 to isIpPublic=false,
+			// which is what a machine with no public ip looks like. direct ssh
+			// cannot work; there is nothing the caller can change on the pod.
+			return "port 22 is mapped but not publicly routable on this machine"
+		}
+	}
+	return "port 22 is declared but the host has not published a mapping for it yet"
+}
+
+// addSSHPortCommand builds the command that adds 22/tcp *without* dropping the
+// ports the pod already publishes.
+//
+// `--ports` is not additive: cmd/pod/update.go sets `req.Ports` to exactly what
+// was passed (unlike `--env`, which merges against the existing pod), and the
+// backend writes it through verbatim (`ports: input.ports` in
+// runpod-backend/model/src/pod/editJob.ts:161). So the naive advice
+// "--ports 22/tcp" silently unpublishes the http port the pod was created for.
+// The suggested command therefore always carries the existing list too.
+//
+// The restart caveat is on the message for the same reason: editJob bumps
+// `version: { increment: 1 }`, the host names containers `{podId}-{version}`
+// (host/pkg/dockpose/api.go:215), and docker port bindings are fixed at create
+// time, so a new public port implies a new container. We observed desiredStatus
+// stay RUNNING and the port appear within seconds, which a recreate against a
+// cached image looks exactly like — so the message says "may restart" rather
+// than claiming either way.
+func addSSHPortCommand(podID string, declaredPorts []string) string {
+	wanted := make([]string, 0, len(declaredPorts)+1)
+	for _, entry := range declaredPorts {
+		if entry = strings.TrimSpace(entry); entry != "" {
+			wanted = append(wanted, entry)
+		}
+	}
+	wanted = append(wanted, "22/tcp")
+	return "runpodctl pod update " + podstate.IDOrPlaceholder(podID) + " --ports " + strings.Join(wanted, ",")
+}
+
+// declaresSSHPort reports whether the pod asked for tcp 22. Entries look like
+// "22/tcp"; a bare "22" is accepted too since the api is lenient about it.
+func declaresSSHPort(declaredPorts []string) bool {
+	for _, entry := range declaredPorts {
+		number, _, _ := strings.Cut(strings.TrimSpace(entry), "/")
+		if number == "22" {
+			return true
+		}
+	}
+	return false
+}
+
+// SplitPorts turns graphql's comma-separated `Pod.ports` string into the same
+// shape rest returns as a list.
+func SplitPorts(ports string) []string {
+	if strings.TrimSpace(ports) == "" {
+		return nil
+	}
+	parts := strings.Split(ports, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
