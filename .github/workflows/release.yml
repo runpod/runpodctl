@@ -14,9 +14,21 @@ jobs:
     name: release
     runs-on: ubuntu-latest
     concurrency: release-${{ github.ref }}
-    # quill waits for a conclusive notary verdict with no bound of its own;
-    # without this a stalled apple submission holds the concurrency lock for
-    # the default 6h and blocks any retry
+    # belt and braces over quill's own notary bound, which is already firm:
+    # notary.PollStatus wraps the poll loop in context.WithTimeout, and
+    # status.timeout-seconds defaults to 900s. this only keeps a hang elsewhere
+    # in the job (build, upload, tap pr) from holding the concurrency lock for
+    # the default 6h and blocking a retry.
+    #
+    # quill's 900s notary timeout has a hard ceiling above it: quill mints one
+    # app store connect jwt up front with exp = timeout + 2m and never refreshes
+    # it (quill/notarize.go WithStatusConfig -> notary.NewSignedToken), and apple
+    # rejects notary tokens with a lifetime over 20 minutes. so anything above
+    # 1080s (18m) is a guaranteed 401 -- the 2400s that looks reasonable for a
+    # slow first submission cannot work. if apple does exceed the timeout,
+    # re-run the workflow; quill has no resume, so it re-signs and resubmits
+    # from scratch (and each signing run embeds a fresh apple timestamp, so the
+    # bytes and the hash differ every time).
     timeout-minutes: 45
 
     steps:
@@ -40,15 +52,42 @@ jobs:
         with:
           go-version: "1.26.5"
 
-      # pinned: an unpinned installer makes releases non-reproducible and lets
-      # an upstream regression break signing without a change on our side
+      # the release tarball is pinned by version *and* sha256, and installed
+      # without piping anything to a shell. this job receives the developer id
+      # p12 and the notary key, so an unverified installer running as root here
+      # is a direct exfiltration path for the signing identity. the checksum
+      # also makes an upstream regression a loud install failure rather than a
+      # quietly different signature.
+      # bump both values together, from quill_<version>_checksums.txt.
+      # names are deliberately not QUILL_*: quill itself reads QUILL_<section>_<key>
+      # from the environment, so keeping install vars out of that prefix stops a
+      # future rename from silently reconfiguring the signer.
       - name: Install quill
-        run: curl -sSfL https://get.anchore.io/quill | sudo sh -s -- -b /usr/local/bin v0.7.1
+        env:
+          PIN_QUILL_VERSION: 0.7.1
+          PIN_QUILL_SHA256: e58c6f86378a22507c1123e24412afd4ee2d3bb32ebd94d6059827dc0c1b3fbf
+        run: |
+          set -euo pipefail
+          # a scratch dir, not the workspace: goreleaser's non-snapshot run fails
+          # on a dirty git tree, so a leftover download would break the release
+          # with an unrelated error message.
+          workdir="$(mktemp -d)"
+          tarball="${workdir}/quill_${PIN_QUILL_VERSION}_linux_amd64.tar.gz"
+          curl -sSfL --retry 3 -o "$tarball" \
+            "https://github.com/anchore/quill/releases/download/v${PIN_QUILL_VERSION}/quill_${PIN_QUILL_VERSION}_linux_amd64.tar.gz"
+          echo "${PIN_QUILL_SHA256}  ${tarball}" | sha256sum --check --strict -
+          tar -xzf "$tarball" -C "$workdir" quill
+          sudo install -m 0755 "${workdir}/quill" /usr/local/bin/quill
+          rm -rf "$workdir"
+          quill version
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest
+          # pinned now that goreleaser drives signing: with `latest`, an upstream
+          # release can change the signing chain (hook ordering, universal binary
+          # handling) between two tags of ours with no change on our side.
+          version: v2.17.1
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

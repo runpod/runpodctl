@@ -220,6 +220,7 @@ releases are fully automated by [goreleaser](https://goreleaser.com/) via the `r
 
 3. the tag push triggers the `release` workflow, which runs `goreleaser release --clean` and:
    - builds binaries for darwin/linux/windows (amd64/arm64), incl. raw `runpodctl-{os}-{arch}` binaries for the legacy self-update command and a upx-compressed linux/amd64 build.
+   - signs and notarizes the darwin universal binary with [quill](https://github.com/anchore/quill), after the per-arch builds are merged into the fat binary and before archiving, so the release checksums and the homebrew formula/cask hashes all cover the signed artifact. the raw per-arch `runpodctl-darwin-{arch}` binaries are **not** signed; only pre-signing runpodctl versions fetch those.
    - creates the github release with archives + checksums (prereleases are auto-detected from the tag).
    - opens pull requests on [runpod/homebrew-runpodctl](https://github.com/runpod/homebrew-runpodctl) for the homebrew formula and cask.
 
@@ -228,6 +229,15 @@ releases are fully automated by [goreleaser](https://goreleaser.com/) via the `r
 notes:
 
 - the workflow can also be run manually via `workflow_dispatch` (re-runs goreleaser against the current ref).
+- running goreleaser locally needs `quill` on your `PATH` (see [quill's install instructions](https://github.com/anchore/quill#installation); the workflow's install step is pinned to linux/amd64, so copy the version but not the tarball name), because the darwin signing hook also runs for snapshots. snapshots sign ad-hoc and skip the notary submission, so no apple credentials are needed:
+
+  ```bash
+  goreleaser release --snapshot --clean
+  ```
+
+- signing/notarization uses the `QUILL_SIGN_P12`, `QUILL_SIGN_PASSWORD`, `QUILL_NOTARY_KEY`, `QUILL_NOTARY_KEY_ID` and `QUILL_NOTARY_ISSUER` secrets. a signing or notary failure fails the whole release before anything is published.
+- quill waits up to 15 minutes (900s) for apple's verdict and then fails. that timeout cannot be raised much: quill mints a single app store connect token with `exp = timeout + 2m` and never refreshes it, and apple rejects notary tokens whose lifetime exceeds 20 minutes — so anything above 1080s (18m) is a guaranteed 401. if apple is slow enough to trip the timeout, re-run the workflow; quill has no resume, so it re-signs and resubmits from scratch (each signing run embeds a fresh apple timestamp, so the hash differs every run).
+- the signed binary is not stapled (quill cannot staple a bare mach-o). that only matters for downloads that carry the quarantine bit (a browser download, or `brew install --cask`): there gatekeeper does an online notarization check on first run. a `curl` download or the homebrew formula sets no quarantine bit, so gatekeeper never checks.
 - the homebrew prs are authored by a github app; tap auth uses the `RELEASE_APP_ID` / `RELEASE_APP_PRIVATE_KEY` secrets, and goreleaser pushes via the generated `HOMEBREW_TAP_TOKEN`.
 - conda-forge is updated separately by the conda-forge feedstock bot, not by this workflow.
 

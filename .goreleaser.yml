@@ -41,13 +41,18 @@ upx:
 universal_binaries:
   - id: default
     replace: true
-    # sign + notarize after lipo merges the per-arch builds; signing before the
-    # merge produces an invalid signature. snapshots ad-hoc sign and skip the
-    # notary submission so local builds need no credentials.
+    # sign + notarize after the per-arch builds are merged into the fat binary;
+    # signing before the merge produces an invalid signature. snapshots ad-hoc
+    # sign and skip the notary submission so local builds need no credentials.
     hooks:
       post:
-        # output: true so quill's notary submission id and rejection reasons
-        # reach the job log — goreleaser swallows hook output otherwise
+        # output: true streams quill's progress live. it is not what surfaces a
+        # rejection: goreleaser buffers hook output and attaches it to the error
+        # anyway, and quill already puts apple's rejection log in the error it
+        # returns. quill logs the submission id at trace only, so to query a past
+        # submission by hand use `quill submission list` rather than raising the
+        # log level here (trace logging on a job holding the signing identity is
+        # not worth the id).
         - cmd: quill sign-and-notarize "{{ .Path }}" --dry-run={{ .IsSnapshot }} --ad-hoc={{ .IsSnapshot }}
           output: true
 
