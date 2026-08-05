@@ -73,7 +73,10 @@ func invokeURLs(id string) *EndpointInvokeURLs {
 	if id == "" {
 		return nil
 	}
-	base := invokeBaseURL() + "/" + id
+	// escaped for the same reason the invoke client escapes it: these urls are
+	// printed for people to curl, and an id with a path-significant character in it
+	// would produce a url addressing something else.
+	base := invokeBaseURL() + "/" + url.PathEscape(id)
 	return &EndpointInvokeURLs{
 		Run:     base + "/run",
 		RunSync: base + "/runsync",

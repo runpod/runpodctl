@@ -1,8 +1,10 @@
 package serverless
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -489,5 +491,160 @@ func TestRunRun_RejectsNegativeWait(t *testing.T) {
 	})
 	if code := errorCode(t, err); code != "usage_error" {
 		t.Fatalf("code = %q, want usage_error (err %v)", code, err)
+	}
+}
+
+// --no-wait and an explicit --wait ask for opposite things; accepting both and
+// ignoring the more specific one is the worst of the three options.
+func TestRunRun_RejectsNoWaitWithAnExplicitWait(t *testing.T) {
+	snapshotRunFlags(t)
+	runNoWait = true
+	runWait = 10 * time.Minute
+
+	// a usable runStep on purpose: without the guard this test must fail on the
+	// assertions below rather than panic on a nil job and abort the whole package.
+	client := installMockInvokeClient(t, &mockInvokeClient{
+		runStep: jobStep{job: mustJob(`{"id":"job-1","status":"IN_QUEUE"}`)},
+	})
+
+	cmd := mockInvokeCommand("")
+	cmd.Flags().Duration("wait", 0, "")
+	cmd.Flags().Lookup("wait").Changed = true
+
+	var err error
+	_, _ = captureOutput(t, func() {
+		err = runRun(cmd, []string{"ep-1"})
+	})
+	if code := errorCode(t, err); code != "usage_error" {
+		t.Fatalf("code = %q, want usage_error (err %v)", code, err)
+	}
+	if client.runCalls != 0 {
+		t.Errorf("a flag conflict must be caught before any api call, got run=%d", client.runCalls)
+	}
+}
+
+// --no-wait on its own is still exactly --wait 0, so the default (unchanged) wait
+// flag must not trip the conflict check.
+func TestRunRun_NoWaitAloneIsNotAConflict(t *testing.T) {
+	snapshotRunFlags(t)
+	runNoWait = true
+
+	client := installMockInvokeClient(t, &mockInvokeClient{
+		runStep: jobStep{job: mustJob(`{"id":"job-1","status":"IN_QUEUE"}`)},
+	})
+
+	cmd := mockInvokeCommand("")
+	cmd.Flags().Duration("wait", api.DefaultInvokeWait, "")
+
+	var err error
+	_, _ = captureOutput(t, func() {
+		err = runRun(cmd, []string{"ep-1"})
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if client.statusCalls != 0 {
+		t.Errorf("--no-wait must not poll, got status=%d", client.statusCalls)
+	}
+}
+
+// An oversized body is rejected by the api only after the whole upload, which on
+// a slow link is minutes of waiting for a 400. The limit is known locally.
+//
+// The boundary is asserted against the bytes the client really sends, not against
+// len(payload): compaction and html escaping both move that number, so an
+// estimate would refuse payloads the api accepts (a pretty-printed file) and pass
+// ones it refuses (an ampersand-heavy one).
+func TestResolveJobInput_ChecksTheRealBodySizeLocally(t *testing.T) {
+	payloadOfBodySize := func(t *testing.T, want int) string {
+		t.Helper()
+		shell := `{"p":""}`
+		base, err := api.RunBodySize(json.RawMessage(shell))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return `{"p":"` + strings.Repeat("a", want-base) + `"}`
+	}
+
+	t.Run("a body one byte over the limit is refused", func(t *testing.T) {
+		payload := payloadOfBodySize(t, api.MaxRunBodyBytes+1)
+		size, err := api.RunBodySize(json.RawMessage(payload))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if size != api.MaxRunBodyBytes+1 {
+			t.Fatalf("test payload builds a %d byte body, want %d", size, api.MaxRunBodyBytes+1)
+		}
+
+		_, err = resolveJobInput(strings.NewReader(""), payload, "")
+		if err == nil {
+			t.Fatal("expected an oversized payload to be rejected")
+		}
+		if code := errorCode(t, err); code != "usage_error" {
+			t.Errorf("code = %q, want usage_error", code)
+		}
+		if !strings.Contains(err.Error(), strconv.Itoa(api.MaxRunBodyBytes)) {
+			t.Errorf("error = %q, want it to name the limit in bytes", err.Error())
+		}
+	})
+
+	t.Run("a body at exactly the limit is accepted", func(t *testing.T) {
+		payload := payloadOfBodySize(t, api.MaxRunBodyBytes)
+		if _, err := resolveJobInput(strings.NewReader(""), payload, ""); err != nil {
+			t.Errorf("a payload at exactly the limit must be accepted, got %v", err)
+		}
+	})
+
+	t.Run("whitespace does not count against the limit", func(t *testing.T) {
+		// over the limit as typed, under it once compacted -- the api would accept
+		// this, so refusing it locally would be a regression against no check at all.
+		payload := "{\n  \"p\": \"" + strings.Repeat("a", api.MaxRunBodyBytes-64) + "\"" + strings.Repeat(" ", 1024) + "\n}"
+		if len(payload) <= api.MaxRunBodyBytes {
+			t.Fatalf("test payload is %d bytes, it must exceed the limit before compaction", len(payload))
+		}
+		if _, err := resolveJobInput(strings.NewReader(""), payload, ""); err != nil {
+			t.Errorf("a payload that only exceeds the limit before compaction must be accepted, got %v", err)
+		}
+	})
+
+	t.Run("html escaping does count against the limit", func(t *testing.T) {
+		// each & becomes six bytes on the wire, so this is under the limit as typed
+		// and far over it once marshalled: the api would refuse it.
+		payload := `{"p":"` + strings.Repeat("&", 3<<20) + `"}`
+		if len(payload) > api.MaxRunBodyBytes {
+			t.Fatalf("test payload is %d bytes, it must be under the limit before escaping", len(payload))
+		}
+		_, err := resolveJobInput(strings.NewReader(""), payload, "")
+		if err == nil {
+			t.Fatal("expected a payload that only exceeds the limit once escaped to be rejected")
+		}
+		if code := errorCode(t, err); code != "usage_error" {
+			t.Errorf("code = %q, want usage_error", code)
+		}
+	})
+}
+
+// The conflict guard reads the flag by name off the real command, so parse the
+// real flag set too: a rename in init() would otherwise disable the guard
+// silently while a test built on a hand-rolled command kept passing.
+func TestRunCmd_ConflictGuardMatchesTheRealFlagNames(t *testing.T) {
+	flags := runCmd.Flags()
+	t.Cleanup(func() {
+		for _, name := range []string{"wait", "no-wait"} {
+			if f := flags.Lookup(name); f != nil {
+				f.Changed = false
+			}
+		}
+		runNoWait, runWait = false, api.DefaultInvokeWait
+	})
+
+	if err := flags.Parse([]string{"--no-wait", "--wait", "10m"}); err != nil {
+		t.Fatalf("parsing the real flags failed: %v", err)
+	}
+	if !flags.Changed("wait") {
+		t.Error(`the guard reads Changed("wait"); the real command has no such flag, so it can never fire`)
+	}
+	if !runNoWait || runWait != 10*time.Minute {
+		t.Errorf("parsed flags did not reach the globals: runNoWait=%v runWait=%v", runNoWait, runWait)
 	}
 }

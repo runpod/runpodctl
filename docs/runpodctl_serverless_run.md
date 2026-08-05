@@ -50,7 +50,7 @@ runpodctl serverless run <endpoint-id> [flags]
   -h, --help                help for run
       --input string        json payload for the handler; '-' reads stdin
       --input-file string   read the json payload from a file; '-' reads stdin
-      --no-wait             submit and print the job id without waiting (same as --wait 0)
+      --no-wait             submit and print the job id without waiting (same as --wait 0; cannot be combined with an explicit --wait)
       --wait duration       how long to wait for a terminal job status; 0 does not wait (e.g. 90s, 10m) (default 5m0s)
 ```
 

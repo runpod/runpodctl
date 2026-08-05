@@ -142,13 +142,17 @@ runpodctl serverless status <id> <job-id> --wait 5m
 ```
 
 the payload must be a json object and is sent as `{"input": <your json>}`; pass
-only the handler payload. it is parsed locally first, so a quoting mistake fails
-with `usage_error` before anything is sent.
+only the handler payload. it is parsed and size-checked locally first, so a
+quoting mistake, or a request body over the invoke api's 10 MiB `/run` limit,
+fails with `usage_error` before anything is uploaded. the size checked is the body
+the cli actually sends — the payload compacted and json-escaped inside
+`{"input": ...}` — so whitespace in an `--input-file` does not count against the
+limit and an `&`-heavy payload (six bytes escaped) does.
 
 | behavior | detail |
 | --- | --- |
 | waiting | `run` submits on `/run` and polls `/status` until the job is terminal, bounded by `--wait` (default 5m) |
-| `--no-wait` | submits and prints the queued job without polling (same as `--wait 0`, exit 0). follow it with `serverless status` |
+| `--no-wait` | submits and prints the queued job without polling (same as `--wait 0`, exit 0). follow it with `serverless status`. passing an explicit `--wait` alongside it is a `usage_error`, not a silently ignored flag |
 | stdout | always the job payload as json — including a `FAILED` job's `error`, and the last known payload when the wait ran out |
 | stderr | progress notes and the error object, never job data |
 | exit codes | 0 when the job is `COMPLETED`, and when `--wait 0` / `--no-wait` submitted it successfully. 1 when the request fails, when `--wait` runs out (`timeout`), or when the job ends `FAILED` / `CANCELLED` / `TIMED_OUT` (`job_failed`) |

@@ -346,3 +346,115 @@ func TestJobFailedError(t *testing.T) {
 		t.Errorf("message without id = %q", got)
 	}
 }
+
+// An id is interpolated into the url path, so anything path-significant in it is
+// escaped rather than sent raw. (The invoke service routes on the decoded path, so
+// this is about what goes on the wire and through proxies, not a guarantee about
+// what the server does with it.)
+func TestInvokeClient_EscapesIDsInPaths(t *testing.T) {
+	cases := []struct {
+		name     string
+		call     func(*InvokeClient) error
+		wantPath string
+	}{
+		{
+			name: "status escapes both ids",
+			call: func(c *InvokeClient) error {
+				_, err := c.JobStatus(context.Background(), "ep-1/../v1", "job-1/status")
+				return err
+			},
+			wantPath: "/ep-1%2F..%2Fv1/status/job-1%2Fstatus",
+		},
+		{
+			name: "run escapes the endpoint id",
+			call: func(c *InvokeClient) error {
+				_, err := c.Run(context.Background(), "ep-1/../v1", json.RawMessage(`{}`))
+				return err
+			},
+			wantPath: "/ep-1%2F..%2Fv1/run",
+		},
+		{
+			name: "health escapes the endpoint id",
+			call: func(c *InvokeClient) error {
+				_, err := c.EndpointHealth(context.Background(), "ep-1/../v1")
+				return err
+			},
+			wantPath: "/ep-1%2F..%2Fv1/health",
+		},
+		{
+			// the ids users actually pass must be untouched, or every existing
+			// caller's url changes.
+			name: "an ordinary id is sent verbatim",
+			call: func(c *InvokeClient) error {
+				_, err := c.JobStatus(context.Background(), "ep-1", "sync-8a7f6c21-b3d4-4e11-9f02-1a2b3c4d5e6f-e1")
+				return err
+			},
+			wantPath: "/ep-1/status/sync-8a7f6c21-b3d4-4e11-9f02-1a2b3c4d5e6f-e1",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotPath := ""
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// EscapedPath, not Path: Path is the decoded form, which cannot show
+				// whether the escaping happened.
+				gotPath = r.URL.EscapedPath()
+				_, _ = w.Write([]byte(`{"id":"job-1","status":"COMPLETED"}`))
+			}))
+			defer server.Close()
+
+			client := newTestInvokeClient(t, server.URL)
+			if err := tc.call(client); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if gotPath != tc.wantPath {
+				t.Errorf("path = %q, want %q", gotPath, tc.wantPath)
+			}
+		})
+	}
+}
+
+// The /run body limit is the invoke service's, so the constant a caller checks
+// against has to match it.
+func TestMaxRunBodyBytesMatchesTheAPI(t *testing.T) {
+	if MaxRunBodyBytes != 10<<20 {
+		t.Errorf("MaxRunBodyBytes = %d, want 10 MiB (ai-api LimitBodySize(10*MiB) on POST /run)", MaxRunBodyBytes)
+	}
+}
+
+// RunBodySize has to report what Run really sends, not an estimate: json
+// compaction shrinks a pretty-printed payload and html escaping grows an
+// ampersand-heavy one, so len(payload)+envelope is wrong in both directions.
+func TestRunBodySizeMatchesWhatRunSends(t *testing.T) {
+	cases := []string{
+		`{}`,
+		`{"prompt":"hi"}`,
+		"{\n  \"prompt\": \"pretty printed\",\n  \"n\": 1\n}",
+		`{"html":"<b>&amp;</b>"}`,
+		`{"unicode":"\u2028\u2029"}`,
+	}
+
+	for _, payload := range cases {
+		var gotBody []byte
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotBody, _ = io.ReadAll(r.Body)
+			_, _ = w.Write([]byte(`{"id":"job-1","status":"IN_QUEUE"}`))
+		}))
+
+		client := newTestInvokeClient(t, server.URL)
+		if _, err := client.Run(context.Background(), "ep-1", json.RawMessage(payload)); err != nil {
+			server.Close()
+			t.Fatalf("payload %s: unexpected error: %v", payload, err)
+		}
+		server.Close()
+
+		size, err := RunBodySize(json.RawMessage(payload))
+		if err != nil {
+			t.Fatalf("payload %s: %v", payload, err)
+		}
+		if size != len(gotBody) {
+			t.Errorf("payload %s: RunBodySize = %d, but the request body was %d bytes (%q)", payload, size, len(gotBody), gotBody)
+		}
+	}
+}

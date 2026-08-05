@@ -69,19 +69,27 @@ var (
 func init() {
 	runCmd.Flags().StringVar(&runInput, "input", "", "json payload for the handler; '-' reads stdin")
 	runCmd.Flags().StringVar(&runInputFile, "input-file", "", "read the json payload from a file; '-' reads stdin")
-	runCmd.Flags().BoolVar(&runNoWait, "no-wait", false, "submit and print the job id without waiting (same as --wait 0)")
+	runCmd.Flags().BoolVar(&runNoWait, "no-wait", false, "submit and print the job id without waiting (same as --wait 0; cannot be combined with an explicit --wait)")
 	runCmd.Flags().DurationVar(&runWait, "wait", api.DefaultInvokeWait, "how long to wait for a terminal job status; 0 does not wait (e.g. 90s, 10m)")
 }
 
 func runRun(cmd *cobra.Command, args []string) error {
 	endpointID := args[0]
 
+	// flag checks before the payload: they are free, and reading plus marshalling a
+	// large --input-file only to report a flag conflict wastes the caller's time.
+	if runWait < 0 {
+		return clierr.Usagef("--wait cannot be negative")
+	}
+	if runNoWait && cmd.Flags().Changed("wait") {
+		// silently ignoring the wait would make the command do the opposite of what
+		// the longer, more specific flag asked for.
+		return clierr.Usagef("--no-wait and --wait are mutually exclusive; --no-wait is the same as --wait 0")
+	}
+
 	input, err := resolveJobInput(cmd.InOrStdin(), runInput, runInputFile)
 	if err != nil {
 		return err
-	}
-	if runWait < 0 {
-		return clierr.Usagef("--wait cannot be negative")
 	}
 	wait := runWait
 	if runNoWait {
@@ -197,6 +205,17 @@ func resolveJobInput(stdin io.Reader, inline, file string) (json.RawMessage, err
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
 		return nil, clierr.Usagef("payload from %s is empty; expected json", source)
+	}
+
+	// the api rejects an oversized body only after the whole upload, which on a
+	// slow link is minutes of waiting for a 400. this is the same fail-locally rule
+	// the json validation below follows, and it runs first because it needs only a
+	// compacting pass rather than a decode into map[string]interface{}.
+	//
+	// a marshalling failure here means the payload is not valid json; that is
+	// reported by the parse below, which words it better.
+	if body, err := api.RunBodySize(trimmed); err == nil && body > api.MaxRunBodyBytes {
+		return nil, clierr.Usagef("the request body from %s is %d bytes, over the /run limit of %d (the payload compacted and json-escaped inside {\"input\": ...})", source, body, api.MaxRunBodyBytes)
 	}
 
 	var parsed interface{}

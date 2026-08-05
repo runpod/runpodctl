@@ -223,11 +223,12 @@ func isNetworkError(err error) bool {
 		return true
 	}
 	// Deliberately NOT matching a bare context.DeadlineExceeded or
-	// io.ErrUnexpectedEOF: any local wait loop can produce those without a
-	// network ever being involved (e.g. --wait-for-hash timing out after a
-	// perfectly successful upload), and network_error is the one code that tells
-	// an agent "transient, retry". A real http client timeout arrives wrapped in
-	// *url.Error, so the branches above already cover it.
+	// io.ErrUnexpectedEOF: any local wait loop can produce those without a network
+	// ever being involved, and network_error is the one code that tells an agent
+	// "transient, retry". A real http client timeout arrives wrapped in *url.Error,
+	// so the branches above already cover it. A local wait that wants to be
+	// machine-readable says so itself, with a typed error carrying its own code --
+	// which is what --wait-for-hash now does (api.TimeoutError, code "timeout").
 	return false
 }
 

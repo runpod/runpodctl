@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -113,7 +114,7 @@ func (c *InvokeClient) do(ctx context.Context, method, path string, body interfa
 // without a cli release and no value is reshaped on the way through; it is only
 // validated as parseable json.
 func (c *InvokeClient) EndpointHealth(ctx context.Context, endpointID string) (json.RawMessage, error) {
-	data, err := c.do(ctx, http.MethodGet, "/"+endpointID+"/health", nil)
+	data, err := c.do(ctx, http.MethodGet, "/"+url.PathEscape(endpointID)+"/health", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -123,6 +124,29 @@ func (c *InvokeClient) EndpointHealth(ctx context.Context, endpointID string) (j
 	}
 
 	return json.RawMessage(data), nil
+}
+
+// MaxRunBodyBytes is the invoke service's body limit for POST /run
+// (ai-api/pkg/api/router.go: middleware.LimitBodySize(10*MiB), answered as a 400
+// once the upload finishes). It bounds the whole marshalled body, not the handler
+// payload, which is why RunBodySize exists.
+//
+// /runsync allows 20 MiB, but the cli never uses it (see Run).
+const MaxRunBodyBytes = 10 << 20
+
+// RunBodySize reports how many bytes Run will actually send for input.
+//
+// It marshals through the same jobRequest, because nothing simpler is correct:
+// encoding/json compacts the payload (dropping whitespace, so a pretty-printed
+// file shrinks) and escapes <, > and & to \u003c-style sequences (six bytes
+// each, so an html-ish payload grows). Estimating from len(input) therefore
+// rejects bodies the api would accept and accepts bodies it would refuse.
+func RunBodySize(input json.RawMessage) (int, error) {
+	body, err := json.Marshal(jobRequest{Input: input})
+	if err != nil {
+		return 0, err
+	}
+	return len(body), nil
 }
 
 // jobRequest is the invoke wire body. The handler payload is always nested
@@ -143,7 +167,7 @@ type jobRequest struct {
 // minute after it completes, against 30 minutes for /run. Submitting here costs
 // one extra round trip and makes both of those failure modes impossible.
 func (c *InvokeClient) Run(ctx context.Context, endpointID string, input json.RawMessage) (*Job, error) {
-	data, err := c.do(ctx, http.MethodPost, "/"+endpointID+"/run", jobRequest{Input: input})
+	data, err := c.do(ctx, http.MethodPost, "/"+url.PathEscape(endpointID)+"/run", jobRequest{Input: input})
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +177,7 @@ func (c *InvokeClient) Run(ctx context.Context, endpointID string, input json.Ra
 // JobStatus fetches the current state of a previously submitted job
 // (GET /status/<job-id>).
 func (c *InvokeClient) JobStatus(ctx context.Context, endpointID, jobID string) (*Job, error) {
-	data, err := c.do(ctx, http.MethodGet, "/"+endpointID+"/status/"+jobID, nil)
+	data, err := c.do(ctx, http.MethodGet, "/"+url.PathEscape(endpointID)+"/status/"+url.PathEscape(jobID), nil)
 	if err != nil {
 		return nil, err
 	}
