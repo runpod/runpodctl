@@ -24,6 +24,9 @@ manage serverless endpoints on runpod
 * [runpodctl serverless create](runpodctl_serverless_create.md)	 - create a new endpoint
 * [runpodctl serverless delete](runpodctl_serverless_delete.md)	 - delete an endpoint
 * [runpodctl serverless get](runpodctl_serverless_get.md)	 - get endpoint details
+* [runpodctl serverless health](runpodctl_serverless_health.md)	 - get endpoint health
 * [runpodctl serverless list](runpodctl_serverless_list.md)	 - list all endpoints
+* [runpodctl serverless run](runpodctl_serverless_run.md)	 - invoke an endpoint and wait for the result
+* [runpodctl serverless status](runpodctl_serverless_status.md)	 - get the status of a serverless job
 * [runpodctl serverless update](runpodctl_serverless_update.md)	 - update an endpoint
 

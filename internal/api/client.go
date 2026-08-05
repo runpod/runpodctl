@@ -73,7 +73,7 @@ func (c *Client) request(method, endpoint string, params url.Values, body interf
 
 // requestURL is request against an already-built absolute url. It exists for the
 // few calls that do not live on the rest control plane (the serverless invoke
-// service, see GetEndpointHealth) but must still share auth, user agent and the
+// service, see InvokeClient.EndpointHealth) but must still share auth, user agent and the
 // structured APIError handling.
 func (c *Client) requestURL(method, u string, body interface{}) ([]byte, error) {
 	var reqBody io.Reader
@@ -138,7 +138,16 @@ func (c *Client) Delete(endpoint string) ([]byte, error) {
 //	bad_request, unauthorized, forbidden, not_found, conflict, rate_limited,
 //	server_error, api_error   -- from a REST APIError (see codeForStatus)
 //	graphql_error             -- from a GraphQLError
-//	usage_error               -- from a cli usage mistake (see cmd package)
+//	usage_error               -- from a cli usage mistake (see cmd/root.go and
+//	                             internal/clierr)
+//	timeout                   -- the cli stopped waiting. two cases, told apart by
+//	                             the message: a --wait budget ran out with the work
+//	                             still running server-side (the message names the
+//	                             command to poll it), or one api call exceeded the
+//	                             per-call timeout (nothing running; retry). See
+//	                             TimeoutError in invoke.go
+//	job_failed                -- a serverless job reached a terminal status other
+//	                             than COMPLETED (see JobFailedError in invoke.go)
 //	no_credentials            -- no api key configured locally
 //	network_error             -- api unreachable (see internal/output)
 //	wait_timeout              -- --wait gave up; resource exists (internal/waitfor)

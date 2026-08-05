@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/runpod/runpodctl/api"
+	internalapi "github.com/runpod/runpodctl/internal/api"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -808,6 +810,17 @@ func TestWaitForUploadedModelHashTimesOut(t *testing.T) {
 	// means "transient, retry").
 	if !strings.Contains(err.Error(), "do not re-upload") {
 		t.Errorf("timeout error should say the model exists, got %v", err)
+	}
+	// "the cli stopped waiting" is one condition, so it must report one code
+	// wherever it happens — an agent branching on code == "timeout" to mean
+	// "still running, do not retry" has to get the same answer here as it does
+	// from serverless run --wait.
+	var timeoutErr *internalapi.TimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("expected an *internalapi.TimeoutError, got %T: %v", err, err)
+	}
+	if timeoutErr.ErrorCode() != "timeout" {
+		t.Errorf("code = %q, want timeout", timeoutErr.ErrorCode())
 	}
 }
 

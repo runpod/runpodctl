@@ -18,4 +18,7 @@ func init() {
 	Cmd.AddCommand(createCmd)
 	Cmd.AddCommand(updateCmd)
 	Cmd.AddCommand(deleteCmd)
+	Cmd.AddCommand(healthCmd)
+	Cmd.AddCommand(runCmd)
+	Cmd.AddCommand(statusCmd)
 }

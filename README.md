@@ -23,6 +23,7 @@ _note: all pods automatically come with runpodctl installed with a pod-scoped ap
     - [pod management](#pod-management)
     - [serverless endpoints](#serverless-endpoints)
     - [waiting until a resource is usable](#waiting-until-a-resource-is-usable)
+      - [invoking an endpoint](#invoking-an-endpoint)
     - [file transfer](#file-transfer)
   - [output format](#output-format)
     - [pod runtime status](#pod-runtime-status)
@@ -114,7 +115,68 @@ runpodctl serverless get <id>         # get endpoint details
 runpodctl serverless create           # create endpoint
 runpodctl serverless update <id>      # update endpoint
 runpodctl serverless delete <id>      # delete endpoint
+runpodctl serverless health <id>      # worker and job counts for an endpoint
+runpodctl serverless run <id>         # invoke an endpoint and wait for the result
+runpodctl serverless status <id> <job-id>  # check a job submitted earlier
 ```
+
+#### invoking an endpoint
+
+`run` and `health` call the invoke api (`api.runpod.ai/v2`) with the api key you
+already configured, so there is no need to hand-build a curl request:
+
+```bash
+# invoke and wait for the result
+runpodctl serverless run <id> --input '{"prompt":"hello"}'
+
+# big payloads: skip shell quoting
+runpodctl serverless run <id> --input-file payload.json
+cat payload.json | runpodctl serverless run <id> --input -
+
+# give a cold or slow endpoint longer
+runpodctl serverless run <id> --input '{}' --wait 15m
+
+# submit and get the job id back immediately
+runpodctl serverless run <id> --input '{}' --no-wait
+runpodctl serverless status <id> <job-id> --wait 5m
+```
+
+the payload must be a json object and is sent as `{"input": <your json>}`; pass
+only the handler payload. it is parsed and size-checked locally first, so a
+quoting mistake, or a request body over the invoke api's 10 MiB `/run` limit,
+fails with `usage_error` before anything is uploaded. the size checked is the body
+the cli actually sends — the payload compacted and json-escaped inside
+`{"input": ...}` — so whitespace in an `--input-file` does not count against the
+limit and an `&`-heavy payload (six bytes escaped) does.
+
+| behavior | detail |
+| --- | --- |
+| waiting | `run` submits on `/run` and polls `/status` until the job is terminal, bounded by `--wait` (default 5m) |
+| `--no-wait` | submits and prints the queued job without polling (same as `--wait 0`, exit 0). follow it with `serverless status`. passing an explicit `--wait` alongside it is a `usage_error`, not a silently ignored flag |
+| stdout | always the job payload as json — including a `FAILED` job's `error`, and the last known payload when the wait ran out |
+| stderr | progress notes and the error object, never job data |
+| exit codes | 0 when the job is `COMPLETED`, and when `--wait 0` / `--no-wait` submitted it successfully. 1 when the request fails, when `--wait` runs out (`timeout`), or when the job ends `FAILED` / `CANCELLED` / `TIMED_OUT` (`job_failed`) |
+
+`timeout` means the cli stopped waiting, not that the endpoint is broken. when the
+message names a `serverless status` command the job is still running server-side —
+poll it with that command rather than re-invoking. when it does not (a single api
+call ran out of time), nothing was left running and a retry is fine.
+
+two budgets, two levers: `--wait` bounds the whole job, and the shared `timeout`
+config key (30s by default) bounds one api call. a call made inside a wait is
+clamped to what is left of `--wait`, except that no single call is ever given less
+than 1s — a request with milliseconds left is doomed before it is sent, and
+clamping it would throw away a terminal status one round trip away. so a `--wait`
+below one second may overshoot by up to that much, and no more.
+
+`/runsync` is deliberately not used, even though `serverless get` still reports
+its url. it is not synchronous: the invoke api holds the connection for 90s and
+then answers with a still-running job, so the cli has to poll `/status` either
+way. Submitting there also has two failure modes `/run` does not — until the
+response arrives there is no job id, so a slow response strands a billed job that
+cannot be polled at all, and a job submitted on `/runsync` has its result
+discarded 1 minute after it completes instead of 30 minutes. `/run` costs one
+extra round trip and avoids both.
 
 other resources: `template` (alias: `tpl`), `volume` (alias: `vol`), `registry` (alias: `reg`)
 
@@ -303,8 +365,10 @@ codes the cli generates:
 | `not_found` | the api has no such resource. during a `--wait` it can also mean a resource that *was* created has gone (or never became visible), so check for an `id` field and clean up rather than assuming nothing exists |
 | `bad_request` `unauthorized` `forbidden` `conflict` `rate_limited` `server_error` `api_error` | derived from the rest status |
 | `graphql_error` | graphql returned an errors array (http 200) |
+| `timeout` | the cli stopped waiting. two cases, told apart by the message: a `--wait` / `--wait-for-hash` budget ran out with the work still running server-side (the message names the command to poll it — do that, do not re-invoke), or a single api call exceeded the `timeout` config key (nothing is running; retry) |
+| `job_failed` | a serverless job reached a terminal status other than `COMPLETED`. the job payload is still on stdout |
 | `no_credentials` | no api key configured — run `runpodctl doctor` or set `RUNPOD_API_KEY` |
-| `network_error` | the api could not be reached at all — dns, refused, tls, timeout. the only code that means "transient, retry" |
+| `network_error` | the api could not be reached at all — dns, refused, tls, timeout. transient: retry |
 | `wait_timeout` | `--wait` gave up before the resource was usable. the resource **was created and still bills** — the last known state is in the message and the id is in `id` |
 | `wait_interrupted` | `--wait` was cancelled (ctrl-c / SIGTERM). same as above: the resource exists, and `id` names it |
 | `cli_error` | anything else local: validation, config, bad input (including a malformed `RUNPOD_API_URL`) |
@@ -333,7 +397,7 @@ rely on the exit code for `project` until CON-816 lands.
 | `RUNPOD_API_KEY` | — | api key. also settable via `runpodctl doctor` or `~/.runpod/config.toml` |
 | `RUNPOD_API_URL` | `https://rest.runpod.io/v1` | rest control plane (config key `restApiUrl`) |
 | `RUNPOD_GRAPHQL_URL` | `https://api.runpod.io/graphql` | graphql control plane (config key `apiUrl`) |
-| `RUNPOD_INVOKE_URL` | `https://api.runpod.ai/v2` | base for the serverless invoke urls reported by `serverless create/get/list/update` (config key `invokeUrl`) |
+| `RUNPOD_INVOKE_URL` | `https://api.runpod.ai/v2` | base for the serverless invoke urls reported by `serverless create/get/list/update`, and the host `serverless run/status/health` call (config key `invokeUrl`) |
 
 invoke is a separate service from the control plane: pointing `RUNPOD_API_URL`
 or `RUNPOD_GRAPHQL_URL` at a non-prod host does **not** move the invoke urls.

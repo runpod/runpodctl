@@ -1,0 +1,264 @@
+package serverless
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"time"
+
+	"github.com/runpod/runpodctl/internal/api"
+	"github.com/runpod/runpodctl/internal/clierr"
+	"github.com/runpod/runpodctl/internal/output"
+
+	"github.com/spf13/cobra"
+)
+
+var runCmd = &cobra.Command{
+	Use:   "run <endpoint-id>",
+	Short: "invoke an endpoint and wait for the result",
+	Long: `invoke a serverless endpoint with a json payload and wait for the job to finish.
+
+the payload must be a json object and is sent as {"input": <your json>}; pass
+only the handler payload.
+
+the job is submitted on /run and then polled on /status until it is terminal.
+/runsync is deliberately not used: it only holds the connection for 90 seconds
+and then hands back a still-running job, and until it answers there is no job id
+to poll, so a slow response would leave a running job unreachable.
+
+waiting is bounded by --wait (default 5m). when it runs out the job is still
+running server-side: the last payload is printed on stdout, a "timeout" error on
+stderr names the 'serverless status' command to poll it, and the exit code is 1.
+a single api call inside the wait is never given less than 1s, so a --wait below
+one second may overshoot by up to that much.
+
+exit codes: 0 when the job is COMPLETED, and when --wait 0 / --no-wait submitted
+it successfully. 1 when the request fails, when the wait budget runs out, or when
+the job ends FAILED / CANCELLED / TIMED_OUT. the job payload (including the
+worker's own error) is still printed on stdout in every one of those cases.
+
+examples:
+  # invoke and wait for the result
+  runpodctl serverless run <endpoint-id> --input '{"prompt":"hello"}'
+
+  # big payloads: skip shell quoting entirely
+  runpodctl serverless run <endpoint-id> --input-file payload.json
+  cat payload.json | runpodctl serverless run <endpoint-id> --input -
+
+  # give a cold or slow endpoint longer
+  runpodctl serverless run <endpoint-id> --input '{}' --wait 15m
+
+  # submit and get the job id back immediately
+  runpodctl serverless run <endpoint-id> --input '{}' --no-wait
+  runpodctl serverless status <endpoint-id> <job-id>`,
+	Args: cobra.ExactArgs(1),
+	RunE: runRun,
+}
+
+var (
+	runInput     string
+	runInputFile string
+	runNoWait    bool
+	runWait      time.Duration
+)
+
+func init() {
+	runCmd.Flags().StringVar(&runInput, "input", "", "json payload for the handler; '-' reads stdin")
+	runCmd.Flags().StringVar(&runInputFile, "input-file", "", "read the json payload from a file; '-' reads stdin")
+	runCmd.Flags().BoolVar(&runNoWait, "no-wait", false, "submit and print the job id without waiting (same as --wait 0; cannot be combined with an explicit --wait)")
+	runCmd.Flags().DurationVar(&runWait, "wait", api.DefaultInvokeWait, "how long to wait for a terminal job status; 0 does not wait (e.g. 90s, 10m)")
+}
+
+func runRun(cmd *cobra.Command, args []string) error {
+	endpointID := args[0]
+
+	// flag checks before the payload: they are free, and reading plus marshalling a
+	// large --input-file only to report a flag conflict wastes the caller's time.
+	if runWait < 0 {
+		return clierr.Usagef("--wait cannot be negative")
+	}
+	if runNoWait && cmd.Flags().Changed("wait") {
+		// silently ignoring the wait would make the command do the opposite of what
+		// the longer, more specific flag asked for.
+		return clierr.Usagef("--no-wait and --wait are mutually exclusive; --no-wait is the same as --wait 0")
+	}
+
+	input, err := resolveJobInput(cmd.InOrStdin(), runInput, runInputFile)
+	if err != nil {
+		return err
+	}
+	wait := runWait
+	if runNoWait {
+		// --no-wait is the discoverable spelling of "do not poll"; keeping it as
+		// exactly --wait 0 means there is one waiting code path, and --wait 0 means
+		// the same thing on 'run' and on 'status'.
+		wait = 0
+	}
+
+	client, err := newInvokeClient()
+	if err != nil {
+		return err
+	}
+
+	cfg := &output.Config{Format: output.ParseFormat(cmd.Flag("output").Value.String())}
+	deadline := time.Now().Add(wait)
+
+	job, waitErr := invokeJob(client, endpointID, input, deadline, wait > 0)
+	if job != nil {
+		if printErr := output.PrintRaw(job.Raw(), cfg); printErr != nil {
+			return printErr
+		}
+	}
+	if waitErr != nil {
+		return waitErr
+	}
+	return jobOutcome(job)
+}
+
+// invokeJob submits the job on /run and, when asked to wait, polls until it is
+// terminal. The job it returns is the last payload seen, so the caller can print
+// it even when the wait failed.
+func invokeJob(client invokeClient, endpointID string, input json.RawMessage, deadline time.Time, wait bool) (*api.Job, error) {
+	// inside a wait the submit must not outlive the budget; without one it gets the
+	// ordinary per-call timeout.
+	submitTimeout := requestTimeout()
+	if wait {
+		submitTimeout = boundedRequestTimeout(deadline)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), submitTimeout)
+	defer cancel()
+
+	job, err := client.Run(ctx, endpointID, input)
+	if err != nil {
+		var timeoutErr *api.TimeoutError
+		if errors.As(err, &timeoutErr) {
+			// the submit itself timed out, so we never got an id: the job may or may
+			// not exist. Say that plainly instead of pointing at a status command
+			// there is no id for, or implying a blind re-invoke is safe.
+			return nil, api.NewTimeoutError(
+				"submitting the job timed out before the invoke api answered, so it is unknown whether the job was created and there is no job id to poll; check 'runpodctl serverless health %s' for queued or running work before invoking again",
+				endpointID,
+			)
+		}
+		return nil, fmt.Errorf("failed to submit job: %w", err)
+	}
+
+	if !wait {
+		// submission succeeded, which is the whole contract of --no-wait: the job is
+		// queued and the id on stdout is what 'serverless status' needs.
+		//
+		// Without an id there is nothing to follow up on, and this is the one place
+		// jobOutcome cannot catch it: HasEnvelope is satisfied by a bare status, so a
+		// {"status":"IN_QUEUE"} answer would exit 0 on a submitted, billed job that
+		// can never be polled. Fail here instead of printing a command with a hole in
+		// it. The payload still goes to stdout.
+		if job.ID == "" {
+			return job, api.NewNoJobIDError()
+		}
+		notef("submitted job %s (%s); poll it with: runpodctl serverless status %s %s", job.ID, job.Status, endpointID, job.ID)
+		return job, nil
+	}
+	return waitForTerminal(client, endpointID, job, deadline)
+}
+
+// resolveJobInput reads the handler payload from --input, --input-file or stdin
+// and validates that it parses as json before anything is sent, so a quoting
+// mistake fails locally with a usage_error instead of as an opaque api error.
+func resolveJobInput(stdin io.Reader, inline, file string) (json.RawMessage, error) {
+	switch {
+	case inline != "" && file != "":
+		return nil, clierr.Usagef("--input and --input-file are mutually exclusive")
+	case inline == "" && file == "":
+		return nil, clierr.Usagef(`one of --input or --input-file is required; pass --input '{}' for a handler that takes no input`)
+	}
+
+	var (
+		raw    []byte
+		source string
+	)
+	switch {
+	case inline == "-" || file == "-":
+		source = "stdin"
+		data, err := io.ReadAll(stdin)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read payload from stdin: %w", err)
+		}
+		raw = data
+	case file != "":
+		source = "--input-file " + file
+		data, err := os.ReadFile(file)
+		if err != nil {
+			// a path that does not exist or is a directory is a caller mistake, the
+			// same class as the payload validation below — not an environment failure.
+			return nil, clierr.Usagef("failed to read --input-file: %v", err)
+		}
+		raw = data
+	default:
+		source = "--input"
+		raw = []byte(inline)
+	}
+
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return nil, clierr.Usagef("payload from %s is empty; expected json", source)
+	}
+
+	// the api rejects an oversized body only after the whole upload, which on a
+	// slow link is minutes of waiting for a 400. this is the same fail-locally rule
+	// the json validation below follows, and it runs first because it needs only a
+	// compacting pass rather than a decode into map[string]interface{}.
+	//
+	// a marshalling failure here means the payload is not valid json; that is
+	// reported by the parse below, which words it better.
+	if body, err := api.RunBodySize(trimmed); err == nil && body > api.MaxRunBodyBytes {
+		return nil, clierr.Usagef("the request body from %s is %d bytes, over the /run limit of %d (the payload compacted and json-escaped inside {\"input\": ...})", source, body, api.MaxRunBodyBytes)
+	}
+
+	var parsed interface{}
+	if err := json.Unmarshal(trimmed, &parsed); err != nil {
+		return nil, clierr.Usagef("payload from %s is not valid json: %v", source, err)
+	}
+
+	// the invoke api decodes the request body into a struct whose "input" is a json
+	// object, so an array or a scalar is rejected server-side with a 400. catching
+	// that here costs nothing and turns a round trip into a local usage_error that
+	// names the flag.
+	obj, isObject := parsed.(map[string]interface{})
+	if !isObject {
+		return nil, clierr.Usagef("payload from %s must be a json object (the invoke api nests it under \"input\"), got %s", source, jsonKind(parsed))
+	}
+
+	// a payload with a top-level "input" key is almost always the whole request
+	// envelope pasted in from curl, which is sent as {"input":{"input":…}} and
+	// reaches the handler double-wrapped. Warn rather than unwrap: guessing would
+	// break a handler whose payload genuinely has an "input" field. The sibling keys
+	// of a curl envelope (policy, webhook, s3Config) are read at the top level of the
+	// request body by the invoke api, so nesting them silently drops them.
+	if _, wrapped := obj["input"]; wrapped {
+		notef(`note: payload from %s has a top-level "input" key; it is sent as {"input": <payload>}, so pass only the handler payload. a whole curl request body arrives double-wrapped, and its "policy"/"webhook"/"s3Config" keys are ignored inside "input"`, source)
+	}
+
+	return json.RawMessage(trimmed), nil
+}
+
+// jsonKind names a json value's type for a usage error.
+func jsonKind(value interface{}) string {
+	switch value.(type) {
+	case nil:
+		return "null"
+	case []interface{}:
+		return "an array"
+	case string:
+		return "a string"
+	case float64:
+		return "a number"
+	case bool:
+		return "a boolean"
+	default:
+		return "a scalar"
+	}
+}

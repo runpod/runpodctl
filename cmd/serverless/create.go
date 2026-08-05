@@ -95,11 +95,40 @@ type serverlessCreateClient interface {
 	GetListing(string) (*api.Listing, error)
 	ResolveServerlessGpuPoolID(string) (string, error)
 	CreateEndpointGQL(*api.EndpointCreateGQLInput) (*api.Endpoint, error)
-	GetEndpointHealth(string) (*api.EndpointHealth, error)
 }
 
 var newServerlessCreateClient = func() (serverlessCreateClient, error) {
 	return api.NewClient()
+}
+
+// --wait reads /health, which is the invoke service rather than the control
+// plane, so it needs the invoke client -- the same one `serverless health` and
+// `serverless run` use. It is built only when --wait is set, so a plain create
+// still needs nothing from that service.
+var newWaitHealthClient = func() (waitfor.EndpointHealthGetter, error) {
+	client, err := api.NewInvokeClient()
+	if err != nil {
+		return nil, err
+	}
+	return boundedHealthClient{client: client}, nil
+}
+
+// boundedHealthClient bounds each /health read by the shared "timeout" config
+// key.
+//
+// The invoke client deliberately has no client-wide timeout -- every call carries
+// its own deadline -- and the wait loop's context has none either, since the loop
+// owns the overall budget itself. Without this a single wedged read would hang the
+// whole wait instead of counting as one failed poll, which is the opposite of the
+// "a transient failure is just an unknown state" rule the wait is built on.
+type boundedHealthClient struct {
+	client *api.InvokeClient
+}
+
+func (b boundedHealthClient) EndpointHealthCounts(ctx context.Context, endpointID string) (*api.EndpointHealth, error) {
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout())
+	defer cancel()
+	return b.client.EndpointHealthCounts(ctx, endpointID)
 }
 
 func init() {
@@ -397,7 +426,12 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	if createWait {
-		if err := waitForReadyWorker(cmd, client, endpoint.ID, waitTimeout); err != nil {
+		healthClient, healthErr := newWaitHealthClient()
+		if healthErr != nil {
+			// the endpoint exists at this point, so say so rather than losing it.
+			return output.WithResourceID(endpoint.ID, fmt.Errorf("endpoint %s was created, but --wait cannot read its health: %w", endpoint.ID, healthErr))
+		}
+		if err := waitForReadyWorker(cmd, healthClient, endpoint.ID, waitTimeout); err != nil {
 			return err
 		}
 	}
@@ -444,15 +478,14 @@ var notifyWaitSignals = signal.NotifyContext
 // waitForReadyWorker blocks until the endpoint's /health reports a worker ready
 // or running (see waitfor.EndpointWorkerPoller for what each counter actually
 // proves). Progress goes to stderr so stdout stays a single json object.
-func waitForReadyWorker(cmd *cobra.Command, client serverlessCreateClient, endpointID string, timeout time.Duration) error {
+func waitForReadyWorker(cmd *cobra.Command, client waitfor.EndpointHealthGetter, endpointID string, timeout time.Duration) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	// ctrl-c stops the wait but must not lose the endpoint: the error names it.
 	// SignalContext releases the handler on the first signal so a second ctrl-c is
-	// not swallowed while an in-flight /health read (uncancellable, up to the
-	// client timeout) finishes.
+	// not swallowed if a read is slow to notice the cancellation.
 	ctx, stop := waitfor.SignalContext(ctx, notifyWaitSignals, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

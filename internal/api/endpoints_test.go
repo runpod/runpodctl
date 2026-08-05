@@ -517,3 +517,22 @@ func TestListEndpoints_PopulatesURLs(t *testing.T) {
 		}
 	}
 }
+
+// The reported invoke urls are printed for people to curl, so an id with a
+// path-significant character in it must not build a url addressing something else.
+func TestInvokeURLsEscapeTheID(t *testing.T) {
+	t.Setenv(configenv.InvokeURLEnv, "https://api.runpod.ai/v2")
+
+	urls := invokeURLs("ep-1/../v1")
+	if urls == nil {
+		t.Fatal("expected urls for a non-empty id")
+	}
+	if want := "https://api.runpod.ai/v2/ep-1%2F..%2Fv1/run"; urls.Run != want {
+		t.Errorf("run url = %q, want %q", urls.Run, want)
+	}
+
+	// and an ordinary id is untouched, or every existing caller's url changes.
+	if urls := invokeURLs("ep-abc123"); urls.Health != "https://api.runpod.ai/v2/ep-abc123/health" {
+		t.Errorf("health url = %q, want it unescaped for an ordinary id", urls.Health)
+	}
+}

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -9,7 +10,7 @@ import (
 	"github.com/spf13/viper"
 )
 
-func TestGetEndpointHealth(t *testing.T) {
+func TestEndpointHealthCounts(t *testing.T) {
 	var gotPath, gotAuth string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
@@ -29,12 +30,12 @@ func TestGetEndpointHealth(t *testing.T) {
 	// not the rest control plane url.
 	t.Setenv(configenv.InvokeURLEnv, server.URL)
 
-	client, err := NewClient()
+	client, err := NewInvokeClient()
 	if err != nil {
-		t.Fatalf("new client: %v", err)
+		t.Fatalf("new invoke client: %v", err)
 	}
 
-	health, err := client.GetEndpointHealth("ep-1")
+	health, err := client.EndpointHealthCounts(context.Background(), "ep-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -53,7 +54,7 @@ func TestGetEndpointHealth(t *testing.T) {
 	}
 }
 
-func TestGetEndpointHealthErrors(t *testing.T) {
+func TestEndpointHealthCountsErrors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte(`{"error":"endpoint not found"}`)) //nolint:errcheck
@@ -65,18 +66,18 @@ func TestGetEndpointHealthErrors(t *testing.T) {
 	t.Setenv(configenv.APIKeyEnv, "test-key")
 	t.Setenv(configenv.InvokeURLEnv, server.URL)
 
-	client, err := NewClient()
+	client, err := NewInvokeClient()
 	if err != nil {
-		t.Fatalf("new client: %v", err)
+		t.Fatalf("new invoke client: %v", err)
 	}
 
-	if _, err := client.GetEndpointHealth("ep-1"); err == nil {
+	if _, err := client.EndpointHealthCounts(context.Background(), "ep-1"); err == nil {
 		t.Fatal("expected an error")
 	} else if apiErr, ok := err.(*APIError); !ok || apiErr.ErrorCode() != "not_found" {
 		t.Fatalf("expected a not_found APIError, got %#v", err)
 	}
 
-	if _, err := client.GetEndpointHealth("  "); err == nil {
+	if _, err := client.EndpointHealthCounts(context.Background(), "  "); err == nil {
 		t.Fatal("expected an error for a blank endpoint id")
 	}
 }

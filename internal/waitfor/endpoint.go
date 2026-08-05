@@ -9,9 +9,11 @@ import (
 	"github.com/runpod/runpodctl/internal/api"
 )
 
-// EndpointHealthGetter is the slice of the rest client an endpoint wait needs.
+// EndpointHealthGetter is the slice of the invoke client an endpoint wait needs.
+// It takes the poll's context, so the wait's deadline and a ctrl-c reach the
+// in-flight read rather than being observed only between polls.
 type EndpointHealthGetter interface {
-	GetEndpointHealth(endpointID string) (*api.EndpointHealth, error)
+	EndpointHealthCounts(ctx context.Context, endpointID string) (*api.EndpointHealth, error)
 }
 
 // EndpointWorkerPoller polls until at least one worker of endpointID is ready or
@@ -40,7 +42,7 @@ func EndpointWorkerPoller(client EndpointHealthGetter, endpointID string) PollFu
 	seen := false
 	missed := 0
 	return func(ctx context.Context) (State, error) {
-		health, err := client.GetEndpointHealth(endpointID)
+		health, err := client.EndpointHealthCounts(ctx, endpointID)
 		if err != nil {
 			if !isNotFoundStatus(err) {
 				// not a 404: state unknown, keep waiting. it also breaks the run of
