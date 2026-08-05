@@ -3,6 +3,7 @@ package project
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/runpod/runpodctl/api"
 	sshpkg "github.com/runpod/runpodctl/cmd/ssh"
+	"github.com/runpod/runpodctl/internal/waitfor"
 
 	"github.com/fatih/color"
 	"golang.org/x/crypto/ssh"
@@ -271,21 +273,39 @@ func PodSSHConnection(podId string) (*SSHConnection, error) {
 	}
 
 	// loop until pod ready
-
+	//
+	// this stdout line is legacy behaviour (CON-816) and is left exactly as it
+	// was; the shared wait loop below writes no progress of its own, so this
+	// command's output does not change. The loop it replaced re-polled inside its
+	// own condition and then second-guessed the result with a
+	// `time.Since(start) >= maxPollTime` check that could report a timeout for a
+	// poll that had just succeeded.
 	fmt.Print("Waiting for Pod to come online... ")
 	// look up ip and ssh port for pod id
 	var podIp string
 	var podPort int
 
-	startTime := time.Now()
-	for podIp, podPort, err = getPodSSHInfo(podId); err != nil && time.Since(startTime) < maxPollTime; {
-		time.Sleep(pollInterval)
-		podIp, podPort, err = getPodSSHInfo(podId)
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to get SSH info for pod %s: %w", podId, err)
-	} else if time.Since(startTime) >= time.Duration(maxPollTime) {
+	// the two failure messages below are the legacy ones, verbatim, and the poll
+	// error is wrapped rather than flattened into a string so errors.Is/As still
+	// reaches the typed no_credentials sentinel.
+	var lastInfoErr error
+	if _, err := waitfor.Until(context.Background(), func(context.Context) (waitfor.State, error) {
+		ip, port, infoErr := getPodSSHInfo(podId)
+		if infoErr != nil {
+			lastInfoErr = infoErr
+			return waitfor.State{Detail: infoErr.Error()}, nil
+		}
+		podIp, podPort = ip, port
+		return waitfor.State{Ready: true}, nil
+	}, waitfor.Options{
+		Label:    fmt.Sprintf("pod %s to come online", podId),
+		Timeout:  maxPollTime,
+		Interval: pollInterval,
+		Progress: nil,
+	}); err != nil {
+		if lastInfoErr != nil {
+			return nil, fmt.Errorf("failed to get SSH info for pod %s: %w", podId, lastInfoErr)
+		}
 		return nil, fmt.Errorf("timeout waiting for pod %s to come online", podId)
 	}
 

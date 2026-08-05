@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/runpod/runpodctl/internal/api"
+	"github.com/runpod/runpodctl/internal/duration"
 	"github.com/runpod/runpodctl/internal/output"
 	"github.com/runpod/runpodctl/internal/podstate"
 	"github.com/runpod/runpodctl/internal/sshconnect"
@@ -89,7 +90,7 @@ func runList(cmd *cobra.Command, args []string) error {
 	// Determine time cutoff from --since and --created-after
 	var cutoff time.Time
 	if listSince != "" {
-		d, err := parseDuration(listSince)
+		d, err := duration.Parse(listSince)
 		if err != nil {
 			return err
 		}
@@ -258,29 +259,6 @@ func fetchRuntimes() map[string]*api.LegacyPod {
 		}
 	}
 	return byID
-}
-
-// parseDuration parses a duration string like "30m", "1h", "1h30m", "7d".
-// It handles "d" (days) specially and falls back to time.ParseDuration for everything else.
-func parseDuration(s string) (time.Duration, error) {
-	if strings.HasSuffix(s, "d") {
-		n, err := strconv.Atoi(strings.TrimSuffix(s, "d"))
-		if err != nil {
-			return 0, fmt.Errorf("invalid duration %q: %w", s, err)
-		}
-		if n <= 0 {
-			return 0, fmt.Errorf("invalid duration %q: must be positive", s)
-		}
-		return time.Duration(n) * 24 * time.Hour, nil
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return 0, fmt.Errorf("invalid duration %q: supported formats are e.g. 30m, 2h, 7d", s)
-	}
-	if d <= 0 {
-		return 0, fmt.Errorf("invalid duration %q: must be positive", s)
-	}
-	return d, nil
 }
 
 // parseCreatedAt parses the createdAt field from the API response.

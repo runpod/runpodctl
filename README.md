@@ -22,6 +22,7 @@ _note: all pods automatically come with runpodctl installed with a pod-scoped ap
   - [commands](#commands)
     - [pod management](#pod-management)
     - [serverless endpoints](#serverless-endpoints)
+    - [waiting until a resource is usable](#waiting-until-a-resource-is-usable)
     - [file transfer](#file-transfer)
   - [output format](#output-format)
     - [pod runtime status](#pod-runtime-status)
@@ -116,6 +117,77 @@ runpodctl serverless delete <id>      # delete endpoint
 ```
 
 other resources: `template` (alias: `tpl`), `volume` (alias: `vol`), `registry` (alias: `reg`)
+
+### waiting until a resource is usable
+
+create returns as soon as the resource is *scheduled*: a pod reports
+`desiredStatus: RUNNING` while its image is still being pulled. `--wait` blocks
+until it is actually usable instead, so there is no poll loop to write.
+
+```bash
+# returns when ssh answers, not when the pod is scheduled
+runpodctl pod create --image <img> --gpu-id "NVIDIA GeForce RTX 4090" --wait
+
+# returns when the endpoint's health reports a ready or running worker
+runpodctl serverless create --template-id <id> --workers-min 1 --wait
+
+# give up sooner than the 10m default
+runpodctl pod create --image <img> --gpu-id <id> --wait --wait-timeout 3m
+```
+
+what each one waits for, precisely:
+
+| command | ready means |
+| --- | --- |
+| `pod create --wait` | the pod's public port 22 accepts a tcp connection **and** answers with an ssh protocol banner. no key and no handshake, so it works before `runpodctl doctor` has ever run — it proves sshd is up, not that your key is installed. port 22 merely *appearing* in `runtime.ports` is not enough: prod allocates that port for images that run no sshd at all |
+| `serverless create --wait` | the endpoint's `/health` reports at least one worker `ready` or `running`. neither counter is quite "a hot handler", and `/health` exposes no stronger one: a `ready` worker is flashboot-cached (its record reads `desiredStatus: EXITED`), so the first request resumes it, and `running` is written when a worker is *scheduled*, before its container exists. `running` still has to count, because a `--workers-min` worker stays `RUNNING` for its whole life and never appears in `ready` |
+
+- progress goes to **stderr** on a 15s cadence; stdout stays exactly one json
+  object, so `... 2>/dev/null | jq` sees a single payload.
+- `pod create --wait` prints the same shape as `pod get` (which includes the live
+  `ssh` block) rather than the create response, which has no ssh info.
+  `serverless create --wait` prints the same create response as without `--wait`.
+- `--wait-timeout` defaults to `10m` and accepts `90s`, `10m`, `1h`, `2d`.
+- on timeout or ctrl-c the resource is **not** deleted — you paid for it, and you
+  need the id to debug or clean up. the exit code is non-zero and the error carries
+  the id, the last known state and the delete command, with code `wait_timeout` /
+  `wait_interrupted`. (the one error without a last-known-state is a ctrl-c during
+  the `pod create --wait` re-read, which happens after ssh already answered.)
+- a second ctrl-c always exits, even while the first one is still producing that
+  error object: the read that follows a successful wait is not cancellable, so the
+  signal handler is released as soon as the first signal arrives.
+- `serverless create --wait` warns at `--workers-min 0` but still waits. runpod
+  does fill a standby pool at 0 min workers whenever `--workers-max` is above 1,
+  and `/health` counts those cached workers as `ready` — it is just slower and less
+  certain than `--workers-min 1`, which starts (and bills for) a worker right away.
+- `pod create --wait` needs ssh, so it cannot be combined with `--ssh=false`. two
+  combinations warn on stderr instead of failing, because they are satisfiable but
+  often are not:
+  - `--compute-type CPU` — cpu pods are created over rest, which cannot request
+    runpod-managed ssh, so only an image that starts its own sshd becomes
+    reachable.
+  - `--cloud-type COMMUNITY` without `--public-ip` — community cloud only maps a
+    public ssh port on a machine that has a public ip, and `--public-ip` is what
+    asks the scheduler for one.
+- a transient api failure during a wait does **not** end it: the poll error is
+  reported as the current state and polling continues to the deadline, because the
+  resource already exists and bills. only a failure that cannot resolve stops the
+  wait early:
+  - bad credentials or a rejected request — http `400`/`401`/`403`, or the codes
+    `unauthorized` / `forbidden` / `no_credentials` / `bad_request`. the pod wait
+    reads graphql, whose failures all carry the code `graphql_error`, so there the
+    decision is made on the http status and the emitted code stays `graphql_error`.
+  - a pod in a terminal state (`conflict`), or a resource that two consecutive
+    reads no longer list (`not_found` — one missing read is treated as an unknown
+    state, not a deletion).
+  - a resource that has never been readable *at all* after twelve consecutive
+    reads — ~1 min at the default 5s interval, so only reachable when
+    `--wait-timeout` is longer than that: `not_found`. an endpoint that never
+    propagated to `/health`, or a pod terminated before it was ever listed, is no
+    longer propagation lag, and waiting out the full budget would report it as a
+    `wait_timeout` worth retrying.
+  - `404`, `429` and `5xx` stay transient on purpose within those bounds:
+    `/health` 404s an endpoint id the invoke service has not propagated yet.
 
 ### file transfer
 
@@ -217,6 +289,7 @@ exit code is non-zero. branch on `code`, never on the message text:
 | `error` | human-readable message, unwrapped (never a nested json blob) |
 | `code` | stable, lowercase. present on every error from the resource commands (see the caveat below) |
 | `status` | http status, **only** when the failure came back from a rest call |
+| `id` | id of a resource the failure left behind, **only** when one exists — a `pod create --wait` that timed out has already bought a pod, and this is how you find it without parsing the message |
 
 `status` is deliberately absent when the api answered 200 with an empty result
 (graphql reports a missing resource that way), so `code` is the field to branch
@@ -227,11 +300,13 @@ codes the cli generates:
 | code | meaning |
 | --- | --- |
 | `usage_error` | your invocation was wrong (unknown command/flag, bad or missing args, missing required flags). usage text is printed after the json |
-| `not_found` | the resource does not exist |
+| `not_found` | the api has no such resource. during a `--wait` it can also mean a resource that *was* created has gone (or never became visible), so check for an `id` field and clean up rather than assuming nothing exists |
 | `bad_request` `unauthorized` `forbidden` `conflict` `rate_limited` `server_error` `api_error` | derived from the rest status |
 | `graphql_error` | graphql returned an errors array (http 200) |
 | `no_credentials` | no api key configured — run `runpodctl doctor` or set `RUNPOD_API_KEY` |
 | `network_error` | the api could not be reached at all — dns, refused, tls, timeout. the only code that means "transient, retry" |
+| `wait_timeout` | `--wait` gave up before the resource was usable. the resource **was created and still bills** — the last known state is in the message and the id is in `id` |
+| `wait_interrupted` | `--wait` was cancelled (ctrl-c / SIGTERM). same as above: the resource exists, and `id` names it |
 | `cli_error` | anything else local: validation, config, bad input (including a malformed `RUNPOD_API_URL`) |
 
 the api may also return its own code, which is passed through lowercased, so

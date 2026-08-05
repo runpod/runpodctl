@@ -68,7 +68,14 @@ func (c *Client) request(method, endpoint string, params url.Values, body interf
 	if params != nil && len(params) > 0 {
 		u += "?" + params.Encode()
 	}
+	return c.requestURL(method, u, body)
+}
 
+// requestURL is request against an already-built absolute url. It exists for the
+// few calls that do not live on the rest control plane (the serverless invoke
+// service, see GetEndpointHealth) but must still share auth, user agent and the
+// structured APIError handling.
+func (c *Client) requestURL(method, u string, body interface{}) ([]byte, error) {
 	var reqBody io.Reader
 	if body != nil {
 		jsonBody, err := json.Marshal(body)
@@ -134,6 +141,8 @@ func (c *Client) Delete(endpoint string) ([]byte, error) {
 //	usage_error               -- from a cli usage mistake (see cmd package)
 //	no_credentials            -- no api key configured locally
 //	network_error             -- api unreachable (see internal/output)
+//	wait_timeout              -- --wait gave up; resource exists (internal/waitfor)
+//	wait_interrupted          -- --wait was cancelled; resource exists (ditto)
 //	cli_error                 -- any other uncoded local failure (fallback)
 //
 // An explicit code returned by the API is passed through (lowercased) instead

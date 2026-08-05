@@ -1,0 +1,546 @@
+package waitfor
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"testing"
+	"time"
+)
+
+// fakeClock lets the wait-loop tests run instantly: Sleep advances the clock
+// instead of blocking, so a "10 minute" timeout costs microseconds.
+type fakeClock struct {
+	now    time.Time
+	slept  []time.Duration
+	cancel error // returned by Sleep to simulate ctrl-c
+}
+
+func newFakeClock() *fakeClock {
+	return &fakeClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+}
+
+func (c *fakeClock) Now() time.Time { return c.now }
+
+func (c *fakeClock) sleepFunc() func(context.Context, time.Duration) error {
+	return func(ctx context.Context, d time.Duration) error {
+		c.slept = append(c.slept, d)
+		if c.cancel != nil {
+			return c.cancel
+		}
+		c.now = c.now.Add(d)
+		return nil
+	}
+}
+
+func TestUntil(t *testing.T) {
+	cases := []struct {
+		name        string
+		polls       []State
+		pollErr     error
+		cancelAfter int // when > 0, Sleep returns context.Canceled from this sleep on
+		timeout     time.Duration
+		interval    time.Duration
+		wantPolls   int
+		wantCode    string
+		wantErr     string
+		wantLast    string
+	}{
+		{
+			name:      "ready on the first poll does not sleep",
+			polls:     []State{{Ready: true, Detail: "ssh reachable at 1.2.3.4:22"}},
+			timeout:   time.Minute,
+			interval:  5 * time.Second,
+			wantPolls: 1,
+		},
+		{
+			name: "keeps polling until ready",
+			polls: []State{
+				{Detail: "pod not listed yet"},
+				{Detail: "ssh port not allocated yet"},
+				{Ready: true},
+			},
+			timeout:   time.Minute,
+			interval:  5 * time.Second,
+			wantPolls: 3,
+		},
+		{
+			name:     "times out with the last known state and a stable code",
+			polls:    []State{{Detail: "ssh port 1.2.3.4:51227 allocated but not reachable: connection refused"}},
+			timeout:  12 * time.Second,
+			interval: 5 * time.Second,
+			// 0s, 5s, 10s, then a last poll at the 12s deadline before giving up.
+			wantPolls: 4,
+			wantCode:  CodeTimeout,
+			wantErr:   "timed out after 12s waiting for ssh on pod abc123",
+			wantLast:  "connection refused",
+		},
+		{
+			name:      "a fatal poll error aborts and keeps the underlying error",
+			polls:     []State{{Detail: "ignored"}},
+			pollErr:   &FatalError{Code: "conflict", Err: errors.New("pod abc123 is exited")},
+			timeout:   time.Minute,
+			wantPolls: 1,
+			wantErr:   "waiting for ssh on pod abc123: pod abc123 is exited",
+		},
+		{
+			name:      "an unauthorized poll aborts: polling will not fix credentials",
+			polls:     []State{{Detail: "ignored"}},
+			pollErr:   &codedError{code: "unauthorized", msg: "unauthorized"},
+			timeout:   time.Minute,
+			wantPolls: 1,
+			wantErr:   "waiting for ssh on pod abc123: unauthorized",
+		},
+		{
+			// a transient api failure must not end a wait: the resource already
+			// exists and bills, and giving up here used to surface a transport code
+			// that tells an agent to retry the create and buy a second one.
+			name:      "a transient poll error keeps the wait going and lands in the timeout state",
+			polls:     []State{{Detail: "ignored"}},
+			pollErr:   &codedError{code: "server_error", msg: "graphql error: boom"},
+			timeout:   12 * time.Second,
+			interval:  5 * time.Second,
+			wantPolls: 4,
+			wantCode:  CodeTimeout,
+			wantErr:   "timed out after 12s waiting for ssh on pod abc123",
+			wantLast:  "graphql error: boom",
+		},
+		{
+			name: "cancellation reports wait_interrupted, not a timeout",
+			polls: []State{
+				{Detail: "ssh port not allocated yet"},
+			},
+			cancelAfter: 1,
+			timeout:     time.Minute,
+			interval:    5 * time.Second,
+			wantPolls:   1,
+			wantCode:    CodeInterrupted,
+			wantErr:     "interrupted after 0s waiting for ssh on pod abc123",
+			wantLast:    "ssh port not allocated yet",
+		},
+		{
+			name:      "an empty detail still reports something",
+			polls:     []State{{}},
+			timeout:   time.Second,
+			interval:  time.Second,
+			wantPolls: 2,
+			wantCode:  CodeTimeout,
+			wantLast:  "not ready",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := newFakeClock()
+			if tc.cancelAfter > 0 {
+				clock.cancel = context.Canceled
+			}
+
+			polls := 0
+			poll := func(context.Context) (State, error) {
+				polls++
+				if tc.pollErr != nil {
+					return State{}, tc.pollErr
+				}
+				idx := polls - 1
+				if idx >= len(tc.polls) {
+					idx = len(tc.polls) - 1
+				}
+				return tc.polls[idx], nil
+			}
+
+			var progress bytes.Buffer
+			_, err := Until(context.Background(), poll, Options{
+				Label:    "ssh on pod abc123",
+				Timeout:  tc.timeout,
+				Interval: tc.interval,
+				Progress: &progress,
+				Now:      clock.Now,
+				Sleep:    clock.sleepFunc(),
+			})
+
+			if polls != tc.wantPolls {
+				t.Errorf("polled %d times, want %d", polls, tc.wantPolls)
+			}
+
+			if tc.wantCode == "" && tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if !strings.Contains(progress.String(), "ready after") {
+					t.Errorf("expected a readiness line on progress, got %q", progress.String())
+				}
+				return
+			}
+
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if tc.wantErr != "" && !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error = %q, want it to contain %q", err.Error(), tc.wantErr)
+			}
+			if tc.wantLast != "" && !strings.Contains(err.Error(), tc.wantLast) {
+				t.Errorf("error = %q, want the last state %q", err.Error(), tc.wantLast)
+			}
+
+			var waitErr *Error
+			if tc.wantCode != "" {
+				if !errors.As(err, &waitErr) {
+					t.Fatalf("expected a *waitfor.Error, got %#v", err)
+				}
+				if waitErr.ErrorCode() != tc.wantCode {
+					t.Errorf("code = %q, want %q", waitErr.ErrorCode(), tc.wantCode)
+				}
+			} else if errors.As(err, &waitErr) {
+				t.Errorf("poll errors must not be reported as a wait error: %#v", waitErr)
+			}
+		})
+	}
+}
+
+// codedError is a poll error carrying a stable code, like the ones internal/api
+// returns.
+type codedError struct {
+	code string
+	msg  string
+}
+
+func (e *codedError) Error() string     { return e.msg }
+func (e *codedError) ErrorCode() string { return e.code }
+
+// statusError is a poll error carrying an http status as well as a code, like
+// *api.APIError and *api.GraphQLError do.
+type statusError struct {
+	code   string
+	status int
+	msg    string
+}
+
+func (e *statusError) Error() string     { return e.msg }
+func (e *statusError) ErrorCode() string { return e.code }
+func (e *statusError) HTTPStatus() int   { return e.status }
+
+// A single bad poll must not end the wait. The invoke service 404s an endpoint
+// id it has not propagated yet, and graphql answers 5xx now and then; both used
+// to abort the wait on the very first poll.
+func TestUntilRetriesAfterATransientPollError(t *testing.T) {
+	clock := newFakeClock()
+
+	polls := 0
+	var progress bytes.Buffer
+	state, err := Until(context.Background(), func(context.Context) (State, error) {
+		polls++
+		switch polls {
+		case 1:
+			return State{}, &codedError{code: "not_found", msg: "endpoint not found"}
+		case 2:
+			return State{}, errors.New("request failed: EOF")
+		default:
+			return State{Ready: true, Detail: "workers ready 1"}, nil
+		}
+	}, Options{
+		Label:         "a ready worker on endpoint ep1",
+		Timeout:       time.Minute,
+		Interval:      5 * time.Second,
+		ProgressEvery: time.Nanosecond,
+		Progress:      &progress,
+		Now:           clock.Now,
+		Sleep:         clock.sleepFunc(),
+	})
+	if err != nil {
+		t.Fatalf("a transient poll error must not end the wait: %v", err)
+	}
+	if !state.Ready {
+		t.Errorf("state = %+v, want ready", state)
+	}
+	if polls != 3 {
+		t.Errorf("polled %d times, want 3", polls)
+	}
+	// the reason has to reach the operator, just not as a fatal error. (the very
+	// first poll is before the progress cadence fires, so the second one is the
+	// one that shows up.)
+	if !strings.Contains(progress.String(), "request failed: EOF") {
+		t.Errorf("expected the poll failure in progress output: %q", progress.String())
+	}
+}
+
+func TestIsFatalPollError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "explicitly fatal", err: &FatalError{Code: "conflict", Err: errors.New("x")}, want: true},
+		{name: "wrapped fatal", err: fmt.Errorf("waiting: %w", &FatalError{Code: "not_found", Err: errors.New("x")}), want: true},
+		{name: "unauthorized", err: &codedError{code: "unauthorized", msg: "x"}, want: true},
+		{name: "forbidden", err: &codedError{code: "forbidden", msg: "x"}, want: true},
+		{name: "no credentials", err: &codedError{code: "no_credentials", msg: "x"}, want: true},
+		{name: "bad request", err: &codedError{code: "bad_request", msg: "x"}, want: true},
+		{name: "not found is transient during propagation", err: &codedError{code: "not_found", msg: "x"}, want: false},
+		{name: "server error", err: &codedError{code: "server_error", msg: "x"}, want: false},
+		{name: "rate limited", err: &codedError{code: "rate_limited", msg: "x"}, want: false},
+		{name: "graphql error with no status is transient", err: &codedError{code: "graphql_error", msg: "x"}, want: false},
+		{name: "uncoded", err: errors.New("EOF"), want: false},
+		// the pod wait's only api call is graphql, and every graphql failure carries
+		// the constant code "graphql_error" — so the fatal decision there can only
+		// come from the http status. prod graphql answers a bad key with 401.
+		{name: "graphql 401", err: &statusError{code: "graphql_error", status: 401, msg: "unauthorized"}, want: true},
+		{name: "graphql 403", err: &statusError{code: "graphql_error", status: 403, msg: "forbidden"}, want: true},
+		{name: "graphql 400", err: &statusError{code: "graphql_error", status: 400, msg: "bad request"}, want: true},
+		{name: "wrapped graphql 401", err: fmt.Errorf("getting pods: %w", &statusError{code: "graphql_error", status: 401, msg: "x"}), want: true},
+		{name: "graphql 404 stays transient", err: &statusError{code: "graphql_error", status: 404, msg: "x"}, want: false},
+		{name: "graphql 429 stays transient", err: &statusError{code: "graphql_error", status: 429, msg: "x"}, want: false},
+		{name: "graphql 502 stays transient", err: &statusError{code: "graphql_error", status: 502, msg: "x"}, want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isFatalPollError(tc.err); got != tc.want {
+				t.Errorf("isFatalPollError(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// The wait must not sleep past its own deadline: a 12s budget with a 5s interval
+// has to shorten the last sleep to 2s rather than overshoot to 15s.
+func TestUntilDoesNotSleepPastDeadline(t *testing.T) {
+	clock := newFakeClock()
+	sleep := clock.sleepFunc()
+
+	_, err := Until(context.Background(), func(context.Context) (State, error) {
+		return State{Detail: "not yet"}, nil
+	}, Options{
+		Label:    "ssh on pod abc123",
+		Timeout:  12 * time.Second,
+		Interval: 5 * time.Second,
+		Now:      clock.Now,
+		Sleep:    sleep,
+	})
+	if err == nil {
+		t.Fatal("expected a timeout")
+	}
+
+	want := []time.Duration{5 * time.Second, 5 * time.Second, 2 * time.Second}
+	if len(clock.slept) != len(want) {
+		t.Fatalf("slept %v, want %v", clock.slept, want)
+	}
+	for i := range want {
+		if clock.slept[i] != want[i] {
+			t.Fatalf("slept %v, want %v", clock.slept, want)
+		}
+	}
+}
+
+// Progress must be throttled (the resource takes minutes; one line per poll is
+// spam) and must never be written when no writer was supplied.
+func TestUntilProgressCadence(t *testing.T) {
+	clock := newFakeClock()
+
+	var progress bytes.Buffer
+	_, err := Until(context.Background(), func(context.Context) (State, error) {
+		return State{Detail: "still booting"}, nil
+	}, Options{
+		Label:         "ssh on pod abc123",
+		Timeout:       time.Minute,
+		Interval:      5 * time.Second,
+		ProgressEvery: 15 * time.Second,
+		Progress:      &progress,
+		Now:           clock.Now,
+		Sleep:         clock.sleepFunc(),
+	})
+	if err == nil {
+		t.Fatal("expected a timeout")
+	}
+
+	lines := strings.Count(strings.TrimSpace(progress.String()), "\n") + 1
+	// 13 polls over 60s: one opening line plus a note at 15s/30s/45s/60s.
+	if lines != 5 {
+		t.Fatalf("expected 5 progress lines, got %d: %q", lines, progress.String())
+	}
+	if !strings.HasPrefix(progress.String(), "waiting for ssh on pod abc123 (timeout 1m0s)") {
+		t.Errorf("unexpected first progress line: %q", progress.String())
+	}
+	if !strings.Contains(progress.String(), "still waiting for ssh on pod abc123 (15s elapsed): still booting") {
+		t.Errorf("progress lines must carry elapsed time and the detail: %q", progress.String())
+	}
+}
+
+// A nil Progress writer must produce no output at all, on stdout least of all:
+// the legacy project path is the one caller that passes nil, and stdout there is
+// parsed output. Asserting "no error" would not have caught a stdout fallback.
+func TestUntilWithoutProgressWriterStaysSilent(t *testing.T) {
+	clock := newFakeClock()
+
+	realStdout, realStderr := os.Stdout, os.Stderr
+	stdoutR, stdoutW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	stderrR, stderrW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout, os.Stderr = stdoutW, stderrW
+	defer func() { os.Stdout, os.Stderr = realStdout, realStderr }()
+
+	_, waitErr := Until(context.Background(), func(context.Context) (State, error) {
+		return State{Detail: "not yet"}, nil
+	}, Options{
+		Label:    "ssh on pod abc123",
+		Timeout:  30 * time.Second,
+		Interval: 5 * time.Second,
+		Now:      clock.Now,
+		Sleep:    clock.sleepFunc(),
+	})
+
+	os.Stdout, os.Stderr = realStdout, realStderr
+	if err := stdoutW.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if err := stderrW.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if waitErr == nil {
+		t.Fatal("expected a timeout")
+	}
+	for name, reader := range map[string]*os.File{"stdout": stdoutR, "stderr": stderrR} {
+		captured := make([]byte, 1024)
+		n, _ := reader.Read(captured)
+		if n > 0 {
+			t.Errorf("a nil Progress writer wrote %d bytes to %s: %q", n, name, captured[:n])
+		}
+	}
+}
+
+func TestUntilDefaults(t *testing.T) {
+	polls := 0
+	_, err := Until(context.Background(), func(context.Context) (State, error) {
+		polls++
+		return State{Ready: true}, nil
+	}, Options{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if polls != 1 {
+		t.Fatalf("polled %d times, want 1", polls)
+	}
+}
+
+// TestUntilAppliesDefaults pins the zero-Options behaviour with an injected
+// clock: a never-ready poll must run on DefaultInterval and give up at
+// DefaultTimeout, and progress must fire on DefaultProgressEvery — otherwise
+// the exported defaults are decoration.
+func TestUntilAppliesDefaults(t *testing.T) {
+	clock := newFakeClock()
+	var progress strings.Builder
+	polls := 0
+
+	_, err := Until(context.Background(), func(context.Context) (State, error) {
+		polls++
+		return State{Detail: "not there yet"}, nil
+	}, Options{
+		Label:    "pod p1",
+		Now:      clock.Now,
+		Sleep:    clock.sleepFunc(),
+		Progress: &progress,
+	})
+	if err == nil {
+		t.Fatal("expected a timeout")
+	}
+	if !strings.Contains(err.Error(), "timed out after "+DefaultTimeout.String()) {
+		t.Errorf("timeout error = %q, want it to name DefaultTimeout %s", err, DefaultTimeout)
+	}
+	// one poll at t=0, then one per DefaultInterval until the budget is gone.
+	if wantPolls := int(DefaultTimeout/DefaultInterval) + 1; polls != wantPolls {
+		t.Errorf("polled %d times, want %d (DefaultTimeout / DefaultInterval + 1)", polls, wantPolls)
+	}
+	wantLines := strings.Count(progress.String(), "not there yet")
+	if want := int(DefaultTimeout / DefaultProgressEvery); wantLines != want {
+		t.Errorf("progress fired %d times, want %d (DefaultTimeout / DefaultProgressEvery)", wantLines, want)
+	}
+}
+
+// The registration must be released the moment the first signal lands, not when
+// the caller finishes: everything after a wait (the pod re-read) makes api calls
+// that cannot be cancelled, and signal.NotifyContext keeps the handler armed
+// after the first delivery, so a second ctrl-c in that window would be swallowed
+// and the process would look unkillable.
+func TestSignalContextReleasesTheHandlerOnTheFirstSignal(t *testing.T) {
+	stopped := make(chan struct{})
+	var signalled context.CancelFunc
+	notify := func(parent context.Context, sigs ...os.Signal) (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(parent)
+		signalled = cancel
+		return ctx, func() {
+			cancel()
+			select {
+			case <-stopped:
+			default:
+				close(stopped)
+			}
+		}
+	}
+
+	ctx, stop := SignalContext(context.Background(), notify, os.Interrupt)
+	defer stop()
+
+	select {
+	case <-stopped:
+		t.Fatal("the handler must stay armed until a signal arrives")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	signalled() // the first ctrl-c
+
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("the handler was not released after the first signal, so a second ctrl-c would be swallowed")
+	}
+	if ctx.Err() == nil {
+		t.Error("the context must still be cancelled for the caller to observe")
+	}
+}
+
+// stop is idempotent, because the caller defers it and the release path may have
+// run first.
+func TestSignalContextStopIsIdempotent(t *testing.T) {
+	calls := 0
+	notify := func(parent context.Context, sigs ...os.Signal) (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(parent)
+		return ctx, func() {
+			calls++
+			cancel()
+		}
+	}
+
+	_, stop := SignalContext(context.Background(), notify, os.Interrupt)
+	stop()
+	stop()
+	// the release goroutine also calls it once the context is done.
+	time.Sleep(20 * time.Millisecond)
+	if calls != 1 {
+		t.Errorf("stop called %d times, want 1", calls)
+	}
+}
+
+// README.md and AGENTS.md quote both bounds and the ~1 minute they add up to, so
+// a change to either constant has to be a deliberate documentation change too.
+func TestMissBoundsMatchTheDocumentedNumbers(t *testing.T) {
+	if missesBeforeGone != 2 {
+		t.Errorf("missesBeforeGone = %d, want 2 (documented as 'two consecutive reads')", missesBeforeGone)
+	}
+	if missesBeforeKnown != 12 {
+		t.Errorf("missesBeforeKnown = %d, want 12 (documented as 'twelve consecutive reads')", missesBeforeKnown)
+	}
+	// the docs say ~1 min: the first poll is immediate, so the verdict lands after
+	// missesBeforeKnown-1 intervals.
+	if elapsed := time.Duration(missesBeforeKnown-1) * DefaultInterval; elapsed > 70*time.Second || elapsed < 45*time.Second {
+		t.Errorf("the bound lands at %s, which is no longer the documented ~1 min", elapsed)
+	}
+}

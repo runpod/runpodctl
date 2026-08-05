@@ -1,13 +1,20 @@
 package serverless
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/runpod/runpodctl/internal/api"
+	"github.com/runpod/runpodctl/internal/duration"
 	"github.com/runpod/runpodctl/internal/output"
+	"github.com/runpod/runpodctl/internal/waitfor"
 
 	"github.com/spf13/cobra"
 )
@@ -42,6 +49,9 @@ examples:
   # create from a hub repo and attach a model
   runpodctl serverless create --hub-id <id> --gpu-id "NVIDIA GeForce RTX 4090" --model-reference https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct:main
 
+  # block until a worker is ready (--workers-min 1 starts one now, and bills for it)
+  runpodctl serverless create --template-id <id> --gpu-id "NVIDIA GeForce RTX 4090" --workers-min 1 --wait
+
   # override or add env vars (hub defaults are included automatically)
   runpodctl serverless create --hub-id <id> --env MODEL_NAME=my-model --env MAX_TOKENS=4096`,
 	Args: cobra.NoArgs,
@@ -69,12 +79,23 @@ var (
 	createExecutionTimeout int
 	createNetworkVolumeIDs string
 	createModelReferences  []string
+	createWait             bool
+	createWaitTimeout      string
 )
+
+// defaultWaitTimeout is the --wait-timeout default; a cold worker has to pull
+// the image and start the handler, which routinely takes minutes.
+const defaultWaitTimeout = "10m"
+
+// waitPollInterval is how often --wait polls the endpoint's health. It is a var
+// only so the tests can shorten it instead of sleeping between fake polls.
+var waitPollInterval = waitfor.DefaultInterval
 
 type serverlessCreateClient interface {
 	GetListing(string) (*api.Listing, error)
 	ResolveServerlessGpuPoolID(string) (string, error)
 	CreateEndpointGQL(*api.EndpointCreateGQLInput) (*api.Endpoint, error)
+	GetEndpointHealth(string) (*api.EndpointHealth, error)
 }
 
 var newServerlessCreateClient = func() (serverlessCreateClient, error) {
@@ -102,6 +123,8 @@ func init() {
 	createCmd.Flags().IntVar(&createExecutionTimeout, "execution-timeout", -1, "max seconds per request")
 	createCmd.Flags().StringVar(&createNetworkVolumeIDs, "network-volume-ids", "", "comma-separated network volume ids for multi-region")
 	createCmd.Flags().StringArrayVar(&createModelReferences, "model-reference", nil, "hugging face model url with a ref to cache on the endpoint, e.g. https://huggingface.co/<org>/<model>:main; works with --template-id or --hub-id, gpu only (repeatable)")
+	createCmd.Flags().BoolVar(&createWait, "wait", false, "block until the endpoint's health reports a worker ready or running. a ready worker may be flashboot-cached, so the first request still resumes it; --workers-min 1 is the fastest way to get one")
+	createCmd.Flags().StringVar(&createWaitTimeout, "wait-timeout", defaultWaitTimeout, "max time to wait with --wait, e.g. 90s, 10m, 1h; on timeout the endpoint is kept and the error carries its id")
 }
 
 func runCreate(cmd *cobra.Command, args []string) error {
@@ -140,6 +163,11 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	if createNetworkVolumeID != "" && createNetworkVolumeIDs != "" {
 		return fmt.Errorf("--network-volume-id and --network-volume-ids are mutually exclusive")
+	}
+
+	waitTimeout, err := resolveWaitTimeout(cmd)
+	if err != nil {
+		return err
 	}
 
 	client, err := newServerlessCreateClient()
@@ -368,8 +396,78 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create endpoint: %w", err)
 	}
 
+	if createWait {
+		if err := waitForReadyWorker(cmd, client, endpoint.ID, waitTimeout); err != nil {
+			return err
+		}
+	}
+
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
 	return output.Print(endpoint, &output.Config{Format: format})
+}
+
+// resolveWaitTimeout validates the --wait flag combination and returns the
+// timeout to use. It runs before the endpoint is created, so a combination that
+// can never be satisfied costs nothing.
+func resolveWaitTimeout(cmd *cobra.Command) (time.Duration, error) {
+	if !createWait {
+		if flagChanged(cmd, "wait-timeout") {
+			fmt.Fprintln(cmd.ErrOrStderr(), "note: --wait-timeout has no effect without --wait; ignoring")
+		}
+		return 0, nil
+	}
+
+	timeout, err := duration.Parse(createWaitTimeout)
+	if err != nil {
+		return 0, fmt.Errorf("invalid --wait-timeout: %w", err)
+	}
+
+	// --workers-min 0 is satisfiable, so it warns rather than refusing: ai-api
+	// floors workersStandby to 5 whenever workersMax > 1 regardless of workersMin
+	// (pkg/graphql/aiapi.go finalEndpoint), worker.Sync then launches cache
+	// workers to fill standby (pkg/worker/sync.go), and /health counts a cached
+	// worker as ready (pkg/api/health.go). Verified live: six endpoints on a prod
+	// account, all with workersMin unset, report ready 1-5 with running 0.
+	// It is still slower and less certain than an explicit warm worker, hence the
+	// note; refusing would break the flag's most common invocation.
+	if createWorkersMin < 1 {
+		fmt.Fprintln(cmd.ErrOrStderr(), "note: at --workers-min 0 no worker is guaranteed to start; runpod only fills a standby pool when --workers-max is above 1, so --wait may take longer or time out. --workers-min 1 starts (and bills) a worker immediately")
+	}
+
+	return timeout, nil
+}
+
+// notifyWaitSignals is signal.NotifyContext, injectable so a test can prove the
+// wait actually registers for ctrl-c.
+var notifyWaitSignals = signal.NotifyContext
+
+// waitForReadyWorker blocks until the endpoint's /health reports a worker ready
+// or running (see waitfor.EndpointWorkerPoller for what each counter actually
+// proves). Progress goes to stderr so stdout stays a single json object.
+func waitForReadyWorker(cmd *cobra.Command, client serverlessCreateClient, endpointID string, timeout time.Duration) error {
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// ctrl-c stops the wait but must not lose the endpoint: the error names it.
+	// SignalContext releases the handler on the first signal so a second ctrl-c is
+	// not swallowed while an in-flight /health read (uncancellable, up to the
+	// client timeout) finishes.
+	ctx, stop := waitfor.SignalContext(ctx, notifyWaitSignals, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	_, err := waitfor.Until(ctx, waitfor.EndpointWorkerPoller(client, endpointID), waitfor.Options{
+		Label:    "a ready worker on endpoint " + endpointID,
+		Timeout:  timeout,
+		Interval: waitPollInterval,
+		Progress: cmd.ErrOrStderr(),
+	})
+	if err != nil {
+		// the id goes into the error object as data, not only into the prose: a
+		// caller must not have to regex a message to find the endpoint it now owns.
+		return output.WithResourceID(endpointID, fmt.Errorf("%w; endpoint %s was created: 'runpodctl serverless get %s' to inspect it, 'runpodctl serverless delete %s' if you no longer want it (an endpoint with no running worker is not billing, but it will start one on the first request)", err, endpointID, endpointID, endpointID))
+	}
+	return nil
 }
 
 // flagChanged reports whether a command-line value was explicitly provided.

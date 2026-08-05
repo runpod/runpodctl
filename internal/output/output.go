@@ -59,6 +59,34 @@ type errorObject struct {
 	Error  string `json:"error"`
 	Code   string `json:"code,omitempty"`
 	Status int    `json:"status,omitempty"`
+	ID     string `json:"id,omitempty"`
+}
+
+// resourceIDError annotates a failure with the id of a resource that was created
+// and outlives it, so the emitted error object carries the id as data.
+type resourceIDError struct {
+	id  string
+	err error
+}
+
+func (e *resourceIDError) Error() string { return e.err.Error() }
+
+func (e *resourceIDError) Unwrap() error { return e.err }
+
+func (e *resourceIDError) ErrorResourceID() string { return e.id }
+
+// WithResourceID marks err as a failure that left a resource behind, so the
+// error object gains an `id` field.
+//
+// Anything that fails *after* a create has succeeded must use this: `pod create
+// --wait` that times out has bought a pod, and an agent needs to delete it. The
+// message names the id too, for humans, but prose is not something a caller
+// should have to parse to avoid leaking a billed resource.
+func WithResourceID(id string, err error) error {
+	if err == nil || id == "" {
+		return err
+	}
+	return &resourceIDError{id: id, err: err}
 }
 
 // fallbackCode classifies errors that carry no ErrorCode() of their own, so that
@@ -110,7 +138,8 @@ func isNetworkError(err error) bool {
 }
 
 // Error writes a single flat JSON error object to stderr. When the error (or an
-// error it wraps) exposes a stable code or HTTP status, those are included.
+// error it wraps) exposes a stable code, an HTTP status or the id of a resource
+// it left behind (see WithResourceID), those are included.
 func Error(err error) {
 	if err == nil {
 		return
@@ -125,6 +154,10 @@ func Error(err error) {
 	var statuser interface{ HTTPStatus() int }
 	if errors.As(err, &statuser) {
 		obj.Status = statuser.HTTPStatus()
+	}
+	var ider interface{ ErrorResourceID() string }
+	if errors.As(err, &ider) {
+		obj.ID = ider.ErrorResourceID()
 	}
 	if obj.Code == "" {
 		obj.Code = fallbackCode(err)
