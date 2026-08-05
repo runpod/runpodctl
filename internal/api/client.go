@@ -73,7 +73,7 @@ func (c *Client) request(method, endpoint string, params url.Values, body interf
 
 // requestURL is request against an already-built absolute url. It exists for the
 // few calls that do not live on the rest control plane (the serverless invoke
-// service, see GetEndpointHealth) but must still share auth, user agent and the
+// service, see InvokeClient.EndpointHealth) but must still share auth, user agent and the
 // structured APIError handling.
 func (c *Client) requestURL(method, u string, body interface{}) ([]byte, error) {
 	var reqBody io.Reader

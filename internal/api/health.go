@@ -1,12 +1,5 @@
 package api
 
-import (
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"strings"
-)
-
 // EndpointHealth is the live readiness snapshot for a serverless endpoint.
 //
 // It is served by the invoke service (api.runpod.ai/v2/<id>/health), not the
@@ -36,24 +29,4 @@ type EndpointHealthWorkers struct {
 	Running      int `json:"running"`
 	Throttled    int `json:"throttled"`
 	Unhealthy    int `json:"unhealthy"`
-}
-
-// GetEndpointHealth returns the live worker/job counts for an endpoint.
-func (c *Client) GetEndpointHealth(endpointID string) (*EndpointHealth, error) {
-	if strings.TrimSpace(endpointID) == "" {
-		return nil, fmt.Errorf("endpoint id is required")
-	}
-
-	urls := invokeURLs(endpointID)
-	data, err := c.requestURL(http.MethodGet, urls.Health, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var health EndpointHealth
-	if err := json.Unmarshal(data, &health); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return &health, nil
 }

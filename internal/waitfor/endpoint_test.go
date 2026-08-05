@@ -15,7 +15,7 @@ type fakeHealthClient struct {
 	calls  int
 }
 
-func (f *fakeHealthClient) GetEndpointHealth(string) (*api.EndpointHealth, error) {
+func (f *fakeHealthClient) EndpointHealthCounts(context.Context, string) (*api.EndpointHealth, error) {
 	f.calls++
 	if f.err != nil {
 		return nil, f.err

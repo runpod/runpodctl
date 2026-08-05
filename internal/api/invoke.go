@@ -149,6 +149,29 @@ func RunBodySize(input json.RawMessage) (int, error) {
 	return len(body), nil
 }
 
+// EndpointHealthCounts is EndpointHealth decoded, for callers that branch on the
+// numbers rather than printing them.
+//
+// It shares one transport with EndpointHealth above: the invoke service is a
+// different host from the rest control plane, and having two clients reach it was
+// two places to keep the base url, auth and escaping right.
+func (c *InvokeClient) EndpointHealthCounts(ctx context.Context, endpointID string) (*EndpointHealth, error) {
+	if strings.TrimSpace(endpointID) == "" {
+		return nil, fmt.Errorf("endpoint id is required")
+	}
+
+	raw, err := c.EndpointHealth(ctx, endpointID)
+	if err != nil {
+		return nil, err
+	}
+
+	var health EndpointHealth
+	if err := json.Unmarshal(raw, &health); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &health, nil
+}
+
 // jobRequest is the invoke wire body. The handler payload is always nested
 // under "input".
 type jobRequest struct {

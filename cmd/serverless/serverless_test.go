@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"syscall"
@@ -11,8 +13,10 @@ import (
 	"time"
 
 	"github.com/runpod/runpodctl/internal/api"
+	"github.com/runpod/runpodctl/internal/configenv"
 	"github.com/runpod/runpodctl/internal/waitfor"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 func TestServerlessCmd_Structure(t *testing.T) {
@@ -138,18 +142,28 @@ func snapshotCreateFlags(t *testing.T) {
 // releaseObservingClient records, at the moment of a health read, whether the
 // signal registration has already been torn down.
 type releaseObservingClient struct {
-	serverlessCreateClient
+	waitfor.EndpointHealthGetter
 	released <-chan struct{}
 	observed *bool
 }
 
-func (c *releaseObservingClient) GetEndpointHealth(id string) (*api.EndpointHealth, error) {
+func (c *releaseObservingClient) EndpointHealthCounts(ctx context.Context, id string) (*api.EndpointHealth, error) {
 	select {
 	case <-c.released:
 		*c.observed = true
 	case <-time.After(2 * time.Second):
 	}
-	return c.serverlessCreateClient.GetEndpointHealth(id)
+	return c.EndpointHealthGetter.EndpointHealthCounts(ctx, id)
+}
+
+// installMockWaitHealthClient points --wait's health reads at the same mock. The
+// wait uses the invoke client, not the control-plane client, because /health is a
+// different service -- so a test that exercises --wait has to install both.
+func installMockWaitHealthClient(t *testing.T, client waitfor.EndpointHealthGetter) {
+	t.Helper()
+	old := newWaitHealthClient
+	t.Cleanup(func() { newWaitHealthClient = old })
+	newWaitHealthClient = func() (waitfor.EndpointHealthGetter, error) { return client, nil }
 }
 
 type mockServerlessCreateClient struct {
@@ -179,7 +193,7 @@ func (c *mockServerlessCreateClient) CreateEndpointGQL(input *api.EndpointCreate
 	return &api.Endpoint{ID: "endpoint-1", Name: input.Name}, nil
 }
 
-func (c *mockServerlessCreateClient) GetEndpointHealth(string) (*api.EndpointHealth, error) {
+func (c *mockServerlessCreateClient) EndpointHealthCounts(context.Context, string) (*api.EndpointHealth, error) {
 	c.healthCalls++
 	if c.healthErr != nil {
 		return nil, c.healthErr
@@ -354,6 +368,7 @@ func TestRunCreate_HubDeploymentConstraints(t *testing.T) {
 			oldFactory := newServerlessCreateClient
 			newServerlessCreateClient = func() (serverlessCreateClient, error) { return client, nil }
 			t.Cleanup(func() { newServerlessCreateClient = oldFactory })
+			installMockWaitHealthClient(t, client)
 
 			err := runCreate(mockCreateCommand(), nil)
 			if tc.wantErr != "" {
@@ -409,6 +424,7 @@ func TestRunCreate_WaitAtZeroMinWorkersWarnsAndStillWaits(t *testing.T) {
 	oldFactory := newServerlessCreateClient
 	newServerlessCreateClient = func() (serverlessCreateClient, error) { return client, nil }
 	t.Cleanup(func() { newServerlessCreateClient = oldFactory })
+	installMockWaitHealthClient(t, client)
 
 	cmd := mockCreateCommand()
 	var stderr bytes.Buffer
@@ -486,6 +502,7 @@ func TestRunCreate_Wait(t *testing.T) {
 			oldFactory := newServerlessCreateClient
 			newServerlessCreateClient = func() (serverlessCreateClient, error) { return client, nil }
 			t.Cleanup(func() { newServerlessCreateClient = oldFactory })
+			installMockWaitHealthClient(t, client)
 
 			cmd := mockCreateCommand()
 			var stderr bytes.Buffer
@@ -548,6 +565,7 @@ func TestRunCreate_WaitSurvivesTransientHealthFailures(t *testing.T) {
 	oldFactory := newServerlessCreateClient
 	newServerlessCreateClient = func() (serverlessCreateClient, error) { return client, nil }
 	t.Cleanup(func() { newServerlessCreateClient = oldFactory })
+	installMockWaitHealthClient(t, client)
 
 	cmd := mockCreateCommand()
 	var stderr bytes.Buffer
@@ -585,6 +603,7 @@ func TestRunCreate_WaitAbortsOnUnauthorized(t *testing.T) {
 	oldFactory := newServerlessCreateClient
 	newServerlessCreateClient = func() (serverlessCreateClient, error) { return client, nil }
 	t.Cleanup(func() { newServerlessCreateClient = oldFactory })
+	installMockWaitHealthClient(t, client)
 
 	err := runCreate(mockCreateCommand(), nil)
 	if err == nil {
@@ -640,7 +659,7 @@ func TestWaitForReadyWorkerHandlesInterrupts(t *testing.T) {
 	// still running, which is the whole point of SignalContext.
 	inner := &mockServerlessCreateClient{health: []api.EndpointHealthWorkers{{Initializing: 1}}}
 	releasedDuringWait := false
-	client := &releaseObservingClient{serverlessCreateClient: inner, released: released, observed: &releasedDuringWait}
+	client := &releaseObservingClient{EndpointHealthGetter: inner, released: released, observed: &releasedDuringWait}
 	cmd := mockCreateCommand()
 	var stderr bytes.Buffer
 	cmd.SetErr(&stderr)
@@ -684,6 +703,7 @@ func TestRunCreate_WaitTimeoutWithoutWait(t *testing.T) {
 	oldFactory := newServerlessCreateClient
 	newServerlessCreateClient = func() (serverlessCreateClient, error) { return client, nil }
 	t.Cleanup(func() { newServerlessCreateClient = oldFactory })
+	installMockWaitHealthClient(t, client)
 
 	cmd := mockCreateCommand("wait-timeout")
 	var stderr bytes.Buffer
@@ -759,5 +779,50 @@ func TestServerlessCmd_Help(t *testing.T) {
 	}
 	if output == "" {
 		t.Error("expected help output")
+	}
+}
+
+// Each /health read inside a wait must carry its own deadline. The invoke client
+// has no client-wide timeout, and the wait loop's context has none, so without a
+// per-call bound a single wedged read would hang the whole wait rather than
+// counting as one failed poll.
+func TestWaitHealthClientBoundsEachRead(t *testing.T) {
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	// drive it against a server that never answers: the call has to return on its
+	// own deadline, not hang, and the caller's context carries no deadline at all.
+	blocked := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-blocked
+	}))
+	defer server.Close()
+	defer close(blocked)
+
+	t.Setenv(configenv.InvokeURLEnv, server.URL)
+	viper.Set("timeout", 100*time.Millisecond)
+
+	client, err := newWaitHealthClient()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := client.(boundedHealthClient); !ok {
+		t.Fatalf("the wait's health client must apply a per-call bound, got %T", client)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.EndpointHealthCounts(context.Background(), "ep-1")
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected the read to fail on its own deadline")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the read never returned: it is not bounded by a per-call deadline")
 	}
 }
