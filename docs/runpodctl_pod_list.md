@@ -28,7 +28,7 @@ runpodctl pod list [flags]
   -h, --help                   help for list
       --name string            filter by pod name
       --since string           filter pods created within duration (e.g. 1h, 7d)
-      --status string          filter by desired status (e.g. RUNNING, EXITED)
+      --status string          filter by desired status (e.g. RUNNING, EXITED); not runtimeStatus values like initializing
 ```
 
 ### Options inherited from parent commands

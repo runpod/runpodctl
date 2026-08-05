@@ -64,7 +64,7 @@ var (
 func init() {
 	listCmd.Flags().StringVar(&listComputeType, "compute-type", "", "filter by compute type (GPU or CPU)")
 	listCmd.Flags().StringVar(&listName, "name", "", "filter by pod name")
-	listCmd.Flags().StringVar(&listStatus, "status", "", "filter by desired status (e.g. RUNNING, EXITED)")
+	listCmd.Flags().StringVar(&listStatus, "status", "", "filter by desired status (e.g. RUNNING, EXITED); not runtimeStatus values like initializing")
 	listCmd.Flags().StringVar(&listSince, "since", "", "filter pods created within duration (e.g. 1h, 7d)")
 	listCmd.Flags().StringVar(&listCreatedAfter, "created-after", "", "filter pods created after date (e.g. 2025-01-15)")
 	listCmd.Flags().BoolVarP(&listAll, "all", "a", false, "show all pods including exited (default: running only)")

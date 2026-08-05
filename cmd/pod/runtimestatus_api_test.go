@@ -216,6 +216,25 @@ func TestRunList_RuntimeStatus(t *testing.T) {
 			wantReason: map[string]string{"p-up": "runtime_unavailable"},
 		},
 		{
+			// pods ship runpodctl with a pod-scoped key, which may be allowed on
+			// rest /pods and rejected on graphql myPods. that must degrade exactly
+			// like any other probe failure -- an in-pod `pod list` still lists
+			// every pod, just without runtime detail -- rather than failing the
+			// command or reporting a live container as down.
+			//
+			// fetchRuntimes discards the error, so this takes the identical path to
+			// the 500 case above and adds no coverage. it is here to document the
+			// in-pod scenario, and to fail if anyone ever makes the probe's error
+			// handling status-specific without thinking about auth rejection.
+			name: "a key rejected by graphql still lists pods, just without runtime detail",
+			stub: stub{
+				restPods:  []map[string]interface{}{restPod("p-up", "RUNNING", nil)},
+				gqlStatus: http.StatusUnauthorized,
+			},
+			wantStatus: map[string]string{"p-up": "unknown"},
+			wantReason: map[string]string{"p-up": "runtime_unavailable"},
+		},
+		{
 			// stale telemetry outlives a stopped container: observed live with
 			// uptimeInSeconds frozen at its last value on an EXITED pod.
 			name: "a stopped pod with stale telemetry is stopped and reports no uptime",
