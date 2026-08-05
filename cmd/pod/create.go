@@ -192,15 +192,9 @@ func runCreate(cmd *cobra.Command, args []string) error {
 			// the pod exists but we cannot address it; say so rather than waiting.
 			return idErr
 		}
-		addr, waitErr := waitForPodSSH(cmd, podID, waitTimeout)
+		details, waitErr := waitForReadyPod(cmd, podID, waitTimeout)
 		if waitErr != nil {
 			return waitErr
-		}
-		// re-read: the create response (either shape) has no live ssh info, and
-		// handing back a pod you can connect to is the entire point of --wait.
-		details, detailsErr := podDetailsWithSSH(podID, addr)
-		if detailsErr != nil {
-			return detailsErr
 		}
 		return output.Print(details, &output.Config{Format: format})
 	}
@@ -260,22 +254,45 @@ var (
 	postWaitReadBackoff = 2 * time.Second
 )
 
-// waitForPodSSH blocks until the pod's ssh is reachable and returns the address
-// that answered. Progress goes to stderr; stdout stays a single json object.
-func waitForPodSSH(cmd *cobra.Command, podID string, timeout time.Duration) (string, error) {
-	lister, err := newPodWaitLister()
-	if err != nil {
-		return "", err
-	}
-
+// waitForReadyPod owns everything after a create when --wait is set: one signal
+// registration, the ssh wait, and the re-read that produces the payload.
+//
+// The three live in one function because the signal handler has to span all of
+// them. Registering it inside the wait alone left the re-read's retry sleeps
+// uncovered, and a ctrl-c there took the default disposition — exit 130, empty
+// stdout, no error object, no id — which is the one path that loses a billed pod.
+func waitForReadyPod(cmd *cobra.Command, podID string, timeout time.Duration) (*podDetails, error) {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	// ctrl-c cancels the wait but must not lose the pod: the error below carries
-	// its id and the delete command, because the pod bills either way.
-	ctx, stop := notifyWaitSignals(ctx, os.Interrupt, syscall.SIGTERM)
+	// SignalContext, not signal.NotifyContext: the re-read's api calls are not
+	// cancellable, so the handler has to be released on the first signal or a
+	// second ctrl-c would be swallowed for as long as they take to give up.
+	ctx, stop := waitfor.SignalContext(ctx, notifyWaitSignals, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	addr, err := waitForPodSSH(ctx, cmd, podID, timeout)
+	if err != nil {
+		return nil, err
+	}
+	// re-read: the create response (either shape) has no live ssh info, and
+	// handing back a pod you can connect to is the entire point of --wait.
+	return podDetailsWithSSH(ctx, podID, addr)
+}
+
+// waitForPodSSH blocks until the pod's ssh is reachable and returns the address
+// that answered. Progress goes to stderr; stdout stays a single json object.
+//
+// ctx must already be cancelled by ctrl-c / SIGTERM (the caller owns that, so the
+// handler also covers the re-read that follows). A cancelled wait must not lose
+// the pod: the error below carries its id and the delete command, because the pod
+// bills either way.
+func waitForPodSSH(ctx context.Context, cmd *cobra.Command, podID string, timeout time.Duration) (string, error) {
+	lister, err := newPodWaitLister()
+	if err != nil {
+		return "", err
+	}
 
 	var addr string
 	if _, err := waitfor.Until(ctx, waitfor.PodSSHPoller(lister, podID, podSSHProbe, &addr), waitfor.Options{
@@ -303,11 +320,19 @@ func waitForPodSSH(cmd *cobra.Command, podID string, timeout time.Duration) (str
 // to produce missing — a caller reading .ssh.ssh_command would get nothing and no
 // signal. The failure is transient by nature (the wait just read that same list
 // successfully), so retry, and fail loudly rather than quietly if it persists.
-func podDetailsWithSSH(podID, addr string) (*podDetails, error) {
+// ctx carries the same ctrl-c handler the wait used, so an interrupt between
+// attempts exits with a coded error object naming the pod rather than the shell's
+// default 130 and an empty stdout.
+func podDetailsWithSSH(ctx context.Context, podID, addr string) (*podDetails, error) {
 	var reason error
 	for attempt := 1; attempt <= postWaitReadTries; attempt++ {
 		if attempt > 1 {
-			time.Sleep(postWaitReadBackoff)
+			// the cancellation is honoured between attempts, never instead of the
+			// first one: a single read is one fast call, and a ctrl-c that lands
+			// exactly as ssh came up should still get the payload it waited for.
+			if err := sleepUnlessCancelled(ctx, postWaitReadBackoff); err != nil {
+				return nil, interruptedReadError(podID, addr, reason)
+			}
 		}
 		// includeMachine: the graphql create response this replaces selected
 		// machine { gpuDisplayName location }, so without it --wait would hand back
@@ -323,7 +348,35 @@ func podDetailsWithSSH(podID, addr string) (*podDetails, error) {
 		}
 	}
 
-	return nil, output.WithResourceID(podID, fmt.Errorf("pod %s is running and ssh answered at %s, but reading the pod back failed: %w; retry with 'runpodctl pod get %s'", podID, addr, reason, podID))
+	return nil, output.WithResourceID(podID, fmt.Errorf("pod %s answered ssh at %s during the wait, but reading it back failed: %w; retry with 'runpodctl pod get %s'", podID, addr, reason, podID))
+}
+
+// interruptedReadError reports a ctrl-c during the post-wait re-read. ssh answered
+// moments ago, so this is the good outcome interrupted late rather than a failed
+// create — but it still exits non-zero with the id, because the pod bills and
+// nothing else in the output would name it.
+func interruptedReadError(podID, addr string, lastReason error) error {
+	msg := fmt.Sprintf("interrupted while reading pod %s back; ssh answered at %s during the wait: 'runpodctl pod get %s' to inspect it, 'runpodctl pod delete %s' if you no longer want it (pods bill by the second)", podID, addr, podID, podID)
+	if lastReason != nil {
+		msg += fmt.Sprintf("; last read failed with: %v", lastReason)
+	}
+	return output.WithResourceID(podID, waitfor.Interrupted(msg))
+}
+
+// sleepUnlessCancelled sleeps for d and returns nil, or returns ctx.Err() as soon
+// as ctx is done -- including immediately when it is already done.
+func sleepUnlessCancelled(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // podIDFrom pulls the pod id out of either create response shape: the rest path

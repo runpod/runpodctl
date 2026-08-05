@@ -118,6 +118,62 @@ func TestEndpointWorkerPollerTolerates404BeforeItEverAnswered(t *testing.T) {
 	}
 }
 
+// ...but that tolerance is finite. An endpoint that never answers at all was
+// deleted before it propagated, or never existed; waiting out the whole budget
+// and then reporting wait_timeout tells an agent to retry a create that already
+// happened.
+func TestEndpointWorkerPollerGivesUpOnAnEndpointThatNeverAnswers(t *testing.T) {
+	client := &fakeHealthClient{err: &api.APIError{Message: "endpoint not found", Status: 404}}
+	poll := EndpointWorkerPoller(client, "endpoint-1")
+
+	for i := 1; i < missesBeforeKnown; i++ {
+		if _, err := poll(context.Background()); isFatalPollError(err) {
+			t.Fatalf("poll %d of %d must still be treated as propagation lag, got a fatal %v", i, missesBeforeKnown, err)
+		}
+	}
+
+	_, err := poll(context.Background())
+	var fatal *FatalError
+	if !errors.As(err, &fatal) {
+		t.Fatalf("expected a fatal error after %d misses, got %v", missesBeforeKnown, err)
+	}
+	if fatal.ErrorCode() != "not_found" {
+		t.Errorf("code = %q, want not_found", fatal.ErrorCode())
+	}
+	// the message must not claim it was deleted *while waiting* (it was never
+	// seen), and must not claim it never existed either (the id came from a create
+	// that succeeded, and an agent told that would buy a second endpoint).
+	if !strings.Contains(err.Error(), "deleted before it propagated") {
+		t.Errorf("error = %q, want it to say the endpoint never propagated", err.Error())
+	}
+	if strings.Contains(err.Error(), "does not exist") {
+		t.Errorf("error = %q must not claim the endpoint never existed", err.Error())
+	}
+}
+
+// A 500 in the middle of a run of 404s breaks the run: "consecutive" has to mean
+// consecutive, or an endpoint that is merely flaky gets declared deleted.
+func TestEndpointWorkerPollerResetsMissesOnANon404(t *testing.T) {
+	client := &fakeHealthClient{health: &api.EndpointHealth{Workers: api.EndpointHealthWorkers{Initializing: 1}}}
+	poll := EndpointWorkerPoller(client, "endpoint-1")
+	if _, err := poll(context.Background()); err != nil {
+		t.Fatalf("unexpected error on the first poll: %v", err)
+	}
+
+	client.err = &api.APIError{Message: "endpoint not found", Status: 404}
+	if _, err := poll(context.Background()); isFatalPollError(err) {
+		t.Fatalf("the first miss must be tolerated, got a fatal %v", err)
+	}
+	client.err = &api.APIError{Message: "internal server error", Status: 500}
+	if _, err := poll(context.Background()); isFatalPollError(err) {
+		t.Fatalf("a 5xx must never end the wait, got %v", err)
+	}
+	client.err = &api.APIError{Message: "endpoint not found", Status: 404}
+	if _, err := poll(context.Background()); isFatalPollError(err) {
+		t.Fatalf("this 404 is the first of a new run, so it must be tolerated, got a fatal %v", err)
+	}
+}
+
 // An endpoint that the invoke service knew and then 404s twice was deleted out of
 // band. Without a fatal case the wait would burn the whole budget, because a
 // /health 404 is otherwise read as propagation lag.

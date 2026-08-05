@@ -27,13 +27,6 @@ var terminalPodStatuses = map[string]bool{
 	"DEAD":       true,
 }
 
-// missesBeforeGone is how many consecutive reads must omit the resource before a
-// wait calls it deleted. One is not enough: the same read is tolerated as
-// "unknown" for every other kind of anomaly, and an eventually-consistent list
-// query that briefly omits a live pod would otherwise produce a not_found whose
-// message asserts the pod was terminated.
-const missesBeforeGone = 2
-
 // PodSSHPoller polls until pod podID is running, has a public ssh port, and that
 // port answers with an ssh banner. Pass a nil probe to use ProbeSSH.
 //
@@ -48,6 +41,10 @@ func PodSSHPoller(lister PodLister, podID string, probe Prober, addr *string) Po
 	return func(ctx context.Context) (State, error) {
 		pods, err := lister.GetPods()
 		if err != nil {
+			// a failed read is an unknown state, not an absence, and it breaks the
+			// run of consecutive misses -- otherwise a short list, a graphql blip and
+			// a second short list would add up to a not_found for a live pod.
+			missed = 0
 			return State{}, err
 		}
 
@@ -76,7 +73,22 @@ func PodSSHPoller(lister PodLister, podID string, probe Prober, addr *string) Po
 					Err:  fmt.Errorf("pod %s is no longer listed, so it was terminated or deleted while waiting", podID),
 				}
 			}
-			// a just-created pod can lag the list query; not an error.
+			// a just-created pod can lag the list query, so an absence here starts
+			// out benign -- but not indefinitely. a pod terminated before it was
+			// ever listed (an account out of credit is the realistic way) would
+			// otherwise be waited out to the deadline and reported as a
+			// wait_timeout, which reads as "try again" for something that never
+			// will. same bound and same reasoning as the endpoint wait.
+			missed++
+			if missed >= missesBeforeKnown {
+				return State{}, &FatalError{
+					Code: "not_found",
+					// not "it was never created": the id came from a create that
+					// succeeded, and saying otherwise invites a retry that buys a
+					// second pod.
+					Err: fmt.Errorf("pod %s has not appeared in %d consecutive reads, so it was terminated before it was ever listed, or it is not visible to this api key", podID, missed),
+				}
+			}
 			return State{Detail: "pod not listed yet"}, nil
 		}
 		seen = true

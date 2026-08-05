@@ -253,6 +253,37 @@ func TestPodSSHPollerToleratesListLag(t *testing.T) {
 	}
 }
 
+// ...but only for as long as list lag plausibly lasts. A pod that never appears
+// was never created, or was terminated before it was listed (an account out of
+// credit), and reporting that as a timeout tells an agent to retry.
+func TestPodSSHPollerGivesUpOnAPodThatIsNeverListed(t *testing.T) {
+	poll := PodSSHPoller(&fakePodLister{}, "pod-1", nil, nil)
+
+	for i := 1; i < missesBeforeKnown; i++ {
+		if _, err := poll(context.Background()); isFatalPollError(err) {
+			t.Fatalf("read %d of %d must still be treated as list lag, got a fatal %v", i, missesBeforeKnown, err)
+		}
+	}
+
+	_, err := poll(context.Background())
+	var fatal *FatalError
+	if !errors.As(err, &fatal) {
+		t.Fatalf("expected a fatal error after %d misses, got %v", missesBeforeKnown, err)
+	}
+	if fatal.ErrorCode() != "not_found" {
+		t.Errorf("code = %q, want not_found", fatal.ErrorCode())
+	}
+	// it was never seen, so the message must not claim it vanished mid-wait -- and
+	// must not claim it was never created either, because the id came from a create
+	// that succeeded and a caller told otherwise would buy a second pod.
+	if !strings.Contains(err.Error(), "terminated before it was ever listed") {
+		t.Errorf("error = %q, want it to say the pod was never listed", err.Error())
+	}
+	if strings.Contains(err.Error(), "never created") {
+		t.Errorf("error = %q must not claim the pod was never created", err.Error())
+	}
+}
+
 // ProbeSSH must accept only something that actually speaks ssh, so that a port
 // which merely accepts tcp does not read as "ssh is up".
 func TestProbeSSH(t *testing.T) {
@@ -311,5 +342,30 @@ func TestProbeSSHOnClosedPort(t *testing.T) {
 
 	if err := ProbeSSH(context.Background(), addr); err == nil {
 		t.Fatal("expected a dial error for a closed port")
+	}
+}
+
+// A transient list failure between two short reads must break the run: otherwise
+// a miss, a graphql blip and a second miss add up to a not_found for a pod that
+// is running and billing.
+func TestPodSSHPollerResetsMissesOnAFailedRead(t *testing.T) {
+	pod := podWithSSHPort("pod-1", "RUNNING", 8888, 20000, true)
+	lister := &fakePodLister{pods: []*api.LegacyPod{pod}}
+	poll := PodSSHPoller(lister, "pod-1", nil, nil)
+
+	if _, err := poll(context.Background()); err != nil {
+		t.Fatalf("unexpected error on the first poll: %v", err)
+	}
+	lister.pods = nil
+	if _, err := poll(context.Background()); isFatalPollError(err) {
+		t.Fatalf("the first miss must be tolerated, got a fatal %v", err)
+	}
+	lister.err = errors.New("boom")
+	if _, err := poll(context.Background()); isFatalPollError(err) {
+		t.Fatalf("a transport failure must never end the wait, got %v", err)
+	}
+	lister.err = nil
+	if _, err := poll(context.Background()); isFatalPollError(err) {
+		t.Fatalf("this miss is the first of a new run, so it must be tolerated, got a fatal %v", err)
 	}
 }

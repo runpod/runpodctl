@@ -450,7 +450,10 @@ func waitForReadyWorker(cmd *cobra.Command, client serverlessCreateClient, endpo
 		ctx = context.Background()
 	}
 	// ctrl-c stops the wait but must not lose the endpoint: the error names it.
-	ctx, stop := notifyWaitSignals(ctx, os.Interrupt, syscall.SIGTERM)
+	// SignalContext releases the handler on the first signal so a second ctrl-c is
+	// not swallowed while an in-flight /health read (uncancellable, up to the
+	// client timeout) finishes.
+	ctx, stop := waitfor.SignalContext(ctx, notifyWaitSignals, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	_, err := waitfor.Until(ctx, waitfor.EndpointWorkerPoller(client, endpointID), waitfor.Options{
@@ -462,7 +465,7 @@ func waitForReadyWorker(cmd *cobra.Command, client serverlessCreateClient, endpo
 	if err != nil {
 		// the id goes into the error object as data, not only into the prose: a
 		// caller must not have to regex a message to find the endpoint it now owns.
-		return output.WithResourceID(endpointID, fmt.Errorf("%w; endpoint %s was created: 'runpodctl serverless get %s' to inspect it, 'runpodctl serverless delete %s' to stop billing", err, endpointID, endpointID, endpointID))
+		return output.WithResourceID(endpointID, fmt.Errorf("%w; endpoint %s was created: 'runpodctl serverless get %s' to inspect it, 'runpodctl serverless delete %s' if you no longer want it (an endpoint with no running worker is not billing, but it will start one on the first request)", err, endpointID, endpointID, endpointID))
 	}
 	return nil
 }

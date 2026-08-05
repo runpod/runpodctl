@@ -132,6 +132,23 @@ func snapshotCreateFlags(t *testing.T) {
 	createEnvVars, createModelReferences = nil, nil
 }
 
+// releaseObservingClient records, at the moment of a health read, whether the
+// signal registration has already been torn down.
+type releaseObservingClient struct {
+	serverlessCreateClient
+	released <-chan struct{}
+	observed *bool
+}
+
+func (c *releaseObservingClient) GetEndpointHealth(id string) (*api.EndpointHealth, error) {
+	select {
+	case <-c.released:
+		*c.observed = true
+	case <-time.After(2 * time.Second):
+	}
+	return c.serverlessCreateClient.GetEndpointHealth(id)
+}
+
 type mockServerlessCreateClient struct {
 	listing       *api.Listing
 	getListingHit bool
@@ -596,19 +613,39 @@ func TestWaitForReadyWorkerHandlesInterrupts(t *testing.T) {
 	t.Cleanup(func() { notifyWaitSignals = oldNotify })
 
 	var registered []os.Signal
+	// released reports that the signal registration was torn down, which
+	// waitfor.SignalContext does as soon as the first signal lands -- not when the
+	// caller finishes. a plain notifyWaitSignals call would only release on the
+	// deferred stop, i.e. after the wait had already returned.
+	released := make(chan struct{})
 	notifyWaitSignals = func(parent context.Context, signals ...os.Signal) (context.Context, context.CancelFunc) {
 		registered = signals
 		ctx, cancel := context.WithCancel(parent)
 		cancel() // stand in for the signal arriving during the wait
-		return ctx, cancel
+		return ctx, func() {
+			cancel()
+			select {
+			case <-released:
+			default:
+				close(released)
+			}
+		}
 	}
 
-	client := &mockServerlessCreateClient{health: []api.EndpointHealthWorkers{{Initializing: 1}}}
+	// the health read stands in for "work still in flight when the signal lands":
+	// it reports whether the registration was already released while the wait was
+	// still running, which is the whole point of SignalContext.
+	inner := &mockServerlessCreateClient{health: []api.EndpointHealthWorkers{{Initializing: 1}}}
+	releasedDuringWait := false
+	client := &releaseObservingClient{serverlessCreateClient: inner, released: released, observed: &releasedDuringWait}
 	cmd := mockCreateCommand()
 	var stderr bytes.Buffer
 	cmd.SetErr(&stderr)
 
 	err := waitForReadyWorker(cmd, client, "endpoint-1", time.Minute)
+	if !releasedDuringWait {
+		t.Error("the signal registration must be released while the wait is still running, or a second ctrl-c is swallowed until the in-flight api call gives up")
+	}
 	var waitErr *waitfor.Error
 	if !errors.As(err, &waitErr) {
 		t.Fatalf("expected a *waitfor.Error, got %#v", err)

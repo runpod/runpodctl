@@ -149,9 +149,13 @@ what each one waits for, precisely:
   `serverless create --wait` prints the same create response as without `--wait`.
 - `--wait-timeout` defaults to `10m` and accepts `90s`, `10m`, `1h`, `2d`.
 - on timeout or ctrl-c the resource is **not** deleted — you paid for it, and you
-  need the id to debug or clean up. the exit code is non-zero and the error
-  carries the id, the last known state and the delete command, with code
-  `wait_timeout` / `wait_interrupted`.
+  need the id to debug or clean up. the exit code is non-zero and the error carries
+  the id, the last known state and the delete command, with code `wait_timeout` /
+  `wait_interrupted`. (the one error without a last-known-state is a ctrl-c during
+  the `pod create --wait` re-read, which happens after ssh already answered.)
+- a second ctrl-c always exits, even while the first one is still producing that
+  error object: the read that follows a successful wait is not cancellable, so the
+  signal handler is released as soon as the first signal arrives.
 - `serverless create --wait` warns at `--workers-min 0` but still waits. runpod
   does fill a standby pool at 0 min workers whenever `--workers-max` is above 1,
   and `/health` counts those cached workers as `ready` — it is just slower and less
@@ -176,8 +180,14 @@ what each one waits for, precisely:
   - a pod in a terminal state (`conflict`), or a resource that two consecutive
     reads no longer list (`not_found` — one missing read is treated as an unknown
     state, not a deletion).
-  - `404`, `429` and `5xx` stay transient on purpose: `/health` 404s an endpoint id
-    the invoke service has not propagated yet.
+  - a resource that has never been readable *at all* after twelve consecutive
+    reads — ~1 min at the default 5s interval, so only reachable when
+    `--wait-timeout` is longer than that: `not_found`. an endpoint that never
+    propagated to `/health`, or a pod terminated before it was ever listed, is no
+    longer propagation lag, and waiting out the full budget would report it as a
+    `wait_timeout` worth retrying.
+  - `404`, `429` and `5xx` stay transient on purpose within those bounds:
+    `/health` 404s an endpoint id the invoke service has not propagated yet.
 
 ### file transfer
 
@@ -290,7 +300,7 @@ codes the cli generates:
 | code | meaning |
 | --- | --- |
 | `usage_error` | your invocation was wrong (unknown command/flag, bad or missing args, missing required flags). usage text is printed after the json |
-| `not_found` | the resource does not exist |
+| `not_found` | the api has no such resource. during a `--wait` it can also mean a resource that *was* created has gone (or never became visible), so check for an `id` field and clean up rather than assuming nothing exists |
 | `bad_request` `unauthorized` `forbidden` `conflict` `rate_limited` `server_error` `api_error` | derived from the rest status |
 | `graphql_error` | graphql returned an errors array (http 200) |
 | `no_credentials` | no api key configured — run `runpodctl doctor` or set `RUNPOD_API_KEY` |

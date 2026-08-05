@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"sync"
 	"time"
 )
 
@@ -38,6 +40,25 @@ const (
 	// resource still exists.
 	CodeInterrupted = "wait_interrupted"
 )
+
+// missesBeforeGone is how many consecutive reads must omit the resource before a
+// wait calls it deleted. One is not enough: the same read is tolerated as
+// "unknown" for every other kind of anomaly, and an eventually-consistent list
+// query that briefly omits a live pod would otherwise produce a not_found whose
+// message asserts the pod was terminated.
+const missesBeforeGone = 2
+
+// missesBeforeKnown is the same verdict for a resource that has never been
+// readable at all, where an absence is expected at first: a fresh endpoint id
+// takes a moment to reach the invoke service, and a fresh pod id a moment to
+// appear in the list query. It is far more generous than missesBeforeGone for
+// that reason, but it is still finite -- Until polls immediately and then once
+// per interval, so at the 5s default the verdict lands at ~55s, after which "it
+// never existed" beats waiting out a 10 minute budget and blaming a timeout.
+//
+// Both waits use it, and README/AGENTS.md quote the number, so it is pinned by
+// TestMissBoundsMatchTheDocumentedNumbers.
+const missesBeforeKnown = 12
 
 // State is the outcome of a single poll.
 type State struct {
@@ -77,6 +98,42 @@ func (e *FatalError) Unwrap() error { return e.Err }
 
 // ErrorCode returns the stable code for the failure.
 func (e *FatalError) ErrorCode() string { return e.Code }
+
+// Interrupted reports a cancellation from a phase around the poll loop that is
+// still part of "waiting" from the caller's point of view — a post-wait re-read,
+// say. It returns the same *Error type Until does, with the same code, so a
+// consumer can type-test "the wait was interrupted" exactly once; msg replaces
+// the generated sentence, because that phase has a better one.
+func Interrupted(msg string) error {
+	return &Error{Code: CodeInterrupted, Msg: msg}
+}
+
+// NotifyFunc is signal.NotifyContext, taken as a parameter so a test can drive
+// SignalContext without sending real signals.
+type NotifyFunc func(context.Context, ...os.Signal) (context.Context, context.CancelFunc)
+
+// SignalContext is signal.NotifyContext with one difference: the registration is
+// released as soon as the first signal arrives, not when the caller is finished.
+//
+// That matters because a wait is followed by work that is not itself cancellable
+// (a re-read of the resource, whose api calls take a client timeout to give up).
+// signal.NotifyContext keeps the handler armed after the first delivery, so
+// during that window a second ctrl-c would be swallowed too and the process would
+// look unkillable. Releasing early means the first signal still produces the
+// coded error object naming the created resource, and an impatient user can
+// always leave with a second one.
+//
+// The returned stop is idempotent, so `defer stop()` is still correct.
+func SignalContext(parent context.Context, notify NotifyFunc, signals ...os.Signal) (context.Context, context.CancelFunc) {
+	ctx, stop := notify(parent, signals...)
+	var once sync.Once
+	release := func() { once.Do(stop) }
+	go func() {
+		<-ctx.Done()
+		release()
+	}()
+	return ctx, release
+}
 
 // fatalPollCodes are the error codes that no amount of polling fixes: the
 // request will be rejected identically every time. Everything else (network
@@ -157,10 +214,17 @@ type Error struct {
 	Label   string
 	Last    string
 	Elapsed time.Duration
+	// Msg, when set, is the message verbatim instead of the sentence built from
+	// the fields above. It exists for Interrupted: a phase outside the poll loop
+	// knows more about what it was doing than "waiting for <label>" conveys.
+	Msg string
 }
 
 // Error implements the error interface.
 func (e *Error) Error() string {
+	if e.Msg != "" {
+		return e.Msg
+	}
 	verb := "timed out"
 	if e.Code == CodeInterrupted {
 		verb = "interrupted"

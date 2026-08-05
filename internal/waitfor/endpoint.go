@@ -42,20 +42,42 @@ func EndpointWorkerPoller(client EndpointHealthGetter, endpointID string) PollFu
 	return func(ctx context.Context) (State, error) {
 		health, err := client.GetEndpointHealth(endpointID)
 		if err != nil {
-			if seen && isNotFoundStatus(err) {
-				missed++
-				if missed < missesBeforeGone {
-					return State{Detail: "endpoint health unreadable in the last poll: " + err.Error()}, nil
-				}
-				// the invoke service knew this endpoint and now does not: it was
-				// deleted out of band. without this the wait burns the whole budget,
-				// because a /health 404 is otherwise read as propagation lag.
-				return State{}, &FatalError{
-					Code: "not_found",
-					Err:  fmt.Errorf("endpoint %s is no longer known to the invoke service, so it was deleted while waiting", endpointID),
-				}
+			if !isNotFoundStatus(err) {
+				// not a 404: state unknown, keep waiting. it also breaks the run of
+				// consecutive misses, which is what "consecutive" has to mean.
+				missed = 0
+				return State{}, err
 			}
-			return State{}, err
+
+			missed++
+			// before the first successful read a 404 is ordinary propagation lag, so
+			// it gets a much longer run than a later one -- but not an unlimited one.
+			// an endpoint deleted (or an id mistyped) before /health ever answered
+			// used to 404 as "lag" until the budget ran out and then report
+			// wait_timeout, which tells an agent to retry a create that already
+			// succeeded, or an id that will never exist.
+			if !seen {
+				if missed >= missesBeforeKnown {
+					return State{}, &FatalError{
+						Code: "not_found",
+						// not "it does not exist": the id came from a create that
+						// succeeded, so a caller told it never existed would retry and
+						// buy a second endpoint.
+						Err: fmt.Errorf("the invoke service still does not know endpoint %s after %d consecutive reads, so it was deleted before it propagated, or it is not visible to this api key", endpointID, missed),
+					}
+				}
+				return State{}, err
+			}
+			if missed < missesBeforeGone {
+				return State{Detail: "endpoint health unreadable in the last poll: " + err.Error()}, nil
+			}
+			// the invoke service knew this endpoint and now does not: it was
+			// deleted out of band. without this the wait burns the whole budget,
+			// because a /health 404 is otherwise read as propagation lag.
+			return State{}, &FatalError{
+				Code: "not_found",
+				Err:  fmt.Errorf("endpoint %s is no longer known to the invoke service, so it was deleted while waiting", endpointID),
+			}
 		}
 		seen = true
 		missed = 0

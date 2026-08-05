@@ -322,7 +322,7 @@ func TestWaitForPodSSH(t *testing.T) {
 		podSSHProbe = func(context.Context, string) error { return nil }
 
 		cmd, stderr := waitCommand()
-		addr, err := waitForPodSSH(cmd, "pod-1", time.Minute)
+		addr, err := waitForPodSSH(context.Background(), cmd, "pod-1", time.Minute)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -348,7 +348,7 @@ func TestWaitForPodSSH(t *testing.T) {
 		}
 
 		cmd, stderr := waitCommand()
-		_, err := waitForPodSSH(cmd, "pod-1", 2*time.Millisecond)
+		_, err := waitForPodSSH(context.Background(), cmd, "pod-1", 2*time.Millisecond)
 		if err == nil {
 			t.Fatal("expected a timeout")
 		}
@@ -380,7 +380,7 @@ func TestWaitForPodSSH(t *testing.T) {
 	t.Run("propagates a client failure", func(t *testing.T) {
 		newPodWaitLister = func() (waitfor.PodLister, error) { return nil, api.ErrNoCredentials }
 		cmd, _ := waitCommand()
-		_, err := waitForPodSSH(cmd, "pod-1", time.Minute)
+		_, err := waitForPodSSH(context.Background(), cmd, "pod-1", time.Minute)
 		if !errors.Is(err, api.ErrNoCredentials) {
 			t.Fatalf("expected the no_credentials sentinel, got %v", err)
 		}
@@ -407,18 +407,11 @@ func TestWaitForPodSSHInterrupted(t *testing.T) {
 	lister := &fakePodLister{pods: []*api.LegacyPod{runningPodWithSSH("pod-1", false)}}
 	newPodWaitLister = func() (waitfor.PodLister, error) { return lister, nil }
 
-	oldNotify := notifyWaitSignals
-	t.Cleanup(func() { notifyWaitSignals = oldNotify })
-	var registered []os.Signal
-	notifyWaitSignals = func(parent context.Context, signals ...os.Signal) (context.Context, context.CancelFunc) {
-		registered = signals
-		ctx, cancel := context.WithCancel(parent)
-		cancel() // stand in for the signal arriving during the wait
-		return ctx, cancel
-	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel() // stand in for the signal arriving during the wait
 
 	cmd, _ := waitCommand()
-	_, err := waitForPodSSH(cmd, "pod-1", time.Minute)
+	_, err := waitForPodSSH(cancelled, cmd, "pod-1", time.Minute)
 	var waitErr *waitfor.Error
 	if !errors.As(err, &waitErr) {
 		t.Fatalf("expected a *waitfor.Error, got %#v", err)
@@ -432,6 +425,95 @@ func TestWaitForPodSSHInterrupted(t *testing.T) {
 	if !strings.Contains(err.Error(), "runpodctl pod delete pod-1") {
 		t.Errorf("error = %q, want the delete command", err.Error())
 	}
+}
+
+// The signal handler must cover the whole post-create phase, not just the poll
+// loop: a ctrl-c after readiness but during the re-read used to take the default
+// disposition (exit 130, empty stdout) and lose the id of a pod that bills.
+//
+// This drives waitForReadyPod, not the two halves separately, because the bug was
+// exactly in how they were wired together: the interrupt is delivered at the
+// moment ssh answers, i.e. in the gap the old code left uncovered.
+func TestWaitForReadyPodCoversTheReReadWithTheSameSignalContext(t *testing.T) {
+	oldLister, oldProbe, oldInterval := newPodWaitLister, podSSHProbe, waitPollInterval
+	oldNotify := notifyWaitSignals
+	oldFetch, oldTries, oldBackoff := fetchPodDetailsFn, postWaitReadTries, postWaitReadBackoff
+	t.Cleanup(func() {
+		newPodWaitLister, podSSHProbe, waitPollInterval = oldLister, oldProbe, oldInterval
+		notifyWaitSignals = oldNotify
+		fetchPodDetailsFn, postWaitReadTries, postWaitReadBackoff = oldFetch, oldTries, oldBackoff
+	})
+	waitPollInterval = time.Millisecond
+	// short, not long: a build that ignores the cancellation must fail on the
+	// assertions below rather than hang until the go test timeout.
+	postWaitReadBackoff = time.Millisecond
+	postWaitReadTries = 3
+
+	newPodWaitLister = func() (waitfor.PodLister, error) {
+		return &fakePodLister{pods: []*api.LegacyPod{runningPodWithSSH("pod-1", true)}}, nil
+	}
+
+	var registered []os.Signal
+	var interrupt context.CancelFunc
+	// released reports that the signal registration was torn down. waitfor
+	// .SignalContext does that as soon as the first signal lands; a plain
+	// notifyWaitSignals would only do it on the deferred stop, i.e. after the
+	// re-read below had already finished running uninterruptibly.
+	released := make(chan struct{})
+	notifyWaitSignals = func(parent context.Context, signals ...os.Signal) (context.Context, context.CancelFunc) {
+		registered = signals
+		ctx, cancel := context.WithCancel(parent)
+		interrupt = cancel
+		return ctx, func() {
+			cancel()
+			select {
+			case <-released:
+			default:
+				close(released)
+			}
+		}
+	}
+	// the ctrl-c lands exactly as ssh comes up, so the wait itself succeeds and
+	// the cancellation can only be observed by the re-read.
+	podSSHProbe = func(context.Context, string) error {
+		interrupt()
+		return nil
+	}
+
+	calls := 0
+	releasedDuringReRead := false
+	degraded := &podDetails{Pod: &api.Pod{ID: "pod-1"}, SSH: map[string]interface{}{"error": "ssh info unavailable"}}
+	fetchPodDetailsFn = func(string, bool, bool) (*podDetails, error) {
+		calls++
+		// the re-read stands in for "work still in flight when the signal lands":
+		// its api calls take a client timeout to give up, so the handler has to be
+		// released by now or a second ctrl-c would be swallowed for that long.
+		select {
+		case <-released:
+			releasedDuringReRead = true
+		case <-time.After(2 * time.Second):
+		}
+		return degraded, nil
+	}
+
+	cmd, _ := waitCommand()
+	_, err := waitForReadyPod(cmd, "pod-1", time.Minute)
+	if err == nil {
+		t.Fatal("expected an interrupted error, not a payload")
+	}
+	if calls != 1 {
+		t.Errorf("read the pod %d times, want 1: the re-read must see the same cancellation", calls)
+	}
+	if !releasedDuringReRead {
+		t.Error("the signal registration must be released before the re-read runs, or a second ctrl-c is swallowed while it does")
+	}
+	var waitErr *waitfor.Error
+	if !errors.As(err, &waitErr) || waitErr.ErrorCode() != waitfor.CodeInterrupted {
+		t.Errorf("error must be a %s-coded *waitfor.Error, got %#v", waitfor.CodeInterrupted, err)
+	}
+	if resourceIDOf(err) != "pod-1" {
+		t.Errorf("error id = %q, want pod-1", resourceIDOf(err))
+	}
 
 	wantSignals := map[os.Signal]bool{os.Interrupt: false, syscall.SIGTERM: false}
 	for _, sig := range registered {
@@ -440,6 +522,52 @@ func TestWaitForPodSSHInterrupted(t *testing.T) {
 	for sig, seen := range wantSignals {
 		if !seen {
 			t.Errorf("the wait must register for %v", sig)
+		}
+	}
+}
+
+// The window this closes: ssh is already up, so the pod is the good outcome — but
+// the re-read sleeps between attempts, and an interrupt there must still exit with
+// a coded error object naming the pod rather than the shell's bare 130.
+func TestPodDetailsWithSSHInterrupted(t *testing.T) {
+	oldFetch, oldTries, oldBackoff := fetchPodDetailsFn, postWaitReadTries, postWaitReadBackoff
+	t.Cleanup(func() {
+		fetchPodDetailsFn, postWaitReadTries, postWaitReadBackoff = oldFetch, oldTries, oldBackoff
+	})
+	// short: an implementation that ignored the cancellation must fail on the call
+	// count below, not hang until the go test timeout.
+	postWaitReadBackoff = time.Millisecond
+	postWaitReadTries = 3
+
+	degraded := &podDetails{Pod: &api.Pod{ID: "pod-1"}, SSH: map[string]interface{}{"error": "ssh info unavailable"}}
+	calls := 0
+	fetchPodDetailsFn = func(string, bool, bool) (*podDetails, error) {
+		calls++
+		return degraded, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := podDetailsWithSSH(ctx, "pod-1", "1.2.3.4:51227")
+	if err == nil {
+		t.Fatal("expected an error rather than a silent 130")
+	}
+	if calls != 1 {
+		t.Errorf("read the pod %d times, want 1: the cancellation must stop the retries", calls)
+	}
+	// the same type Until returns for an interrupted poll loop, so a consumer can
+	// type-test "the wait was interrupted" once rather than per phase.
+	var waitErr *waitfor.Error
+	if !errors.As(err, &waitErr) || waitErr.ErrorCode() != waitfor.CodeInterrupted {
+		t.Errorf("error must be a %s-coded *waitfor.Error, got %#v", waitfor.CodeInterrupted, err)
+	}
+	if resourceIDOf(err) != "pod-1" {
+		t.Errorf("error id = %q, want pod-1: an interrupt here must not lose a billed pod", resourceIDOf(err))
+	}
+	for _, want := range []string{"pod-1", "1.2.3.4:51227", "runpodctl pod delete pod-1"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to contain %q", err.Error(), want)
 		}
 	}
 }
@@ -458,7 +586,7 @@ func TestWaitForPodSSHFailsFastOnATerminalPod(t *testing.T) {
 	// a tiny timeout as well as a huge interval: the fail-fast still proves itself
 	// with calls == 1, but a regression fails in 300ms with a wait_timeout instead
 	// of hanging until `go test` panics after 10 minutes.
-	_, err := waitForPodSSH(cmd, "pod-1", 300*time.Millisecond)
+	_, err := waitForPodSSH(context.Background(), cmd, "pod-1", 300*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected an error for an exited pod")
 	}
@@ -496,7 +624,7 @@ func TestPodDetailsWithSSH(t *testing.T) {
 			calls++
 			return ready, nil
 		}
-		got, err := podDetailsWithSSH("pod-1", "1.2.3.4:51227")
+		got, err := podDetailsWithSSH(context.Background(), "pod-1", "1.2.3.4:51227")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -517,7 +645,7 @@ func TestPodDetailsWithSSH(t *testing.T) {
 			}
 			return ready, nil
 		}
-		got, err := podDetailsWithSSH("pod-1", "1.2.3.4:51227")
+		got, err := podDetailsWithSSH(context.Background(), "pod-1", "1.2.3.4:51227")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -531,7 +659,7 @@ func TestPodDetailsWithSSH(t *testing.T) {
 
 	t.Run("a permanently degraded ssh block is an error, not a silent success", func(t *testing.T) {
 		fetchPodDetailsFn = func(string, bool, bool) (*podDetails, error) { return degraded, nil }
-		_, err := podDetailsWithSSH("pod-1", "1.2.3.4:51227")
+		_, err := podDetailsWithSSH(context.Background(), "pod-1", "1.2.3.4:51227")
 		if err == nil {
 			t.Fatal("expected an error rather than a payload with no ssh info")
 		}
@@ -549,7 +677,7 @@ func TestPodDetailsWithSSH(t *testing.T) {
 		fetchPodDetailsFn = func(string, bool, bool) (*podDetails, error) {
 			return nil, errors.New("failed to get pod: boom")
 		}
-		_, err := podDetailsWithSSH("pod-1", "1.2.3.4:51227")
+		_, err := podDetailsWithSSH(context.Background(), "pod-1", "1.2.3.4:51227")
 		if err == nil {
 			t.Fatal("expected an error")
 		}

@@ -464,3 +464,83 @@ func TestUntilAppliesDefaults(t *testing.T) {
 		t.Errorf("progress fired %d times, want %d (DefaultTimeout / DefaultProgressEvery)", wantLines, want)
 	}
 }
+
+// The registration must be released the moment the first signal lands, not when
+// the caller finishes: everything after a wait (the pod re-read) makes api calls
+// that cannot be cancelled, and signal.NotifyContext keeps the handler armed
+// after the first delivery, so a second ctrl-c in that window would be swallowed
+// and the process would look unkillable.
+func TestSignalContextReleasesTheHandlerOnTheFirstSignal(t *testing.T) {
+	stopped := make(chan struct{})
+	var signalled context.CancelFunc
+	notify := func(parent context.Context, sigs ...os.Signal) (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(parent)
+		signalled = cancel
+		return ctx, func() {
+			cancel()
+			select {
+			case <-stopped:
+			default:
+				close(stopped)
+			}
+		}
+	}
+
+	ctx, stop := SignalContext(context.Background(), notify, os.Interrupt)
+	defer stop()
+
+	select {
+	case <-stopped:
+		t.Fatal("the handler must stay armed until a signal arrives")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	signalled() // the first ctrl-c
+
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("the handler was not released after the first signal, so a second ctrl-c would be swallowed")
+	}
+	if ctx.Err() == nil {
+		t.Error("the context must still be cancelled for the caller to observe")
+	}
+}
+
+// stop is idempotent, because the caller defers it and the release path may have
+// run first.
+func TestSignalContextStopIsIdempotent(t *testing.T) {
+	calls := 0
+	notify := func(parent context.Context, sigs ...os.Signal) (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(parent)
+		return ctx, func() {
+			calls++
+			cancel()
+		}
+	}
+
+	_, stop := SignalContext(context.Background(), notify, os.Interrupt)
+	stop()
+	stop()
+	// the release goroutine also calls it once the context is done.
+	time.Sleep(20 * time.Millisecond)
+	if calls != 1 {
+		t.Errorf("stop called %d times, want 1", calls)
+	}
+}
+
+// README.md and AGENTS.md quote both bounds and the ~1 minute they add up to, so
+// a change to either constant has to be a deliberate documentation change too.
+func TestMissBoundsMatchTheDocumentedNumbers(t *testing.T) {
+	if missesBeforeGone != 2 {
+		t.Errorf("missesBeforeGone = %d, want 2 (documented as 'two consecutive reads')", missesBeforeGone)
+	}
+	if missesBeforeKnown != 12 {
+		t.Errorf("missesBeforeKnown = %d, want 12 (documented as 'twelve consecutive reads')", missesBeforeKnown)
+	}
+	// the docs say ~1 min: the first poll is immediate, so the verdict lands after
+	// missesBeforeKnown-1 intervals.
+	if elapsed := time.Duration(missesBeforeKnown-1) * DefaultInterval; elapsed > 70*time.Second || elapsed < 45*time.Second {
+		t.Errorf("the bound lands at %s, which is no longer the documented ~1 min", elapsed)
+	}
+}
