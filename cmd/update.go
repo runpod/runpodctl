@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -27,7 +29,7 @@ type GithubApiResponse struct {
 	Assets  []Asset `json:"assets"`
 }
 
-func DownloadFile(url string, savePath string) (file *os.File, err error) {
+func DownloadBytes(url string) ([]byte, error) {
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, err
@@ -38,7 +40,11 @@ func DownloadFile(url string, savePath string) (file *os.File, err error) {
 		return nil, fmt.Errorf("bad status: %s", resp.Status)
 	}
 
-	content, err := io.ReadAll(resp.Body)
+	return io.ReadAll(resp.Body)
+}
+
+func DownloadFile(url string, savePath string) (file *os.File, err error) {
+	content, err := DownloadBytes(url)
 	if err != nil {
 		return nil, err
 	}
@@ -88,6 +94,65 @@ func assetName() string {
 		ext = ".zip"
 	}
 	return fmt.Sprintf("runpodctl-%s-%s%s", runtime.GOOS, arch, ext)
+}
+
+func checksumAssetName(version string) string {
+	return fmt.Sprintf("checksums_%s_sha256.txt", strings.TrimPrefix(version, "v"))
+}
+
+func findAsset(assets []Asset, name string) (Asset, bool) {
+	for _, asset := range assets {
+		if asset.Name == name {
+			return asset, true
+		}
+	}
+	return Asset{}, false
+}
+
+func checksumForAsset(checksumText []byte, assetName string) (string, error) {
+	for _, line := range strings.Split(string(checksumText), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[1] != assetName {
+			continue
+		}
+		digest := strings.ToLower(fields[0])
+		if len(digest) != sha256.Size*2 {
+			return "", fmt.Errorf("invalid checksum for %s", assetName)
+		}
+		if _, err := hex.DecodeString(digest); err != nil {
+			return "", fmt.Errorf("invalid checksum for %s: %w", assetName, err)
+		}
+		return digest, nil
+	}
+	return "", fmt.Errorf("checksum not found for %s", assetName)
+}
+
+func verifyFileChecksum(path string, expected string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return err
+	}
+
+	actual := hex.EncodeToString(hash.Sum(nil))
+	expected = strings.ToLower(strings.TrimSpace(expected))
+	if actual != expected {
+		return fmt.Errorf("checksum mismatch for %s", filepath.Base(path))
+	}
+	return nil
+}
+
+func verifyArchiveChecksum(archivePath string, archiveName string, checksumText []byte) error {
+	expected, err := checksumForAsset(checksumText, archiveName)
+	if err != nil {
+		return err
+	}
+	return verifyFileChecksum(archivePath, expected)
 }
 
 // extractBinaryFromTarGz extracts the "runpodctl" binary from a .tar.gz archive.
@@ -178,15 +243,15 @@ var updateCmd = &cobra.Command{
 
 		// find download link for current platform
 		expectedAsset := assetName()
-		var downloadLink string
-		for _, asset := range apiResp.Assets {
-			if asset.Name == expectedAsset {
-				downloadLink = asset.Url
-				break
-			}
-		}
-		if downloadLink == "" {
+		downloadAsset, ok := findAsset(apiResp.Assets, expectedAsset)
+		if !ok {
 			return fmt.Errorf("platform %s-%s not supported in latest version", runtime.GOOS, runtime.GOARCH)
+		}
+
+		checksumName := checksumAssetName(latestVersion)
+		checksumAsset, ok := findAsset(apiResp.Assets, checksumName)
+		if !ok {
+			return fmt.Errorf("failed to verify update checksum: checksum asset %s not found", checksumName)
 		}
 
 		ex, err := os.Executable()
@@ -211,11 +276,19 @@ var updateCmd = &cobra.Command{
 		defer os.Remove(archivePath)
 
 		fmt.Printf("downloading runpodctl %s\n", latestVersion)
-		file, err := DownloadFile(downloadLink, archivePath)
+		file, err := DownloadFile(downloadAsset.Url, archivePath)
 		if err != nil {
 			return fmt.Errorf("failed to fetch the latest version of runpodctl: %w", err)
 		}
 		file.Close()
+
+		checksumText, err := DownloadBytes(checksumAsset.Url)
+		if err != nil {
+			return fmt.Errorf("failed to fetch update checksum: %w", err)
+		}
+		if err := verifyArchiveChecksum(archivePath, expectedAsset, checksumText); err != nil {
+			return fmt.Errorf("failed to verify update checksum: %w", err)
+		}
 
 		// extract binary from archive to a temp location next to the destination
 		extractedPath := destPath + ".new"
