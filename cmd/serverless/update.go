@@ -49,7 +49,7 @@ func init() {
 	updateCmd.Flags().StringVar(&updateTemplateID, "template-id", "", "new template id")
 	updateCmd.Flags().IntVar(&updateWorkersMin, "workers-min", -1, "new minimum number of workers")
 	updateCmd.Flags().IntVar(&updateWorkersMax, "workers-max", -1, "new maximum number of workers")
-	updateCmd.Flags().IntVar(&updateIdleTimeout, "idle-timeout", -1, "new idle timeout in seconds")
+	updateCmd.Flags().IntVar(&updateIdleTimeout, "idle-timeout", -1, "new idle timeout in seconds (1-3600)")
 	updateCmd.Flags().StringVar(&updateScaleBy, "scale-by", "", "autoscale strategy: delay (seconds of queue wait) or requests (pending request count)")
 	updateCmd.Flags().IntVar(&updateScaleThreshold, "scale-threshold", -1, "trigger point for autoscaler (delay: seconds, requests: count)")
 	updateCmd.Flags().StringArrayVar(&updateModelRefs, "model-reference", nil, "model reference to cache on the endpoint (repeatable); replaces existing model references")
@@ -61,6 +61,13 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	if updateClearModels && len(updateModelRefs) > 0 {
 		return fmt.Errorf("--clear-models and --model-reference are mutually exclusive")
+	}
+	if updateIdleTimeout >= 0 && (updateIdleTimeout < 1 || updateIdleTimeout > 3600) {
+		return fmt.Errorf("--idle-timeout must be between 1 and 3600 seconds")
+	}
+	if updateScaleThreshold >= 0 && updateScaleThreshold < 1 {
+		// the api floor is 0.5, but this flag is an int, so 1 is the lowest it can express.
+		return fmt.Errorf("--scale-threshold must be at least 1")
 	}
 
 	client, err := api.NewClient()

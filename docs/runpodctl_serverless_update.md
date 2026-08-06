@@ -28,7 +28,7 @@ runpodctl serverless update <endpoint-id> [flags]
 ```
       --clear-models                  remove all model references from the endpoint
   -h, --help                          help for update
-      --idle-timeout int              new idle timeout in seconds (default -1)
+      --idle-timeout int              new idle timeout in seconds (1-3600) (default -1)
       --model-reference stringArray   model reference to cache on the endpoint (repeatable); replaces existing model references
       --name string                   new endpoint name
       --scale-by string               autoscale strategy: delay (seconds of queue wait) or requests (pending request count)

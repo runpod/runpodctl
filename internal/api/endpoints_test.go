@@ -99,6 +99,45 @@ func TestGetEndpoint(t *testing.T) {
 	}
 }
 
+func TestEndpointCreateGQLInputZeroValues(t *testing.T) {
+	zero := 0
+	data, err := json.Marshal(EndpointCreateGQLInput{
+		Name:               "ep",
+		WorkersMin:         &zero,
+		WorkersMax:         &zero,
+		ExecutionTimeoutMs: &zero,
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var out map[string]interface{}
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, field := range []string{"workersMin", "workersMax", "executionTimeoutMs"} {
+		got, ok := out[field]
+		if !ok {
+			t.Errorf("expected %s in create input, got %s", field, data)
+			continue
+		}
+		if got != float64(0) {
+			t.Errorf("expected %s 0, got %#v", field, got)
+		}
+	}
+
+	// unset must stay omitted, or create would clobber server defaults.
+	bare, err := json.Marshal(EndpointCreateGQLInput{Name: "ep"})
+	if err != nil {
+		t.Fatalf("marshal bare: %v", err)
+	}
+	for _, field := range []string{"workersMin", "workersMax", "executionTimeoutMs", "gpuCount"} {
+		if strings.Contains(string(bare), field) {
+			t.Errorf("expected %s to be omitted when unset, got %s", field, bare)
+		}
+	}
+}
+
 func TestEndpointCreateGQLInputSerialization(t *testing.T) {
 	data, err := json.Marshal(EndpointCreateGQLInput{
 		Name:             "ep",
@@ -194,9 +233,55 @@ func TestCreateEndpointGQLIncludesModelReferences(t *testing.T) {
 	}
 }
 
+func TestEndpointZeroNumericFieldsSurviveOutput(t *testing.T) {
+	render := func(t *testing.T, body string) map[string]interface{} {
+		t.Helper()
+		var e Endpoint
+		if err := json.Unmarshal([]byte(body), &e); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		data, err := json.Marshal(e)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		var out map[string]interface{}
+		if err := json.Unmarshal(data, &out); err != nil {
+			t.Fatalf("unmarshal output: %v", err)
+		}
+		return out
+	}
+
+	// all zero on purpose: a presence check only detects omitempty at 0.
+	allZero := render(t, `{"id":"ep-123","name":"my-endpoint","workersMin":0,"workersMax":0,
+		"idleTimeout":0,"scalerValue":0,"gpuCount":0,"executionTimeoutMs":0}`)
+	for _, field := range []string{"workersMin", "workersMax", "idleTimeout", "scalerValue", "gpuCount", "executionTimeoutMs"} {
+		got, ok := allZero[field]
+		if !ok {
+			t.Errorf("expected %s in rendered output, got %#v", field, allZero)
+			continue
+		}
+		if got != float64(0) {
+			t.Errorf("expected %s 0, got %#v", field, got)
+		}
+	}
+
+	nonZero := render(t, `{"id":"ep-123","name":"my-endpoint","workersMin":2,"workersMax":3,"idleTimeout":5}`)
+	if nonZero["workersMin"] != float64(2) {
+		t.Errorf("expected workersMin 2, got %#v", nonZero["workersMin"])
+	}
+	if nonZero["workersMax"] != float64(3) {
+		t.Errorf("expected workersMax 3, got %#v", nonZero["workersMax"])
+	}
+	if nonZero["idleTimeout"] != float64(5) {
+		t.Errorf("expected idleTimeout 5, got %#v", nonZero["idleTimeout"])
+	}
+}
+
 func TestUpdateEndpoint(t *testing.T) {
 	wrkMin := 0
 	wrkMax := 5
+
+	var body map[string]interface{}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPatch {
@@ -205,11 +290,11 @@ func TestUpdateEndpoint(t *testing.T) {
 		if r.URL.Path != "/endpoints/ep-123" {
 			t.Errorf("expected /endpoints/ep-123, got %s", r.URL.Path)
 		}
-		json.NewEncoder(w).Encode(Endpoint{
-			ID:         "ep-123",
-			WorkersMin: wrkMin,
-			WorkersMax: wrkMax,
-		})
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request body: %v", err)
+		}
+		// raw wire shape so this does not depend on Endpoint's tags.
+		w.Write([]byte(`{"id":"ep-123","workersMin":0,"workersMax":5}`))
 	}))
 	defer server.Close()
 
@@ -224,6 +309,26 @@ func TestUpdateEndpoint(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got, ok := body["workersMin"]; !ok {
+		t.Errorf("expected workersMin in patch body, got %#v", body)
+	} else if got != float64(0) {
+		t.Errorf("expected workersMin 0, got %#v", got)
+	}
+	if got := body["workersMax"]; got != float64(5) {
+		t.Errorf("expected workersMax 5, got %#v", got)
+	}
+	// unset fields must still be omitted rather than sent as zeroes.
+	if _, ok := body["idleTimeout"]; ok {
+		t.Errorf("expected idleTimeout to be omitted, got %#v", body)
+	}
+	if _, ok := body["scalerValue"]; ok {
+		t.Errorf("expected scalerValue to be omitted, got %#v", body)
+	}
+
+	if endpoint.ID != "ep-123" {
+		t.Errorf("expected ep-123, got %q", endpoint.ID)
 	}
 	if endpoint.WorkersMax != 5 {
 		t.Errorf("expected 5, got %d", endpoint.WorkersMax)
