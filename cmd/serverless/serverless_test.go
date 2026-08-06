@@ -3,7 +3,9 @@ package serverless
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -314,6 +316,70 @@ func TestHubDeploymentConstraintPrecedence(t *testing.T) {
 	}
 	if got := hubMinCudaVersion([]string{" ", "12.8"}); got != "12.8" {
 		t.Fatalf("blank cuda values were not ignored: %q", got)
+	}
+}
+
+func TestRunCreate_ZeroValuedNumericFlagsAreSent(t *testing.T) {
+	cases := []struct {
+		name                                string
+		workersMin, workersMax, execTimeout int
+		wantMin, wantMax, wantExecTimeoutMs int
+	}{
+		// distinct values: identical ones would hide a flag wired to the wrong field.
+		{"distinct values", 0, 2, 7, 0, 2, 7000},
+		{"all zero", 0, 0, 0, 0, 0, 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshotCreateFlags(t)
+			createTemplateID, createHubID = "tpl-1", ""
+			createComputeType = "CPU"
+			createInstanceID = defaultCPUInstanceID
+			createWorkersMin = tc.workersMin
+			createWorkersMax = tc.workersMax
+			createExecutionTimeout = tc.execTimeout
+			createIdleTimeout = -1
+			createScaleThreshold = -1
+
+			client := &mockServerlessCreateClient{}
+			oldFactory := newServerlessCreateClient
+			newServerlessCreateClient = func() (serverlessCreateClient, error) { return client, nil }
+			t.Cleanup(func() { newServerlessCreateClient = oldFactory })
+			installMockWaitHealthClient(t, client)
+
+			if err := runCreate(mockCreateCommand(), nil); err != nil {
+				t.Fatal(err)
+			}
+			if client.createInput == nil {
+				t.Fatal("endpoint create was not called")
+			}
+
+			in := client.createInput
+			if in.WorkersMin == nil || *in.WorkersMin != tc.wantMin {
+				t.Errorf("workersMin = %v, want %d", in.WorkersMin, tc.wantMin)
+			}
+			if in.WorkersMax == nil || *in.WorkersMax != tc.wantMax {
+				t.Errorf("workersMax = %v, want %d", in.WorkersMax, tc.wantMax)
+			}
+			if in.ExecutionTimeoutMs == nil || *in.ExecutionTimeoutMs != tc.wantExecTimeoutMs {
+				t.Errorf("executionTimeoutMs = %v, want %d", in.ExecutionTimeoutMs, tc.wantExecTimeoutMs)
+			}
+
+			data, err := json.Marshal(in)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			for _, want := range []string{
+				fmt.Sprintf(`"workersMin":%d`, tc.wantMin),
+				fmt.Sprintf(`"workersMax":%d`, tc.wantMax),
+				fmt.Sprintf(`"executionTimeoutMs":%d`, tc.wantExecTimeoutMs),
+			} {
+				if !strings.Contains(string(data), want) {
+					t.Errorf("expected %s in create input, got %s", want, data)
+				}
+			}
+		})
 	}
 }
 

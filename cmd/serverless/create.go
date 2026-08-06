@@ -246,8 +246,8 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	input := &api.EndpointCreateGQLInput{
-		WorkersMin: createWorkersMin,
-		WorkersMax: createWorkersMax,
+		WorkersMin: &createWorkersMin,
+		WorkersMax: &createWorkersMax,
 	}
 
 	// compute type: gpu uses a gpu pool id, cpu uses an instance id.
@@ -308,7 +308,8 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	if createExecutionTimeout >= 0 {
 		// 0 is allowed (server treats it as "no per-request limit").
-		input.ExecutionTimeoutMs = createExecutionTimeout * 1000
+		ms := createExecutionTimeout * 1000
+		input.ExecutionTimeoutMs = &ms
 	}
 
 	// flash boot maps to the flashBootType enum (off|flashboot); always set so

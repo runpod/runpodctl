@@ -9,7 +9,9 @@ import (
 	"github.com/runpod/runpodctl/internal/configenv"
 )
 
-// Endpoint represents a serverless endpoint
+// Endpoint represents a serverless endpoint. Its numeric fields carry no
+// omitempty: this struct is re-marshalled to render cli output, and 0 is a real
+// value for all of them.
 type Endpoint struct {
 	ID                 string                  `json:"id"`
 	Name               string                  `json:"name"`
@@ -19,17 +21,17 @@ type Endpoint struct {
 	NetworkVolumeID    string                  `json:"networkVolumeId,omitempty"`
 	NetworkVolumeIDs   []EndpointNetworkVolume `json:"networkVolumeIds,omitempty"`
 	Locations          string                  `json:"locations,omitempty"`
-	IdleTimeout        int                     `json:"idleTimeout,omitempty"`
+	IdleTimeout        int                     `json:"idleTimeout"`
 	ScalerType         string                  `json:"scalerType,omitempty"`
-	ScalerValue        int                     `json:"scalerValue,omitempty"`
-	WorkersMin         int                     `json:"workersMin,omitempty"`
-	WorkersMax         int                     `json:"workersMax,omitempty"`
-	GpuCount           int                     `json:"gpuCount,omitempty"`
+	ScalerValue        int                     `json:"scalerValue"`
+	WorkersMin         int                     `json:"workersMin"`
+	WorkersMax         int                     `json:"workersMax"`
+	GpuCount           int                     `json:"gpuCount"`
 	MinCudaVersion     string                  `json:"minCudaVersion,omitempty"`
 	Flashboot          *bool                   `json:"flashboot,omitempty"`
 	FlashBootType      string                  `json:"flashBootType,omitempty"`
 	ComputeType        string                  `json:"computeType,omitempty"`
-	ExecutionTimeoutMs int                     `json:"executionTimeoutMs,omitempty"`
+	ExecutionTimeoutMs int                     `json:"executionTimeoutMs"`
 	ModelReferences    []string                `json:"modelReferences,omitempty"`
 	Template           map[string]interface{}  `json:"template,omitempty"`
 	Workers            []interface{}           `json:"workers,omitempty"`
@@ -117,11 +119,11 @@ type EndpointListResponse struct {
 // EndpointUpdateRequest is the request to update an endpoint
 type EndpointUpdateRequest struct {
 	Name        string `json:"name,omitempty"`
-	WorkersMin  int    `json:"workersMin,omitempty"`
-	WorkersMax  int    `json:"workersMax,omitempty"`
-	IdleTimeout int    `json:"idleTimeout,omitempty"`
+	WorkersMin  *int   `json:"workersMin,omitempty"`
+	WorkersMax  *int   `json:"workersMax,omitempty"`
+	IdleTimeout *int   `json:"idleTimeout,omitempty"`
 	ScalerType  string `json:"scalerType,omitempty"`
-	ScalerValue int    `json:"scalerValue,omitempty"`
+	ScalerValue *int   `json:"scalerValue,omitempty"`
 	Flashboot   *bool  `json:"flashboot,omitempty"`
 }
 
@@ -360,22 +362,23 @@ type NetworkVolumeIDInput struct {
 // saveEndpoint mutation. all serverless creates go through this path, so every
 // cli flag maps to a field here (the web console uses the same mutation).
 type EndpointCreateGQLInput struct {
-	Name               string                 `json:"name"`
-	HubReleaseID       string                 `json:"hubReleaseId,omitempty"`
-	TemplateID         string                 `json:"templateId,omitempty"`
-	Template           *EndpointTemplateInput `json:"template,omitempty"`
-	GpuIDs             string                 `json:"gpuIds,omitempty"`
+	Name         string                 `json:"name"`
+	HubReleaseID string                 `json:"hubReleaseId,omitempty"`
+	TemplateID   string                 `json:"templateId,omitempty"`
+	Template     *EndpointTemplateInput `json:"template,omitempty"`
+	GpuIDs       string                 `json:"gpuIds,omitempty"`
+	// plain int: the api minimum is 1, so 0 is never worth sending.
 	GpuCount           int                    `json:"gpuCount,omitempty"`
 	InstanceIDs        []string               `json:"instanceIds,omitempty"`
-	WorkersMin         int                    `json:"workersMin,omitempty"`
-	WorkersMax         int                    `json:"workersMax,omitempty"`
+	WorkersMin         *int                   `json:"workersMin,omitempty"`
+	WorkersMax         *int                   `json:"workersMax,omitempty"`
 	Locations          string                 `json:"locations,omitempty"`
 	NetworkVolumeID    string                 `json:"networkVolumeId,omitempty"`
 	NetworkVolumeIDs   []NetworkVolumeIDInput `json:"networkVolumeIds,omitempty"`
 	IdleTimeout        int                    `json:"idleTimeout,omitempty"`
 	ScalerType         string                 `json:"scalerType,omitempty"`
 	ScalerValue        int                    `json:"scalerValue,omitempty"`
-	ExecutionTimeoutMs int                    `json:"executionTimeoutMs,omitempty"`
+	ExecutionTimeoutMs *int                   `json:"executionTimeoutMs,omitempty"`
 	MinCudaVersion     string                 `json:"minCudaVersion,omitempty"`
 	FlashBootType      string                 `json:"flashBootType,omitempty"`
 	ModelReferences    []string               `json:"modelReferences,omitempty"`

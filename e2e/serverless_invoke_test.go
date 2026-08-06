@@ -262,12 +262,13 @@ func TestE2E_ServerlessInvokeLifecycle(t *testing.T) {
 		t.Logf("deleted template %s", template.ID)
 	})
 
+	workersMin, workersMax := 0, 1
 	endpoint, err := client.CreateEndpointGQL(&api.EndpointCreateGQLInput{
 		Name:        "e2e-invoke-" + suffix,
 		TemplateID:  template.ID,
 		InstanceIDs: []string{"cpu3g-4-16"},
-		WorkersMin:  0,
-		WorkersMax:  1,
+		WorkersMin:  &workersMin,
+		WorkersMax:  &workersMax,
 	})
 	if err != nil {
 		t.Fatalf("failed to create endpoint: %v", err)

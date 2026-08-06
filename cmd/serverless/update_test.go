@@ -170,6 +170,238 @@ func TestRunUpdate_ClearModelsAndModelReferenceMutuallyExclusive(t *testing.T) {
 	}
 }
 
+// distinct values: identical ones would hide a flag wired to the wrong field.
+func TestRunUpdate_AllNumericFlagsAreWired(t *testing.T) {
+	resetUpdateVars(t)
+
+	var patchBody map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPatch && r.URL.Path == "/endpoints/ep-123":
+			if err := json.NewDecoder(r.Body).Decode(&patchBody); err != nil {
+				t.Errorf("decode rest request: %v", err)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "ep-123"})
+		case r.Method == http.MethodGet && r.URL.Path == "/endpoints/ep-123":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "ep-123"})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+	viper.Set("restApiUrl", server.URL)
+	viper.Set("apiUrl", server.URL)
+	t.Cleanup(func() {
+		viper.Set("restApiUrl", "")
+		viper.Set("apiUrl", "")
+	})
+
+	updateName = "renamed"
+	updateTemplateID = ""
+	updateWorkersMin = 0
+	updateWorkersMax = 7
+	updateIdleTimeout = 30
+	updateScaleBy = "requests"
+	updateScaleThreshold = 4
+	updateModelRefs = nil
+	updateClearModels = false
+
+	cmd := &cobra.Command{}
+	cmd.Flags().String("output", "json", "")
+
+	if err := runUpdate(cmd, []string{"ep-123"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := map[string]interface{}{
+		"name":        "renamed",
+		"workersMin":  float64(0),
+		"workersMax":  float64(7),
+		"idleTimeout": float64(30),
+		"scalerValue": float64(4),
+		"scalerType":  "REQUEST_COUNT",
+	}
+	for field, expected := range want {
+		got, ok := patchBody[field]
+		if !ok {
+			t.Errorf("expected %s in patch body, got %#v", field, patchBody)
+			continue
+		}
+		if got != expected {
+			t.Errorf("expected %s %#v, got %#v", field, expected, got)
+		}
+	}
+}
+
+func TestRunUpdate_WorkersMinZeroIsSent(t *testing.T) {
+	resetUpdateVars(t)
+
+	var patchBody map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPatch && r.URL.Path == "/endpoints/ep-123":
+			if err := json.NewDecoder(r.Body).Decode(&patchBody); err != nil {
+				t.Fatalf("decode rest request: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":         "ep-123",
+				"workersMin": 0,
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/endpoints/ep-123":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":         "ep-123",
+				"workersMin": 0,
+			})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+	viper.Set("restApiUrl", server.URL)
+	viper.Set("apiUrl", server.URL)
+	t.Cleanup(func() {
+		viper.Set("restApiUrl", "")
+		viper.Set("apiUrl", "")
+	})
+
+	updateName = ""
+	updateTemplateID = ""
+	updateWorkersMin = 0
+	updateWorkersMax = -1
+	updateIdleTimeout = -1
+	updateScaleBy = ""
+	updateScaleThreshold = -1
+	updateModelRefs = nil
+	updateClearModels = false
+
+	cmd := &cobra.Command{}
+	cmd.Flags().String("output", "json", "")
+
+	if err := runUpdate(cmd, []string{"ep-123"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// see issue #298.
+	if got, ok := patchBody["workersMin"]; !ok {
+		t.Fatalf("expected workersMin in patch body, got %#v", patchBody)
+	} else if got != float64(0) {
+		t.Fatalf("expected workersMin 0, got %#v", got)
+	}
+}
+
+func TestRunUpdate_RejectsOutOfRangeNumericFlags(t *testing.T) {
+	cases := []struct {
+		name           string
+		idleTimeout    int
+		scaleThreshold int
+		wantErr        string
+	}{
+		{"idle timeout zero", 0, -1, "--idle-timeout must be between 1 and 3600 seconds"},
+		{"idle timeout too large", 3601, -1, "--idle-timeout must be between 1 and 3600 seconds"},
+		{"scale threshold zero", -1, 0, "--scale-threshold must be at least 1"},
+	}
+
+	// boundary values: an off-by-one in the guard would slip past otherwise.
+	accepted := []struct {
+		name           string
+		idleTimeout    int
+		scaleThreshold int
+		wantField      string
+		wantValue      float64
+	}{
+		{"idle timeout min", 1, -1, "idleTimeout", 1},
+		{"idle timeout max", 3600, -1, "idleTimeout", 3600},
+		{"scale threshold min", -1, 1, "scalerValue", 1},
+	}
+
+	for _, tc := range accepted {
+		t.Run("accepts "+tc.name, func(t *testing.T) {
+			resetUpdateVars(t)
+
+			var patchBody map[string]interface{}
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodPatch && r.URL.Path == "/endpoints/ep-123":
+					if err := json.NewDecoder(r.Body).Decode(&patchBody); err != nil {
+						t.Errorf("decode rest request: %v", err)
+						return
+					}
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "ep-123"})
+				case r.Method == http.MethodGet && r.URL.Path == "/endpoints/ep-123":
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "ep-123"})
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				}
+			}))
+			defer server.Close()
+
+			t.Setenv("RUNPOD_API_KEY", "test-key")
+			viper.Set("restApiUrl", server.URL)
+			viper.Set("apiUrl", server.URL)
+			t.Cleanup(func() {
+				viper.Set("restApiUrl", "")
+				viper.Set("apiUrl", "")
+			})
+
+			updateName = ""
+			updateTemplateID = ""
+			updateWorkersMin = -1
+			updateWorkersMax = -1
+			updateIdleTimeout = tc.idleTimeout
+			updateScaleBy = ""
+			updateScaleThreshold = tc.scaleThreshold
+			updateModelRefs = nil
+			updateClearModels = false
+
+			cmd := &cobra.Command{}
+			cmd.Flags().String("output", "json", "")
+
+			if err := runUpdate(cmd, []string{"ep-123"}); err != nil {
+				t.Fatalf("expected boundary value to be accepted, got %v", err)
+			}
+			if got := patchBody[tc.wantField]; got != tc.wantValue {
+				t.Errorf("expected %s %v, got %#v", tc.wantField, tc.wantValue, got)
+			}
+		})
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resetUpdateVars(t)
+
+			updateName = ""
+			updateTemplateID = ""
+			updateWorkersMin = -1
+			updateWorkersMax = -1
+			updateIdleTimeout = tc.idleTimeout
+			updateScaleBy = ""
+			updateScaleThreshold = tc.scaleThreshold
+			updateModelRefs = nil
+			updateClearModels = false
+
+			cmd := &cobra.Command{}
+			cmd.Flags().String("output", "json", "")
+
+			// validation must fail before any api client is built, so no server here.
+			err := runUpdate(cmd, []string{"ep-123"})
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
 func TestRunUpdate_ModelReferences(t *testing.T) {
 	resetUpdateVars(t)
 
