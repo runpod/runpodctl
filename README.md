@@ -281,24 +281,9 @@ unrecognized one is rejected rather than silently falling back to json:
 {"error":"invalid --output \"table\": supported formats are json and yaml","code":"usage_error"}
 ```
 
-validation applies to every command that runs, including the ones that don't
-honor the flag. `get pod` and `get cloud` print a table, and the legacy
-`create/remove/start/stop pod` and `create/remove pods` print plaintext; all of
-them ignore the *value* of `--output`, but `get pod --output=table` is still
-rejected. (`get models` is not in that set — it honors `--output` like any
-current command.) an invalid `--output` on `exec` or `config` is rejected too.
-
-the paths that never emit data are exempt, because cobra resolves them before any
-validation runs: `--help` anywhere on the line, `help <cmd>`, a bare parent like
-`runpodctl pod`, `--version`/`-v`, and shell completion all still work with a bad
-`--output`.
-
-being rejected does not mean nothing was written. `initConfig` runs ahead of the
-whole hook chain, so on a first run it still creates `~/.runpod/config.toml` — and
-because `config` binds `--apiKey` into viper at init, a rejected
-`config --apiKey=… --output=table` persists that key anyway. what rejection does
-prevent is the `config` body: no ssh keypair is generated and none is uploaded.
-an already-readable config is left alone.
+a few surfaces ignore the flag's *value* — `get pod` and `get cloud` always print
+a table, and the legacy `create/remove/start/stop pod` and `create/remove pods`
+always print plaintext — but an unrecognized value is rejected everywhere.
 
 ### pod runtime status
 
@@ -414,7 +399,7 @@ stderr and carry no `code`:
 
 so a parser should tolerate a non-json line on stderr from those, and must not
 rely on the exit code for `project`, which is slated for deletion rather than
-repair (CON-874, superseding CON-816).
+repair.
 
 `exec` still keeps its progress output (`Running remote Python shell...`,
 `Waiting for Pod to come online... `) on **stdout** for backwards compatibility,
