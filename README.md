@@ -100,6 +100,7 @@ commands follow noun-verb pattern: `runpodctl <resource> <action>`
 ```bash
 runpodctl pod list                    # list all pods
 runpodctl pod get <id>                # get pod details
+runpodctl pod logs <id>               # read a pod's logs (--follow to stream)
 runpodctl pod create --image=<img>    # create a pod
 runpodctl pod update <id>             # update a pod
 runpodctl pod start <id>              # start a stopped pod
@@ -116,9 +117,46 @@ runpodctl serverless create           # create endpoint
 runpodctl serverless update <id>      # update endpoint
 runpodctl serverless delete <id>      # delete endpoint
 runpodctl serverless health <id>      # worker and job counts for an endpoint
+runpodctl serverless logs <id>        # read worker logs (--follow to stream)
 runpodctl serverless run <id>         # invoke an endpoint and wait for the result
 runpodctl serverless status <id> <job-id>  # check a job submitted earlier
 ```
+
+#### reading logs
+
+`pod logs` and `serverless logs` stream from rest v2 (`api.runpod.io/v2`), which
+is a different host from the rest v1 control plane the crud commands use. output
+is json lines — one `{source,line,ts}` object per line, plus `workerId` on
+serverless — so it pipes into `jq` or an agent without further parsing.
+
+```bash
+runpodctl pod logs <id> --tail 50            # replay recent lines and exit
+runpodctl pod logs <id> --follow             # stream until interrupted
+runpodctl pod logs <id> --since 30m          # a time window instead of a line count
+runpodctl pod logs <id> --source system      # platform lines only
+runpodctl serverless logs <id>               # every worker, tagged with workerId
+runpodctl serverless logs <id> --worker <wid>  # one worker
+```
+
+behavior worth knowing, all verified against prod:
+
+- `source` is `container` (your workload's own output) or `system` (the platform
+  narrating image pull, container create/start/stop). a deploy that never comes up
+  usually explains itself in the system lines.
+- `--tail` is applied **per source**, so `--tail 5` on a pod emitting both kinds
+  returns up to 5 container lines *and* up to 5 system lines.
+- `--since` accepts a duration (`30m`, `2h`, `7d`) or an rfc3339 timestamp, and
+  overrides `--tail` server-side.
+- logs outlive the workload: a stopped pod still returns its history, including
+  the `stop container` lines. this is the post-mortem case, and it works.
+- the stream never ends on its own, so without `--follow` the command returns once
+  the replayed lines stop arriving (or after `--max-wait`, default 5s).
+- `--follow` reconnects on its own if the connection drops, resuming from the last
+  line it printed rather than replaying `--tail` again. reconnect notes go to
+  stderr; stdout stays pure json lines.
+- `serverless logs` without `--worker` resolves the endpoint's workers and reads
+  them all concurrently. the worker set is resolved once at start, so a worker
+  that appears later needs the command re-run.
 
 #### invoking an endpoint
 
@@ -398,10 +436,13 @@ rely on the exit code for `project` until CON-816 lands.
 | `RUNPOD_API_URL` | `https://rest.runpod.io/v1` | rest control plane (config key `restApiUrl`) |
 | `RUNPOD_GRAPHQL_URL` | `https://api.runpod.io/graphql` | graphql control plane (config key `apiUrl`) |
 | `RUNPOD_INVOKE_URL` | `https://api.runpod.ai/v2` | base for the serverless invoke urls reported by `serverless create/get/list/update`, and the host `serverless run/status/health` call (config key `invokeUrl`) |
+| `RUNPOD_REST_V2_URL` | `https://api.runpod.io/v2` | rest v2, which serves `pod logs`, `serverless logs` and the worker listing behind them (config key `restV2ApiUrl`) |
 
 invoke is a separate service from the control plane: pointing `RUNPOD_API_URL`
 or `RUNPOD_GRAPHQL_URL` at a non-prod host does **not** move the invoke urls.
-override `RUNPOD_INVOKE_URL` explicitly when you need that.
+override `RUNPOD_INVOKE_URL` explicitly when you need that. rest v2 is separate
+again — the crud commands are still on rest v1, so moving one does not move the
+other.
 
 ## legacy commands
 
