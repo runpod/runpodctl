@@ -34,6 +34,11 @@ const DefaultMaxWait = 5 * time.Second
 // why this is a hard cap rather than a queue.
 const MaxStreams = 32
 
+// DefaultDiscoveryInterval is how often a follow re-resolves the worker set. Slow
+// enough not to add meaningful load to a long follow, fast enough that a worker
+// coming up during a deploy is picked up while that deploy is still interesting.
+const DefaultDiscoveryInterval = 15 * time.Second
+
 // Flags holds the values of the shared log flags.
 type Flags struct {
 	Tail    int
@@ -131,6 +136,22 @@ type Target struct {
 	WorkerID string
 }
 
+// Discovery re-resolves the target set while a follow is running.
+//
+// It exists because an endpoint's worker set is not fixed: scaling up, or a
+// worker being replaced rather than restarted, produces a worker id that did not
+// exist when the command started. Resolving once meant `--follow` kept watching
+// the original workers and silently ignored every one that arrived after -- the
+// mirror image of not reporting the ones that left.
+type Discovery struct {
+	// Refresh returns the currently addressable targets. A failure is transient
+	// (the endpoint is still there, the poll just did not land), so it is reported
+	// and retried rather than ending the command.
+	Refresh func(context.Context) ([]Target, error)
+	// Interval is how often to re-resolve. Zero means DefaultDiscoveryInterval.
+	Interval time.Duration
+}
+
 // Run streams one or more targets to stdout until the snapshot bound is reached
 // or, when following, until the user interrupts.
 //
@@ -138,11 +159,12 @@ type Target struct {
 // the only way to follow a whole endpoint: each worker is a separate route, and
 // reading them in sequence would mean the second worker's output only appears
 // after the first stops -- which for a live worker is never.
-// Following does not pick up workers that appear after it starts: the worker set
-// is resolved once, up front. A crash-looping worker keeps its id across
-// restarts, so the case this command exists for is covered; an endpoint that
-// scales up mid-follow needs the command re-run.
-func Run(client *api.LogClient, targets []Target, opts api.LogStreamOptions, flags *Flags, format output.Format) error {
+//
+// discovery may be nil (a pod has exactly one log stream, and an explicit
+// --worker names the only one wanted). When set, it only runs under --follow: a
+// snapshot is bounded and short enough that the worker set cannot meaningfully
+// change while it reads.
+func Run(client *api.LogClient, targets []Target, opts api.LogStreamOptions, flags *Flags, format output.Format, discovery *Discovery) error {
 	if len(targets) == 0 {
 		return fmt.Errorf("no log streams to read")
 	}
@@ -174,12 +196,19 @@ func Run(client *api.LogClient, targets []Target, opts api.LogStreamOptions, fla
 	// goroutine owns the writer: concurrent encoder writes would interleave
 	// mid-record and corrupt the output.
 	entries := make(chan api.LogEntry, 256)
-	streamErrs := make([]error, len(targets))
 	var wg sync.WaitGroup
 
-	for i, target := range targets {
+	// Streams can now be added while others are running, so the error set and the
+	// record of what is already being read are shared mutable state.
+	var mu sync.Mutex
+	streamErrs := make([]error, 0, len(targets))
+	streaming := make(map[string]bool, len(targets))
+
+	// spawn starts one stream. Callers hold mu only to decide *whether* to spawn,
+	// never across the goroutine's lifetime.
+	spawn := func(target Target) {
 		wg.Add(1)
-		go func(index int, target Target) {
+		go func() {
 			defer wg.Done()
 			sink := func(entry api.LogEntry) error {
 				if target.WorkerID != "" {
@@ -192,13 +221,18 @@ func Run(client *api.LogClient, targets []Target, opts api.LogStreamOptions, fla
 					return ctx.Err()
 				}
 			}
+
 			var err error
 			if flags.Follow {
 				err = client.Follow(ctx, target.Path, opts, sink, followNotice(target))
 			} else {
 				err = client.Snapshot(ctx, target.Path, opts, flags.MaxWait, sink)
 			}
-			streamErrs[index] = err
+
+			mu.Lock()
+			streamErrs = append(streamErrs, err)
+			multiple := len(streaming) > 1
+			mu.Unlock()
 
 			// Report the moment it happens, not at the end. Under --follow the
 			// remaining streams keep the command alive indefinitely, so deferring
@@ -209,10 +243,82 @@ func Run(client *api.LogClient, targets []Target, opts api.LogStreamOptions, fla
 			// Only worth saying when there is more than one stream: with a single
 			// target the error is the command's own result and is reported once,
 			// by the caller.
-			if err != nil && len(targets) > 1 && ctx.Err() == nil {
+			if err != nil && multiple && ctx.Err() == nil {
 				notef("worker %s: %v", target.WorkerID, err)
 			}
-		}(i, target)
+		}()
+	}
+
+	mu.Lock()
+	for _, target := range targets {
+		streaming[target.Path] = true
+		spawn(target)
+	}
+	mu.Unlock()
+
+	if flags.Follow && discovery != nil && discovery.Refresh != nil {
+		// The discovery loop holds a WaitGroup slot for its whole life, which is
+		// what makes adding streams later safe: the counter cannot reach zero
+		// while it is still able to call wg.Add, so the drain goroutine below
+		// never closes `entries` out from under a newly spawned stream.
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			interval := discovery.Interval
+			if interval <= 0 {
+				interval = DefaultDiscoveryInterval
+			}
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+
+				fresh, err := discovery.Refresh(ctx)
+				if err != nil {
+					if ctx.Err() != nil {
+						return
+					}
+					// An error that will come back identically forever -- the
+					// endpoint was deleted, the credential died -- must end the
+					// loop, not just this poll. Observed live: after an endpoint was
+					// deleted mid-follow, every worker stream 404'd and ended while
+					// this loop kept re-polling, and because it holds a WaitGroup
+					// slot the command stayed alive producing nothing at all rather
+					// than exiting.
+					if api.IsPermanentStreamError(err) {
+						notef("no longer looking for new workers: %v", err)
+						return
+					}
+					notef("could not refresh the worker list (%v); still following the workers already found", err)
+					continue
+				}
+
+				for _, target := range fresh {
+					mu.Lock()
+					_, known := streaming[target.Path]
+					atCap := len(streaming) >= MaxStreams
+					if !known && !atCap {
+						streaming[target.Path] = true
+					}
+					mu.Unlock()
+
+					if known {
+						continue
+					}
+					if atCap {
+						notef("worker %s appeared but %d streams are already open; not reading it", target.WorkerID, MaxStreams)
+						continue
+					}
+					notef("worker %s appeared; following it too", target.WorkerID)
+					spawn(target)
+				}
+			}
+		}()
 	}
 
 	go func() {
@@ -236,6 +342,9 @@ func Run(client *api.LogClient, targets []Target, opts api.LogStreamOptions, fla
 	if writeErr != nil {
 		return writeErr
 	}
+
+	mu.Lock()
+	defer mu.Unlock()
 	return combineStreamErrors(streamErrs)
 }
 

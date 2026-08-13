@@ -1,6 +1,7 @@
 package serverless
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -30,8 +31,8 @@ with capacity.
 
 without --follow this replays recent lines and exits as soon as they stop
 arriving. with --follow it keeps streaming, reconnecting on its own if the
-connection drops. the worker set is resolved once at start, so a worker that
-appears later needs the command re-run.`,
+connection drops, and picking up workers that appear while it runs -- so an
+endpoint scaling up mid-follow does not need the command re-run.`,
 	Example: `  # every worker's recent logs
   runpodctl serverless logs abc123
 
@@ -73,7 +74,51 @@ func runLogs(cmd *cobra.Command, args []string) error {
 	}
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
-	return logstream.Run(client, targets, opts, &logsFlags, format)
+	return logstream.Run(client, targets, opts, &logsFlags, format, workerDiscovery(endpointID, logsWorker))
+}
+
+// workerDiscovery lets a follow pick up workers that appear after it started.
+//
+// It returns nil for an explicit --worker: the caller named the one stream they
+// want, so quietly attaching others would be the opposite of what they asked for.
+func workerDiscovery(endpointID, workerID string) *logstream.Discovery {
+	if workerID != "" {
+		return nil
+	}
+	return &logstream.Discovery{
+		Refresh: func(ctx context.Context) ([]logstream.Target, error) {
+			// Built per poll rather than closed over: NewV2Client reads the api key
+			// and base url through configenv, so constructing it at call time keeps
+			// a long follow honest about the current config, and http.Client reuses
+			// its connection pool through the default transport anyway.
+			client, err := api.NewV2Client()
+			if err != nil {
+				return nil, err
+			}
+			workers, err := client.ListEndpointWorkers(ctx, endpointID)
+			if err != nil {
+				return nil, err
+			}
+			return workerTargets(endpointID, workers), nil
+		},
+	}
+}
+
+// workerTargets maps a worker listing to log routes, skipping any worker with no
+// id -- it cannot be addressed, and building a path from it would request
+// /workers//logs.
+func workerTargets(endpointID string, workers *api.WorkersResponse) []logstream.Target {
+	targets := make([]logstream.Target, 0, len(workers.Workers))
+	for _, worker := range workers.Workers {
+		if worker.ID == "" {
+			continue
+		}
+		targets = append(targets, logstream.Target{
+			Path:     api.WorkerLogsPath(endpointID, worker.ID),
+			WorkerID: worker.ID,
+		})
+	}
+	return targets
 }
 
 // resolveLogTargets turns an endpoint id into the set of worker log routes to
@@ -97,16 +142,7 @@ func resolveLogTargets(endpointID, workerID string) ([]logstream.Target, error) 
 		return nil, fmt.Errorf("failed to list workers for endpoint %s: %w", endpointID, err)
 	}
 
-	targets := make([]logstream.Target, 0, len(workers.Workers))
-	for _, worker := range workers.Workers {
-		if worker.ID == "" {
-			continue
-		}
-		targets = append(targets, logstream.Target{
-			Path:     api.WorkerLogsPath(endpointID, worker.ID),
-			WorkerID: worker.ID,
-		})
-	}
+	targets := workerTargets(endpointID, workers)
 
 	if len(targets) == 0 {
 		// No workers is not an api failure, but there is nothing to stream and an

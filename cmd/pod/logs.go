@@ -59,6 +59,7 @@ func runLogs(cmd *cobra.Command, args []string) error {
 	}
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
+	// no discovery: a pod is exactly one log stream, and it keeps its id.
 	targets := []logstream.Target{{Path: api.PodLogsPath(args[0])}}
-	return logstream.Run(client, targets, opts, &logsFlags, format)
+	return logstream.Run(client, targets, opts, &logsFlags, format, nil)
 }

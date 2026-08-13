@@ -160,8 +160,10 @@ behavior worth knowing, all verified against prod:
   line it printed rather than replaying `--tail` again. reconnect notes go to
   stderr; stdout stays pure json lines.
 - `serverless logs` without `--worker` resolves the endpoint's workers and reads
-  them all concurrently. the worker set is resolved once at start, so a worker
-  that appears later needs the command re-run.
+  them all concurrently. under `--follow` it keeps re-resolving, so a worker that
+  starts after you do (an endpoint scaling up mid-deploy) is picked up and
+  announced on stderr rather than missed. `--worker` pins one worker and never
+  attaches others.
 - `--tail` is **per worker as well as per source**, so it multiplies: the default
   `--tail 100` across 10 workers writing both sources can replay a few thousand
   interleaved lines before the live output starts. narrow it with `--worker`, a

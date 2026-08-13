@@ -20,8 +20,8 @@ with capacity.
 
 without --follow this replays recent lines and exits as soon as they stop
 arriving. with --follow it keeps streaming, reconnecting on its own if the
-connection drops. the worker set is resolved once at start, so a worker that
-appears later needs the command re-run.
+connection drops, and picking up workers that appear while it runs -- so an
+endpoint scaling up mid-follow does not need the command re-run.
 
 ```
 runpodctl serverless logs <endpoint-id> [flags]

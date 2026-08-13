@@ -3,6 +3,7 @@ package logstream
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -278,7 +279,7 @@ func runFanIn(t *testing.T, server *httptest.Server, workers []string) (string, 
 
 	var runErr error
 	out := captureStdout(t, func() {
-		runErr = Run(client, targets, api.LogStreamOptions{}, &Flags{MaxWait: 5 * time.Second}, output.FormatJSON)
+		runErr = Run(client, targets, api.LogStreamOptions{}, &Flags{MaxWait: 5 * time.Second}, output.FormatJSON, nil)
 	})
 	return out, runErr
 }
@@ -340,6 +341,49 @@ func TestRunFansInWithoutCorruptingRecords(t *testing.T) {
 			t.Errorf("worker %s produced %d records, want %d", worker, perWorker[worker], framesPerWorker)
 		}
 	}
+}
+
+// captureStdoutUntil captures stdout while fn runs, calling stopWhen on each line.
+//
+// When stopWhen returns true (or the safety timeout fires) the read end is closed,
+// which makes the command's next write fail. That is how a --follow is ended
+// without sending a signal, and it exercises the closed-stdout path at the same
+// time. The timeout is what keeps a broken discovery a failing test rather than a
+// hanging one.
+func captureStdoutUntil(t *testing.T, timeout time.Duration, stopWhen func(string) bool, fn func()) string {
+	t.Helper()
+	original := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = writer
+
+	var closeOnce sync.Once
+	closeReader := func() { closeOnce.Do(func() { _ = reader.Close() }) }
+	safety := time.AfterFunc(timeout, closeReader)
+	defer safety.Stop()
+
+	collected := make(chan string, 1)
+	go func() {
+		var buffer bytes.Buffer
+		scanner := bufio.NewScanner(reader)
+		for scanner.Scan() {
+			line := scanner.Text()
+			buffer.WriteString(line)
+			buffer.WriteString("\n")
+			if stopWhen(line) {
+				break
+			}
+		}
+		closeReader()
+		collected <- buffer.String()
+	}()
+
+	fn()
+	_ = writer.Close()
+	os.Stdout = original
+	return <-collected
 }
 
 // captureStderr swaps os.Stderr for a pipe. Notes are written from the stream
@@ -443,7 +487,7 @@ func TestRunReportsWorkerFailureWhileOthersStillStream(t *testing.T) {
 		defer close(runReturned)
 		// stdout is discarded: the surviving worker's frames are not under test.
 		_ = captureStdout(t, func() {
-			_ = Run(client, targets, api.LogStreamOptions{}, &Flags{MaxWait: 3 * time.Second}, output.FormatJSON)
+			_ = Run(client, targets, api.LogStreamOptions{}, &Flags{MaxWait: 3 * time.Second}, output.FormatJSON, nil)
 		})
 	}()
 
@@ -467,6 +511,173 @@ func TestRunReportsWorkerFailureWhileOthersStillStream(t *testing.T) {
 	<-runReturned
 	_ = writer.Close()
 	os.Stderr = originalStderr
+}
+
+// A worker that appears after the follow started must be picked up. Resolving the
+// set once meant an endpoint scaling from 1 to 3 workers mid-deploy kept showing
+// only the first, silently -- the mirror image of not reporting the ones that die.
+func TestRunDiscoversWorkersThatAppearMidFollow(t *testing.T) {
+	stop := make(chan struct{})
+	var stopOnce sync.Once
+	closeStop := func() { stopOnce.Do(func() { close(stop) }) }
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		worker := path.Base(path.Dir(r.URL.Path))
+		w.Header().Set("Content-Type", "text/event-stream")
+		for i := 0; ; i++ {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-stop:
+				return
+			default:
+			}
+			fmt.Fprintf(w, "id: %d\ndata: {\"source\":\"container\",\"line\":\"%s says %d\",\"ts\":\"t\"}\n\n", i, worker, i)
+			w.(http.Flusher).Flush()
+			time.Sleep(20 * time.Millisecond)
+		}
+	}))
+	t.Cleanup(func() {
+		closeStop()
+		server.Close()
+	})
+
+	t.Setenv(configenv.RESTV2URLEnv, server.URL)
+	t.Setenv(configenv.APIKeyEnv, "test-key")
+	client, err := api.NewLogClient()
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+
+	// the second worker only shows up on the second poll.
+	var mu sync.Mutex
+	polls := 0
+	discovery := &Discovery{
+		Interval: 40 * time.Millisecond,
+		Refresh: func(context.Context) ([]Target, error) {
+			mu.Lock()
+			polls++
+			second := polls > 1
+			mu.Unlock()
+
+			targets := []Target{{Path: api.WorkerLogsPath("ep1", "first"), WorkerID: "first"}}
+			if second {
+				targets = append(targets, Target{Path: api.WorkerLogsPath("ep1", "late"), WorkerID: "late"})
+			}
+			return targets, nil
+		},
+	}
+
+	initial := []Target{{Path: api.WorkerLogsPath("ep1", "first"), WorkerID: "first"}}
+
+	// Run under --follow only ends on a signal, so it is stopped by closing stdout:
+	// the write failure cancels the context, which is also the closed-pipe path.
+	sawLate := make(chan struct{})
+	var sawOnce sync.Once
+	out := captureStdoutUntil(t, 20*time.Second, func(line string) bool {
+		if strings.Contains(line, "late says") {
+			sawOnce.Do(func() { close(sawLate) })
+			return true
+		}
+		return false
+	}, func() {
+		_ = Run(client, initial, api.LogStreamOptions{}, &Flags{Follow: true}, output.FormatJSON, discovery)
+	})
+
+	select {
+	case <-sawLate:
+	default:
+		t.Fatalf("the late worker was never streamed; output was:\n%s", out)
+	}
+	if !strings.Contains(out, "first says") {
+		t.Errorf("the original worker stopped being read:\n%s", out)
+	}
+	closeStop()
+}
+
+// Regression: a permanently failing refresh has to end the discovery loop.
+//
+// Observed live -- after the endpoint was deleted mid-follow, every worker stream
+// 404'd and ended, but the loop kept re-polling a dead endpoint, and because it
+// holds a WaitGroup slot the command stayed alive forever emitting nothing.
+func TestRunStopsDiscoveringWhenEndpointIsGone(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"detail":"worker not found","status":404}`)
+	}))
+	t.Cleanup(server.Close)
+
+	t.Setenv(configenv.RESTV2URLEnv, server.URL)
+	t.Setenv(configenv.APIKeyEnv, "test-key")
+	client, err := api.NewLogClient()
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+
+	discovery := &Discovery{
+		Interval: 20 * time.Millisecond,
+		Refresh: func(context.Context) ([]Target, error) {
+			// what a deleted endpoint answers.
+			return nil, &api.APIError{Message: "endpoint not found", Status: 404}
+		},
+	}
+
+	// every stream is fatal and ends immediately, so the only thing that could keep
+	// the command alive is the discovery loop.
+	targets := []Target{{Path: api.WorkerLogsPath("gone", "w1"), WorkerID: "w1"}}
+
+	// The goroutine is awaited to completion, not just until Run returns:
+	// captureStdout restores the os.Stdout global on its way out, and letting that
+	// happen after this test ends races with the next test's capture.
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		_ = captureStdout(t, func() {
+			_ = Run(client, targets, api.LogStreamOptions{}, &Flags{Follow: true}, output.FormatJSON, discovery)
+		})
+	}()
+
+	select {
+	case <-finished:
+		// returned rather than hanging: the assertion.
+	case <-time.After(20 * time.Second):
+		t.Fatal("Run never returned: discovery kept polling a deleted endpoint and held the command open")
+	}
+}
+
+// A refresh that fails is transient: the endpoint is still there and the streams
+// already open are still valid, so the command must keep going rather than die.
+func TestRunSurvivesDiscoveryRefreshFailure(t *testing.T) {
+	server := sseServer(t, 3)
+	t.Setenv(configenv.RESTV2URLEnv, server.URL)
+	t.Setenv(configenv.APIKeyEnv, "test-key")
+	client, err := api.NewLogClient()
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+
+	discovery := &Discovery{
+		Interval: 20 * time.Millisecond,
+		Refresh: func(context.Context) ([]Target, error) {
+			return nil, errors.New("worker list unavailable")
+		},
+	}
+
+	targets := []Target{{Path: api.WorkerLogsPath("ep1", "w1"), WorkerID: "w1"}}
+
+	// a snapshot ignores discovery entirely, so this also pins that a failing
+	// refresh cannot affect the non-follow path.
+	var runErr error
+	out := captureStdout(t, func() {
+		runErr = Run(client, targets, api.LogStreamOptions{}, &Flags{MaxWait: 2 * time.Second}, output.FormatJSON, discovery)
+	})
+
+	if runErr != nil {
+		t.Errorf("err = %v, want nil: a failed refresh is not a failed command", runErr)
+	}
+	if !strings.Contains(out, "w1") {
+		t.Errorf("expected the already-open stream to still produce output:\n%s", out)
+	}
 }
 
 // One worker failing while another still streams is churn, not a failed command.

@@ -255,7 +255,7 @@ func (c *LogClient) Follow(ctx context.Context, path string, opts LogStreamOptio
 		if err != nil {
 			// A request that the api rejects the same way every time must not be
 			// retried, or a typo'd id becomes an infinite loop.
-			if isFatalLogStreamError(err) {
+			if IsPermanentStreamError(err) {
 				return err
 			}
 			if notice != nil {
@@ -523,11 +523,11 @@ func isAPIError(err error) bool {
 	return errors.As(err, &apiErr)
 }
 
-// isFatalLogStreamError reports whether retrying or reconnecting would hit the
+// IsPermanentStreamError reports whether retrying or reconnecting would hit the
 // same rejection. It mirrors the reasoning in internal/waitfor: auth and
 // not-found are permanent for a given id, while 429/5xx and transport failures
 // are the transient conditions a reconnect exists for.
-func isFatalLogStreamError(err error) bool {
+func IsPermanentStreamError(err error) bool {
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
 		return false

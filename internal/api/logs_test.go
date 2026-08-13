@@ -691,8 +691,8 @@ func TestIsFatalLogStreamError(t *testing.T) {
 
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			if got := isFatalLogStreamError(testCase.err); got != testCase.want {
-				t.Errorf("isFatalLogStreamError(%v) = %v, want %v", testCase.err, got, testCase.want)
+			if got := IsPermanentStreamError(testCase.err); got != testCase.want {
+				t.Errorf("IsPermanentStreamError(%v) = %v, want %v", testCase.err, got, testCase.want)
 			}
 		})
 	}
