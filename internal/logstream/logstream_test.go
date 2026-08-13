@@ -1,6 +1,7 @@
 package logstream
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -201,6 +202,37 @@ func TestResolveRejectsNonPositiveMaxWait(t *testing.T) {
 	}
 }
 
+// A flag that was set and then ignored should say so, the same way the
+// --tail/--since overlap does.
+func TestResolveNotesMaxWaitIgnoredUnderFollow(t *testing.T) {
+	cmd, flags := newTestCommand("--follow", "--max-wait", "9s")
+
+	stderr := captureStderr(t, func() {
+		if _, err := flags.Resolve(cmd, time.Now()); err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+	})
+
+	if !strings.Contains(stderr, "--max-wait is ignored") {
+		t.Errorf("expected a note that --max-wait does not apply to a follow, got %q", stderr)
+	}
+}
+
+// ...and a flag that was not set must not produce a note.
+func TestResolveSilentWhenMaxWaitUnset(t *testing.T) {
+	cmd, flags := newTestCommand("--follow")
+
+	stderr := captureStderr(t, func() {
+		if _, err := flags.Resolve(cmd, time.Now()); err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+	})
+
+	if strings.Contains(stderr, "--max-wait") {
+		t.Errorf("unset --max-wait should produce no note, got %q", stderr)
+	}
+}
+
 func TestResolveDefaultMaxWait(t *testing.T) {
 	cmd, flags := newTestCommand()
 
@@ -310,6 +342,133 @@ func TestRunFansInWithoutCorruptingRecords(t *testing.T) {
 	}
 }
 
+// captureStderr swaps os.Stderr for a pipe. Notes are written from the stream
+// goroutines, so this is how their timing is observed.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	original := os.Stderr
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stderr = writer
+
+	collected := make(chan string, 1)
+	go func() {
+		var buffer bytes.Buffer
+		_, _ = buffer.ReadFrom(reader)
+		collected <- buffer.String()
+	}()
+
+	fn()
+	_ = writer.Close()
+	os.Stderr = original
+	return <-collected
+}
+
+// Regression: a worker that dies while others keep streaming used to be reported
+// only after the whole command ended. Under --follow that is at ctrl-c, so someone
+// watching a deploy could sit for minutes without learning a worker had dropped.
+//
+// The assertion is specifically about *timing*: the note must reach stderr while
+// Run is still executing. The surviving worker keeps emitting frames so the quiet
+// gap never fires, which keeps Run alive until its own budget expires.
+func TestRunReportsWorkerFailureWhileOthersStillStream(t *testing.T) {
+	stop := make(chan struct{})
+	var stopOnce sync.Once
+	closeStop := func() { stopOnce.Do(func() { close(stop) }) }
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "dead") {
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, `{"detail":"worker not found","status":404}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		for i := 0; ; i++ {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-stop:
+				return
+			default:
+			}
+			fmt.Fprintf(w, "id: %d\ndata: {\"source\":\"container\",\"line\":\"alive %d\",\"ts\":\"t\"}\n\n", i, i)
+			w.(http.Flusher).Flush()
+			time.Sleep(30 * time.Millisecond)
+		}
+	}))
+	t.Cleanup(func() {
+		closeStop()
+		server.Close()
+	})
+
+	t.Setenv(configenv.RESTV2URLEnv, server.URL)
+	t.Setenv(configenv.APIKeyEnv, "test-key")
+	client, err := api.NewLogClient()
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+
+	targets := []Target{
+		{Path: api.WorkerLogsPath("ep1", "dead"), WorkerID: "dead"},
+		{Path: api.WorkerLogsPath("ep1", "alive"), WorkerID: "alive"},
+	}
+
+	// stderr is scanned as it is written rather than collected at the end, so
+	// "the note arrived before Run returned" is actually observable.
+	originalStderr := os.Stderr
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stderr = writer
+	defer func() { os.Stderr = originalStderr }()
+
+	noteSeen := make(chan string, 1)
+	go func() {
+		scanner := bufio.NewScanner(reader)
+		for scanner.Scan() {
+			if strings.Contains(scanner.Text(), "dead") {
+				select {
+				case noteSeen <- scanner.Text():
+				default:
+				}
+			}
+		}
+	}()
+
+	runReturned := make(chan struct{})
+	go func() {
+		defer close(runReturned)
+		// stdout is discarded: the surviving worker's frames are not under test.
+		_ = captureStdout(t, func() {
+			_ = Run(client, targets, api.LogStreamOptions{}, &Flags{MaxWait: 3 * time.Second}, output.FormatJSON)
+		})
+	}()
+
+	select {
+	case note := <-noteSeen:
+		select {
+		case <-runReturned:
+			t.Errorf("note %q only surfaced after Run returned", note)
+		default:
+		}
+		if !strings.Contains(note, "worker not found") {
+			t.Errorf("note does not name the cause: %q", note)
+		}
+	case <-runReturned:
+		t.Error("Run finished without ever reporting the failed worker")
+	case <-time.After(15 * time.Second):
+		t.Fatal("timed out waiting for the failure note")
+	}
+
+	closeStop()
+	<-runReturned
+	_ = writer.Close()
+	os.Stderr = originalStderr
+}
+
 // One worker failing while another still streams is churn, not a failed command.
 func TestRunPartialFailureStillPrintsAndSucceeds(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -388,22 +547,20 @@ func TestRunCapsConcurrentStreams(t *testing.T) {
 }
 
 func TestCombineStreamErrorsPartialFailureSucceeds(t *testing.T) {
-	targets := []Target{{WorkerID: "w1"}, {WorkerID: "w2"}}
 	errs := []error{errors.New("w1 vanished"), nil}
 
 	// one worker of two dying is churn, not a failed command: the other worker's
 	// output is still what was asked for.
-	if err := combineStreamErrors(targets, errs); err != nil {
+	if err := combineStreamErrors(errs); err != nil {
 		t.Errorf("err = %v, want nil when at least one stream worked", err)
 	}
 }
 
 func TestCombineStreamErrorsTotalFailureReturnsFirst(t *testing.T) {
-	targets := []Target{{WorkerID: "w1"}, {WorkerID: "w2"}}
 	first := &api.APIError{Message: "unauthorized", Status: 401}
 	errs := []error{first, errors.New("second")}
 
-	err := combineStreamErrors(targets, errs)
+	err := combineStreamErrors(errs)
 	if !errors.Is(err, error(first)) {
 		t.Fatalf("err = %v, want the first error preserved", err)
 	}
@@ -415,10 +572,9 @@ func TestCombineStreamErrorsTotalFailureReturnsFirst(t *testing.T) {
 }
 
 func TestCombineStreamErrorsSingleTargetReturnsError(t *testing.T) {
-	targets := []Target{{}}
 	sentinel := errors.New("boom")
 
-	if err := combineStreamErrors(targets, []error{sentinel}); !errors.Is(err, sentinel) {
+	if err := combineStreamErrors([]error{sentinel}); !errors.Is(err, sentinel) {
 		t.Errorf("err = %v, want %v", err, sentinel)
 	}
 }

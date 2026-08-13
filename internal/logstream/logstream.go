@@ -81,6 +81,13 @@ func (f *Flags) Resolve(cmd *cobra.Command, now time.Time) (api.LogStreamOptions
 		return opts, clierr.Usagef("invalid --max-wait %s: must be positive", f.MaxWait)
 	}
 
+	// --max-wait bounds a snapshot; a follow runs until interrupted. Saying so
+	// matches how the --tail/--since overlap is reported: a flag that was set and
+	// then ignored should not be silently dropped.
+	if f.Follow && cmd != nil && cmd.Flags().Changed("max-wait") {
+		notef("--max-wait is ignored when --follow is set")
+	}
+
 	if f.Since != "" {
 		since, err := resolveSince(f.Since, now)
 		if err != nil {
@@ -185,11 +192,26 @@ func Run(client *api.LogClient, targets []Target, opts api.LogStreamOptions, fla
 					return ctx.Err()
 				}
 			}
+			var err error
 			if flags.Follow {
-				streamErrs[index] = client.Follow(ctx, target.Path, opts, sink, followNotice(target))
-				return
+				err = client.Follow(ctx, target.Path, opts, sink, followNotice(target))
+			} else {
+				err = client.Snapshot(ctx, target.Path, opts, flags.MaxWait, sink)
 			}
-			streamErrs[index] = client.Snapshot(ctx, target.Path, opts, flags.MaxWait, sink)
+			streamErrs[index] = err
+
+			// Report the moment it happens, not at the end. Under --follow the
+			// remaining streams keep the command alive indefinitely, so deferring
+			// this to combineStreamErrors meant a worker that died five seconds in
+			// stayed invisible until ctrl-c -- while the user sat watching a
+			// deploy and silently missed the one worker that failed.
+			//
+			// Only worth saying when there is more than one stream: with a single
+			// target the error is the command's own result and is reported once,
+			// by the caller.
+			if err != nil && len(targets) > 1 && ctx.Err() == nil {
+				notef("worker %s: %v", target.WorkerID, err)
+			}
 		}(i, target)
 	}
 
@@ -214,29 +236,29 @@ func Run(client *api.LogClient, targets []Target, opts api.LogStreamOptions, fla
 	if writeErr != nil {
 		return writeErr
 	}
-	return combineStreamErrors(targets, streamErrs)
+	return combineStreamErrors(streamErrs)
 }
 
 // combineStreamErrors decides what a partially failed fan-in means.
 //
-// One worker of several failing is reported on stderr but does not fail the
-// command: the surviving streams are still the output the user asked for, and a
-// worker disappearing mid-follow is ordinary churn. Every target failing is a
-// real failure and is returned, so a bad id or a dead credential still exits
-// non-zero with its code intact.
-func combineStreamErrors(targets []Target, errs []error) error {
+// One worker of several failing does not fail the command: the surviving streams
+// are still the output the user asked for, and a worker disappearing mid-follow is
+// ordinary churn. Every target failing is a real failure and is returned, so a bad
+// id or a dead credential still exits non-zero with its code intact.
+//
+// This only picks the return value. The per-worker stderr note is emitted by the
+// stream goroutine at the time of failure, so that a follow reports it live rather
+// than holding it until the command ends.
+func combineStreamErrors(errs []error) error {
 	var first error
 	failed := 0
-	for i, err := range errs {
+	for _, err := range errs {
 		if err == nil {
 			continue
 		}
 		failed++
 		if first == nil {
 			first = err
-		}
-		if len(targets) > 1 {
-			notef("worker %s: %v", targets[i].WorkerID, err)
 		}
 	}
 	if failed == len(errs) {
@@ -254,8 +276,16 @@ func followNotice(target Target) func(string) {
 	return func(message string) { notef("worker %s: %s", target.WorkerID, message) }
 }
 
+// noteMu serializes stderr notes. Reconnect and failure notes are emitted from
+// one goroutine per stream, and two concurrent Fprintf calls can interleave
+// mid-line, which would produce a note naming one worker and a message from
+// another.
+var noteMu sync.Mutex
+
 // notef writes a note to stderr. stdout carries the log lines, so nothing
 // advisory may go there.
 func notef(format string, args ...interface{}) {
+	noteMu.Lock()
+	defer noteMu.Unlock()
 	fmt.Fprintf(os.Stderr, format+"\n", args...)
 }

@@ -162,6 +162,11 @@ behavior worth knowing, all verified against prod:
 - `serverless logs` without `--worker` resolves the endpoint's workers and reads
   them all concurrently. the worker set is resolved once at start, so a worker
   that appears later needs the command re-run.
+- `--tail` is **per worker as well as per source**, so it multiplies: the default
+  `--tail 100` across 10 workers writing both sources can replay a few thousand
+  interleaved lines before the live output starts. narrow it with `--worker`, a
+  smaller `--tail`, or `--tail 0` for live output only. at most 32 workers are read
+  at once, and the cap is reported on stderr.
 
 #### invoking an endpoint
 

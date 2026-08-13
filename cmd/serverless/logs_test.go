@@ -19,8 +19,13 @@ func withV2Server(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	server := httptest.NewServer(handler)
 	t.Setenv(configenv.RESTV2URLEnv, server.URL)
 	t.Setenv(configenv.APIKeyEnv, "test-key")
-	// viper is a process global: a value left behind would leak into other tests.
+	// viper is a process global with no per-test scoping, so the previous value is
+	// restored rather than left overwritten -- 0 here means "fall back to
+	// DefaultTimeout", and leaking that into a test that set its own short timeout
+	// would change what that test exercises.
+	previousTimeout := viper.Get("timeout")
 	viper.Set("timeout", 0)
+	t.Cleanup(func() { viper.Set("timeout", previousTimeout) })
 	t.Cleanup(server.Close)
 	return server
 }
