@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -456,6 +457,220 @@ func TestFollowReturnsNilOnContextCancel(t *testing.T) {
 
 	if err != nil {
 		t.Errorf("err = %v, want nil after cancel", err)
+	}
+}
+
+// Regression: a slow server fault used to be discarded whenever the deadline had
+// also passed, so a degraded log store printed nothing and exited 0. A 5xx is the
+// server's own verdict and is never a side effect of our own cancellation, so it
+// is reported however long it took to arrive.
+func TestSnapshotReportsSlowServerError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprint(w, `{"detail":"log store unavailable","status":503}`)
+	}))
+	defer server.Close()
+
+	err := newTestLogClient(server.URL).Snapshot(context.Background(), "/pods/p/logs", LogStreamOptions{}, 5*time.Second, func(LogEntry) error {
+		return nil
+	})
+
+	if err == nil {
+		t.Fatal("the 503 was swallowed; the command would exit 0 with no output")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.HTTPStatus() != http.StatusServiceUnavailable {
+		t.Fatalf("err = %v, want the 503 preserved", err)
+	}
+	if apiErr.ErrorCode() != "server_error" {
+		t.Errorf("code = %q, want server_error", apiErr.ErrorCode())
+	}
+}
+
+// Regression: a host that accepts the connection and never replies is not the
+// same as a healthy stream that had nothing to say, and must not exit 0 silently.
+func TestSnapshotReportsTimeoutWhenNeverConnected(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	err := newTestLogClient(server.URL).Snapshot(context.Background(), "/pods/p/logs", LogStreamOptions{}, 200*time.Millisecond, func(LogEntry) error {
+		return nil
+	})
+
+	if err == nil {
+		t.Fatal("a host that never answered reported success")
+	}
+	var coder interface{ ErrorCode() string }
+	if !errors.As(err, &coder) || coder.ErrorCode() != "timeout" {
+		t.Errorf("err = %v, want a timeout code", err)
+	}
+}
+
+// The converse: a stream that connects, says nothing and is cut off by the budget
+// is a legitimately empty snapshot, not a failure.
+func TestSnapshotSucceedsWhenConnectedButQuiet(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	err := newTestLogClient(server.URL).Snapshot(context.Background(), "/pods/p/logs", LogStreamOptions{}, 200*time.Millisecond, func(LogEntry) error {
+		return nil
+	})
+
+	if err != nil {
+		t.Errorf("err = %v, want nil: the stream was healthy and simply quiet", err)
+	}
+}
+
+// Regression: a sink failure is the consumer going away, which reconnecting
+// cannot fix. It used to take the retry branch and hot-loop against the api --
+// and because a delivered frame resets the backoff, it never even slowed down.
+func TestFollowStopsOnSinkError(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "id: 1\ndata: {\"line\":\"a\"}\n\n")
+		w.(http.Flusher).Flush()
+	}))
+	defer server.Close()
+
+	sentinel := errors.New("stdout closed")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	err := newTestLogClient(server.URL).Follow(ctx, "/pods/p/logs", LogStreamOptions{}, func(LogEntry) error {
+		return sentinel
+	}, nil)
+
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("err = %v, want the sink error returned", err)
+	}
+	if attempts != 1 {
+		t.Errorf("attempts = %d, want 1: a dead consumer must not be retried", attempts)
+	}
+}
+
+// Regression: the cursor used to advance before the line was handed to the sink,
+// so a failed delivery moved the resume point past a line that was never printed.
+func TestCursorAdvancesOnlyAfterDelivery(t *testing.T) {
+	var cursors []string
+
+	err := decodeLogSSE(strings.NewReader("id: c1\ndata: {\"line\":\"a\"}\n\n"), func(LogEntry) error {
+		return errors.New("sink down")
+	}, func(id string) { cursors = append(cursors, id) })
+
+	if err == nil {
+		t.Fatal("expected the sink error to propagate")
+	}
+	if len(cursors) != 0 {
+		t.Errorf("cursors = %v, want none: nothing was delivered", cursors)
+	}
+}
+
+// A sink error has to stay matchable through the wrapper Follow uses to classify
+// it, or callers lose the cause.
+func TestSinkErrorUnwraps(t *testing.T) {
+	sentinel := errors.New("broken pipe")
+
+	err := decodeLogSSE(strings.NewReader("data: {\"line\":\"a\"}\n\n"), func(LogEntry) error {
+		return sentinel
+	}, nil)
+
+	if !errors.Is(err, sentinel) {
+		t.Errorf("err = %v, want it to unwrap to %v", err, sentinel)
+	}
+}
+
+// Regression: ReadString grew without bound, so one newline-less line let a
+// container drive the cli's memory to roughly twice the line size -- with no
+// natural end, because these streams never close.
+func TestDecodeLogSSECapsOversizedLine(t *testing.T) {
+	huge := strings.Repeat("x", 4*logLineMax)
+
+	var entries []LogEntry
+	err := decodeLogSSE(strings.NewReader("data: "+huge+"\n\n"), func(entry LogEntry) error {
+		entries = append(entries, entry)
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	if len(entries[0].Raw) > logLineMax {
+		t.Errorf("kept %d bytes, want at most the %d cap", len(entries[0].Raw), logLineMax)
+	}
+	if !entries[0].Truncated {
+		t.Error("an oversized line must be marked truncated, not silently shortened")
+	}
+}
+
+// The frame cap bounds the other shape of the same attack: many short data lines
+// with no blank line to end the frame.
+func TestDecodeLogSSECapsOversizedFrame(t *testing.T) {
+	var builder strings.Builder
+	chunk := strings.Repeat("y", 4096)
+	for builder.Len() < 3*logFrameMax {
+		builder.WriteString("data: " + chunk + "\n")
+	}
+	builder.WriteString("\n")
+
+	var entries []LogEntry
+	if err := decodeLogSSE(strings.NewReader(builder.String()), func(entry LogEntry) error {
+		entries = append(entries, entry)
+		return nil
+	}, nil); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	if len(entries[0].Raw) > logFrameMax+len(chunk) {
+		t.Errorf("frame kept %d bytes, want bounded near the %d cap", len(entries[0].Raw), logFrameMax)
+	}
+	if !entries[0].Truncated {
+		t.Error("an oversized frame must be marked truncated")
+	}
+}
+
+// Regression: `line` is part of the documented record shape, so a container
+// printing a blank line must still emit the key rather than dropping it and
+// turning `jq -r .line` into null.
+func TestBlankLineKeepsDocumentedShape(t *testing.T) {
+	entries, _ := collect(t, "data: {\"source\":\"container\",\"line\":\"\",\"ts\":\"2026-08-13T18:00:00Z\"}\n\n")
+	if len(entries) != 1 {
+		t.Fatalf("entries = %+v", entries)
+	}
+
+	encoded, err := json.Marshal(entries[0])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, key := range []string{"source", "line", "ts"} {
+		if _, present := decoded[key]; !present {
+			t.Errorf("key %q missing from %s", key, encoded)
+		}
+	}
+	// the optional ones stay optional.
+	for _, key := range []string{"workerId", "raw", "truncated"} {
+		if _, present := decoded[key]; present {
+			t.Errorf("key %q should be omitted when empty: %s", key, encoded)
+		}
 	}
 }
 

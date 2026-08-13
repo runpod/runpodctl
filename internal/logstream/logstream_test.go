@@ -1,11 +1,22 @@
 package logstream
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/runpod/runpodctl/internal/api"
+	"github.com/runpod/runpodctl/internal/configenv"
+	"github.com/runpod/runpodctl/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -198,6 +209,181 @@ func TestResolveDefaultMaxWait(t *testing.T) {
 	}
 	if flags.MaxWait != DefaultMaxWait {
 		t.Errorf("max-wait = %s, want %s", flags.MaxWait, DefaultMaxWait)
+	}
+}
+
+// sseServer serves a fixed number of frames per worker path and then closes,
+// so a snapshot over several targets terminates without needing the quiet gap.
+func sseServer(t *testing.T, framesPerWorker int) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		worker := path.Base(path.Dir(r.URL.Path))
+		w.Header().Set("Content-Type", "text/event-stream")
+		for i := 0; i < framesPerWorker; i++ {
+			fmt.Fprintf(w, "id: %s-%d\ndata: {\"source\":\"container\",\"line\":\"%s line %d\",\"ts\":\"t\"}\n\n", worker, i, worker, i)
+		}
+		w.(http.Flusher).Flush()
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+// runFanIn drives Run against a test server and returns what landed on stdout.
+func runFanIn(t *testing.T, server *httptest.Server, workers []string) (string, error) {
+	t.Helper()
+	t.Setenv(configenv.RESTV2URLEnv, server.URL)
+	t.Setenv(configenv.APIKeyEnv, "test-key")
+
+	client, err := api.NewLogClient()
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+
+	targets := make([]Target, 0, len(workers))
+	for _, worker := range workers {
+		targets = append(targets, Target{Path: api.WorkerLogsPath("ep1", worker), WorkerID: worker})
+	}
+
+	var runErr error
+	out := captureStdout(t, func() {
+		runErr = Run(client, targets, api.LogStreamOptions{}, &Flags{MaxWait: 5 * time.Second}, output.FormatJSON)
+	})
+	return out, runErr
+}
+
+// captureStdout swaps os.Stdout for a pipe. Run writes from the goroutine that
+// owns the writer, so this also proves records are not interleaved mid-line.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	original := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = writer
+
+	collected := make(chan string, 1)
+	go func() {
+		var buffer bytes.Buffer
+		_, _ = buffer.ReadFrom(reader)
+		collected <- buffer.String()
+	}()
+
+	fn()
+	_ = writer.Close()
+	os.Stdout = original
+	return <-collected
+}
+
+// The fan-in is the most concurrency-sensitive part of the change: several
+// producers, one writer. Every record from every worker must arrive exactly once
+// and as a whole line.
+func TestRunFansInWithoutCorruptingRecords(t *testing.T) {
+	const framesPerWorker = 40
+	workers := []string{"w1", "w2", "w3"}
+
+	out, err := runFanIn(t, sseServer(t, framesPerWorker), workers)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) != framesPerWorker*len(workers) {
+		t.Fatalf("lines = %d, want %d", len(lines), framesPerWorker*len(workers))
+	}
+
+	perWorker := map[string]int{}
+	for i, line := range lines {
+		var entry api.LogEntry
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("line %d is not a whole json record (interleaved write?): %q", i, line)
+		}
+		if entry.WorkerID == "" {
+			t.Errorf("line %d carries no workerId: %q", i, line)
+		}
+		perWorker[entry.WorkerID]++
+	}
+	for _, worker := range workers {
+		if perWorker[worker] != framesPerWorker {
+			t.Errorf("worker %s produced %d records, want %d", worker, perWorker[worker], framesPerWorker)
+		}
+	}
+}
+
+// One worker failing while another still streams is churn, not a failed command.
+func TestRunPartialFailureStillPrintsAndSucceeds(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "dead") {
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, `{"detail":"worker not found","status":404}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "id: 1\ndata: {\"source\":\"container\",\"line\":\"alive\",\"ts\":\"t\"}\n\n")
+		w.(http.Flusher).Flush()
+	}))
+	t.Cleanup(server.Close)
+
+	out, err := runFanIn(t, server, []string{"alive", "dead"})
+	if err != nil {
+		t.Fatalf("err = %v, want nil while one worker still streams", err)
+	}
+	if !strings.Contains(out, `"line":"alive"`) {
+		t.Errorf("surviving worker's output missing:\n%s", out)
+	}
+}
+
+// Every worker failing is a real failure, and the code has to survive so an agent
+// sees `not_found` rather than a generic cli_error.
+func TestRunTotalFailureReturnsCodedError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"detail":"worker not found","status":404}`)
+	}))
+	t.Cleanup(server.Close)
+
+	out, err := runFanIn(t, server, []string{"w1", "w2"})
+	if err == nil {
+		t.Fatal("expected an error when every stream failed")
+	}
+	var coder interface{ ErrorCode() string }
+	if !errors.As(err, &coder) || coder.ErrorCode() != "not_found" {
+		t.Errorf("err = %v, want code not_found", err)
+	}
+	// stdout is the data channel: a failure puts nothing on it.
+	if strings.TrimSpace(out) != "" {
+		t.Errorf("stdout should be empty on total failure, got:\n%s", out)
+	}
+}
+
+// Reading hundreds of streams at once is not viable, and a cap that says nothing
+// would read as full coverage.
+func TestRunCapsConcurrentStreams(t *testing.T) {
+	var mu sync.Mutex
+	opened := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		opened++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "id: 1\ndata: {\"source\":\"container\",\"line\":\"x\",\"ts\":\"t\"}\n\n")
+		w.(http.Flusher).Flush()
+	}))
+	t.Cleanup(server.Close)
+
+	workers := make([]string, MaxStreams+8)
+	for i := range workers {
+		workers[i] = fmt.Sprintf("w%d", i)
+	}
+
+	if _, err := runFanIn(t, server, workers); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if opened > MaxStreams {
+		t.Errorf("opened %d streams, want at most %d", opened, MaxStreams)
 	}
 }
 

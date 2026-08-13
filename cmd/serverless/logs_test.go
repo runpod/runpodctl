@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/runpod/runpodctl/internal/configenv"
@@ -90,8 +91,11 @@ func TestResolveLogTargetsFansOutOverWorkers(t *testing.T) {
 }
 
 // An endpoint with no workers has no logs, but that is not an api failure and
-// must not read as "no output". It gets a usage error naming the likely causes.
-func TestResolveLogTargetsNoWorkersIsUsageError(t *testing.T) {
+// must not read as "no output". It reports `conflict` -- the endpoint exists and
+// the id was right, it is just in a state with nothing to stream. Reporting
+// usage_error here would tell an agent its input was wrong, so it would re-guess
+// the endpoint id instead of following the advice in the message.
+func TestResolveLogTargetsNoWorkersIsConflict(t *testing.T) {
 	withV2Server(t, func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"summary":{"total":0},"workers":[]}`)
 	})
@@ -101,8 +105,12 @@ func TestResolveLogTargetsNoWorkersIsUsageError(t *testing.T) {
 		t.Fatal("expected an error for an endpoint with no workers")
 	}
 	var coder interface{ ErrorCode() string }
-	if !errors.As(err, &coder) || coder.ErrorCode() != "usage_error" {
-		t.Errorf("err = %v, want a usage_error", err)
+	if !errors.As(err, &coder) || coder.ErrorCode() != "conflict" {
+		t.Errorf("err = %v, want code conflict", err)
+	}
+	// the message has to name the actionable next step, not just the state.
+	if !strings.Contains(err.Error(), "serverless health") {
+		t.Errorf("message should point at the follow-up command: %q", err)
 	}
 }
 

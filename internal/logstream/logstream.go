@@ -30,6 +30,10 @@ import (
 // command the user did not ask to follow.
 const DefaultMaxWait = 5 * time.Second
 
+// MaxStreams caps how many log streams are read at once. See the note in Run for
+// why this is a hard cap rather than a queue.
+const MaxStreams = 32
+
 // Flags holds the values of the shared log flags.
 type Flags struct {
 	Tail    int
@@ -134,6 +138,16 @@ type Target struct {
 func Run(client *api.LogClient, targets []Target, opts api.LogStreamOptions, flags *Flags, format output.Format) error {
 	if len(targets) == 0 {
 		return fmt.Errorf("no log streams to read")
+	}
+
+	// Each target is its own goroutine and its own open connection, and under
+	// --follow none of them ever finish -- so a queue would starve rather than
+	// drain, and the only honest bound is to read fewer of them. An endpoint with
+	// a large workersMax would otherwise open hundreds of concurrent tls streams.
+	// Say so on stderr: a silent cap reads as full coverage.
+	if len(targets) > MaxStreams {
+		notef("reading the first %d of %d workers (--worker <id> to pick one)", MaxStreams, len(targets))
+		targets = targets[:MaxStreams]
 	}
 
 	writer := output.NewLineWriter(&output.Config{Format: format})

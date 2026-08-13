@@ -41,6 +41,13 @@ const (
 	// logReconnectMin/Max bound the backoff between follow reconnects.
 	logReconnectMin = 500 * time.Millisecond
 	logReconnectMax = 15 * time.Second
+
+	// logLineMax and logFrameMax bound how much of one oversized line, and one
+	// oversized reassembled frame, is kept in memory. Anything past the cap is
+	// drained and dropped, and the entry is marked truncated. These streams never
+	// end, so without a ceiling a single pathological line grows unboundedly.
+	logLineMax  = 1 << 20 // 1 MiB
+	logFrameMax = 4 << 20 // 4 MiB
 )
 
 // LogEntry is one frame of a log stream.
@@ -51,12 +58,19 @@ const (
 // wire change surfaces as visible text rather than a silently dropped line.
 // WorkerID is set only by the serverless fan-in, where lines from several
 // workers share one stream and would otherwise be unattributable.
+//
+// source, line and ts are NOT omitempty: the documented record shape is
+// {source,line,ts}, and a container printing a blank line -- ordinary between log
+// stanzas -- would otherwise emit a record with no `line` key at all, so
+// `jq -r .line` returned null instead of an empty string on a shape callers were
+// promised was fixed.
 type LogEntry struct {
-	Source   string `json:"source,omitempty"`
-	Line     string `json:"line,omitempty"`
-	TS       string `json:"ts,omitempty"`
-	WorkerID string `json:"workerId,omitempty"`
-	Raw      string `json:"raw,omitempty"`
+	Source    string `json:"source"`
+	Line      string `json:"line"`
+	TS        string `json:"ts"`
+	WorkerID  string `json:"workerId,omitempty"`
+	Raw       string `json:"raw,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
 }
 
 // LogStreamOptions are the query params the two log routes share.
@@ -145,6 +159,9 @@ func (c *LogClient) Snapshot(ctx context.Context, path string, opts LogStreamOpt
 	// arrivals. The stream goroutine writes, this function reads.
 	entries := make(chan LogEntry, 64)
 	streamErr := make(chan error, 1)
+	// written by the stream goroutine before it sends on streamErr, read only
+	// after that receive, so the send/receive pair is the synchronisation point.
+	connected := false
 	go func() {
 		streamErr <- c.stream(ctx, path, opts, "", func(entry LogEntry) error {
 			select {
@@ -153,7 +170,7 @@ func (c *LogClient) Snapshot(ctx context.Context, path string, opts LogStreamOpt
 			case <-ctx.Done():
 				return ctx.Err()
 			}
-		}, nil)
+		}, nil, func() { connected = true })
 		close(entries)
 	}()
 
@@ -172,7 +189,7 @@ func (c *LogClient) Snapshot(ctx context.Context, path string, opts LogStreamOpt
 		case entry, ok := <-entries:
 			if !ok {
 				// stream ended on its own; surface whatever ended it.
-				return normalizeStreamEnd(ctx, <-streamErr)
+				return normalizeStreamEnd(<-streamErr, connected)
 			}
 			if err := sink(entry); err != nil {
 				cancel()
@@ -192,9 +209,10 @@ func (c *LogClient) Snapshot(ctx context.Context, path string, opts LogStreamOpt
 			cancel()
 			return nil
 		case <-ctx.Done():
-			// maxWait elapsed, or the caller cancelled. Either way the request
-			// itself did not fail, so report success unless the stream did.
-			return normalizeStreamEnd(ctx, <-streamErr)
+			// maxWait elapsed, or the caller cancelled. Wait for the stream to
+			// report why it stopped: it may have been a real failure that simply
+			// took longer than the budget to surface.
+			return normalizeStreamEnd(<-streamErr, connected)
 		}
 	}
 }
@@ -219,12 +237,20 @@ func (c *LogClient) Follow(ctx context.Context, path string, opts LogStreamOptio
 			cursor = id
 			// a frame arrived, so the connection works: forget earlier failures.
 			backoff = logReconnectMin
-		})
+		}, nil)
 
 		if ctx.Err() != nil {
 			// cancelled by the caller (ctrl-c, or a parent deadline): the
 			// expected way a follow ends.
 			return nil
+		}
+		// A sink failure is the consumer going away (a closed stdout), not the
+		// connection breaking. Reconnecting cannot fix it: it would hot-loop
+		// against the api, and every delivered frame resets the backoff so it
+		// would not even slow down.
+		var sinkFailure *sinkError
+		if errors.As(err, &sinkFailure) {
+			return sinkFailure.Unwrap()
 		}
 		if err != nil {
 			// A request that the api rejects the same way every time must not be
@@ -257,7 +283,7 @@ func (c *LogClient) Follow(ctx context.Context, path string, opts LogStreamOptio
 // stream opens one connection and feeds parsed frames to sink until the stream
 // ends or ctx is done. onCursor, when set, is called with each event id so a
 // follow can resume from it.
-func (c *LogClient) stream(ctx context.Context, path string, opts LogStreamOptions, cursor string, sink LogSink, onCursor func(string)) error {
+func (c *LogClient) stream(ctx context.Context, path string, opts LogStreamOptions, cursor string, sink LogSink, onCursor func(string), onConnect func()) error {
 	target := c.baseURL + path
 	if params := opts.query(); len(params) > 0 {
 		target += "?" + params.Encode()
@@ -289,6 +315,12 @@ func (c *LogClient) stream(ctx context.Context, path string, opts LogStreamOptio
 		return parseAPIError(body, resp.StatusCode)
 	}
 
+	// headers came back with a usable status: the difference between a quiet
+	// stream and a host that never answered.
+	if onConnect != nil {
+		onConnect()
+	}
+
 	return decodeLogSSE(resp.Body, sink, onCursor)
 }
 
@@ -301,39 +333,54 @@ func (c *LogClient) stream(ctx context.Context, path string, opts LogStreamOptio
 func decodeLogSSE(body io.Reader, sink LogSink, onCursor func(string)) error {
 	reader := bufio.NewReader(body)
 	var data []string
+	dataBytes := 0
 	id := ""
+	truncated := false
 
 	flush := func() error {
-		if len(data) == 0 {
-			// an id with no data is a keepalive cursor, not a log line: advance
-			// the resume point without emitting anything.
-			if id != "" && onCursor != nil {
-				onCursor(id)
-			}
-			id = ""
-			return nil
-		}
 		payload := strings.Join(data, "\n")
 		data = data[:0]
+		dataBytes = 0
 		eventID := id
 		id = ""
+		wasTruncated := truncated
+		truncated = false
+
+		// No data field at all (or one carrying nothing) is a keepalive: advance
+		// the resume point without emitting a line the user never saw.
 		if strings.TrimSpace(payload) == "" {
+			if eventID != "" && onCursor != nil {
+				onCursor(eventID)
+			}
 			return nil
 		}
+
 		entry := parseLogPayload(payload)
+		entry.Truncated = wasTruncated
+		if err := sink(entry); err != nil {
+			// tagged so Follow can tell a dead consumer from a dropped
+			// connection: one is terminal, the other is what it retries.
+			return &sinkError{err: err}
+		}
+		// Only now that the line has actually been delivered. Advancing the
+		// cursor first would let a reconnect resume *past* a line that was never
+		// printed, silently losing it.
 		if eventID != "" && onCursor != nil {
 			onCursor(eventID)
 		}
-		return sink(entry)
+		return nil
 	}
 
 	for {
-		line, readErr := reader.ReadString('\n')
+		line, lineTruncated, readErr := readLimitedLine(reader, logLineMax)
+		if lineTruncated {
+			truncated = true
+		}
 		// A final frame with no trailing newline still has to be delivered, so
 		// the line is processed before the error is acted on.
 		trimmed := strings.TrimRight(line, "\r\n")
 
-		if trimmed == "" && line != "" || (readErr != nil && trimmed == "") {
+		if trimmed == "" && line != "" {
 			if err := flush(); err != nil {
 				return err
 			}
@@ -342,7 +389,16 @@ func decodeLogSSE(body io.Reader, sink LogSink, onCursor func(string)) error {
 			case strings.HasPrefix(trimmed, ":"):
 				// comment / keepalive
 			case strings.HasPrefix(trimmed, "data:"):
-				data = append(data, sseFieldValue(trimmed, "data:"))
+				value := sseFieldValue(trimmed, "data:")
+				// Cap the reassembled frame too: the per-line cap alone does not
+				// bound a stream that sends millions of short data lines with no
+				// blank line to end the frame.
+				if dataBytes+len(value) > logFrameMax {
+					truncated = true
+				} else {
+					data = append(data, value)
+					dataBytes += len(value)
+				}
 			case strings.HasPrefix(trimmed, "id:"):
 				id = sseFieldValue(trimmed, "id:")
 			}
@@ -360,11 +416,53 @@ func decodeLogSSE(body io.Reader, sink LogSink, onCursor func(string)) error {
 	}
 }
 
+// readLimitedLine reads one line, keeping at most max bytes of it.
+//
+// bufio.Reader.ReadString grows without bound, so a container that writes a very
+// large payload with no newline (a dumped blob, a \r-only progress bar) made the
+// process allocate the whole thing -- measured at ~2x the line size -- with no
+// natural end, since these streams never close. ReadSlice bounds each read to the
+// reader's buffer instead, so the remainder of an oversized line is drained and
+// discarded rather than accumulated.
+func readLimitedLine(reader *bufio.Reader, max int) (string, bool, error) {
+	var builder strings.Builder
+	truncated := false
+
+	for {
+		slice, err := reader.ReadSlice('\n')
+		if len(slice) > 0 {
+			switch {
+			case builder.Len() >= max:
+				truncated = true
+			case builder.Len()+len(slice) > max:
+				builder.Write(slice[:max-builder.Len()])
+				truncated = true
+			default:
+				builder.Write(slice)
+			}
+		}
+		// ErrBufferFull means this line is longer than the reader's buffer, not
+		// that the stream failed: keep draining until the newline.
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return builder.String(), truncated, err
+	}
+}
+
 // sseFieldValue strips a field name and the single optional space the spec
 // allows after the colon. A second space is part of the value.
 func sseFieldValue(line, prefix string) string {
 	return strings.TrimPrefix(strings.TrimPrefix(line, prefix), " ")
 }
+
+// sinkError marks a failure that came from the caller's sink rather than from the
+// stream, so a follow can treat a vanished consumer as terminal.
+type sinkError struct{ err error }
+
+func (e *sinkError) Error() string { return e.err.Error() }
+
+func (e *sinkError) Unwrap() error { return e.err }
 
 // parseLogPayload decodes one data payload into an entry. A payload that is not
 // the documented json object is preserved verbatim under Raw rather than
@@ -385,19 +483,44 @@ func parseLogPayload(payload string) LogEntry {
 }
 
 // normalizeStreamEnd maps the end of a bounded read to an error or to success.
-// A context cancellation is how Snapshot stops the stream deliberately, so the
-// resulting transport error is not a failure of the command.
-func normalizeStreamEnd(ctx context.Context, err error) error {
+//
+// Only the cancellation Snapshot itself performs may be swallowed. An earlier
+// version discarded every non-fatal error once the deadline had passed, which
+// meant a server fault that took longer than --max-wait to arrive (a slow 503, a
+// host that accepts the connection and never answers) printed nothing, said
+// nothing, and exited 0 -- indistinguishable from a pod that simply had no logs,
+// and a different exit code for the same fault depending on latency.
+//
+// connected reports whether response headers ever came back. Without that, "the
+// stream was healthy and quiet" and "we never got a reply at all" are the same
+// observation: both end with a deadline error and no entries.
+func normalizeStreamEnd(err error, connected bool) error {
 	if err == nil {
 		return nil
 	}
-	if ctx.Err() != nil && !isFatalLogStreamError(err) {
-		return nil
+	// A non-2xx is the server's own verdict and is never a side effect of our
+	// cancellation, so it is reported whenever it arrives.
+	if isAPIError(err) {
+		return err
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if !connected {
+			// Observed against prod: the api withholds response headers entirely
+			// until it has a line to send, so a filter that matches nothing looks
+			// identical to an unreachable host -- neither ever answers. Say both,
+			// because the caller can act on either and we cannot tell them apart.
+			return NewTimeoutError("timed out waiting for the log stream to respond. the api sends nothing until it has a line, so this can also mean no logs match --since/--source, or the pod has not started writing yet")
+		}
+		// the deliberate end of a bounded read.
 		return nil
 	}
 	return err
+}
+
+// isAPIError reports whether err came from a non-2xx response.
+func isAPIError(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr)
 }
 
 // isFatalLogStreamError reports whether retrying or reconnecting would hit the

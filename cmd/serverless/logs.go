@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/runpod/runpodctl/internal/api"
-	"github.com/runpod/runpodctl/internal/clierr"
 	"github.com/runpod/runpodctl/internal/logstream"
 	"github.com/runpod/runpodctl/internal/output"
 
@@ -113,7 +112,16 @@ func resolveLogTargets(endpointID, workerID string) ([]logstream.Target, error) 
 		// No workers is not an api failure, but there is nothing to stream and an
 		// empty success would read as "no logs". Say which of the two it is,
 		// because they have different fixes.
-		return nil, clierr.Usagef("endpoint %s has no workers to read logs from. it may be scaled to zero with no queued jobs, or waiting on gpu capacity -- check `runpodctl serverless health %s`", endpointID, endpointID)
+		//
+		// Coded `conflict`, not `usage_error`: the endpoint id was correct and
+		// nothing the caller typed was wrong, it is the endpoint that is in a
+		// state with no logs to give. Reporting a usage error tells an agent its
+		// input was bad, so it re-guesses the id instead of following the advice
+		// in this very message.
+		return nil, &api.APIError{
+			Message: fmt.Sprintf("endpoint %s has no workers to read logs from. it may be scaled to zero with no queued jobs, or waiting on gpu capacity -- check `runpodctl serverless health %s`", endpointID, endpointID),
+			Code:    "conflict",
+		}
 	}
 	return targets, nil
 }

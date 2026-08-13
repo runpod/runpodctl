@@ -151,6 +151,11 @@ behavior worth knowing, all verified against prod:
   the `stop container` lines. this is the post-mortem case, and it works.
 - the stream never ends on its own, so without `--follow` the command returns once
   the replayed lines stop arriving (or after `--max-wait`, default 5s).
+- the api sends nothing at all — not even response headers — until it has a line
+  to send, so a filter that matches nothing (`--since` past the last log, a
+  `--source` with no output) ends in a `timeout` rather than an empty result. that
+  is reported as an error on purpose: exiting 0 with no output would be
+  indistinguishable from a workload that genuinely logged nothing.
 - `--follow` reconnects on its own if the connection drops, resuming from the last
   line it printed rather than replaying `--tail` again. reconnect notes go to
   stderr; stdout stays pure json lines.
