@@ -25,6 +25,7 @@ manage gpu pods on runpod
 * [runpodctl pod delete](runpodctl_pod_delete.md)	 - delete a pod
 * [runpodctl pod get](runpodctl_pod_get.md)	 - get pod details
 * [runpodctl pod list](runpodctl_pod_list.md)	 - list all pods
+* [runpodctl pod logs](runpodctl_pod_logs.md)	 - read a pod's logs
 * [runpodctl pod reset](runpodctl_pod_reset.md)	 - reset a pod
 * [runpodctl pod restart](runpodctl_pod_restart.md)	 - restart a pod
 * [runpodctl pod start](runpodctl_pod_start.md)	 - start a stopped pod

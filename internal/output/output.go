@@ -135,6 +135,73 @@ func yamlValue(value interface{}) *yaml.Node {
 	}
 }
 
+// LineWriter emits a record per line as it is produced, for commands whose
+// output is an open-ended stream rather than one document.
+//
+// It exists for `pod logs` / `serverless logs`. Print and PrintRaw both encode a
+// single complete value, which a log follow never has: lines must reach stdout as
+// they arrive, not be accumulated until the command ends. json format is
+// therefore JSON Lines (one compact object per line) rather than an indented
+// document, which is also the shape agents and `jq` consume most easily.
+//
+// Nothing is buffered: os.Stdout is unbuffered in Go, so each Write is a syscall
+// and a piped consumer sees each line immediately. The gpu-key normalisation
+// Print applies is deliberately skipped -- these records are api-shaped log
+// frames, not the cli's own control-plane structs.
+type LineWriter struct {
+	format      Format
+	jsonEncoder *json.Encoder
+	yamlEncoder *yaml.Encoder
+}
+
+// NewLineWriter builds a LineWriter for the configured format.
+func NewLineWriter(cfg *Config) *LineWriter {
+	if cfg == nil {
+		cfg = DefaultConfig
+	}
+	writer := &LineWriter{format: cfg.Format}
+	if cfg.Format == FormatYAML {
+		writer.yamlEncoder = yaml.NewEncoder(os.Stdout)
+		writer.yamlEncoder.SetIndent(2)
+		return writer
+	}
+	// no SetIndent: one line per record is the point.
+	writer.jsonEncoder = json.NewEncoder(os.Stdout)
+	return writer
+}
+
+// Write emits one record.
+//
+// The yaml path round-trips through json first. yaml.v3 reads its own struct tags
+// and ignores json ones, so encoding a record directly would rename every field
+// to its lowercased Go name (workerId -> workerid) and emit the empty optional
+// ones that `json:",omitempty"` exists to drop. Going through json keeps both
+// formats reporting the same key names, which is the contract callers rely on.
+func (w *LineWriter) Write(record interface{}) error {
+	if w.yamlEncoder == nil {
+		return w.jsonEncoder.Encode(record)
+	}
+
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	value, err := decodeRawJSON(encoded)
+	if err != nil {
+		return err
+	}
+	return w.yamlEncoder.Encode(yamlValue(value))
+}
+
+// Close finishes the stream. Only the yaml encoder needs it; the json path is
+// complete after every Write, so Close is still safe to defer unconditionally.
+func (w *LineWriter) Close() error {
+	if w.yamlEncoder != nil {
+		return w.yamlEncoder.Close()
+	}
+	return nil
+}
+
 func printJSON(data interface{}) error {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")

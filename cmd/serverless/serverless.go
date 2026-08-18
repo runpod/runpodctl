@@ -19,6 +19,7 @@ func init() {
 	Cmd.AddCommand(updateCmd)
 	Cmd.AddCommand(deleteCmd)
 	Cmd.AddCommand(healthCmd)
+	Cmd.AddCommand(logsCmd)
 	Cmd.AddCommand(runCmd)
 	Cmd.AddCommand(statusCmd)
 }

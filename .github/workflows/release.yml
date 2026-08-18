@@ -50,7 +50,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.6"
 
       # the release tarball is pinned by version *and* sha256, and installed
       # without piping anything to a shell. this job receives the developer id
