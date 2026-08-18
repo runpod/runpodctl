@@ -789,3 +789,86 @@ func TestCombineStreamErrorsSingleTargetReturnsError(t *testing.T) {
 		t.Errorf("err = %v, want %v", err, sentinel)
 	}
 }
+
+// Regression: the stream cap must count streams that are still open, not every
+// worker id the follow has ever seen.
+//
+// Workers that are replaced rather than restarted come back with a fresh id, so
+// on a long follow of a churning endpoint the seen-set grows without bound. When
+// the cap was measured against that set, discovery stopped attaching new workers
+// after MaxStreams ids had existed -- while the stderr note claimed MaxStreams
+// streams were open, though every one of them had already ended.
+func TestRunCapCountsLiveStreamsNotSeenWorkers(t *testing.T) {
+	const churn = MaxStreams + 4
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		worker := path.Base(path.Dir(r.URL.Path))
+		// a replaced worker is gone for good: 404 is permanent, so its stream
+		// goroutine ends rather than reconnecting.
+		if worker != "survivor" {
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, `{"detail":"worker not found","status":404}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		for i := 0; ; i++ {
+			select {
+			case <-r.Context().Done():
+				return
+			default:
+			}
+			fmt.Fprintf(w, "id: %d\ndata: {\"source\":\"container\",\"line\":\"survivor says %d\",\"ts\":\"t\"}\n\n", i, i)
+			w.(http.Flusher).Flush()
+			time.Sleep(20 * time.Millisecond)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	t.Setenv(configenv.RESTV2URLEnv, server.URL)
+	t.Setenv(configenv.APIKeyEnv, "test-key")
+	client, err := api.NewLogClient()
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+
+	// one churned worker per poll, then the one that actually stays up. Only the
+	// new id is returned each time: the ones already streaming are deduplicated
+	// by the seen-set, which is the part that must keep growing.
+	var mu sync.Mutex
+	polls := 0
+	discovery := &Discovery{
+		Interval: 5 * time.Millisecond,
+		Refresh: func(context.Context) ([]Target, error) {
+			mu.Lock()
+			polls++
+			n := polls
+			mu.Unlock()
+
+			worker := fmt.Sprintf("replaced-%d", n)
+			if n > churn {
+				worker = "survivor"
+			}
+			return []Target{{Path: api.WorkerLogsPath("ep1", worker), WorkerID: worker}}, nil
+		},
+	}
+
+	initial := []Target{{Path: api.WorkerLogsPath("ep1", "replaced-0"), WorkerID: "replaced-0"}}
+
+	sawSurvivor := make(chan struct{})
+	var sawOnce sync.Once
+	out := captureStdoutUntil(t, 30*time.Second, func(line string) bool {
+		if strings.Contains(line, "survivor says") {
+			sawOnce.Do(func() { close(sawSurvivor) })
+			return true
+		}
+		return false
+	}, func() {
+		_ = Run(client, initial, api.LogStreamOptions{}, &Flags{Follow: true}, output.FormatJSON, discovery)
+	})
+
+	select {
+	case <-sawSurvivor:
+	default:
+		t.Fatalf("the worker that appeared after %d replaced workers was never streamed; output was:\n%s", churn, out)
+	}
+}

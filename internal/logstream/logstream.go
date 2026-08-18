@@ -200,12 +200,23 @@ func Run(client *api.LogClient, targets []Target, opts api.LogStreamOptions, fla
 
 	// Streams can now be added while others are running, so the error set and the
 	// record of what is already being read are shared mutable state.
+	//
+	// seen and live are deliberately separate. seen never shrinks, because it is
+	// what stops a worker that already ended from being re-attached on the next
+	// discovery tick. live is the number of streams actually open, and is what
+	// MaxStreams bounds: on a churning endpoint workers are *replaced* rather than
+	// restarted, so counting the seen-set against the cap would stop attaching new
+	// workers once 32 ids had ever existed -- while the stderr note claimed 32
+	// streams were open, most of them long since ended.
 	var mu sync.Mutex
 	streamErrs := make([]error, 0, len(targets))
-	streaming := make(map[string]bool, len(targets))
+	seen := make(map[string]bool, len(targets))
+	live := 0
 
 	// spawn starts one stream. Callers hold mu only to decide *whether* to spawn,
-	// never across the goroutine's lifetime.
+	// never across the goroutine's lifetime. live is incremented by the caller,
+	// under the same mu as the cap check: incrementing it inside the goroutine
+	// would let several spawns past the cap before any of them ran.
 	spawn := func(target Target) {
 		wg.Add(1)
 		go func() {
@@ -231,7 +242,10 @@ func Run(client *api.LogClient, targets []Target, opts api.LogStreamOptions, fla
 
 			mu.Lock()
 			streamErrs = append(streamErrs, err)
-			multiple := len(streaming) > 1
+			live--
+			// seen, not live: this asks whether the command is reading one worker
+			// or several, which does not change as the streams finish.
+			multiple := len(seen) > 1
 			mu.Unlock()
 
 			// Report the moment it happens, not at the end. Under --follow the
@@ -251,7 +265,8 @@ func Run(client *api.LogClient, targets []Target, opts api.LogStreamOptions, fla
 
 	mu.Lock()
 	for _, target := range targets {
-		streaming[target.Path] = true
+		seen[target.Path] = true
+		live++
 		spawn(target)
 	}
 	mu.Unlock()
@@ -300,18 +315,20 @@ func Run(client *api.LogClient, targets []Target, opts api.LogStreamOptions, fla
 
 				for _, target := range fresh {
 					mu.Lock()
-					_, known := streaming[target.Path]
-					atCap := len(streaming) >= MaxStreams
+					known := seen[target.Path]
+					atCap := live >= MaxStreams
 					if !known && !atCap {
-						streaming[target.Path] = true
+						seen[target.Path] = true
+						live++
 					}
+					open := live
 					mu.Unlock()
 
 					if known {
 						continue
 					}
 					if atCap {
-						notef("worker %s appeared but %d streams are already open; not reading it", target.WorkerID, MaxStreams)
+						notef("worker %s appeared but %d streams are already open; not reading it", target.WorkerID, open)
 						continue
 					}
 					notef("worker %s appeared; following it too", target.WorkerID)

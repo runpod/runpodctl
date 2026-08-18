@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"strings"
@@ -315,6 +316,22 @@ func (c *LogClient) stream(ctx context.Context, path string, opts LogStreamOptio
 		return parseAPIError(body, resp.StatusCode)
 	}
 
+	// A 2xx from something that is not this api at all -- a captive portal, a
+	// corporate proxy, a load balancer's own error page -- would otherwise be fed
+	// to the sse decoder, and every line of that html would land on stdout as a
+	// raw entry. Worse under --follow: html carries no `id:` fields, so the resume
+	// cursor never advances and the same page is replayed on every reconnect.
+	//
+	// This is deliberately narrower than rejecting anything unexpected: the Raw
+	// fallback in parseLogPayload exists so that a change to the *frame* shape
+	// still surfaces the line. The check here separates that ("the api changed
+	// what it sends") from "this response did not come from the api". A missing
+	// Content-Type is accepted, since that is a header a proxy may strip from an
+	// otherwise valid stream.
+	if err := checkEventStream(resp.Header.Get("Content-Type")); err != nil {
+		return err
+	}
+
 	// headers came back with a usable status: the difference between a quiet
 	// stream and a host that never answered.
 	if onConnect != nil {
@@ -322,6 +339,26 @@ func (c *LogClient) stream(ctx context.Context, path string, opts LogStreamOptio
 	}
 
 	return decodeLogSSE(resp.Body, sink, onCursor)
+}
+
+// checkEventStream reports whether a 2xx response actually carried an sse
+// stream. The returned error is deliberately not an *APIError, so
+// IsPermanentStreamError treats it as transient: an intermediary answering for
+// the api is the same class of fault as the 5xx a follow already reconnects
+// through. A snapshot has no retry, so it fails immediately and names what came
+// back instead.
+func checkEventStream(contentType string) error {
+	if contentType == "" {
+		return nil
+	}
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return fmt.Errorf("log stream returned an unreadable content-type %q; this response did not come from the runpod api", contentType)
+	}
+	if !strings.EqualFold(mediaType, "text/event-stream") {
+		return fmt.Errorf("log stream returned %s instead of text/event-stream; this response did not come from the runpod api (a proxy or captive portal may be answering for it)", mediaType)
+	}
+	return nil
 }
 
 // decodeLogSSE parses an SSE byte stream, calling sink for every data frame.

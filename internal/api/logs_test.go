@@ -697,3 +697,57 @@ func TestIsFatalLogStreamError(t *testing.T) {
 		})
 	}
 }
+
+// Regression: a 2xx that is not an sse stream must not be decoded as one.
+//
+// A captive portal, a corporate proxy or a load balancer's own error page answers
+// 200 with html. Fed to the decoder, every line of that page landed on stdout as a
+// raw entry -- and since html carries no `id:` fields the resume cursor never
+// advanced, so under --follow the same page was replayed on every reconnect.
+func TestStreamRejectsNonEventStreamSuccess(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, "<html><body>sign in to continue</body></html>")
+	}))
+	defer server.Close()
+
+	var got []LogEntry
+	err := newTestLogClient(server.URL).Snapshot(context.Background(), "/pods/p/logs", LogStreamOptions{}, 5*time.Second, func(entry LogEntry) error {
+		got = append(got, entry)
+		return nil
+	})
+
+	if err == nil {
+		t.Fatalf("snapshot succeeded on an html response; entries = %+v", got)
+	}
+	if len(got) != 0 {
+		t.Errorf("emitted %d entries from an html body, want none: %+v", len(got), got)
+	}
+	if !strings.Contains(err.Error(), "text/html") {
+		t.Errorf("error = %v, want it to name what came back instead", err)
+	}
+}
+
+func TestCheckEventStreamAcceptsRealStreams(t *testing.T) {
+	cases := []struct {
+		contentType string
+		wantErr     bool
+	}{
+		{"text/event-stream", false},
+		{"text/event-stream; charset=utf-8", false},
+		{"Text/Event-Stream", false},
+		// a proxy may strip the header from an otherwise valid stream, so a
+		// missing content-type is not treated as a wrong one.
+		{"", false},
+		{"text/html", true},
+		{"application/json", true},
+		{"text/event-stream;;", true},
+	}
+
+	for _, tc := range cases {
+		err := checkEventStream(tc.contentType)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("checkEventStream(%q) = %v, wantErr %v", tc.contentType, err, tc.wantErr)
+		}
+	}
+}
