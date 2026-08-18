@@ -27,7 +27,7 @@ type Pod struct {
 	DockerEntrypoint  []string               `json:"dockerEntrypoint,omitempty"`
 	CostPerHr         float64                `json:"costPerHr,omitempty"`
 	NetworkVolumeID   string                 `json:"networkVolumeId,omitempty"`
-	NetworkVolume     map[string]interface{} `json:"networkVolume,omitempty"`
+	NetworkVolume     *NetworkVolume         `json:"networkVolume,omitempty"`
 	Machine           map[string]interface{} `json:"machine,omitempty"`
 	Runtime           map[string]interface{} `json:"runtime,omitempty"`
 	Env               map[string]string      `json:"env,omitempty"`
