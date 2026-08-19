@@ -107,7 +107,7 @@ func TestResolvePasswordFromStdinReportsReadFailure(t *testing.T) {
 	}
 }
 
-func TestResolvePasswordFromFlagWarns(t *testing.T) {
+func TestResolvePasswordFromFlag(t *testing.T) {
 	stubTerminal(t, false, "", nil)
 	var stderr bytes.Buffer
 
@@ -118,23 +118,10 @@ func TestResolvePasswordFromFlagWarns(t *testing.T) {
 	if got != "s3cret" {
 		t.Errorf("password = %q, want s3cret", got)
 	}
-
-	// the warning is the whole point of keeping --password working, so assert it
-	// lands and names the safe alternative.
-	warning := stderr.String()
-	if !strings.Contains(warning, "--password-stdin") {
-		t.Errorf("warning must point at --password-stdin, got %q", warning)
-	}
-	if !strings.Contains(warning, "warning:") {
-		t.Errorf("warning must be marked as one, got %q", warning)
-	}
-	// AGENTS.md: all text output is lowercase.
-	if warning != strings.ToLower(warning) {
-		t.Errorf("warning must be lowercase, got %q", warning)
-	}
-	// the secret itself must never be echoed back.
-	if strings.Contains(warning, "s3cret") {
-		t.Error("the warning must not repeat the password")
+	// --password is a supported choice, not a mistake: it must not nag, and it
+	// must never echo the credential it was handed.
+	if stderr.Len() != 0 {
+		t.Errorf("expected no output on the --password path, got %q", stderr.String())
 	}
 }
 

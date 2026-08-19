@@ -19,11 +19,10 @@ var createCmd = &cobra.Command{
 	Short: "create a new registry auth",
 	Long: `create a new container registry authentication
 
-the password is a long-lived credential, so prefer --password-stdin: a value
-passed with --password is visible in the process table for the lifetime of the
-command and is written to your shell history. with neither flag, an interactive
-terminal is prompted without echo.`,
-	Example: `  # read the password from a pipe (preferred)
+the password can come from --password, from stdin with --password-stdin, or from
+an interactive prompt when neither flag is given. --password-stdin keeps the
+credential out of the process table and your shell history.`,
+	Example: `  # read the password from a pipe
   echo "$REGISTRY_TOKEN" | runpodctl registry create --name ghcr --username me --password-stdin
 
   # read it from a file without exposing it to the process table
@@ -45,7 +44,7 @@ var (
 func init() {
 	createCmd.Flags().StringVar(&createName, "name", "", "registry auth name (required)")
 	createCmd.Flags().StringVar(&createUsername, "username", "", "registry username (required)")
-	createCmd.Flags().StringVar(&createPassword, "password", "", "registry password; insecure, prefer --password-stdin")
+	createCmd.Flags().StringVar(&createPassword, "password", "", "registry password; see also --password-stdin")
 	createCmd.Flags().BoolVar(&createPasswordStdin, "password-stdin", false, "read the registry password from stdin")
 
 	createCmd.MarkFlagRequired("name")     //nolint:errcheck
@@ -78,8 +77,8 @@ var stdinIsTerminal = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
 // sources. It takes the reader and writer rather than touching os.Stdin/Stderr
 // directly so the whole matrix is testable without a tty.
 //
-// A password on the command line is not refused, only warned about: scripts
-// already pass it that way and breaking them is not this change's job.
+// --password stays a first-class choice: it is the caller's call whether argv
+// exposure matters for their environment, and scripts already pass it that way.
 func resolvePassword(stdin io.Reader, stderr io.Writer, flagValue string, fromStdin bool) (string, error) {
 	switch {
 	case fromStdin:
@@ -102,7 +101,6 @@ func resolvePassword(stdin io.Reader, stderr io.Writer, flagValue string, fromSt
 		return secret, nil
 
 	case flagValue != "":
-		fmt.Fprintln(stderr, "warning: --password is insecure; it is visible in the process table and your shell history. use --password-stdin instead.")
 		return flagValue, nil
 
 	case stdinIsTerminal():
