@@ -77,13 +77,14 @@ var promptPassword = func(stderr io.Writer) (string, error) {
 	defer close(done)
 	go func() {
 		select {
-		case <-sigCh:
+		case sig := <-sigCh:
 			_ = term.Restore(fd, state)
 			fmt.Fprintln(stderr)
-			// 128 + SIGINT, the shell convention for "died on a signal". The
-			// deferred restores below are deliberately skipped: the terminal is
-			// already back and there is nothing else to unwind at a prompt.
-			os.Exit(130)
+			// 128 + the signal number is the shell convention for "died on a
+			// signal". The deferred restores below are deliberately skipped: the
+			// terminal is already back and there is nothing else to unwind at a
+			// prompt.
+			os.Exit(signalExitCode(sig))
 		case <-done:
 		}
 	}()
@@ -97,6 +98,13 @@ var promptPassword = func(stderr io.Writer) (string, error) {
 		return "", fmt.Errorf("failed to read the password from the terminal: %w", err)
 	}
 	return string(secret), nil
+}
+
+func signalExitCode(sig os.Signal) int {
+	if signalNumber, ok := sig.(syscall.Signal); ok {
+		return 128 + int(signalNumber)
+	}
+	return 1
 }
 
 // stdinIsTerminal reports whether stdin is a terminal we can prompt on, as

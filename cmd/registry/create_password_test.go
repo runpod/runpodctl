@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"os"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -22,6 +24,25 @@ func stubTerminal(t *testing.T, isTTY bool, secret string, promptErr error) *boo
 		return secret, promptErr
 	}
 	return &prompted
+}
+
+func TestSignalExitCode(t *testing.T) {
+	tests := []struct {
+		name string
+		sig  os.Signal
+		want int
+	}{
+		{name: "interrupt", sig: os.Interrupt, want: 130},
+		{name: "terminate", sig: syscall.SIGTERM, want: 143},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := signalExitCode(tt.sig); got != tt.want {
+				t.Errorf("signalExitCode(%v) = %d, want %d", tt.sig, got, tt.want)
+			}
+		})
+	}
 }
 
 func TestResolvePasswordFromStdin(t *testing.T) {
