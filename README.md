@@ -37,10 +37,6 @@ _note: all pods automatically come with runpodctl installed with a pod-scoped ap
 
 ### install
 
-the canonical install guide, with every platform and the full notes, lives at
-[docs.runpod.io/runpodctl/overview](https://docs.runpod.io/runpodctl/overview).
-keep the two in step when either changes.
-
 #### linux/macos (wsl)
 
 ```bash
