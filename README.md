@@ -316,13 +316,24 @@ runpodctl receive 8338-galileo-collect-fidel
 
 ## output format
 
-default output is json (optimized for agents). use `--output` flag for alternatives:
+default output is json (optimized for agents). `--output` takes `json` or `yaml`:
 
 ```bash
 runpodctl pod list                    # json (default)
-runpodctl pod list --output=table     # human-readable table
 runpodctl pod list --output=yaml      # yaml format
 ```
+
+there is no table format. the value is case-insensitive (`YAML` works), and an
+unrecognized one is rejected rather than silently falling back to json:
+
+```jsonc
+// runpodctl gpu list --output=table
+{"error":"invalid --output \"table\": supported formats are json and yaml","code":"usage_error"}
+```
+
+a few surfaces ignore the flag's *value* — `get pod` and `get cloud` always print
+a table, and the legacy `create/remove/start/stop pod` and `create/remove pods`
+always print plaintext — but an unrecognized value is rejected everywhere.
 
 ### pod runtime status
 
@@ -428,17 +439,22 @@ treat the list as the set the cli generates rather than an exhaustive one.
 
 **known gaps.** the json error shape covers `pod`, `serverless`, `template`,
 `volume`, `registry`, `gpu`, `datacenter`, `billing`, `user`, `model`, `ssh`,
-`send`, `receive`, `hub` and `update`. these still print plaintext on stderr and
-carry no `code`:
+`send`, `receive`, `hub`, `update` and `exec`. these still print plaintext on
+stderr and carry no `code`:
 
 | surface | shape |
 | --- | --- |
 | legacy `get/create/remove/start/stop pod`, `create/remove pods`, `get cloud` | `Error: <msg>` via cobra, exit 1 |
-| `exec` | plaintext, exit 1 |
-| `project` | prints to **stdout** and exits 0 (bug, tracked as CON-816) |
+| `project` | prints to **stdout** and exits 0 |
 
 so a parser should tolerate a non-json line on stderr from those, and must not
-rely on the exit code for `project` until CON-816 lands.
+rely on the exit code for `project`, which is slated for deletion rather than
+repair.
+
+`exec` still keeps its progress output (`Running remote Python shell...`,
+`Waiting for Pod to come online... `) on **stdout** for backwards compatibility,
+and polls up to 5 minutes (`maxPollTime`) for the pod's ssh info before giving up.
+its errors are json with a `code` and exit 1.
 
 ## environment variables
 

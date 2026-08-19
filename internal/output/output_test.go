@@ -40,12 +40,49 @@ func TestParseFormat(t *testing.T) {
 		{"yaml", FormatYAML},
 		{"invalid", FormatJSON}, // defaults to json
 		{"", FormatJSON},
+		// case and whitespace are normalized: these used to fall through to json
+		{"YAML", FormatYAML},
+		{"Yaml", FormatYAML},
+		{" yaml ", FormatYAML},
+		{"JSON", FormatJSON},
 	}
 
 	for _, test := range tests {
 		result := ParseFormat(test.input)
 		if result != test.expected {
 			t.Errorf("ParseFormat(%q) = %v, want %v", test.input, result, test.expected)
+		}
+	}
+}
+
+func TestValidateFormat(t *testing.T) {
+	valid := []string{"json", "yaml", "JSON", "YAML", "Yaml", " yaml "}
+	for _, s := range valid {
+		if err := ValidateFormat(s); err != nil {
+			t.Errorf("ValidateFormat(%q) = %v, want nil", s, err)
+		}
+	}
+
+	// the flag defaults to "json", so "" is never the value of an omitted flag —
+	// it only happens when someone writes `--output=`, which is a mistake and is
+	// rejected like any other unsupported value. (checked separately from the
+	// table below because the "error quotes the value" assertion there is vacuous
+	// for the empty string.)
+	if err := ValidateFormat(""); err == nil {
+		t.Error(`ValidateFormat("") = nil, want an error: an explicit --output= is a usage mistake`)
+	}
+
+	// `table` never existed as an output format but used to be accepted silently,
+	// which is how it ended up documented. It must now be rejected.
+	invalid := []string{"table", "tabel", "jsonl", "yml", "xml"}
+	for _, s := range invalid {
+		err := ValidateFormat(s)
+		if err == nil {
+			t.Errorf("ValidateFormat(%q) = nil, want an error", s)
+			continue
+		}
+		if !strings.Contains(err.Error(), s) {
+			t.Errorf("ValidateFormat(%q) error %q should quote the offending value", s, err)
 		}
 	}
 }

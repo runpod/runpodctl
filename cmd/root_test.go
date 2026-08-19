@@ -3,8 +3,12 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 
 	"github.com/runpod/runpodctl/internal/api"
 )
@@ -104,6 +108,192 @@ func TestRootCmd_OutputFlag(t *testing.T) {
 	}
 	if flag.Usage != "output format (json, yaml)" {
 		t.Errorf("expected usage 'output format (json, yaml)', got %s", flag.Usage)
+	}
+}
+
+func TestOutputFlagRejectsUnsupportedFormat(t *testing.T) {
+	root := GetRootCmd()
+	if root.PersistentPreRunE == nil {
+		t.Fatal("expected a root PersistentPreRunE to validate --output")
+	}
+
+	original := outputFormat
+	t.Cleanup(func() { outputFormat = original })
+
+	// `table` was never a real format but used to be accepted silently and return
+	// json, which is how it ended up in the README.
+	for _, bad := range []string{"table", "yml", "jsonl"} {
+		outputFormat = bad
+		err := root.PersistentPreRunE(root, nil)
+		if err == nil {
+			t.Errorf("--output=%s: expected an error, got nil", bad)
+			continue
+		}
+		var ue *usageError
+		if !errors.As(err, &ue) {
+			t.Errorf("--output=%s: expected a *usageError (code usage_error), got %T", bad, err)
+			continue
+		}
+		if ue.ErrorCode() != "usage_error" {
+			t.Errorf("--output=%s: code = %q, want usage_error", bad, ue.ErrorCode())
+		}
+	}
+
+	for _, ok := range []string{"json", "yaml", "YAML", " yaml "} {
+		outputFormat = ok
+		if err := root.PersistentPreRunE(root, nil); err != nil {
+			t.Errorf("--output=%q: expected nil, got %v", ok, err)
+		}
+	}
+}
+
+// TestOutputValidationSurvivesShadowingHook covers the case a subcommand's own
+// PersistentPreRun(E) used to bypass: without cobra.EnableTraverseRunHooks only
+// the closest hook runs, so `exec` and `config` (both define one for their
+// deprecation notice) reached their bodies with an unvalidated --output. For
+// `config` that meant writing the config file and uploading an ssh key on an
+// invocation that should have been rejected.
+//
+// The stand-in command below keeps the test off those real bodies; a regression
+// makes it run instead of hanging on the network or mutating local state.
+func TestOutputValidationSurvivesShadowingHook(t *testing.T) {
+	if !cobra.EnableTraverseRunHooks {
+		t.Fatal("cobra.EnableTraverseRunHooks must stay set, otherwise a subcommand that defines PersistentPreRun(E) shadows the root --output guard")
+	}
+
+	// This is the only test in the package that runs a *runnable* command, which
+	// means it is the only one that reaches cobra.OnInitialize(initConfig) —
+	// cobra's --help path returns before the initializers. initConfig writes
+	// ~/.runpod/config.toml when it cannot read one, so without redirecting HOME
+	// `go test` would create (or, on an unreadable config, overwrite and thereby
+	// destroy the api key in) the real one. USERPROFILE covers windows, where
+	// os.UserHomeDir reads that instead.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	root := GetRootCmd()
+	t.Cleanup(func() {
+		// pflag writes through to &outputFormat, so setting the flag restores the
+		// var too — assigning outputFormat separately would be redundant. Reset
+		// Changed as well, so a later test can't mistake this for a user-set flag.
+		//nolint:errcheck // restoring the flag so later tests see the default
+		root.PersistentFlags().Set("output", "json")
+		root.PersistentFlags().Lookup("output").Changed = false
+		root.SetArgs(nil)
+		root.SetOut(nil)
+		root.SetErr(nil)
+	})
+
+	var ownHookRan, bodyRan bool
+	shadow := &cobra.Command{
+		Use:    "shadow-hook-test",
+		Hidden: true,
+		// shadows the root hook, the way exec and config do
+		PersistentPreRun: func(*cobra.Command, []string) { ownHookRan = true },
+		RunE: func(*cobra.Command, []string) error {
+			bodyRan = true
+			return nil
+		},
+	}
+	root.AddCommand(shadow)
+	t.Cleanup(func() { root.RemoveCommand(shadow) })
+
+	var out, errOut bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&errOut)
+
+	root.SetArgs([]string{"shadow-hook-test", "--output=table"})
+	err := root.Execute()
+	if bodyRan {
+		t.Error("command body ran with --output=table; the root validation was skipped")
+	}
+	var ue *usageError
+	if !errors.As(err, &ue) {
+		t.Fatalf("expected a *usageError, got %T (%v)", err, err)
+	}
+	if ue.ErrorCode() != "usage_error" {
+		t.Errorf("code = %q, want usage_error", ue.ErrorCode())
+	}
+
+	// traversing must add the root hook, not replace the subcommand's own — exec
+	// and config print their deprecation notice from theirs.
+	ownHookRan, bodyRan = false, false
+	root.SetArgs([]string{"shadow-hook-test", "--output=yaml"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("--output=yaml: expected nil, got %v", err)
+	}
+	if !ownHookRan {
+		t.Error("the subcommand's own PersistentPreRun did not run")
+	}
+	if !bodyRan {
+		t.Error("the subcommand body did not run")
+	}
+
+	// `help <cmd>` stays reachable with a bad --output. It is the one help path
+	// that runs as a normal command, so it is the only one the guard could break;
+	// `--help` and a bare parent return before the hooks on their own.
+	root.SetArgs([]string{"help", "pod", "--output=table"})
+	if err := root.Execute(); err != nil {
+		t.Errorf("help with an invalid --output should still print help, got %v", err)
+	}
+}
+
+// TestExecAndConfigRejectInvalidOutput drives the two real commands that were
+// bypassing the guard, not a stand-in. The test above proves the mechanism, and
+// since EnableTraverseRunHooks is a package global the mechanism necessarily
+// covers these — but nothing otherwise pins that they are still registered under
+// a root that carries the hook, or that neither has grown a local --output flag
+// or DisableFlagParsing, both of which would silently reopen the hole.
+//
+// Safe to run because validation happens before either body: `config` would
+// otherwise generate an ssh keypair and upload it, and `exec` would poll for five
+// minutes, so a regression here shows up as a slow failure rather than a wrong
+// pass. HOME is redirected because initConfig writes a config file regardless of
+// the outcome — see TestOutputValidationSurvivesShadowingHook.
+func TestExecAndConfigRejectInvalidOutput(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	root := GetRootCmd()
+	t.Cleanup(func() {
+		//nolint:errcheck // restoring the flag so later tests see the default
+		root.PersistentFlags().Set("output", "json")
+		root.PersistentFlags().Lookup("output").Changed = false
+		root.SetArgs(nil)
+		root.SetOut(nil)
+		root.SetErr(nil)
+	})
+
+	var out, errOut bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&errOut)
+
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"config", []string{"config", "--apiKey=must-not-be-used", "--output=table"}},
+		{"exec python", []string{"exec", "python", "--output=table", "/nonexistent.py"}},
+	} {
+		root.SetArgs(tc.args)
+		err := root.Execute()
+		var ue *usageError
+		if !errors.As(err, &ue) {
+			t.Errorf("%s with --output=table: expected a *usageError, got %T (%v)", tc.name, err, err)
+			continue
+		}
+		if ue.ErrorCode() != "usage_error" {
+			t.Errorf("%s: code = %q, want usage_error", tc.name, ue.ErrorCode())
+		}
+	}
+
+	// the ssh keypair is the part of config's body that rejection actually
+	// prevents; the api key is persisted by initConfig either way, which is why
+	// this asserts on the key directory rather than on config.toml.
+	if entries, err := os.ReadDir(filepath.Join(home, ".runpod", "ssh")); err == nil && len(entries) > 0 {
+		t.Errorf("config generated ssh keys despite being rejected: %v", entries)
 	}
 }
 
