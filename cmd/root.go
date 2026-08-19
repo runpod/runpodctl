@@ -255,6 +255,10 @@ var usageErrorPrefixes = []string{
 	// through SetFlagErrorFunc and has to be matched here (20 MarkFlagRequired
 	// sites, e.g. `template create` with no --name/--image).
 	"required flag(s)",
+	// ValidateFlagGroups is in the same post-parse position as
+	// ValidateRequiredFlags above, so MarkFlagsMutuallyExclusive violations
+	// (registry create's --password / --password-stdin) also land here.
+	"if any flags in the group",
 }
 
 // asUsageError reports whether err represents a usage error, returning a
