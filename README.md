@@ -52,7 +52,7 @@ brew install runpod/runpodctl/runpodctl
 #### windows powershell
 
 ```powershell
-wget https://github.com/runpod/runpodctl/releases/latest/download/runpodctl-windows-amd64.exe -O runpodctl.exe
+Invoke-WebRequest -Uri https://github.com/runpod/runpodctl/releases/latest/download/runpodctl-windows-amd64.exe -OutFile runpodctl.exe
 ```
 
 #### conda, mamba, pixi (conda-forge)
