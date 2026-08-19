@@ -60,6 +60,23 @@ func TestResolvePasswordFromStdin(t *testing.T) {
 	}
 }
 
+// a gcr.io / artifact registry credential is an entire service-account json key
+// passed as the password (username _json_key), the same shape docker login takes
+// on stdin. it is multi-line, the api accepts it, and an earlier revision of this
+// resolver rejected it -- so it stays pinned.
+func TestResolvePasswordKeepsAMultiLineCredential(t *testing.T) {
+	stubTerminal(t, false, "", nil)
+	key := "{\n  \"type\": \"service_account\",\n  \"private_key\": \"-----BEGIN PRIVATE KEY-----\\nabc\\n-----END PRIVATE KEY-----\\n\"\n}"
+
+	got, err := resolvePassword(strings.NewReader(key+"\n"), io.Discard, "", true)
+	if err != nil {
+		t.Fatalf("a multi-line credential must be accepted: %v", err)
+	}
+	if got != key {
+		t.Errorf("password = %q, want the key back with only the trailing newline stripped", got)
+	}
+}
+
 func TestResolvePasswordRejectsBadStdin(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -68,8 +85,6 @@ func TestResolvePasswordRejectsBadStdin(t *testing.T) {
 	}{
 		{name: "empty stdin", stdin: "", wantMsg: "empty"},
 		{name: "only a newline", stdin: "\n", wantMsg: "empty"},
-		// a redirected file with extra content, not a credential.
-		{name: "multiple lines", stdin: "s3cret\nextra\n", wantMsg: "multiple lines"},
 	}
 
 	for _, tt := range tests {

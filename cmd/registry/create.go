@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/runpod/runpodctl/internal/api"
 	"github.com/runpod/runpodctl/internal/clierr"
@@ -58,8 +60,36 @@ func init() {
 // promptPassword is a package variable so tests can exercise the prompt branch
 // without a controlling terminal.
 var promptPassword = func(stderr io.Writer) (string, error) {
+	fd := int(os.Stdin.Fd())
+
+	// ReadPassword disables echo and restores it from a deferred ioctl, which a
+	// signal's default disposition never reaches: a ctrl-c at the prompt would
+	// kill the process with echo still off and leave the caller's shell typing
+	// blind until they ran `stty sane`. Restore it from a handler instead.
+	state, err := term.GetState(fd)
+	if err != nil {
+		return "", fmt.Errorf("failed to read the terminal state: %w", err)
+	}
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-sigCh:
+			_ = term.Restore(fd, state)
+			fmt.Fprintln(stderr)
+			// 128 + SIGINT, the shell convention for "died on a signal". The
+			// deferred restores below are deliberately skipped: the terminal is
+			// already back and there is nothing else to unwind at a prompt.
+			os.Exit(130)
+		case <-done:
+		}
+	}()
+
 	fmt.Fprint(stderr, "registry password: ")
-	secret, err := term.ReadPassword(int(os.Stdin.Fd()))
+	secret, err := term.ReadPassword(fd)
 	// ReadPassword swallows the user's newline, so the next line of output would
 	// otherwise start on the prompt line.
 	fmt.Fprintln(stderr)
@@ -86,17 +116,14 @@ func resolvePassword(stdin io.Reader, stderr io.Writer, flagValue string, fromSt
 		if err != nil {
 			return "", fmt.Errorf("failed to read the password from stdin: %w", err)
 		}
-		// strip only the trailing line ending a pipe or heredoc adds. leading and
-		// inner whitespace can be part of the credential and must survive.
+		// strip only the trailing line ending a pipe or heredoc adds. everything
+		// else survives: a gcr.io / artifact registry credential is a whole
+		// service-account json key (username _json_key), so the value is
+		// legitimately multi-line, and the api accepts it. leading and inner
+		// whitespace can be significant too.
 		secret := strings.TrimSuffix(strings.TrimSuffix(string(data), "\n"), "\r")
 		if secret == "" {
 			return "", clierr.Usagef("the password read from stdin is empty")
-		}
-		// a token never spans lines, so this is a redirected file with extra
-		// content rather than a credential. the api would reject it with a less
-		// obvious error.
-		if strings.ContainsAny(secret, "\r\n") {
-			return "", clierr.Usagef("the password read from stdin spans multiple lines")
 		}
 		return secret, nil
 
