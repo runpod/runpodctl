@@ -59,8 +59,9 @@ $dest = "$env:LOCALAPPDATA\runpodctl"
 Invoke-WebRequest -UseBasicParsing -Uri https://github.com/runpod/runpodctl/releases/latest/download/runpodctl-windows-amd64.zip -OutFile "$env:TEMP\runpodctl.zip"
 Expand-Archive -Force -Path "$env:TEMP\runpodctl.zip" -DestinationPath $dest
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-if ($userPath -notlike "*$dest*") {
-  [Environment]::SetEnvironmentVariable('Path', "$userPath;$dest", 'User')
+$pathEntries = @($userPath -split ';' | Where-Object { $_ })
+if ($pathEntries -notcontains $dest) {
+  [Environment]::SetEnvironmentVariable('Path', (($pathEntries + $dest) -join ';'), 'User')
 }
 ```
 
