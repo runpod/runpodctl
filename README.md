@@ -51,9 +51,21 @@ brew install runpod/runpodctl/runpodctl
 
 #### windows powershell
 
+installs to `%LOCALAPPDATA%\runpodctl` and puts it on your `PATH`, so `runpodctl`
+works from any terminal. for arm64, swap `amd64` for `arm64` in the url.
+
 ```powershell
-wget https://github.com/runpod/runpodctl/releases/latest/download/runpodctl-windows-amd64.exe -O runpodctl.exe
+$dest = "$env:LOCALAPPDATA\runpodctl"
+Invoke-WebRequest -UseBasicParsing -Uri https://github.com/runpod/runpodctl/releases/latest/download/runpodctl-windows-amd64.zip -OutFile "$env:TEMP\runpodctl.zip"
+Expand-Archive -Force -Path "$env:TEMP\runpodctl.zip" -DestinationPath $dest
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+$pathEntries = @($userPath -split ';' | Where-Object { $_ })
+if ($pathEntries -notcontains $dest) {
+  [Environment]::SetEnvironmentVariable('Path', (($pathEntries + $dest) -join ';'), 'User')
+}
 ```
+
+then open a new terminal so the `PATH` change takes effect.
 
 #### conda, mamba, pixi (conda-forge)
 
