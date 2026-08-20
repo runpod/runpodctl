@@ -318,6 +318,8 @@ func TestAsUsageError(t *testing.T) {
 		`invalid argument "x" for "--count"`,
 		// ValidateRequiredFlags bypasses SetFlagErrorFunc, so it must match here.
 		`required flag(s) "image", "name" not set`,
+		// ValidateFlagGroups, same position: registry create's --password pair.
+		"if any flags in the group [password password-stdin] are set none of the others can be; [password password-stdin] were all set",
 	}
 	for _, msg := range usageCases {
 		if _, ok := asUsageError(root, errors.New(msg)); !ok {
