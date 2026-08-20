@@ -34,6 +34,7 @@ func TestSignalExitCode(t *testing.T) {
 	}{
 		{name: "interrupt", sig: os.Interrupt, want: 130},
 		{name: "terminate", sig: syscall.SIGTERM, want: 143},
+		{name: "quit", sig: syscall.SIGQUIT, want: 131},
 	}
 
 	for _, tt := range tests {

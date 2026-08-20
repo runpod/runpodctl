@@ -25,7 +25,7 @@ the password can come from --password, from stdin with --password-stdin, or from
 an interactive prompt when neither flag is given. --password-stdin keeps the
 credential out of the process table and your shell history.`,
 	Example: `  # read the password from a pipe
-  echo "$REGISTRY_TOKEN" | runpodctl registry create --name ghcr --username me --password-stdin
+  printenv REGISTRY_TOKEN | runpodctl registry create --name ghcr --username me --password-stdin
 
   # read it from a file without exposing it to the process table
   runpodctl registry create --name ghcr --username me --password-stdin < token.txt
@@ -71,7 +71,7 @@ var promptPassword = func(stderr io.Writer) (string, error) {
 		return "", fmt.Errorf("failed to read the terminal state: %w", err)
 	}
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 	defer signal.Stop(sigCh)
 	done := make(chan struct{})
 	defer close(done)
@@ -156,12 +156,15 @@ func resolvePassword(stdin io.Reader, stderr io.Writer, flagValue string, fromSt
 }
 
 func runCreate(cmd *cobra.Command, args []string) error {
-	password, err := resolvePassword(cmd.InOrStdin(), cmd.ErrOrStderr(), createPassword, createPasswordStdin)
+	// build the client before touching the password sources: a missing api key
+	// should fail here, not after consuming a one-shot stdin secret or making the
+	// user type a password that can never be submitted.
+	client, err := api.NewClient()
 	if err != nil {
 		return err
 	}
 
-	client, err := api.NewClient()
+	password, err := resolvePassword(cmd.InOrStdin(), cmd.ErrOrStderr(), createPassword, createPasswordStdin)
 	if err != nil {
 		return err
 	}
