@@ -68,6 +68,8 @@ var (
 	createDockerArgs        string
 	createRegistryAuthID    string
 	createCountryCode       string
+	createStopAfter         string
+	createTerminateAfter    string
 	createCompliance        string
 	createWait              bool
 	createWaitTimeout       string
@@ -95,6 +97,8 @@ func init() {
 	createCmd.Flags().StringVar(&createDockerArgs, "docker-args", "", "docker cmd arguments")
 	createCmd.Flags().StringVar(&createRegistryAuthID, "registry-auth-id", "", "container registry auth id (from 'runpodctl registry list')")
 	createCmd.Flags().StringVar(&createCountryCode, "country-code", "", "limit pod to a specific country (e.g., US, DE)")
+	createCmd.Flags().StringVar(&createStopAfter, "stop-after", "", "auto-stop the pod after a duration (2h, 7d) or at an rfc3339 time (2026-04-15T00:00:00Z); gpu pods only")
+	createCmd.Flags().StringVar(&createTerminateAfter, "terminate-after", "", "auto-terminate the pod after a duration (2h, 7d) or at an rfc3339 time (2026-04-15T00:00:00Z); gpu pods only")
 	createCmd.Flags().StringVar(&createCompliance, "compliance", "", "comma-separated compliance requirements (e.g., HIPAA,SOC_2_TYPE_2)")
 	createCmd.Flags().BoolVar(&createWait, "wait", false, "block until ssh is reachable (tcp connect to the pod's public port 22 answers with an ssh banner; no key or handshake needed), then print the pod as 'pod get' does. needs a publicly mapped port 22, so community cloud also needs --public-ip")
 	createCmd.Flags().StringVar(&createWaitTimeout, "wait-timeout", defaultWaitTimeout, "max time to wait with --wait, e.g. 90s, 10m, 1h; on timeout the pod is kept and the error carries its id")
@@ -164,6 +168,11 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	schedule, err := resolvePodSchedule(cmd, computeType)
+	if err != nil {
+		return err
+	}
+
 	var result interface{}
 
 	if computeType == "CPU" {
@@ -171,7 +180,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		result, err = createPodREST(computeType, gpuTypeID, cloudType, supportPublicIP)
 	} else {
 		// GPU pods use GraphQL (supports startSsh)
-		result, err = createPodGraphQL(gpuTypeID, cloudType, supportPublicIP)
+		result, err = createPodGraphQL(gpuTypeID, cloudType, supportPublicIP, schedule)
 	}
 	if err != nil {
 		if createGlobalNetworking {
@@ -237,6 +246,65 @@ func resolveWaitTimeout(cmd *cobra.Command, computeType, cloudType string, suppo
 	}
 
 	return timeout, nil
+}
+
+// podSchedule carries the auto-stop / auto-terminate deadlines as the rfc3339
+// strings the graphql api takes. An empty field means "not requested".
+type podSchedule struct {
+	stopAfter      string
+	terminateAfter string
+}
+
+// timeNow is an injection point so the schedule tests do not read the clock.
+var timeNow = time.Now
+
+// resolvePodSchedule validates --stop-after / --terminate-after and normalises
+// them to absolute instants. It runs before the create call so a rejected value
+// costs nothing.
+func resolvePodSchedule(cmd *cobra.Command, computeType string) (podSchedule, error) {
+	stopAfter, err := resolveDeadlineFlag("stop-after", createStopAfter, computeType)
+	if err != nil {
+		return podSchedule{}, err
+	}
+	terminateAfter, err := resolveDeadlineFlag("terminate-after", createTerminateAfter, computeType)
+	if err != nil {
+		return podSchedule{}, err
+	}
+
+	// Neither the create response nor a pod read exposes these, so the note is
+	// the only echo the caller gets of the deadline that was sent. Do not
+	// restore these flags before the api enforces the timer: telling someone a
+	// pod will stop when it will not is how the flags got removed in the first
+	// place.
+	if stopAfter != "" {
+		fmt.Fprintf(cmd.ErrOrStderr(), "note: auto-stop scheduled for %s\n", stopAfter)
+	}
+	if terminateAfter != "" {
+		fmt.Fprintf(cmd.ErrOrStderr(), "note: auto-terminate scheduled for %s\n", terminateAfter)
+	}
+
+	return podSchedule{stopAfter: stopAfter, terminateAfter: terminateAfter}, nil
+}
+
+// resolveDeadlineFlag turns one scheduling flag into an rfc3339 instant, or ""
+// when it was not set.
+//
+// CPU pods are refused: they are created over the rest api, whose schema has no
+// scheduling field, so the flag used to be dropped without a word and the pod
+// ran until someone noticed the bill.
+func resolveDeadlineFlag(flag, value, computeType string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	if computeType == "CPU" {
+		return "", fmt.Errorf("--%s is not supported for compute type CPU; cpu pods are created through the rest api, which has no auto-stop or auto-terminate field", flag)
+	}
+	at, err := duration.ParseDeadline(value, timeNow())
+	if err != nil {
+		return "", fmt.Errorf("invalid --%s: %w", flag, err)
+	}
+	return at.Format(time.RFC3339), nil
 }
 
 // injection points for the wait, so its tests neither sleep nor hit the network.
@@ -391,7 +459,7 @@ func podIDFrom(result interface{}) (string, error) {
 	return "", fmt.Errorf("pod was created but the response carried no id, so --wait cannot poll it; find it with 'runpodctl pod list'")
 }
 
-func createPodGraphQL(gpuTypeID, cloudType string, supportPublicIP bool) (map[string]interface{}, error) {
+func createPodGraphQL(gpuTypeID, cloudType string, supportPublicIP bool, schedule podSchedule) (map[string]interface{}, error) {
 	gqlClient, err := api.NewGraphQLClient()
 	if err != nil {
 		return nil, err
@@ -443,6 +511,9 @@ func createPodGraphQL(gpuTypeID, cloudType string, supportPublicIP bool) (map[st
 	if createCountryCode != "" {
 		req.CountryCode = createCountryCode
 	}
+
+	req.StopAfter = schedule.stopAfter
+	req.TerminateAfter = schedule.terminateAfter
 
 	if createCompliance != "" {
 		req.Compliance = strings.Split(createCompliance, ",")

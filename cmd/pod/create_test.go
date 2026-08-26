@@ -711,3 +711,106 @@ func TestPodCreateRequestDockerArgsWireFormat(t *testing.T) {
 		t.Fatalf("request body missing dockerStartCmd tokens: %s", body)
 	}
 }
+
+func TestResolvePodSchedule(t *testing.T) {
+	now := time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		name           string
+		computeType    string
+		stopAfter      string
+		terminateAfter string
+		wantStop       string
+		wantTerminate  string
+		wantErr        string
+	}{
+		{name: "unset", computeType: "GPU"},
+		{
+			name:        "duration is resolved against now",
+			computeType: "GPU",
+			stopAfter:   "2h",
+			wantStop:    "2026-04-15T14:00:00Z",
+		},
+		{
+			name:           "days are supported",
+			computeType:    "GPU",
+			terminateAfter: "7d",
+			wantTerminate:  "2026-04-22T12:00:00Z",
+		},
+		{
+			name:        "rfc3339 is normalised to utc",
+			computeType: "GPU",
+			stopAfter:   "2026-04-15T16:30:00+02:00",
+			wantStop:    "2026-04-15T14:30:00Z",
+		},
+		{
+			name:        "past timestamp is rejected",
+			computeType: "GPU",
+			stopAfter:   "2020-01-01T00:00:00Z",
+			wantErr:     "must be in the future",
+		},
+		{
+			name:        "garbage is rejected",
+			computeType: "GPU",
+			stopAfter:   "tomorrow",
+			wantErr:     "invalid --stop-after",
+		},
+		{
+			name:        "cpu pods are refused rather than silently dropped",
+			computeType: "CPU",
+			stopAfter:   "2h",
+			wantErr:     "not supported for compute type CPU",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer withScheduleFlags(t, tc.stopAfter, tc.terminateAfter, now)()
+
+			cmd := &cobra.Command{}
+			cmd.SetErr(&bytes.Buffer{})
+
+			got, err := resolvePodSchedule(cmd, tc.computeType)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want it to contain %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got.stopAfter != tc.wantStop || got.terminateAfter != tc.wantTerminate {
+				t.Fatalf("got %+v, want stop=%q terminate=%q", got, tc.wantStop, tc.wantTerminate)
+			}
+		})
+	}
+}
+
+func TestResolvePodScheduleNotesTheDeadline(t *testing.T) {
+	now := time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC)
+	defer withScheduleFlags(t, "2h", "", now)()
+
+	var stderr bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetErr(&stderr)
+
+	if _, err := resolvePodSchedule(cmd, "GPU"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "auto-stop scheduled for 2026-04-15T14:00:00Z") {
+		t.Fatalf("stderr = %q, want the resolved stop time", stderr.String())
+	}
+}
+
+// withScheduleFlags sets the create flags and clock resolvePodSchedule reads,
+// and returns the restore func.
+func withScheduleFlags(t *testing.T, stopAfter, terminateAfter string, now time.Time) func() {
+	t.Helper()
+	prevStop, prevTerminate, prevNow := createStopAfter, createTerminateAfter, timeNow
+	createStopAfter, createTerminateAfter = stopAfter, terminateAfter
+	timeNow = func() time.Time { return now }
+	return func() {
+		createStopAfter, createTerminateAfter, timeNow = prevStop, prevTerminate, prevNow
+	}
+}

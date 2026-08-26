@@ -52,7 +52,9 @@ runpodctl pod create [flags]
       --public-ip                  require public ip (community cloud only)
       --registry-auth-id string    container registry auth id (from 'runpodctl registry list')
       --ssh                        enable ssh on the pod (default true)
+      --stop-after string          auto-stop datetime (e.g., 2026-04-15T00:00:00Z)
       --template-id string         template id (use 'runpodctl template search' to find templates)
+      --terminate-after string     auto-terminate datetime (e.g., 2026-04-15T00:00:00Z)
       --volume-in-gb int           volume size in gb
       --volume-mount-path string   volume mount path (default "/workspace")
       --wait                       block until ssh is reachable (tcp connect to the pod's public port 22 answers with an ssh banner; no key or handshake needed), then print the pod as 'pod get' does. needs a publicly mapped port 22, so community cloud also needs --public-ip
