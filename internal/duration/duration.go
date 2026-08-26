@@ -43,3 +43,30 @@ func Parse(s string) (time.Duration, error) {
 	}
 	return d, nil
 }
+
+// ParseDeadline resolves a flag value that names a point in time into an
+// absolute UTC instant. It accepts both forms users reach for: a relative
+// duration ("2h", "7d") and an RFC 3339 timestamp ("2026-04-15T00:00:00Z").
+//
+// Past instants are rejected. The pod scheduler accepts them and then never
+// fires, which reads as a timer that was silently ignored -- the exact failure
+// this validation exists to prevent.
+func ParseDeadline(s string, now time.Time) (time.Time, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, fmt.Errorf("empty value: use a duration like 2h or an rfc3339 timestamp like 2026-04-15T00:00:00Z")
+	}
+
+	if d, err := Parse(s); err == nil {
+		return now.UTC().Add(d), nil
+	}
+
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid time %q: use a duration like 2h, 7d or an rfc3339 timestamp like 2026-04-15T00:00:00Z", s)
+	}
+	if !t.After(now) {
+		return time.Time{}, fmt.Errorf("invalid time %q: must be in the future (now is %s)", s, now.UTC().Format(time.RFC3339))
+	}
+	return t.UTC(), nil
+}

@@ -59,3 +59,40 @@ func TestParse(t *testing.T) {
 		})
 	}
 }
+
+func TestParseDeadline(t *testing.T) {
+	now := time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{in: "30m", want: "2026-04-15T12:30:00Z"},
+		{in: "7d", want: "2026-04-22T12:00:00Z"},
+		{in: " 2h ", want: "2026-04-15T14:00:00Z"},
+		{in: "2026-04-15T16:30:00+02:00", want: "2026-04-15T14:30:00Z"},
+		{in: "", wantErr: true},
+		{in: "tomorrow", wantErr: true},
+		{in: "-2h", wantErr: true},
+		{in: "2020-01-01T00:00:00Z", wantErr: true},
+		{in: "2026-04-15T12:00:00Z", wantErr: true}, // now is not in the future
+	}
+
+	for _, tc := range cases {
+		got, err := ParseDeadline(tc.in, now)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("ParseDeadline(%q) = %v, want error", tc.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("ParseDeadline(%q) errored: %v", tc.in, err)
+			continue
+		}
+		if got.Format(time.RFC3339) != tc.want {
+			t.Errorf("ParseDeadline(%q) = %s, want %s", tc.in, got.Format(time.RFC3339), tc.want)
+		}
+	}
+}
