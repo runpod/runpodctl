@@ -68,8 +68,6 @@ var (
 	createDockerArgs        string
 	createRegistryAuthID    string
 	createCountryCode       string
-	createStopAfter         string
-	createTerminateAfter    string
 	createCompliance        string
 	createWait              bool
 	createWaitTimeout       string
@@ -97,8 +95,6 @@ func init() {
 	createCmd.Flags().StringVar(&createDockerArgs, "docker-args", "", "docker cmd arguments")
 	createCmd.Flags().StringVar(&createRegistryAuthID, "registry-auth-id", "", "container registry auth id (from 'runpodctl registry list')")
 	createCmd.Flags().StringVar(&createCountryCode, "country-code", "", "limit pod to a specific country (e.g., US, DE)")
-	createCmd.Flags().StringVar(&createStopAfter, "stop-after", "", "auto-stop datetime (e.g., 2026-04-15T00:00:00Z)")
-	createCmd.Flags().StringVar(&createTerminateAfter, "terminate-after", "", "auto-terminate datetime (e.g., 2026-04-15T00:00:00Z)")
 	createCmd.Flags().StringVar(&createCompliance, "compliance", "", "comma-separated compliance requirements (e.g., HIPAA,SOC_2_TYPE_2)")
 	createCmd.Flags().BoolVar(&createWait, "wait", false, "block until ssh is reachable (tcp connect to the pod's public port 22 answers with an ssh banner; no key or handshake needed), then print the pod as 'pod get' does. needs a publicly mapped port 22, so community cloud also needs --public-ip")
 	createCmd.Flags().StringVar(&createWaitTimeout, "wait-timeout", defaultWaitTimeout, "max time to wait with --wait, e.g. 90s, 10m, 1h; on timeout the pod is kept and the error carries its id")
@@ -446,14 +442,6 @@ func createPodGraphQL(gpuTypeID, cloudType string, supportPublicIP bool) (map[st
 
 	if createCountryCode != "" {
 		req.CountryCode = createCountryCode
-	}
-
-	if createStopAfter != "" {
-		req.StopAfter = createStopAfter
-	}
-
-	if createTerminateAfter != "" {
-		req.TerminateAfter = createTerminateAfter
 	}
 
 	if createCompliance != "" {
