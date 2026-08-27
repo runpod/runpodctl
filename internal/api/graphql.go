@@ -324,8 +324,6 @@ type CreatePodGQLInput struct {
 	DockerArgs              string       `json:"dockerArgs,omitempty"`
 	ContainerRegistryAuthId string       `json:"containerRegistryAuthId,omitempty"`
 	CountryCode             string       `json:"countryCode,omitempty"`
-	StopAfter               string       `json:"stopAfter,omitempty"`
-	TerminateAfter          string       `json:"terminateAfter,omitempty"`
 	Compliance              []string     `json:"compliance,omitempty"`
 }
 
