@@ -42,6 +42,7 @@ var (
 	addModelWaitForHash         bool
 	addModelHashTimeout         time.Duration
 	addModelVerbose             bool
+	addModelDeleteAfterUpload   bool
 )
 
 const (
@@ -108,12 +109,14 @@ type uploadedModelFile struct {
 }
 
 type modelAddOutput struct {
-	Model          *api.Model           `json:"model,omitempty"`
-	Upload         *api.ModelRepoUpload `json:"upload,omitempty"`
-	UploadedFiles  []uploadedModelFile  `json:"uploadedFiles,omitempty"`
-	ModelSizeBytes *int64               `json:"modelSizeBytes,omitempty"`
-	ModelHash      string               `json:"modelHash,omitempty"`
-	ModelURL       string               `json:"modelUrl,omitempty"`
+	Model                  *api.Model           `json:"model,omitempty"`
+	Upload                 *api.ModelRepoUpload `json:"upload,omitempty"`
+	UploadedFiles          []uploadedModelFile  `json:"uploadedFiles,omitempty"`
+	ModelSizeBytes         *int64               `json:"modelSizeBytes,omitempty"`
+	ModelHash              string               `json:"modelHash,omitempty"`
+	ModelURL               string               `json:"modelUrl,omitempty"`
+	DeletedModelFiles      int                  `json:"deletedModelFiles,omitempty"`
+	DeletedModelFilesBytes int64                `json:"deletedModelFilesBytes,omitempty"`
 }
 
 type compactModelAddOutput struct {
@@ -153,6 +156,7 @@ var (
 	completeModelUploadFile = completeModelUploadWithProgress
 	getModelsForAdd         = api.GetModels
 	sleepModelHashPoll      = waitModelHashPoll
+	removeModelFile         = os.Remove
 )
 
 var addCmd = &cobra.Command{
@@ -161,7 +165,10 @@ var addCmd = &cobra.Command{
 	Short: "add a model",
 	Long:  "add a model to the runpod model repository",
 	Example: `  # --name is the destination; --huggingface-model is the source
-  runpodctl model add --name tiny-llm --huggingface-model arnir0/Tiny-LLM`,
+  runpodctl model add --name tiny-llm --huggingface-model arnir0/Tiny-LLM
+
+  # upload local files, then delete them once the model version hash is confirmed
+  runpodctl model add --name my-model --model-path ./my-model-dir --wait-for-hash --delete-my-model-files-after-upload`,
 	RunE: runAddModel,
 }
 
@@ -198,6 +205,7 @@ func bindAddModelFlags(cmd *cobra.Command) {
 	cmd.Flags().BoolVar(&addModelWaitForHash, "wait-for-hash", false, "wait for completed model-path uploads to be hashed")
 	cmd.Flags().DurationVar(&addModelHashTimeout, "hash-timeout", modelHashWaitTimeout, "maximum duration to wait for --wait-for-hash (0 disables timeout)")
 	cmd.Flags().BoolVarP(&addModelVerbose, "verbose", "v", false, "include upload details in wait-for-hash output")
+	cmd.Flags().BoolVar(&addModelDeleteAfterUpload, "delete-my-model-files-after-upload", false, "delete the uploaded --model-path files once the model version hash is confirmed (requires --wait-for-hash)")
 }
 
 func isHuggingFaceMirror() bool {
@@ -342,6 +350,20 @@ func runAddModel(cmd *cobra.Command, args []string) error {
 			result.ModelHash = ready.ModelHash
 			result.ModelURL = ready.ModelURL
 			printModelReadyURL(ready.ModelURL)
+
+			if addModelDeleteAfterUpload {
+				deletedCount, deletedBytes, deleteErr := deleteVerifiedModelFiles(modelFiles)
+				result.DeletedModelFiles = deletedCount
+				result.DeletedModelFilesBytes = deletedBytes
+				if deleteErr != nil {
+					// the upload and hash are already confirmed above, so this is
+					// reported as its own failure rather than folded into a generic
+					// upload error: the model is fully usable, only local cleanup
+					// did not complete.
+					return deleteErr
+				}
+			}
+
 			if !addModelVerbose {
 				return printCompactModelAddOutput(cmd, model)
 			}
@@ -378,6 +400,18 @@ func runAddModel(cmd *cobra.Command, args []string) error {
 }
 
 func validateAddModelFlags() error {
+	if addModelDeleteAfterUpload {
+		// checked before the huggingface-model conflict below so a user who
+		// combines all three flags gets the more specific, more actionable
+		// error first instead of the generic "cannot be combined" message.
+		if addModelDirectoryPath == "" {
+			return fmt.Errorf("--delete-my-model-files-after-upload requires --model-path")
+		}
+		if !addModelWaitForHash {
+			return fmt.Errorf("--delete-my-model-files-after-upload requires --wait-for-hash: files are only deleted once the model version hash is confirmed server-side")
+		}
+	}
+
 	if !isHuggingFaceMirror() {
 		return nil
 	}
@@ -457,6 +491,37 @@ func totalModelFileSize(files []modelFile) int64 {
 		total += file.Size
 	}
 	return total
+}
+
+// deleteVerifiedModelFiles removes the local --model-path files backing
+// --delete-my-model-files-after-upload. Callers must only invoke this after
+// every file in `files` has both (a) completed its multipart upload
+// (uploadModelFiles returned without error) and (b) had its model version
+// hash confirmed server-side (waitForUploadedModelHash returned without
+// error) — this function does not itself re-check either condition. It never
+// deletes anything else in --model-path: only the exact absolute paths that
+// were part of this run's verified upload, never a directory-wide wipe.
+func deleteVerifiedModelFiles(files []modelFile) (deletedCount int, deletedBytes int64, err error) {
+	var failures []string
+
+	for _, file := range files {
+		if removeErr := removeModelFile(file.AbsolutePath); removeErr != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", file.RelativePath, removeErr))
+			continue
+		}
+		deletedCount++
+		deletedBytes += file.Size
+	}
+
+	if deletedCount > 0 {
+		fmt.Fprintf(os.Stderr, "deleted %d verified model file(s) (%d bytes) from %s\n", deletedCount, deletedBytes, addModelDirectoryPath)
+	}
+
+	if len(failures) > 0 {
+		return deletedCount, deletedBytes, fmt.Errorf("upload and hash are confirmed, but failed to delete %d of %d model file(s) from %s: %s", len(failures), len(files), addModelDirectoryPath, strings.Join(failures, "; "))
+	}
+
+	return deletedCount, deletedBytes, nil
 }
 
 func stderrIsTerminal() bool {

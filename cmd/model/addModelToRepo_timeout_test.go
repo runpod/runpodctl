@@ -961,6 +961,7 @@ func resetAddModelGlobals(t *testing.T) {
 	oldWaitForHash := addModelWaitForHash
 	oldHashTimeout := addModelHashTimeout
 	oldVerbose := addModelVerbose
+	oldDeleteAfterUpload := addModelDeleteAfterUpload
 	t.Cleanup(func() {
 		addModelOwner = oldOwner
 		addModelName = oldName
@@ -978,6 +979,7 @@ func resetAddModelGlobals(t *testing.T) {
 		addModelWaitForHash = oldWaitForHash
 		addModelHashTimeout = oldHashTimeout
 		addModelVerbose = oldVerbose
+		addModelDeleteAfterUpload = oldDeleteAfterUpload
 	})
 
 	addModelOwner = ""
@@ -996,4 +998,5 @@ func resetAddModelGlobals(t *testing.T) {
 	addModelWaitForHash = false
 	addModelHashTimeout = modelHashWaitTimeout
 	addModelVerbose = false
+	addModelDeleteAfterUpload = false
 }

@@ -76,6 +76,9 @@ func TestModelCommandFlags(t *testing.T) {
 	if addCmd.Flags().Lookup("verbose") == nil {
 		t.Fatal("expected model add --verbose flag")
 	}
+	if addCmd.Flags().Lookup("delete-my-model-files-after-upload") == nil {
+		t.Fatal("expected model add --delete-my-model-files-after-upload flag")
+	}
 	if addCmd.Flags().Lookup("version-status") != nil {
 		t.Fatal("did not expect model add --version-status flag")
 	}
