@@ -273,6 +273,21 @@ func (c *Client) UpdateEndpointModels(endpointID string, modelRefs []string) (*E
 		nvIDs[i] = NetworkVolumeIDInput{NetworkVolumeID: nv.NetworkVolumeID}
 	}
 
+	// REST GET /v1/endpoints/{id} returns a "flashboot" bool, not the
+	// "flashBootType" enum string saveEndpoint expects — so endpoint.FlashBootType
+	// is always empty after GetEndpoint, and sending "" fails saveEndpoint's
+	// FlashBootType enum validation. Verified live (STO-360 e2e test): calling
+	// UpdateEndpointModels on a real endpoint returned
+	// `Value "" does not exist in "FlashBootType" enum.` every time. Derive the
+	// enum from the REST bool the same way cmd/serverless/create.go does.
+	flashBootType := endpoint.FlashBootType
+	if flashBootType == "" {
+		flashBootType = "OFF"
+		if endpoint.Flashboot != nil && *endpoint.Flashboot {
+			flashBootType = "FLASHBOOT"
+		}
+	}
+
 	query := `
 		mutation SaveEndpoint($input: EndpointInput!) {
 			saveEndpoint(input: $input) {
@@ -316,7 +331,7 @@ func (c *Client) UpdateEndpointModels(endpointID string, modelRefs []string) (*E
 			"scalerValue":        endpoint.ScalerValue,
 			"executionTimeoutMs": endpoint.ExecutionTimeoutMs,
 			"minCudaVersion":     endpoint.MinCudaVersion,
-			"flashBootType":      endpoint.FlashBootType,
+			"flashBootType":      flashBootType,
 			"modelReferences":    modelRefs,
 		},
 	}

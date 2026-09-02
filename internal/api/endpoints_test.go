@@ -493,6 +493,76 @@ func TestUpdateEndpointModels_RoundTripsConfig(t *testing.T) {
 	if nvobj["networkVolumeId"] != "vol-9" {
 		t.Errorf("expected networkVolumeId vol-9, got %v", nvobj)
 	}
+
+	// the REST fixture above has neither "flashboot" nor "flashBootType", so
+	// this must fall back to the "OFF" default rather than sending "".
+	if got := gqlInput["flashBootType"]; got != "OFF" {
+		t.Errorf("expected flashBootType OFF when REST returns no flash boot info, got %v", got)
+	}
+}
+
+// TestUpdateEndpointModels_DerivesFlashBootTypeFromRESTBool covers a bug found
+// live (STO-360 e2e test): REST GET /v1/endpoints/{id} returns a "flashboot"
+// bool, never the "flashBootType" enum string saveEndpoint requires, so
+// endpoint.FlashBootType was always "" after GetEndpoint and saveEndpoint
+// rejected it with `Value "" does not exist in "FlashBootType" enum.` on every
+// real endpoint. UpdateEndpointModels must derive the enum from the REST bool.
+func TestUpdateEndpointModels_DerivesFlashBootTypeFromRESTBool(t *testing.T) {
+	oldAPIURL := viper.GetString("apiUrl")
+	t.Cleanup(func() { viper.Set("apiUrl", oldAPIURL) })
+
+	var gqlInput map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/endpoints/"):
+			// REST read: the real wire shape — "flashboot" bool, no "flashBootType".
+			w.Write([]byte(`{
+				"id": "ep-abc",
+				"name": "my-ep",
+				"templateId": "tpl-1",
+				"gpuIds": "ADA_24",
+				"workersMin": 0,
+				"workersMax": 1,
+				"flashboot": true
+			}`))
+		case r.Method == http.MethodPost:
+			var body struct {
+				Variables struct {
+					Input map[string]interface{} `json:"input"`
+				} `json:"variables"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode gql body: %v", err)
+			}
+			gqlInput = body.Variables.Input
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": map[string]interface{}{
+					"saveEndpoint": map[string]interface{}{
+						"id":   "ep-abc",
+						"name": "my-ep",
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+	viper.Set("apiUrl", server.URL)
+
+	client, _ := NewClient()
+	client.baseURL = server.URL
+
+	if _, err := client.UpdateEndpointModels("ep-abc", nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := gqlInput["flashBootType"]; got != "FLASHBOOT" {
+		t.Errorf("expected flashBootType FLASHBOOT when REST flashboot=true, got %v", got)
+	}
 }
 
 func TestDeleteEndpoint(t *testing.T) {
