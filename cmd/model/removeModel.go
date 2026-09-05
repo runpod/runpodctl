@@ -2,13 +2,13 @@ package model
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
 	"github.com/runpod/runpodctl/api"
+	internalapi "github.com/runpod/runpodctl/internal/api"
 	"github.com/runpod/runpodctl/internal/output"
 
 	"github.com/spf13/cobra"
@@ -102,7 +102,10 @@ func defaultListDependentEndpoints(owner, name, hash string) ([]DependentEndpoin
 		return nil, err
 	}
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
+		return nil, &internalapi.GraphQLError{
+			Message: fmt.Sprintf("statuscode %d: %s", res.StatusCode, string(rawData)),
+			Status:  res.StatusCode,
+		}
 	}
 
 	var data struct {
@@ -121,7 +124,10 @@ func defaultListDependentEndpoints(owner, name, hash string) ([]DependentEndpoin
 		return nil, err
 	}
 	if len(data.Errors) > 0 {
-		return nil, errors.New(data.Errors[0].Message)
+		// Same graphql top-level error shape as api/model.go; wrap as a typed
+		// GraphQLError so it keeps the "graphql_error" code through
+		// checkDependentEndpoints' %w wrap.
+		return nil, &internalapi.GraphQLError{Message: data.Errors[0].Message}
 	}
 	if data.Data == nil || data.Data.Myself == nil {
 		return nil, fmt.Errorf("data is nil: %s", string(rawData))
