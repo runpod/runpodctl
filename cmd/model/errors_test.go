@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -378,4 +380,126 @@ func TestCreateUploadValidationRunsBeforeCreatingTheModel(t *testing.T) {
 			}
 		})
 	}
+}
+
+// newModelRepoDisabledServer stands in for the real backend's response when
+// Model Repo is unavailable, disabled, or inaccessible for the caller: the
+// resolver throws before returning data (see assertModelRepoFeatureEnabled in
+// node/graphql/schema/modelRepo.ts), which graphql reports as a 200 response
+// with a top-level `errors` array and no successful data.
+func newModelRepoDisabledServer(t *testing.T) string {
+	t.Helper()
+	const disabledMessage = "Model Repo feature is not enabled for this user"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": nil,
+			"errors": []map[string]interface{}{
+				{"message": disabledMessage, "extensions": map[string]interface{}{"code": "RUNPOD"}},
+			},
+		})
+	}))
+	t.Cleanup(server.Close)
+	return server.URL
+}
+
+// TestModelCommandsExitNonZeroWhenModelRepoAccessDenied pins the STO-357
+// contract end to end for each `model` command: when Model Repo is
+// unavailable, disabled, or inaccessible, the command must return a non-nil
+// error (so cobra/cmd/root.go exit 1), the command itself must stay silent on
+// both streams (the sink owns printing), and the sink must emit a single
+// stable-coded json error object on stderr -- "graphql_error", not the generic
+// "cli_error" fallback -- so automation can reliably tell a Model Repo access
+// failure apart from an unrelated local cli mistake.
+func TestModelCommandsExitNonZeroWhenModelRepoAccessDenied(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	t.Setenv(configenv.APIKeyEnv, "test-key")
+	t.Setenv(configenv.GraphQLURLEnv, newModelRepoDisabledServer(t))
+
+	assertGraphQLErrorContract := func(t *testing.T, runErr error) {
+		t.Helper()
+		if runErr == nil {
+			t.Fatal("expected an error when Model Repo access is denied; a nil error means the cli exits 0")
+		}
+
+		var gqlErr *internalapi.GraphQLError
+		if !errors.As(runErr, &gqlErr) {
+			t.Fatalf("expected a *internalapi.GraphQLError so the code is stable, got %#v (%v)", runErr, runErr)
+		}
+		if gqlErr.ErrorCode() != "graphql_error" {
+			t.Fatalf("expected code graphql_error, got %q", gqlErr.ErrorCode())
+		}
+
+		sinkStdout, sinkStderr := captureStdStreams(t, func() {
+			output.Error(runErr)
+		})
+		if sinkStdout != "" {
+			t.Fatalf("the sink must not write to stdout, got %q", sinkStdout)
+		}
+		var obj struct {
+			Error string `json:"error"`
+			Code  string `json:"code"`
+		}
+		if err := json.Unmarshal([]byte(sinkStderr), &obj); err != nil {
+			t.Fatalf("stderr must be a json error object: %v (%q)", err, sinkStderr)
+		}
+		if obj.Code != "graphql_error" {
+			t.Fatalf("expected sink code graphql_error, got %q (%q)", obj.Code, sinkStderr)
+		}
+		if obj.Error == "" {
+			t.Fatal("expected a non-empty message on the json object")
+		}
+	}
+
+	t.Run("model list", func(t *testing.T) {
+		cmd := &cobra.Command{Use: "list"}
+		cmd.Flags().String("output", "json", "")
+
+		var runErr error
+		stdout, stderr := captureStdStreams(t, func() {
+			runErr = runModelList(cmd, nil)
+		})
+		if stdout != "" || stderr != "" {
+			t.Fatalf("the command must not print anything itself, got stdout=%q stderr=%q", stdout, stderr)
+		}
+		assertGraphQLErrorContract(t, runErr)
+	})
+
+	t.Run("model add", func(t *testing.T) {
+		resetAddModelGlobals(t)
+		addModelName = "test-model"
+
+		var runErr error
+		stdout, stderr := captureStdStreams(t, func() {
+			runErr = runAddModel(newTestAddModelCommand(), nil)
+		})
+		if stdout != "" || stderr != "" {
+			t.Fatalf("the command must not print anything itself, got stdout=%q stderr=%q", stdout, stderr)
+		}
+		assertGraphQLErrorContract(t, runErr)
+	})
+
+	t.Run("model remove", func(t *testing.T) {
+		originalOwner, originalName := removeOwner, removeName
+		originalHash, originalVersion := removeHash, removeVersion
+		t.Cleanup(func() {
+			removeOwner, removeName = originalOwner, originalName
+			removeHash, removeVersion = originalHash, originalVersion
+		})
+		removeOwner, removeName = "owner", "name"
+		removeHash, removeVersion = "", ""
+
+		cmd := &cobra.Command{Use: "remove"}
+		cmd.Flags().String("output", "json", "")
+
+		var runErr error
+		stdout, stderr := captureStdStreams(t, func() {
+			runErr = runRemoveModel(cmd, nil)
+		})
+		if stdout != "" || stderr != "" {
+			t.Fatalf("the command must not print anything itself, got stdout=%q stderr=%q", stdout, stderr)
+		}
+		assertGraphQLErrorContract(t, runErr)
+	})
 }

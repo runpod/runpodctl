@@ -2,13 +2,13 @@ package model
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
 	"github.com/runpod/runpodctl/api"
+	internalapi "github.com/runpod/runpodctl/internal/api"
 	"github.com/runpod/runpodctl/internal/output"
 
 	"github.com/spf13/cobra"
@@ -102,7 +102,10 @@ func defaultListDependentEndpoints(owner, name, hash string) ([]DependentEndpoin
 		return nil, err
 	}
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
+		return nil, &internalapi.GraphQLError{
+			Message: fmt.Sprintf("statuscode %d: %s", res.StatusCode, string(rawData)),
+			Status:  res.StatusCode,
+		}
 	}
 
 	var data struct {
@@ -121,7 +124,12 @@ func defaultListDependentEndpoints(owner, name, hash string) ([]DependentEndpoin
 		return nil, err
 	}
 	if len(data.Errors) > 0 {
-		return nil, errors.New(data.Errors[0].Message)
+		// same Model Repo access-error shape as api/model.go: the resolver
+		// throws before returning data, so this is where a disabled/inaccessible
+		// Model Repo surfaces. Wrap it as a typed GraphQLError so it carries the
+		// stable "graphql_error" code through checkDependentEndpoints' %w wrap
+		// instead of falling back to cli_error.
+		return nil, &internalapi.GraphQLError{Message: data.Errors[0].Message}
 	}
 	if data.Data == nil || data.Data.Myself == nil {
 		return nil, fmt.Errorf("data is nil: %s", string(rawData))
