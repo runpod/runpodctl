@@ -97,7 +97,7 @@ func stubAddModelUploadSeams(t *testing.T) {
 			Owner:    "user-id",
 			Name:     "test-model",
 			Provider: "LOCAL",
-			Versions: []*api.ModelVersion{{UUID: "version-uuid", Hash: "hash-123"}},
+			Versions: []*api.ModelVersion{{UUID: "version-uuid", Hash: "hash-123", Status: api.ModelVersionStatusPodReady}},
 		}}, nil
 	}
 }
@@ -169,13 +169,15 @@ func TestRunAddModelDeleteAfterUploadLeavesFilesWhenHashConfirmationFails(t *tes
 	}
 
 	getModelsForAdd = func(input *api.GetModelsInput) ([]*api.Model, error) {
-		// hash never shows up
+		// the real hash never shows up: the version keeps the placeholder hash the
+		// api assigns at creation, which is exactly the state that must NOT count
+		// as confirmation for deleting local files.
 		return []*api.Model{{
 			ID:       "model-id",
 			Owner:    "user-id",
 			Name:     "test-model",
 			Provider: "LOCAL",
-			Versions: []*api.ModelVersion{{UUID: "version-uuid", Hash: ""}},
+			Versions: []*api.ModelVersion{{UUID: "version-uuid", Hash: "ph-0123456789abcdef", Status: api.ModelVersionStatusNeedsHash}},
 		}}, nil
 	}
 
@@ -195,12 +197,12 @@ func TestRunAddModelDeleteAfterUploadLeavesFilesWhenHashConfirmationFails(t *tes
 	if runErr == nil {
 		t.Fatal("expected non-zero error when hash confirmation fails")
 	}
-	if !strings.Contains(runErr.Error(), "timed out waiting for the model hash") {
+	if !strings.Contains(runErr.Error(), "timed out waiting for the model version to become deployable") {
 		t.Fatalf("expected timeout error, got %v", runErr)
 	}
 
 	if _, err := os.Stat(weightsPath); err != nil {
-		t.Fatalf("expected weights.bin to remain on disk when hash was never confirmed, stat err: %v", err)
+		t.Fatalf("expected weights.bin to remain on disk when the version never became deployable, stat err: %v", err)
 	}
 }
 

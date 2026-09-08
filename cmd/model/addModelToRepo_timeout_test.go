@@ -166,7 +166,7 @@ func TestRunAddModelPathWaitForHashPrintsCompactOutput(t *testing.T) {
 			Owner:    "user-id",
 			Name:     "test-model",
 			Provider: "LOCAL",
-			Versions: []*api.ModelVersion{{UUID: "version-uuid", Hash: "hash-123"}},
+			Versions: []*api.ModelVersion{{UUID: "version-uuid", Hash: "hash-123", Status: api.ModelVersionStatusPodReady}},
 		}}, nil
 	}
 
@@ -252,7 +252,7 @@ func TestRunAddModelPathWaitForHashVerbosePrintsFullOutput(t *testing.T) {
 			Owner:    "user-id",
 			Name:     "test-model",
 			Provider: "LOCAL",
-			Versions: []*api.ModelVersion{{UUID: "version-uuid", Hash: "hash-123"}},
+			Versions: []*api.ModelVersion{{UUID: "version-uuid", Hash: "hash-123", Status: api.ModelVersionStatusPodReady}},
 		}}, nil
 	}
 
@@ -714,12 +714,14 @@ func TestWaitForUploadedModelHashPollsUntilHash(t *testing.T) {
 			t.Fatalf("expected model lookup by name test-model, got %#v", input)
 		}
 		if calls == 1 {
+			// the api assigns a placeholder hash the moment the version exists, so
+			// a nonempty hash on a NEEDS_HASH version must not end the wait.
 			return []*api.Model{
 				{
 					ID:       "model-id",
 					Owner:    "user-id",
 					Name:     "test-model",
-					Versions: []*api.ModelVersion{{UUID: "version-uuid", Hash: ""}, {UUID: "old-version", Hash: "old-hash"}},
+					Versions: []*api.ModelVersion{{UUID: "version-uuid", Hash: "ph-0123456789abcdef", Status: api.ModelVersionStatusNeedsHash}, {UUID: "old-version", Hash: "old-hash"}},
 				},
 			}, nil
 		}
@@ -728,7 +730,7 @@ func TestWaitForUploadedModelHashPollsUntilHash(t *testing.T) {
 				ID:       "model-id",
 				Owner:    "user-id",
 				Name:     "test-model",
-				Versions: []*api.ModelVersion{{UUID: "old-version", Hash: "old-hash"}, {UUID: "version-uuid", Hash: "hash-123"}},
+				Versions: []*api.ModelVersion{{UUID: "old-version", Hash: "old-hash"}, {UUID: "version-uuid", Hash: "hash-123", Status: api.ModelVersionStatusPodReady}},
 			},
 		}, nil
 	}
@@ -751,7 +753,7 @@ func TestWaitForUploadedModelHashPollsUntilHash(t *testing.T) {
 	if stdout != "" {
 		t.Fatalf("stdout must remain empty, got %q", stdout)
 	}
-	if stderr != "waiting for model to be hashed.\n" {
+	if stderr != "waiting for model to be deployable.\n" {
 		t.Fatalf("expected wait progress on stderr, got %q", stderr)
 	}
 	if calls != 2 {
@@ -790,20 +792,30 @@ func TestWaitForUploadedModelHashTimesOut(t *testing.T) {
 			ID:       "model-id",
 			Owner:    "user-id",
 			Name:     "test-model",
-			Versions: []*api.ModelVersion{{UUID: "version-uuid", Hash: ""}},
+			Versions: []*api.ModelVersion{{UUID: "version-uuid", Hash: "ph-0123456789abcdef", Status: api.ModelVersionStatusNeedsHash}},
 		}}, nil
 	}
 	sleepModelHashPoll = waitModelHashPoll
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	// long enough for one poll to observe the status, short enough that the
+	// hour-long poll interval below is what the deadline interrupts.
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
 	_, err := waitForUploadedModelHash(ctx, "user-id", "test-model", &api.Model{ID: "model-id"}, "version-uuid", time.Hour)
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
-	if !strings.Contains(err.Error(), "timed out waiting for the model hash") {
+	if !strings.Contains(err.Error(), "timed out waiting for the model version to become deployable") {
 		t.Fatalf("expected timeout error, got %v", err)
+	}
+	// which of the two "not deployable yet" cases this was decides the operator's
+	// next move, and the status is the only thing that separates them.
+	if !strings.Contains(err.Error(), "last version status: needs_hash") {
+		t.Errorf("timeout error should name the last version status seen, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "runpodctl model list --name test-model") {
+		t.Errorf("timeout error should name the command to poll with, got %v", err)
 	}
 	// the upload already succeeded at this point, so the message must tell an
 	// agent not to re-upload, and the sink must NOT tag it network_error (which
@@ -844,24 +856,203 @@ func TestWaitForUploadedModelHashRequiresModelVersionUUID(t *testing.T) {
 	}
 }
 
-func TestUploadedModelVersionHashRequiresMatchingVersionUUID(t *testing.T) {
+func TestUploadedModelVersionStateRequiresMatchingVersionUUID(t *testing.T) {
 	model := &api.Model{Versions: []*api.ModelVersion{
-		{UUID: "old-version", Hash: "old-hash"},
-		{UUID: "version-uuid", Hash: ""},
-		{UUID: "newer-version", Hash: "newer-hash"},
+		{UUID: "old-version", Hash: "old-hash", Status: api.ModelVersionStatusPodReady},
+		{UUID: "version-uuid", Hash: "ph-0123456789abcdef", Status: api.ModelVersionStatusNeedsHash},
+		{UUID: "newer-version", Hash: "newer-hash", Status: api.ModelVersionStatusPodReady},
 	}}
 
-	if got := uploadedModelVersionHash(model, ""); got != "" {
-		t.Fatalf("expected no fallback hash without model version uuid, got %q", got)
+	if got := uploadedModelVersionState(model, ""); got.hash != "" {
+		t.Fatalf("expected no fallback hash without model version uuid, got %q", got.hash)
 	}
 
-	if got := uploadedModelVersionHash(model, "version-uuid"); got != "" {
-		t.Fatalf("expected no hash for pending uploaded version, got %q", got)
+	if got := uploadedModelVersionState(model, "version-uuid"); got.hash != "" {
+		t.Fatalf("expected no hash for pending uploaded version, got %q", got.hash)
 	}
 
 	model.Versions[1].Hash = "hash-123"
-	if got := uploadedModelVersionHash(model, "version-uuid"); got != "hash-123" {
-		t.Fatalf("expected uploaded version hash, got %q", got)
+	model.Versions[1].Status = api.ModelVersionStatusPodReady
+	if got := uploadedModelVersionState(model, "version-uuid"); got.hash != "hash-123" {
+		t.Fatalf("expected uploaded version hash, got %q", got.hash)
+	}
+}
+
+func TestUploadedModelVersionStateReadiness(t *testing.T) {
+	tests := []struct {
+		name         string
+		version      *api.ModelVersion
+		wantHash     string
+		wantTerminal bool
+	}{
+		{
+			name:    "placeholder hash while needs_hash is not deployable",
+			version: &api.ModelVersion{UUID: "version-uuid", Hash: "ph-0123456789abcdef", Status: api.ModelVersionStatusNeedsHash},
+		},
+		{
+			name:    "real hash while needs_hash is not deployable",
+			version: &api.ModelVersion{UUID: "version-uuid", Hash: "hash-123", Status: api.ModelVersionStatusNeedsHash},
+		},
+		{
+			name:    "placeholder hash on a deployable status is not deployable",
+			version: &api.ModelVersion{UUID: "version-uuid", Hash: "ph-0123456789abcdef", Status: api.ModelVersionStatusPodReady},
+		},
+		{
+			name:    "validating is not deployable, and not terminal either",
+			version: &api.ModelVersion{UUID: "version-uuid", Hash: "hash-123", Status: "VALIDATING"},
+		},
+		{
+			name:     "pod_ready with a real hash is deployable",
+			version:  &api.ModelVersion{UUID: "version-uuid", Hash: "hash-123", Status: api.ModelVersionStatusPodReady},
+			wantHash: "hash-123",
+		},
+		{
+			name:     "ready with a real hash is deployable",
+			version:  &api.ModelVersion{UUID: "version-uuid", Hash: "hash-123", Status: api.ModelVersionStatusReady},
+			wantHash: "hash-123",
+		},
+		{
+			name:         "failed is terminal",
+			version:      &api.ModelVersion{UUID: "version-uuid", Hash: "ph-0123456789abcdef", Status: api.ModelVersionStatusFailed},
+			wantTerminal: true,
+		},
+		{
+			name:         "deprecated without a canonical pointer is terminal",
+			version:      &api.ModelVersion{UUID: "version-uuid", Hash: "hash-123", Status: api.ModelVersionStatusDeprecated},
+			wantTerminal: true,
+		},
+		{
+			// the api dedupes an upload whose content already exists: this uuid is
+			// deprecated and keeps its placeholder hash forever, and the canonical
+			// version it names is the deployable result. Failing here would fail a
+			// successful upload.
+			name: "deprecated with a canonical pointer resolves to the canonical hash",
+			version: &api.ModelVersion{
+				UUID:   "version-uuid",
+				Hash:   "ph-0123456789abcdef",
+				Status: api.ModelVersionStatusDeprecated,
+				Metadata: map[string]interface{}{
+					"dedupedToCanonicalVersion": map[string]interface{}{
+						"uuid": "canonical-uuid",
+						"hash": "canonical-hash",
+					},
+				},
+			},
+			wantHash: "canonical-hash",
+		},
+		{
+			name: "canonical pointer with no usable hash is still terminal",
+			version: &api.ModelVersion{
+				UUID:   "version-uuid",
+				Hash:   "ph-0123456789abcdef",
+				Status: api.ModelVersionStatusDeprecated,
+				Metadata: map[string]interface{}{
+					"dedupedToCanonicalVersion": map[string]interface{}{"uuid": "canonical-uuid"},
+				},
+			},
+			wantTerminal: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := uploadedModelVersionState(&api.Model{Versions: []*api.ModelVersion{tt.version}}, "version-uuid")
+			if got.hash != tt.wantHash {
+				t.Errorf("hash = %q, want %q", got.hash, tt.wantHash)
+			}
+			if got.terminal != tt.wantTerminal {
+				t.Errorf("terminal = %v, want %v", got.terminal, tt.wantTerminal)
+			}
+			if got.status != strings.ToUpper(tt.version.Status) {
+				t.Errorf("status = %q, want %q", got.status, strings.ToUpper(tt.version.Status))
+			}
+		})
+	}
+}
+
+func TestWaitForUploadedModelHashStopsOnTerminalVersionStatus(t *testing.T) {
+	oldGetModelsForAdd := getModelsForAdd
+	oldSleepModelHashPoll := sleepModelHashPoll
+	t.Cleanup(func() {
+		getModelsForAdd = oldGetModelsForAdd
+		sleepModelHashPoll = oldSleepModelHashPoll
+	})
+
+	getModelsForAdd = func(input *api.GetModelsInput) ([]*api.Model, error) {
+		return []*api.Model{{
+			ID:       "model-id",
+			Owner:    "user-id",
+			Name:     "test-model",
+			Versions: []*api.ModelVersion{{UUID: "version-uuid", Hash: "ph-0123456789abcdef", Status: api.ModelVersionStatusFailed}},
+		}}, nil
+	}
+	sleepModelHashPoll = func(ctx context.Context, duration time.Duration) error {
+		t.Fatal("a version that failed server-side must not be polled again")
+		return nil
+	}
+
+	var err error
+	stdout, _ := captureStdStreams(t, func() {
+		_, err = waitForUploadedModelHash(context.Background(), "user-id", "test-model", &api.Model{ID: "model-id"}, "version-uuid", time.Hour)
+	})
+
+	if stdout != "" {
+		t.Fatalf("stdout must remain empty, got %q", stdout)
+	}
+	if err == nil {
+		t.Fatal("expected an error for a failed model version")
+	}
+	if !strings.Contains(err.Error(), "will never become deployable") {
+		t.Errorf("error should say waiting is pointless, got %v", err)
+	}
+	// not `timeout`: that code means the work is still running server-side and
+	// tells an agent to poll rather than re-upload. Here re-uploading is the fix.
+	var apiErr *internalapi.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected an *internalapi.APIError, got %T: %v", err, err)
+	}
+	if apiErr.ErrorCode() != "conflict" {
+		t.Errorf("code = %q, want conflict", apiErr.ErrorCode())
+	}
+}
+
+func TestWaitForUploadedModelHashResolvesDedupedVersion(t *testing.T) {
+	oldGetModelsForAdd := getModelsForAdd
+	t.Cleanup(func() { getModelsForAdd = oldGetModelsForAdd })
+
+	getModelsForAdd = func(input *api.GetModelsInput) ([]*api.Model, error) {
+		return []*api.Model{{
+			ID:    "model-id",
+			Owner: "user-id",
+			Name:  "test-model",
+			Versions: []*api.ModelVersion{{
+				UUID:   "version-uuid",
+				Hash:   "ph-0123456789abcdef",
+				Status: api.ModelVersionStatusDeprecated,
+				Metadata: map[string]interface{}{
+					"dedupedToCanonicalVersion": map[string]interface{}{
+						"uuid": "canonical-uuid",
+						"hash": "canonical-hash",
+					},
+				},
+			}},
+		}}, nil
+	}
+
+	var ready *modelReadyOutput
+	captureStdStreams(t, func() {
+		var err error
+		ready, err = waitForUploadedModelHash(context.Background(), "user-id", "test-model", &api.Model{ID: "model-id"}, "version-uuid", time.Hour)
+		if err != nil {
+			t.Fatalf("waitForUploadedModelHash returned error: %v", err)
+		}
+	})
+
+	if ready.ModelHash != "canonical-hash" {
+		t.Fatalf("hash = %q, want the canonical version hash", ready.ModelHash)
+	}
+	if !strings.HasSuffix(ready.ModelURL, ":canonical-hash") {
+		t.Fatalf("model url must name the canonical hash, got %q", ready.ModelURL)
 	}
 }
 

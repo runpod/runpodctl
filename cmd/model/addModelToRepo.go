@@ -50,7 +50,29 @@ const (
 	modelGraphQLTimeoutValue = time.Minute
 	modelHashPollInterval    = 5 * time.Second
 	modelHashWaitTimeout     = 30 * time.Minute
+
+	// placeholderModelVersionHashPrefix marks the hash the api assigns when it
+	// creates a version, before the real content hash is known.
+	placeholderModelVersionHashPrefix = "ph-"
+
+	// dedupedCanonicalVersionMetadataKey is where the api records the canonical
+	// version a deduped upload was folded into, as {uuid, hash}.
+	dedupedCanonicalVersionMetadataKey = "dedupedToCanonicalVersion"
 )
+
+var deployableModelVersionStatuses = map[string]bool{
+	api.ModelVersionStatusPodReady: true,
+	api.ModelVersionStatusReady:    true,
+}
+
+// terminalModelVersionStatuses will never become deployable. DEPRECATED is
+// terminal only when it carries no canonical-version pointer, which
+// uploadedModelVersionState checks first.
+var terminalModelVersionStatuses = map[string]bool{
+	api.ModelVersionStatusFailed:     true,
+	api.ModelVersionStatusDeprecated: true,
+	api.ModelVersionStatusPodRemoved: true,
+}
 
 // The GraphQL requests for uploading a model can take longer than the default
 // 10s, as the server needs to create pre-signed S3 URLs from R2, which can be
@@ -202,10 +224,10 @@ func bindAddModelFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&addModelContentType, "content-type", "", "upload content type")
 	cmd.Flags().StringVar(&addModelDirectoryPath, "model-path", "", "directory containing model files to upload")
 	cmd.Flags().StringToStringVar(&addModelMetadata, "metadata", nil, "metadata key=value pairs")
-	cmd.Flags().BoolVar(&addModelWaitForHash, "wait-for-hash", false, "wait for completed model-path uploads to be hashed")
+	cmd.Flags().BoolVar(&addModelWaitForHash, "wait-for-hash", false, "wait for completed model-path uploads to become deployable")
 	cmd.Flags().DurationVar(&addModelHashTimeout, "hash-timeout", modelHashWaitTimeout, "maximum duration to wait for --wait-for-hash (0 disables timeout)")
 	cmd.Flags().BoolVarP(&addModelVerbose, "verbose", "v", false, "include upload details in wait-for-hash output")
-	cmd.Flags().BoolVar(&addModelDeleteAfterUpload, "delete-my-model-files-after-upload", false, "delete the uploaded --model-path files once the model version hash is confirmed (requires --wait-for-hash)")
+	cmd.Flags().BoolVar(&addModelDeleteAfterUpload, "delete-my-model-files-after-upload", false, "delete the uploaded --model-path files once the model version is confirmed deployable (requires --wait-for-hash)")
 }
 
 func isHuggingFaceMirror() bool {
@@ -408,7 +430,7 @@ func validateAddModelFlags() error {
 			return fmt.Errorf("--delete-my-model-files-after-upload requires --model-path")
 		}
 		if !addModelWaitForHash {
-			return fmt.Errorf("--delete-my-model-files-after-upload requires --wait-for-hash: files are only deleted once the model version hash is confirmed server-side")
+			return fmt.Errorf("--delete-my-model-files-after-upload requires --wait-for-hash: files are only deleted once the model version is confirmed deployable server-side")
 		}
 	}
 
@@ -496,9 +518,9 @@ func totalModelFileSize(files []modelFile) int64 {
 // deleteVerifiedModelFiles removes the local --model-path files backing
 // --delete-my-model-files-after-upload. Callers must only invoke this after
 // every file in `files` has both (a) completed its multipart upload
-// (uploadModelFiles returned without error) and (b) had its model version
-// hash confirmed server-side (waitForUploadedModelHash returned without
-// error) — this function does not itself re-check either condition. It never
+// (uploadModelFiles returned without error) and (b) been confirmed deployable
+// server-side (waitForUploadedModelHash returned without error). This
+// function does not itself re-check either condition. It never
 // deletes anything else in --model-path: only the exact absolute paths that
 // were part of this run's verified upload, never a directory-wide wipe.
 func deleteVerifiedModelFiles(files []modelFile) (deletedCount int, deletedBytes int64, err error) {
@@ -572,12 +594,13 @@ func waitForUploadedModelHash(ctx context.Context, owner, name string, uploadedM
 		return nil, fmt.Errorf("model version uuid is required to wait for hashing")
 	}
 
-	fmt.Fprint(os.Stderr, "waiting for model to be hashed")
+	fmt.Fprint(os.Stderr, "waiting for model to be deployable")
 	defer fmt.Fprintln(os.Stderr)
 
+	lastStatus := ""
 	for {
 		if err := ctx.Err(); err != nil {
-			return nil, internalapi.NewTimeoutError("upload completed but timed out waiting for the model hash; the model exists, do not re-upload: %v", err)
+			return nil, modelVersionWaitTimeoutError(name, lastStatus, err)
 		}
 
 		models, err := getModelsForAdd(&api.GetModelsInput{Name: name})
@@ -586,8 +609,16 @@ func waitForUploadedModelHash(ctx context.Context, owner, name string, uploadedM
 		}
 
 		model := findUploadedModel(models, owner, name, uploadedModel)
-		hash := uploadedModelVersionHash(model, modelVersionUUID)
-		if hash != "" {
+		state := uploadedModelVersionState(model, modelVersionUUID)
+		if state.status != "" {
+			lastStatus = state.status
+		}
+
+		if state.terminal {
+			return nil, modelVersionTerminalError(name, state.status)
+		}
+
+		if state.hash != "" {
 			ownerID := modelOwnerForURL(owner, uploadedModel, model)
 			if ownerID == "" {
 				return nil, fmt.Errorf("model owner is required to build model url")
@@ -597,40 +628,134 @@ func waitForUploadedModelHash(ctx context.Context, owner, name string, uploadedM
 				return nil, fmt.Errorf("model name is required to build model url")
 			}
 
-			modelURL := formatModelURL(ownerID, modelName, hash)
+			modelURL := formatModelURL(ownerID, modelName, state.hash)
 			return &modelReadyOutput{
 				Owner:     ownerID,
 				Name:      modelName,
-				ModelHash: hash,
+				ModelHash: state.hash,
 				ModelURL:  modelURL,
 			}, nil
 		}
 
 		fmt.Fprint(os.Stderr, ".")
 		if err := sleepModelHashPoll(ctx, pollInterval); err != nil {
-			return nil, internalapi.NewTimeoutError("upload completed but timed out waiting for the model hash; the model exists, do not re-upload: %v", err)
+			return nil, modelVersionWaitTimeoutError(name, lastStatus, err)
 		}
 	}
 }
 
-func uploadedModelVersionHash(model *api.Model, modelVersionUUID string) string {
+// modelVersionWaitTimeoutError reports a --wait-for-hash budget that ran out
+// with the version still being processed server-side. It names the last status
+// seen and the command to poll with, because the upload itself succeeded and a
+// re-upload would create a second version of the same bytes.
+func modelVersionWaitTimeoutError(name, lastStatus string, cause error) error {
+	if lastStatus == "" {
+		lastStatus = "unknown"
+	}
+	return internalapi.NewTimeoutError(
+		"upload completed but timed out waiting for the model version to become deployable (last version status: %s); the model exists, do not re-upload, poll it with: runpodctl model list --name %s: %v",
+		strings.ToLower(lastStatus), name, cause,
+	)
+}
+
+// modelVersionTerminalError reports a version that will never become
+// deployable, so the wait ends immediately instead of burning the whole
+// --hash-timeout budget and reporting `timeout` (which tells an agent the work
+// is still running). Coded `conflict`, matching the pod wait's treatment of a
+// terminal status: nothing the caller typed was wrong, the version is in a
+// state no amount of waiting fixes.
+func modelVersionTerminalError(name, status string) error {
+	return &internalapi.APIError{
+		Message: fmt.Sprintf(
+			"model version for %s is %s, so it will never become deployable; the uploaded bytes are not usable, re-run the upload",
+			name, strings.ToLower(status),
+		),
+		Code: "conflict",
+	}
+}
+
+// modelVersionState is what a single poll of the uploaded version could tell
+// us. A zero value means "keep waiting": not found yet, or found and still
+// being processed.
+type modelVersionState struct {
+	// status is the version status the poll saw, "" when the version is not
+	// listed yet. Reported in the timeout message so a caller can tell "still
+	// hashing" from "stuck".
+	status string
+	// hash is the deployable version hash, set only once the version is
+	// deployable. Never a placeholder.
+	hash string
+	// terminal marks a version that will never become deployable.
+	terminal bool
+}
+
+// uploadedModelVersionState reads the readiness of the version this upload
+// created. A nonempty hash alone does not mean ready: the api assigns a
+// `ph-`-prefixed placeholder hash at creation, while the version is still
+// NEEDS_HASH and would be rejected at deploy time.
+//
+// The version's own status is not the whole answer either. When the hashed
+// bytes collide with an existing version, the api deprecates this uuid and
+// points it at the canonical version that already holds the content, so a
+// successful upload's uuid stays DEPRECATED with its placeholder hash forever.
+// That pointer is the deployable result, not a failure.
+func uploadedModelVersionState(model *api.Model, modelVersionUUID string) modelVersionState {
 	if model == nil {
-		return ""
+		return modelVersionState{}
 	}
 	modelVersionUUID = strings.TrimSpace(modelVersionUUID)
 	if modelVersionUUID == "" {
-		return ""
+		return modelVersionState{}
 	}
+
 	for _, version := range model.Versions {
 		if version == nil || strings.TrimSpace(version.UUID) != modelVersionUUID {
 			continue
 		}
-		if hash := strings.TrimSpace(version.Hash); hash != "" {
-			return hash
+
+		status := strings.ToUpper(strings.TrimSpace(version.Status))
+		if canonicalHash := dedupedCanonicalVersionHash(version); canonicalHash != "" {
+			return modelVersionState{status: status, hash: canonicalHash}
 		}
+		if terminalModelVersionStatuses[status] {
+			return modelVersionState{status: status, terminal: true}
+		}
+		if !deployableModelVersionStatuses[status] {
+			return modelVersionState{status: status}
+		}
+
+		hash := strings.TrimSpace(version.Hash)
+		if hash == "" || isPlaceholderModelVersionHash(hash) {
+			return modelVersionState{status: status}
+		}
+		return modelVersionState{status: status, hash: hash}
+	}
+
+	return modelVersionState{}
+}
+
+func isPlaceholderModelVersionHash(hash string) bool {
+	return strings.HasPrefix(strings.TrimSpace(hash), placeholderModelVersionHashPrefix)
+}
+
+// dedupedCanonicalVersionHash returns the hash of the canonical version this
+// one was deduped into, or "" when it was not deduped.
+func dedupedCanonicalVersionHash(version *api.ModelVersion) string {
+	if version == nil {
 		return ""
 	}
-	return ""
+	deduped, ok := version.Metadata[dedupedCanonicalVersionMetadataKey].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	hash, ok := deduped["hash"].(string)
+	if !ok {
+		return ""
+	}
+	if hash = strings.TrimSpace(hash); hash == "" || isPlaceholderModelVersionHash(hash) {
+		return ""
+	}
+	return hash
 }
 
 func waitModelHashPoll(ctx context.Context, duration time.Duration) error {
