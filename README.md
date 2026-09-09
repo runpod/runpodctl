@@ -436,7 +436,7 @@ codes the cli generates:
 | --- | --- |
 | `usage_error` | your invocation was wrong (unknown command/flag, bad or missing args, missing required flags). usage text is printed after the json |
 | `not_found` | the api has no such resource. during a `--wait` it can also mean a resource that *was* created has gone (or never became visible), so check for an `id` field and clean up rather than assuming nothing exists |
-| `bad_request` `unauthorized` `forbidden` `conflict` `rate_limited` `server_error` `api_error` | derived from the rest status |
+| `bad_request` `unauthorized` `forbidden` `conflict` `rate_limited` `server_error` `api_error` | derived from the rest status. `conflict` is also emitted without one, for a resource in a state no amount of waiting fixes: a terminal pod during `--wait`, an endpoint with no workers to read logs from, a model version that failed server-side hashing during `--wait-for-hash` (re-run the upload; do not poll) |
 | `graphql_error` | graphql returned an errors array (http 200) |
 | `timeout` | the cli stopped waiting. two cases, told apart by the message: a `--wait` / `--wait-for-hash` budget ran out with the work still running server-side (the message names the command to poll it — do that, do not re-invoke), or a single api call exceeded the `timeout` config key (nothing is running; retry) |
 | `job_failed` | a serverless job reached a terminal status other than `COMPLETED`. the job payload is still on stdout |

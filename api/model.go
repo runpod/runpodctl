@@ -66,9 +66,17 @@ type ModelVersion struct {
 	Metadata  map[string]interface{} `json:"metadata,omitempty"`
 }
 
-// ModelVersionStatus constants used when updating a model version's status.
+// ModelVersionStatus constants: the statuses the cli writes when updating a
+// model version, plus the ones it has to branch on while waiting for an upload.
+// POD_READY and READY are the only two the api accepts for endpoint deployment
+// (`READY_MODEL_REPO_STATUSES` in its aiApi schema): a version in any other
+// status is rejected at deploy time.
 const (
 	ModelVersionStatusReady      = "READY"
+	ModelVersionStatusPodReady   = "POD_READY"
+	ModelVersionStatusNeedsHash  = "NEEDS_HASH"
+	ModelVersionStatusFailed     = "FAILED"
+	ModelVersionStatusDeprecated = "DEPRECATED"
 	ModelVersionStatusPodRemoved = "POD_REMOVED"
 )
 

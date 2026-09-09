@@ -27,7 +27,7 @@ runpodctl model add [flags]
       --create-upload                        create an upload session
       --credential-reference string          credential reference (if required)
       --credential-type string               credential type (if required)
-      --delete-my-model-files-after-upload   delete the uploaded --model-path files once the model version hash is confirmed (requires --wait-for-hash)
+      --delete-my-model-files-after-upload   delete the uploaded --model-path files once the model version is confirmed deployable (requires --wait-for-hash)
       --file-name string                     file name for upload
       --file-size string                     file size in bytes
       --hash-timeout duration                maximum duration to wait for --wait-for-hash (0 disables timeout) (default 30m0s)
@@ -40,7 +40,7 @@ runpodctl model add [flags]
       --owner string                         model owner namespace (user or team owner id)
       --part-size string                     multipart upload part size in bytes
   -v, --verbose                              include upload details in wait-for-hash output
-      --wait-for-hash                        wait for completed model-path uploads to be hashed
+      --wait-for-hash                        wait for completed model-path uploads to become deployable
 ```
 
 ### Options inherited from parent commands
