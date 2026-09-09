@@ -8,11 +8,31 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	internalapi "github.com/runpod/runpodctl/internal/api"
 )
 
 // ErrModelRepoNotImplemented is retained for backwards compatibility with callers that
 // handled the previous unimplemented model repository helpers.
 var ErrModelRepoNotImplemented = errors.New("model repository functionality not yet implemented")
+
+// modelRepoHTTPError wraps a non-200 graphql http response (e.g. Model Repo
+// down behind the api gateway) as a typed GraphQLError, giving it a stable
+// "graphql_error" code and preserving the http status.
+func modelRepoHTTPError(status int, body []byte) error {
+	return &internalapi.GraphQLError{
+		Message: fmt.Sprintf("statuscode %d: %s", status, string(body)),
+		Status:  status,
+	}
+}
+
+// modelRepoGraphQLError wraps a graphql top-level error (how Model Repo
+// access failures surface: the resolver throws before returning data) as a
+// typed GraphQLError, giving it a stable "graphql_error" code instead of the
+// generic cli_error fallback.
+func modelRepoGraphQLError(gqlErr *GraphQLError) error {
+	return &internalapi.GraphQLError{Message: gqlErr.Message}
+}
 
 // Model represents a model stored in the RunPod model repository.
 type Model struct {
@@ -303,7 +323,7 @@ func AddModelToRepo(input *AddModelToRepoInput) (*Model, error) {
 		return nil, err
 	}
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
+		return nil, modelRepoHTTPError(res.StatusCode, rawData)
 	}
 
 	var data struct {
@@ -316,7 +336,7 @@ func AddModelToRepo(input *AddModelToRepoInput) (*Model, error) {
 		return nil, err
 	}
 	if len(data.Errors) > 0 {
-		return nil, errors.New(data.Errors[0].Message)
+		return nil, modelRepoGraphQLError(data.Errors[0])
 	}
 	if data.Data == nil || data.Data.AddModelToRepo == nil {
 		return nil, fmt.Errorf("data is nil: %s", string(rawData))
@@ -381,7 +401,7 @@ func GetModels(input *GetModelsInput) ([]*Model, error) {
 		return nil, err
 	}
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
+		return nil, modelRepoHTTPError(res.StatusCode, rawData)
 	}
 
 	var data struct {
@@ -394,7 +414,7 @@ func GetModels(input *GetModelsInput) ([]*Model, error) {
 		return nil, err
 	}
 	if len(data.Errors) > 0 {
-		return nil, errors.New(data.Errors[0].Message)
+		return nil, modelRepoGraphQLError(data.Errors[0])
 	}
 	if data.Data == nil {
 		return nil, fmt.Errorf("data is nil: %s", string(rawData))
@@ -493,7 +513,7 @@ func GetModel(input *GetModelInput) (*Model, error) {
 		return nil, err
 	}
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
+		return nil, modelRepoHTTPError(res.StatusCode, rawData)
 	}
 
 	var data struct {
@@ -506,7 +526,7 @@ func GetModel(input *GetModelInput) (*Model, error) {
 		return nil, err
 	}
 	if len(data.Errors) > 0 {
-		return nil, errors.New(data.Errors[0].Message)
+		return nil, modelRepoGraphQLError(data.Errors[0])
 	}
 	if data.Data == nil || data.Data.MyModel == nil {
 		return nil, fmt.Errorf("data is nil: %s", string(rawData))
@@ -581,7 +601,7 @@ func RemoveModel(input *RemoveModelInput) (*ModelRepoMutationResult, error) {
 		return nil, err
 	}
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
+		return nil, modelRepoHTTPError(res.StatusCode, rawData)
 	}
 
 	var data struct {
@@ -594,7 +614,7 @@ func RemoveModel(input *RemoveModelInput) (*ModelRepoMutationResult, error) {
 		return nil, err
 	}
 	if len(data.Errors) > 0 {
-		return nil, errors.New(data.Errors[0].Message)
+		return nil, modelRepoGraphQLError(data.Errors[0])
 	}
 	if data.Data == nil || data.Data.RemoveModelFromRepo == nil {
 		return nil, fmt.Errorf("data is nil: %s", string(rawData))
@@ -717,7 +737,7 @@ func CreateModelRepoUpload(input *CreateModelRepoUploadInput) (*ModelRepoMutatio
 		return nil, err
 	}
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
+		return nil, modelRepoHTTPError(res.StatusCode, rawData)
 	}
 
 	var data struct {
@@ -730,7 +750,7 @@ func CreateModelRepoUpload(input *CreateModelRepoUploadInput) (*ModelRepoMutatio
 		return nil, err
 	}
 	if len(data.Errors) > 0 {
-		return nil, errors.New(data.Errors[0].Message)
+		return nil, modelRepoGraphQLError(data.Errors[0])
 	}
 	if data.Data == nil || data.Data.CreateModelRepoUpload == nil {
 		return nil, fmt.Errorf("data is nil: %s", string(rawData))
@@ -789,7 +809,7 @@ func CompleteModelRepoUpload(sessionID string) (*CompleteModelRepoUploadResult, 
 		return nil, err
 	}
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
+		return nil, modelRepoHTTPError(res.StatusCode, rawData)
 	}
 
 	var data struct {
@@ -802,7 +822,7 @@ func CompleteModelRepoUpload(sessionID string) (*CompleteModelRepoUploadResult, 
 		return nil, err
 	}
 	if len(data.Errors) > 0 {
-		return nil, errors.New(data.Errors[0].Message)
+		return nil, modelRepoGraphQLError(data.Errors[0])
 	}
 	if data.Data == nil || data.Data.CompleteModelRepoUpload == nil {
 		return nil, fmt.Errorf("data is nil: %s", string(rawData))
@@ -845,7 +865,7 @@ func UpdateModelVersionStatusByIdentifier(input *UpdateModelVersionStatusInput) 
 		return nil, err
 	}
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
+		return nil, modelRepoHTTPError(res.StatusCode, rawData)
 	}
 
 	var data struct {
@@ -858,7 +878,7 @@ func UpdateModelVersionStatusByIdentifier(input *UpdateModelVersionStatusInput) 
 		return nil, err
 	}
 	if len(data.Errors) > 0 {
-		return nil, errors.New(data.Errors[0].Message)
+		return nil, modelRepoGraphQLError(data.Errors[0])
 	}
 	if data.Data == nil || data.Data.UpdateModelVersionStatus == nil {
 		return nil, fmt.Errorf("data is nil: %s", string(rawData))
