@@ -172,14 +172,46 @@ type progressReader struct {
 // TODO: replace the manual completion call with github.com/aws/aws-sdk-go-v2/service/s3's
 // CompleteMultipartUpload to rely on the SDK for payload formatting and signing logic.
 var (
-	addModelToRepo          = api.AddModelToRepo
-	createModelRepoUpload   = api.CreateModelRepoUpload
-	completeModelRepoUpload = api.CompleteModelRepoUpload
-	completeModelUploadFile = completeModelUploadWithProgress
-	getModelsForAdd         = api.GetModels
-	sleepModelHashPoll      = waitModelHashPoll
-	removeModelFile         = os.Remove
+	addModelToRepo           = api.AddModelToRepo
+	createModelRepoUpload    = api.CreateModelRepoUpload
+	completeModelRepoUpload  = api.CompleteModelRepoUpload
+	completeModelUploadFile  = completeModelUploadWithProgress
+	getModelsForAdd          = api.GetModels
+	getModelRepoStorageUsage = api.GetModelRepoStorageUsage
+	sleepModelHashPoll       = waitModelHashPoll
+	removeModelFile          = os.Remove
 )
+
+// checkModelRepoStorageQuota rejects an upload of requestedBytes that would exceed the
+// account's quota, before anything is created server-side. Deliberately fails open: an
+// unreachable or unparseable usage query only warns, because a client-side pre-check must
+// never itself break an otherwise-valid upload. createModelRepoUpload's server-side gate
+// enforces the real limit regardless.
+func checkModelRepoStorageQuota(owner string, requestedBytes int64) error {
+	usage, err := getModelRepoStorageUsage(owner)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not verify model repo storage quota before upload: %v\n", err)
+		return nil
+	}
+	if usage == nil || !usage.Enforced || usage.AvailableBytes == nil {
+		return nil
+	}
+
+	available, err := strconv.ParseInt(strings.TrimSpace(*usage.AvailableBytes), 10, 64)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not parse model repo storage quota response: %v\n", err)
+		return nil
+	}
+
+	if requestedBytes > available {
+		return fmt.Errorf(
+			"model upload of %d bytes would exceed the available Model Repo storage quota (%d bytes available); free up space or contact support to request a higher quota",
+			requestedBytes, available,
+		)
+	}
+
+	return nil
+}
 
 var addCmd = &cobra.Command{
 	Use:   "add",
@@ -308,6 +340,14 @@ func runAddModel(cmd *cobra.Command, args []string) error {
 		}
 		if addModelFileSize == "" {
 			return fmt.Errorf("file-size is required when creating an upload")
+		}
+	}
+
+	if wantsUploadSession() {
+		if requestedBytes, ok := modelUploadRequestedBytes(modelFiles); ok {
+			if err := checkModelRepoStorageQuota(addModelOwner, requestedBytes); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -513,6 +553,21 @@ func totalModelFileSize(files []modelFile) int64 {
 		total += file.Size
 	}
 	return total
+}
+
+// modelUploadRequestedBytes reports the total bytes an upload is about to send. ok is false
+// when that can't be determined locally (e.g. an unparseable --file-size), in which case the
+// caller must skip the quota pre-check rather than guess.
+func modelUploadRequestedBytes(modelFiles []modelFile) (bytes int64, ok bool) {
+	if len(modelFiles) > 0 {
+		return totalModelFileSize(modelFiles), true
+	}
+
+	size, err := strconv.ParseInt(strings.TrimSpace(addModelFileSize), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return size, true
 }
 
 // deleteVerifiedModelFiles removes the local --model-path files backing

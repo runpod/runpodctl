@@ -247,6 +247,18 @@ type CreateModelRepoUploadInput struct {
 	CredentialReference string                 `json:"credentialReference,omitempty"`
 }
 
+// ModelRepoStorageUsage is a namespace's storage usage and quota state. The byte counts are
+// strings because they exceed a graphql Int.
+type ModelRepoStorageUsage struct {
+	OwnerID        string  `json:"ownerId"`
+	CommittedBytes string  `json:"committedBytes"`
+	ReservedBytes  string  `json:"reservedBytes"`
+	UsedBytes      string  `json:"usedBytes"`
+	LimitBytes     *string `json:"limitBytes"`
+	AvailableBytes *string `json:"availableBytes"`
+	Enforced       bool    `json:"enforced"`
+}
+
 // AddModelToRepo uploads a new model to the RunPod model repository.
 func AddModelToRepo(input *AddModelToRepoInput) (*Model, error) {
 	if input == nil {
@@ -777,6 +789,64 @@ func CreateModelRepoUpload(input *CreateModelRepoUploadInput) (*ModelRepoMutatio
 	}
 
 	return result, nil
+}
+
+// GetModelRepoStorageUsage fetches storage usage and quota state for owner. An empty owner
+// defaults to the acting user's own namespace.
+func GetModelRepoStorageUsage(owner string) (*ModelRepoStorageUsage, error) {
+	variables := map[string]interface{}{}
+	if owner = strings.TrimSpace(owner); owner != "" {
+		variables["owner"] = owner
+	}
+
+	gqlInput := Input{
+		Query: `
+                query modelRepoStorageUsage($owner: String) {
+                        modelRepoStorageUsage(owner: $owner) {
+                                ownerId
+                                committedBytes
+                                reservedBytes
+                                usedBytes
+                                limitBytes
+                                availableBytes
+                                enforced
+                        }
+                }
+                `,
+		Variables: variables,
+	}
+
+	res, err := Query(gqlInput)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	rawData, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode != http.StatusOK {
+		return nil, modelRepoHTTPError(res.StatusCode, rawData)
+	}
+
+	var data struct {
+		Data *struct {
+			ModelRepoStorageUsage *ModelRepoStorageUsage `json:"modelRepoStorageUsage"`
+		} `json:"data"`
+		Errors []*GraphQLError `json:"errors"`
+	}
+	if err = json.Unmarshal(rawData, &data); err != nil {
+		return nil, err
+	}
+	if len(data.Errors) > 0 {
+		return nil, modelRepoGraphQLError(data.Errors[0])
+	}
+	if data.Data == nil || data.Data.ModelRepoStorageUsage == nil {
+		return nil, fmt.Errorf("data is nil: %s", string(rawData))
+	}
+
+	return data.Data.ModelRepoStorageUsage, nil
 }
 
 // CompleteModelRepoUpload notifies the Model Repo service that an upload session has finished uploading to storage.
