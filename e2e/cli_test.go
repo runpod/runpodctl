@@ -942,7 +942,8 @@ func TestCLI_ServerlessUpdateModelReferenceOnGPUEndpoint(t *testing.T) {
 	gpusBefore := endpointGpuSelection(t, endpointID)
 
 	const modelRef = "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct:main"
-	if _, updateErr, err := runCLI("serverless", "update", endpointID, "--model-reference", modelRef); err != nil {
+	updateOut, updateErr, err := runCLI("serverless", "update", endpointID, "--model-reference", modelRef)
+	if err != nil {
 		t.Fatalf("serverless update --model-reference failed on gpu endpoint: %v\nstderr: %s", err, updateErr)
 	}
 	// the ref is stored resolved to a commit hash, so match the model, not the
@@ -952,12 +953,29 @@ func TestCLI_ServerlessUpdateModelReferenceOnGPUEndpoint(t *testing.T) {
 	if len(refs) != 1 || !strings.HasPrefix(refs[0], modelPrefix) {
 		t.Fatalf("expected one %s* model reference after update, got: %v", modelPrefix, refs)
 	}
+	var updated struct {
+		ModelReferences []string `json:"modelReferences"`
+	}
+	if err := json.Unmarshal([]byte(updateOut), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.ModelReferences) != 1 || updated.ModelReferences[0] != refs[0] {
+		t.Fatalf("update output must contain saved refs: %s", updateOut)
+	}
 	if got := endpointGpuSelection(t, endpointID); got != gpusBefore {
 		t.Errorf("--model-reference changed the gpu selection: %q -> %q", gpusBefore, got)
 	}
 
-	if _, clearErr, err := runCLI("serverless", "update", endpointID, "--clear-models"); err != nil {
+	clearOut, clearErr, err := runCLI("serverless", "update", endpointID, "--clear-models")
+	if err != nil {
 		t.Fatalf("serverless update --clear-models failed on gpu endpoint: %v\nstderr: %s", err, clearErr)
+	}
+	var clearedOutput map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(clearOut), &clearedOutput); err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(clearedOutput["modelReferences"])) != "[]" {
+		t.Fatalf("clear output must contain an empty refs array: %s", clearOut)
 	}
 	if cleared := endpointModelReferences(t, endpointID); len(cleared) > 0 {
 		t.Errorf("expected modelReferences cleared, got: %v", cleared)
@@ -973,9 +991,7 @@ func TestCLI_ServerlessUpdateModelReferenceOnGPUEndpoint(t *testing.T) {
 // endpoint.
 //
 // it goes through `serverless model-status`, not the `serverless update`
-// output: update re-reads the endpoint over rest for its output, and rest omits
-// modelReferences entirely, so asserting on the update's own output can only
-// ever see nil.
+// output: this independently verifies the stored references after the write.
 func endpointModelReferences(t *testing.T, endpointID string) []string {
 	t.Helper()
 

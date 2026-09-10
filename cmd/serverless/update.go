@@ -16,6 +16,9 @@ var updateCmd = &cobra.Command{
 	Short: "update an endpoint",
 	Long: `update an existing serverless endpoint.
 
+model updates include the saved modelReferences in the output; clearing models
+returns an empty array.
+
 examples:
   # rename an endpoint
   runpodctl serverless update <id> --name my-endpoint
@@ -125,12 +128,14 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	var modelUpdate *api.Endpoint
 	if len(updateModelRefs) > 0 || updateClearModels {
 		var refs []string
 		if !updateClearModels {
 			refs = updateModelRefs
 		}
-		if _, err := client.UpdateEndpointModels(endpointID, refs); err != nil {
+		modelUpdate, err = client.UpdateEndpointModels(endpointID, refs)
+		if err != nil {
 			return fmt.Errorf("failed to update model references: %w", err)
 		}
 	}
@@ -141,5 +146,17 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
+	if modelUpdate != nil {
+		// REST omits modelReferences. Retain the server-resolved GraphQL value,
+		// including an explicit empty array after clearing, without another read.
+		refs := modelUpdate.ModelReferences
+		if refs == nil {
+			refs = []string{}
+		}
+		return output.Print(struct {
+			*api.Endpoint
+			ModelReferences []string `json:"modelReferences"`
+		}{endpoint, refs}, &output.Config{Format: format})
+	}
 	return output.Print(endpoint, &output.Config{Format: format})
 }
