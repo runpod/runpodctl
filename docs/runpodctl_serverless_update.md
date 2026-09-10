@@ -6,6 +6,9 @@ update an endpoint
 
 update an existing serverless endpoint.
 
+model updates include the saved modelReferences in the output; clearing models
+returns an empty array.
+
 examples:
   # rename an endpoint
   runpodctl serverless update <id> --name my-endpoint

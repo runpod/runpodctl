@@ -85,6 +85,43 @@ func TestListGpuTypes_PricingAndPerDC(t *testing.T) {
 	}
 }
 
+// A failed pools query used to be swallowed: the input came back unchanged with
+// a nil error, so a gpu *type* id sailed through untranslated and saveEndpoint
+// rejected the write with `Invalid GPU Pool ID`, hiding the outage that caused
+// it (found live on PR #340).
+func TestResolveServerlessGpuPoolID_PoolQueryFailurePropagates(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), "serverlessGpuPools") {
+			t.Errorf("unexpected graphql query: %s", body)
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	viper.Set("apiUrl", server.URL)
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+
+	client, err := NewClient()
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	got, err := client.ResolveServerlessGpuPoolID("NVIDIA A40")
+	if err == nil {
+		t.Fatal("expected an error when the pools query fails")
+	}
+	if !strings.Contains(err.Error(), "failed to look up serverless gpu pools") {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if got != "" {
+		t.Errorf("resolved = %q, want empty; an unresolved gpu type id must never reach a caller", got)
+	}
+}
+
 func TestStockRank(t *testing.T) {
 	// the known set, pinned: if the api adds a level, this test should be the
 	// thing that fails, not a silently misranked gpu in `gpu list`.

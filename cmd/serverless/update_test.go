@@ -2,6 +2,7 @@ package serverless
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
 func TestUpdateCmd_HasTemplateIDFlag(t *testing.T) {
@@ -403,15 +405,22 @@ func TestRunUpdate_RejectsOutOfRangeNumericFlags(t *testing.T) {
 }
 
 func TestRunUpdate_ModelReferences(t *testing.T) {
-	resetUpdateVars(t)
+	for _, format := range []string{"json", "yaml"} {
+		for _, clear := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/clear=%t", format, clear), func(t *testing.T) {
+				resetUpdateVars(t)
 
-	var gqlBody map[string]interface{}
+				savedRefs := []string{"https://huggingface.co/org/model:resolved-commit"}
+				if clear {
+					savedRefs = []string{}
+				}
+				var gqlBody map[string]interface{}
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/endpoints/ep-123":
-			// serve raw rest wire shape with non-default config to catch round-trip regressions.
-			_, _ = w.Write([]byte(`{
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					switch {
+					case r.Method == http.MethodGet && r.URL.Path == "/endpoints/ep-123":
+						// serve raw rest wire shape with non-default config to catch round-trip regressions.
+						_, _ = w.Write([]byte(`{
 				"id":          "ep-123",
 				"name":        "my-endpoint",
 				"idleTimeout": 42,
@@ -419,65 +428,107 @@ func TestRunUpdate_ModelReferences(t *testing.T) {
 				"scalerValue": 9,
 				"workersMax":  5
 			}`))
-		case r.Method == http.MethodPost && r.URL.Path == "/":
-			if err := json.NewDecoder(r.Body).Decode(&gqlBody); err != nil {
-				t.Fatalf("decode gql request: %v", err)
-			}
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"data": map[string]interface{}{
-					"saveEndpoint": map[string]interface{}{
-						"id":              "ep-123",
-						"name":            "my-endpoint",
-						"modelReferences": []string{"https://huggingface.co/org/model:main"},
-					},
-				},
+					case r.Method == http.MethodPost && r.URL.Path == "/":
+						var body map[string]interface{}
+						if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+							t.Errorf("decode gql request: %v", err)
+							return
+						}
+						query, _ := body["query"].(string)
+						// gpuIds is unreadable over rest, so the update reads it over graphql
+						// before writing the config back.
+						if strings.Contains(query, "EndpointGpuIDs") {
+							_ = json.NewEncoder(w).Encode(map[string]interface{}{
+								"data": map[string]interface{}{
+									"myself": map[string]interface{}{
+										"endpoint": map[string]interface{}{"gpuIds": "ADA_24"},
+									},
+								},
+							})
+							return
+						}
+						gqlBody = body
+						_ = json.NewEncoder(w).Encode(map[string]interface{}{
+							"data": map[string]interface{}{
+								"saveEndpoint": map[string]interface{}{
+									"id":              "ep-123",
+									"name":            "my-endpoint",
+									"modelReferences": savedRefs,
+								},
+							},
+						})
+					default:
+						t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+					}
+				}))
+				defer server.Close()
+
+				t.Setenv("RUNPOD_API_KEY", "test-key")
+				viper.Set("restApiUrl", server.URL)
+				viper.Set("apiUrl", server.URL)
+				t.Cleanup(func() {
+					viper.Set("restApiUrl", "")
+					viper.Set("apiUrl", "")
+				})
+
+				updateModelRefs = []string{"https://huggingface.co/org/model:main"}
+				updateClearModels = clear
+				if clear {
+					updateModelRefs = nil
+				}
+				updateWorkersMin = -1
+				updateWorkersMax = -1
+				updateIdleTimeout = -1
+				updateScaleThreshold = -1
+
+				cmd := &cobra.Command{}
+				cmd.Flags().String("output", format, "")
+
+				stdout, _ := captureOutput(t, func() {
+					if err := runUpdate(cmd, []string{"ep-123"}); err != nil {
+						t.Errorf("unexpected error: %v", err)
+					}
+				})
+				var result map[string]interface{}
+				if err := yaml.Unmarshal([]byte(stdout), &result); err != nil {
+					t.Fatal(err)
+				}
+				got, ok := result["modelReferences"].([]interface{})
+				if !ok || len(got) != len(savedRefs) {
+					t.Fatalf("expected explicit saved references %v, got %s", savedRefs, stdout)
+				}
+				if !clear && got[0] != savedRefs[0] {
+					t.Fatalf("expected resolved reference, got %v", got)
+				}
+				if result["id"] != "ep-123" || result["idleTimeout"] != 42 {
+					t.Fatalf("REST fields lost: %s", stdout)
+				}
+
+				vars, _ := gqlBody["variables"].(map[string]interface{})
+				input, _ := vars["input"].(map[string]interface{})
+
+				// model references must carry the new value.
+				refs, _ := input["modelReferences"].([]interface{})
+				if (clear && len(refs) != 0) || (!clear && (len(refs) != 1 || refs[0] != "https://huggingface.co/org/model:main")) {
+					t.Fatalf("expected modelReferences to contain the provided ref, got %#v", refs)
+				}
+
+				// existing config must be round-tripped, not reset to defaults.
+				if input["idleTimeout"] != float64(42) {
+					t.Errorf("idleTimeout not round-tripped: got %v", input["idleTimeout"])
+				}
+				if input["scalerValue"] != float64(9) {
+					t.Errorf("scalerValue not round-tripped: got %v", input["scalerValue"])
+				}
+				if input["workersMax"] != float64(5) {
+					t.Errorf("workersMax not round-tripped: got %v", input["workersMax"])
+				}
+				// the gpu selection comes from the graphql read, since rest never reports it.
+				if input["gpuIds"] != "ADA_24" {
+					t.Errorf("gpuIds not round-tripped: got %v", input["gpuIds"])
+				}
+
 			})
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
-	}))
-	defer server.Close()
-
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-	viper.Set("restApiUrl", server.URL)
-	viper.Set("apiUrl", server.URL)
-	t.Cleanup(func() {
-		viper.Set("restApiUrl", "")
-		viper.Set("apiUrl", "")
-	})
-
-	updateModelRefs = []string{"https://huggingface.co/org/model:main"}
-	updateClearModels = false
-	updateWorkersMin = -1
-	updateWorkersMax = -1
-	updateIdleTimeout = -1
-	updateScaleThreshold = -1
-
-	cmd := &cobra.Command{}
-	cmd.Flags().String("output", "json", "")
-
-	err := runUpdate(cmd, []string{"ep-123"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	vars, _ := gqlBody["variables"].(map[string]interface{})
-	input, _ := vars["input"].(map[string]interface{})
-
-	// model references must carry the new value.
-	refs, _ := input["modelReferences"].([]interface{})
-	if len(refs) != 1 || refs[0] != "https://huggingface.co/org/model:main" {
-		t.Fatalf("expected modelReferences to contain the provided ref, got %#v", refs)
-	}
-
-	// existing config must be round-tripped, not reset to defaults.
-	if input["idleTimeout"] != float64(42) {
-		t.Errorf("idleTimeout not round-tripped: got %v", input["idleTimeout"])
-	}
-	if input["scalerValue"] != float64(9) {
-		t.Errorf("scalerValue not round-tripped: got %v", input["scalerValue"])
-	}
-	if input["workersMax"] != float64(5) {
-		t.Errorf("workersMax not round-tripped: got %v", input["workersMax"])
 	}
 }

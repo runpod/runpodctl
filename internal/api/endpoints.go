@@ -16,7 +16,8 @@ type Endpoint struct {
 	ID                 string                  `json:"id"`
 	Name               string                  `json:"name"`
 	TemplateID         string                  `json:"templateId,omitempty"`
-	GpuIDs             string                  `json:"gpuIds,omitempty"`
+	GpuIDs             string                  `json:"gpuIds,omitempty"`     // graphql write side only: pool ids
+	GpuTypeIDs         []string                `json:"gpuTypeIds,omitempty"` // rest read side only: gpu type ids
 	InstanceIDs        []string                `json:"instanceIds,omitempty"`
 	NetworkVolumeID    string                  `json:"networkVolumeId,omitempty"`
 	NetworkVolumeIDs   []EndpointNetworkVolume `json:"networkVolumeIds,omitempty"`
@@ -250,6 +251,57 @@ func (c *Client) DeleteEndpoint(endpointID string) error {
 	return err
 }
 
+// getEndpointGpuIDs reads an endpoint's gpuIds: the gpu *pool* id string
+// saveEndpoint's write side expects, e.g. "AMPERE_48", or
+// "AMPERE_48,-NVIDIA RTX A6000" when the endpoint is restricted to a subset of
+// a pool. This has to go through GraphQL. A REST read only reports gpuTypeIds
+// — gpu *type* names in a different identifier space, with no way to express
+// those "-" exclusions — so a pool id derived from the REST shape drops any
+// exclusion and widens the endpoint's permitted hardware.
+func (c *Client) getEndpointGpuIDs(endpointID string) (string, error) {
+	query := `
+		query EndpointGpuIDs($id: String!) {
+			myself {
+				endpoint(id: $id) {
+					gpuIds
+				}
+			}
+		}
+	`
+
+	data, err := c.graphqlRequest(query, map[string]interface{}{"id": endpointID})
+	if err != nil {
+		return "", err
+	}
+
+	var resp struct {
+		Data struct {
+			Myself *struct {
+				Endpoint *struct {
+					GpuIDs string `json:"gpuIds"`
+				} `json:"endpoint"`
+			} `json:"myself"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return "", fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if len(resp.Errors) > 0 {
+		return "", newGraphQLError(resp.Errors[0].Message)
+	}
+
+	if resp.Data.Myself == nil || resp.Data.Myself.Endpoint == nil {
+		return "", fmt.Errorf("endpoint %s not found", endpointID)
+	}
+
+	return resp.Data.Myself.Endpoint.GpuIDs, nil
+}
+
 // UpdateEndpointModels sets the model references on an existing endpoint via
 // saveEndpoint. The full current config is round-tripped so that only
 // modelReferences changes — saveEndpoint is a full replace and omitting fields
@@ -288,6 +340,24 @@ func (c *Client) UpdateEndpointModels(endpointID string, modelRefs []string) (*E
 		}
 	}
 
+	// A REST read never returns gpuIds, so a GPU endpoint round-tripped straight
+	// back through saveEndpoint fails "gpuId(s) is required for a gpu endpoint".
+	// Read the authoritative value over GraphQL rather than rebuilding one from
+	// the REST gpuTypeIds: that translation cannot express the "-<type>"
+	// exclusions that restrict an endpoint to a subset of a pool, so a
+	// model-only update would silently widen its permitted hardware.
+	gpuIDs, err := c.getEndpointGpuIDs(endpointID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read endpoint gpu ids: %w", err)
+	}
+
+	// saveEndpoint rejects an empty gpuIds on anything without instanceIds, so a
+	// GPU endpoint that reports none is a read we do not understand — say so
+	// instead of writing a config that drops its gpu selection.
+	if gpuIDs == "" && len(endpoint.InstanceIDs) == 0 {
+		return nil, fmt.Errorf("endpoint %s reports no gpuIds and no instanceIds; refusing to update model references with an empty gpu selection", endpointID)
+	}
+
 	query := `
 		mutation SaveEndpoint($input: EndpointInput!) {
 			saveEndpoint(input: $input) {
@@ -318,7 +388,7 @@ func (c *Client) UpdateEndpointModels(endpointID string, modelRefs []string) (*E
 			"id":                 endpointID,
 			"name":               endpoint.Name,
 			"templateId":         endpoint.TemplateID,
-			"gpuIds":             endpoint.GpuIDs,
+			"gpuIds":             gpuIDs,
 			"gpuCount":           endpoint.GpuCount,
 			"instanceIds":        endpoint.InstanceIDs,
 			"workersMin":         endpoint.WorkersMin,

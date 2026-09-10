@@ -402,59 +402,105 @@ func TestUpdateEndpointTemplate_GraphQLError(t *testing.T) {
 	}
 }
 
-func TestUpdateEndpointModels_RoundTripsConfig(t *testing.T) {
+// updateModelsStub stands in for the three calls UpdateEndpointModels makes:
+// the REST endpoint read, the GraphQL gpuIds read, and the saveEndpoint write.
+// restJSON is the REST body (which, like prod, never carries gpuIds); gpuIDs is
+// what the GraphQL read reports; gpuIDsErr makes that read fail instead.
+type updateModelsStub struct {
+	restJSON  string
+	gpuIDs    string
+	gpuIDsErr string
+
+	saveInput  map[string]interface{}
+	saveCalled bool
+}
+
+// client wires a client to a server backed by the stub, restoring the global
+// viper key it has to set on the way out.
+func (s *updateModelsStub) client(t *testing.T) *Client {
+	t.Helper()
+
 	oldAPIURL := viper.GetString("apiUrl")
 	t.Cleanup(func() { viper.Set("apiUrl", oldAPIURL) })
-
-	var gqlInput map[string]interface{}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/endpoints/"):
-			// REST read: return wire shape with custom config and a bare-string networkVolumeId.
-			w.Write([]byte(`{
-				"id": "ep-abc",
-				"name": "my-ep",
-				"templateId": "tpl-1",
-				"gpuIds": "ADA_24",
-				"workersMin": 1,
-				"workersMax": 5,
-				"idleTimeout": 42,
-				"scalerType": "REQUEST_COUNT",
-				"scalerValue": 9,
-				"networkVolumeId": "vol-9",
-				"networkVolumeIds": ["vol-9"]
-			}`))
+			_, _ = w.Write([]byte(s.restJSON))
 		case r.Method == http.MethodPost:
-			// GraphQL saveEndpoint call.
 			var body struct {
-				Variables struct {
-					Input map[string]interface{} `json:"input"`
-				} `json:"variables"`
+				Query     string                 `json:"query"`
+				Variables map[string]interface{} `json:"variables"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Fatalf("decode gql body: %v", err)
+				t.Errorf("decode gql body: %v", err)
+				return
 			}
-			gqlInput = body.Variables.Input
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"data": map[string]interface{}{
-					"saveEndpoint": map[string]interface{}{
-						"id":   "ep-abc",
-						"name": "my-ep",
+			switch {
+			case strings.Contains(body.Query, "EndpointGpuIDs"):
+				if s.gpuIDsErr != "" {
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{
+						"errors": []map[string]interface{}{{"message": s.gpuIDsErr}},
+					})
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"data": map[string]interface{}{
+						"myself": map[string]interface{}{
+							"endpoint": map[string]interface{}{"gpuIds": s.gpuIDs},
+						},
 					},
-				},
-			})
+				})
+			case strings.Contains(body.Query, "saveEndpoint"):
+				s.saveCalled = true
+				s.saveInput, _ = body.Variables["input"].(map[string]interface{})
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"data": map[string]interface{}{
+						"saveEndpoint": map[string]interface{}{"id": "ep-abc", "name": "my-ep"},
+					},
+				})
+			default:
+				// nothing may reconstruct gpuIds from the REST gpuTypeIds — notably
+				// no serverlessGpuPools lookup: that translation cannot express the
+				// pool exclusions gpuIds carries.
+				t.Errorf("unexpected graphql query: %s", body.Query)
+			}
 		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 
 	t.Setenv("RUNPOD_API_KEY", "test-key")
 	viper.Set("apiUrl", server.URL)
 
-	client, _ := NewClient()
+	client, err := NewClient()
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
 	client.baseURL = server.URL
+	return client
+}
+
+func TestUpdateEndpointModels_RoundTripsConfig(t *testing.T) {
+	stub := &updateModelsStub{
+		// REST read: real wire shape, with a bare-string networkVolumeId.
+		restJSON: `{
+			"id": "ep-abc",
+			"name": "my-ep",
+			"templateId": "tpl-1",
+			"gpuTypeIds": ["NVIDIA L4"],
+			"workersMin": 1,
+			"workersMax": 5,
+			"idleTimeout": 42,
+			"scalerType": "REQUEST_COUNT",
+			"scalerValue": 9,
+			"networkVolumeId": "vol-9",
+			"networkVolumeIds": ["vol-9"]
+		}`,
+		gpuIDs: "ADA_24",
+	}
+	client := stub.client(t)
 
 	_, err := client.UpdateEndpointModels("ep-abc", []string{"https://huggingface.co/org/model:main"})
 	if err != nil {
@@ -473,21 +519,21 @@ func TestUpdateEndpointModels_RoundTripsConfig(t *testing.T) {
 		"scalerValue": float64(9),
 	}
 	for field, want := range checks {
-		if got := gqlInput[field]; got != want {
+		if got := stub.saveInput[field]; got != want {
 			t.Errorf("input.%s = %v, want %v", field, got, want)
 		}
 	}
 
 	// modelReferences must carry the new value, not the old one.
-	refs, _ := gqlInput["modelReferences"].([]interface{})
+	refs, _ := stub.saveInput["modelReferences"].([]interface{})
 	if len(refs) != 1 || refs[0] != "https://huggingface.co/org/model:main" {
-		t.Errorf("unexpected modelReferences: %v", gqlInput["modelReferences"])
+		t.Errorf("unexpected modelReferences: %v", stub.saveInput["modelReferences"])
 	}
 
 	// networkVolumeIds must be passed as objects, not bare strings.
-	nvids, _ := gqlInput["networkVolumeIds"].([]interface{})
+	nvids, _ := stub.saveInput["networkVolumeIds"].([]interface{})
 	if len(nvids) != 1 {
-		t.Fatalf("expected 1 networkVolumeId, got %v", gqlInput["networkVolumeIds"])
+		t.Fatalf("expected 1 networkVolumeId, got %v", stub.saveInput["networkVolumeIds"])
 	}
 	nvobj, _ := nvids[0].(map[string]interface{})
 	if nvobj["networkVolumeId"] != "vol-9" {
@@ -496,7 +542,7 @@ func TestUpdateEndpointModels_RoundTripsConfig(t *testing.T) {
 
 	// the REST fixture above has neither "flashboot" nor "flashBootType", so
 	// this must fall back to the "OFF" default rather than sending "".
-	if got := gqlInput["flashBootType"]; got != "OFF" {
+	if got := stub.saveInput["flashBootType"]; got != "OFF" {
 		t.Errorf("expected flashBootType OFF when REST returns no flash boot info, got %v", got)
 	}
 }
@@ -508,60 +554,145 @@ func TestUpdateEndpointModels_RoundTripsConfig(t *testing.T) {
 // rejected it with `Value "" does not exist in "FlashBootType" enum.` on every
 // real endpoint. UpdateEndpointModels must derive the enum from the REST bool.
 func TestUpdateEndpointModels_DerivesFlashBootTypeFromRESTBool(t *testing.T) {
-	oldAPIURL := viper.GetString("apiUrl")
-	t.Cleanup(func() { viper.Set("apiUrl", oldAPIURL) })
-
-	var gqlInput map[string]interface{}
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/endpoints/"):
-			// REST read: the real wire shape — "flashboot" bool, no "flashBootType".
-			w.Write([]byte(`{
-				"id": "ep-abc",
-				"name": "my-ep",
-				"templateId": "tpl-1",
-				"gpuIds": "ADA_24",
-				"workersMin": 0,
-				"workersMax": 1,
-				"flashboot": true
-			}`))
-		case r.Method == http.MethodPost:
-			var body struct {
-				Variables struct {
-					Input map[string]interface{} `json:"input"`
-				} `json:"variables"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Fatalf("decode gql body: %v", err)
-			}
-			gqlInput = body.Variables.Input
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"data": map[string]interface{}{
-					"saveEndpoint": map[string]interface{}{
-						"id":   "ep-abc",
-						"name": "my-ep",
-					},
-				},
-			})
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-	viper.Set("apiUrl", server.URL)
-
-	client, _ := NewClient()
-	client.baseURL = server.URL
+	stub := &updateModelsStub{
+		// REST read: the real wire shape — "flashboot" bool, no "flashBootType".
+		restJSON: `{
+			"id": "ep-abc",
+			"name": "my-ep",
+			"templateId": "tpl-1",
+			"gpuTypeIds": ["NVIDIA L4"],
+			"workersMin": 0,
+			"workersMax": 1,
+			"flashboot": true
+		}`,
+		gpuIDs: "ADA_24",
+	}
+	client := stub.client(t)
 
 	if _, err := client.UpdateEndpointModels("ep-abc", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if got := gqlInput["flashBootType"]; got != "FLASHBOOT" {
+	if got := stub.saveInput["flashBootType"]; got != "FLASHBOOT" {
 		t.Errorf("expected flashBootType FLASHBOOT when REST flashboot=true, got %v", got)
+	}
+}
+
+// A REST read never returns gpuIds, so the empty one that left made
+// saveEndpoint reject every GPU endpoint update with "gpuId(s) is required for
+// a gpu endpoint". gpuIds has to be read over GraphQL, and passed through
+// untouched: it is not just a pool id but a whole gpu selection, and the "-"
+// entries restricting an endpoint to a subset of a pool are unrepresentable in
+// the gpuTypeIds REST reports. Reconstructing it from those (found live on
+// PR #340) re-permitted the excluded gpus, so a model-reference change silently
+// widened the endpoint's hardware.
+func TestUpdateEndpointModels_PreservesGpuPoolExclusions(t *testing.T) {
+	stub := &updateModelsStub{
+		// an endpoint restricted to one gpu of the two-gpu AMPERE_48 pool: REST
+		// reports only the allowed type, graphql the pool plus the exclusion.
+		restJSON: `{
+			"id": "ep-abc",
+			"name": "my-ep",
+			"templateId": "tpl-1",
+			"gpuTypeIds": ["NVIDIA A40"],
+			"workersMin": 0,
+			"workersMax": 1
+		}`,
+		gpuIDs: "AMPERE_48,-NVIDIA RTX A6000",
+	}
+	client := stub.client(t)
+
+	if _, err := client.UpdateEndpointModels("ep-abc", []string{"https://huggingface.co/org/model:main"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := stub.saveInput["gpuIds"]; got != "AMPERE_48,-NVIDIA RTX A6000" {
+		t.Errorf("gpuIds = %v, want the graphql value verbatim; an update must not widen the gpu selection", got)
+	}
+}
+
+// A failed gpuIds read must stop the update. Writing what we could not read
+// would drop the endpoint's gpu selection, and inferring one from the REST
+// gpuTypeIds gets the whole mutation rejected with `Invalid GPU Pool ID`,
+// masking the read failure that caused it (found live on PR #340).
+func TestUpdateEndpointModels_GpuIDsReadFailureSkipsWrite(t *testing.T) {
+	stub := &updateModelsStub{
+		restJSON: `{
+			"id": "ep-abc",
+			"name": "my-ep",
+			"gpuTypeIds": ["NVIDIA A40"],
+			"workersMin": 0,
+			"workersMax": 1
+		}`,
+		gpuIDsErr: "Something went wrong. Please try again later or contact support.",
+	}
+	client := stub.client(t)
+
+	_, err := client.UpdateEndpointModels("ep-abc", nil)
+	if err == nil {
+		t.Fatal("expected an error when the gpuIds read fails")
+	}
+	if !strings.Contains(err.Error(), "failed to read endpoint gpu ids") {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if stub.saveCalled {
+		t.Error("saveEndpoint must not be called when the gpuIds read fails")
+	}
+}
+
+// saveEndpoint rejects an empty gpuIds on anything without instanceIds, so
+// report that rather than sending a write that drops the gpu selection.
+func TestUpdateEndpointModels_EmptyGpuIDsOnGpuEndpointSkipsWrite(t *testing.T) {
+	stub := &updateModelsStub{
+		restJSON: `{
+			"id": "ep-abc",
+			"name": "my-ep",
+			"gpuTypeIds": ["NVIDIA A40"],
+			"workersMin": 0,
+			"workersMax": 1
+		}`,
+		gpuIDs: "",
+	}
+	client := stub.client(t)
+
+	_, err := client.UpdateEndpointModels("ep-abc", nil)
+	if err == nil {
+		t.Fatal("expected an error when a gpu endpoint reports no gpuIds")
+	}
+	if !strings.Contains(err.Error(), "no gpuIds and no instanceIds") {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if stub.saveCalled {
+		t.Error("saveEndpoint must not be called with an empty gpu selection")
+	}
+}
+
+// A cpu endpoint has instanceIds and legitimately no gpuIds, so the empty-gpuIds
+// guard above must not block it.
+func TestUpdateEndpointModels_CPUEndpointNeedsNoGpuIDs(t *testing.T) {
+	stub := &updateModelsStub{
+		restJSON: `{
+			"id": "ep-abc",
+			"name": "my-ep",
+			"templateId": "tpl-1",
+			"instanceIds": ["cpu3c-2-4"],
+			"workersMin": 0,
+			"workersMax": 1
+		}`,
+		gpuIDs: "",
+	}
+	client := stub.client(t)
+
+	if _, err := client.UpdateEndpointModels("ep-abc", nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := stub.saveInput["gpuIds"]; got != "" {
+		t.Errorf("gpuIds = %v, want empty for a cpu endpoint", got)
+	}
+	ids, _ := stub.saveInput["instanceIds"].([]interface{})
+	if len(ids) != 1 || ids[0] != "cpu3c-2-4" {
+		t.Errorf("instanceIds = %v, want the cpu instance preserved", stub.saveInput["instanceIds"])
 	}
 }
 
