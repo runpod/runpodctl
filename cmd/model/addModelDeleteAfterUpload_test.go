@@ -62,13 +62,13 @@ func stubAddModelUploadSeams(t *testing.T) {
 	t.Helper()
 
 	oldAddModelToRepo := addModelToRepo
-	oldCreateModelRepoUpload := createModelRepoUpload
+	oldCreateModelRepoUploadBatch := createModelRepoUploadBatch
 	oldCompleteModelUploadFile := completeModelUploadFile
 	oldCompleteModelRepoUpload := completeModelRepoUpload
 	oldGetModelsForAdd := getModelsForAdd
 	t.Cleanup(func() {
 		addModelToRepo = oldAddModelToRepo
-		createModelRepoUpload = oldCreateModelRepoUpload
+		createModelRepoUploadBatch = oldCreateModelRepoUploadBatch
 		completeModelUploadFile = oldCompleteModelUploadFile
 		completeModelRepoUpload = oldCompleteModelRepoUpload
 		getModelsForAdd = oldGetModelsForAdd
@@ -77,12 +77,16 @@ func stubAddModelUploadSeams(t *testing.T) {
 	addModelToRepo = func(input *api.AddModelToRepoInput) (*api.Model, error) {
 		return &api.Model{ID: "model-id", Owner: "user-id", Name: "test-model", Provider: "huggingface"}, nil
 	}
-	createModelRepoUpload = func(input *api.CreateModelRepoUploadInput) (*api.ModelRepoMutationResult, error) {
-		return &api.ModelRepoMutationResult{
+	createModelRepoUploadBatch = func(input *api.CreateModelRepoUploadBatchInput) (*api.ModelRepoUploadBatchResult, error) {
+		uploads := make([]*api.ModelRepoUpload, len(input.Files))
+		for i, file := range input.Files {
+			uploads[i] = &api.ModelRepoUpload{SessionID: "session-" + file.FileName, Key: "key-" + file.FileName}
+		}
+		return &api.ModelRepoUploadBatchResult{
 			Success: true,
 			Model:   &api.Model{ID: "model-id", Owner: "user-id", Name: "test-model", Provider: "LOCAL"},
 			Version: &api.ModelVersion{UUID: "version-uuid"},
-			Upload:  &api.ModelRepoUpload{SessionID: "session-" + input.FileName, Key: "key-" + input.FileName},
+			Uploads: uploads,
 		}, nil
 	}
 	completeModelUploadFile = func(upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {

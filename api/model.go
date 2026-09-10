@@ -247,6 +247,36 @@ type CreateModelRepoUploadInput struct {
 	CredentialReference string                 `json:"credentialReference,omitempty"`
 }
 
+// ModelRepoUploadBatchFileInput is one file of a createModelRepoUploadBatch manifest,
+// mirroring CreateModelRepoUploadInput's per-file fields.
+type ModelRepoUploadBatchFileInput struct {
+	FileName      string `json:"fileName"`
+	FileSizeBytes string `json:"fileSizeBytes"`
+	PartSizeBytes string `json:"partSizeBytes,omitempty"`
+	ContentType   string `json:"contentType,omitempty"`
+}
+
+// CreateModelRepoUploadBatchInput starts upload sessions for every file in Files in one
+// request. All files land on the same model version.
+type CreateModelRepoUploadBatchInput struct {
+	Owner               string                          `json:"owner,omitempty"`
+	Name                string                          `json:"name,omitempty"`
+	Files               []ModelRepoUploadBatchFileInput `json:"files"`
+	ModelVersionUUID    string                          `json:"modelVersionUuid,omitempty"`
+	Metadata            map[string]interface{}          `json:"metadata,omitempty"`
+	CredentialType      string                          `json:"credentialType,omitempty"`
+	CredentialReference string                          `json:"credentialReference,omitempty"`
+}
+
+// ModelRepoUploadBatchResult represents the payload returned by createModelRepoUploadBatch.
+type ModelRepoUploadBatchResult struct {
+	Success bool               `json:"success"`
+	Message string             `json:"message"`
+	Model   *Model             `json:"model,omitempty"`
+	Version *ModelVersion      `json:"version,omitempty"`
+	Uploads []*ModelRepoUpload `json:"uploads"`
+}
+
 // AddModelToRepo uploads a new model to the RunPod model repository.
 func AddModelToRepo(input *AddModelToRepoInput) (*Model, error) {
 	if input == nil {
@@ -712,11 +742,11 @@ func CreateModelRepoUpload(input *CreateModelRepoUploadInput) (*ModelRepoMutatio
                                         completeUrl
                                         abortUrl
                                 }
-	                                model {
-	                                        id
-	                                        owner
-	                                        name
-	                                        provider
+                                model {
+                                        id
+                                        owner
+                                        name
+                                        provider
                                         status
                                         updatedAt
                                 }
@@ -774,6 +804,162 @@ func CreateModelRepoUpload(input *CreateModelRepoUploadInput) (*ModelRepoMutatio
 
 	if result.Upload == nil {
 		return nil, fmt.Errorf("upload is nil: %s", string(rawData))
+	}
+
+	return result, nil
+}
+
+// CreateModelRepoUploadBatch starts an upload session and presigned URLs for every file in
+// input.Files, which must all belong to the same model version.
+func CreateModelRepoUploadBatch(input *CreateModelRepoUploadBatchInput) (*ModelRepoUploadBatchResult, error) {
+	if input == nil {
+		return nil, fmt.Errorf("input cannot be nil")
+	}
+
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		return nil, fmt.Errorf("name cannot be empty")
+	}
+	if len(input.Files) == 0 {
+		return nil, fmt.Errorf("files cannot be empty")
+	}
+
+	files := make([]map[string]interface{}, 0, len(input.Files))
+	for i, file := range input.Files {
+		fileName := strings.TrimSpace(file.FileName)
+		if fileName == "" {
+			return nil, fmt.Errorf("files[%d].fileName cannot be empty", i)
+		}
+		fileSize := strings.TrimSpace(file.FileSizeBytes)
+		if fileSize == "" {
+			return nil, fmt.Errorf("files[%d].fileSizeBytes cannot be empty", i)
+		}
+
+		entry := map[string]interface{}{
+			"fileName":      fileName,
+			"fileSizeBytes": fileSize,
+		}
+		if v := strings.TrimSpace(file.PartSizeBytes); v != "" {
+			entry["partSizeBytes"] = v
+		}
+		if v := strings.TrimSpace(file.ContentType); v != "" {
+			entry["contentType"] = v
+		}
+		files = append(files, entry)
+	}
+
+	payload := map[string]interface{}{
+		"name":  name,
+		"files": files,
+	}
+
+	addString := func(key, value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		payload[key] = value
+	}
+
+	addString("owner", input.Owner)
+	addString("credentialType", input.CredentialType)
+	addString("credentialReference", input.CredentialReference)
+	addString("modelVersionUuid", input.ModelVersionUUID)
+
+	if len(input.Metadata) > 0 {
+		payload["metadata"] = input.Metadata
+	}
+
+	variables := map[string]interface{}{
+		"input": payload,
+	}
+
+	gqlInput := Input{
+		Query: `
+                mutation createModelRepoUploadBatch($input: CreateModelRepoUploadBatchInput!) {
+                        createModelRepoUploadBatch(input: $input) {
+                                success
+                                message
+                                uploads {
+                                        sessionId
+                                        status
+                                        uploadId
+                                        bucket
+                                        key
+                                        keyPrefix
+                                        partSizeBytes
+                                        partCount
+                                        expiresInSeconds
+                                        parts {
+                                                partNumber
+                                                url
+                                                expiresAt
+                                        }
+                                        completeUrl
+                                        abortUrl
+                                }
+                                model {
+                                        id
+                                        owner
+                                        name
+                                        provider
+                                        status
+                                        updatedAt
+                                }
+                                version {
+                                        uuid
+                                        hash
+                                        status
+                                        metadata
+                                        createdAt
+                                        updatedAt
+                                }
+                        }
+                }
+                `,
+		Variables: variables,
+	}
+
+	res, err := Query(gqlInput)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	rawData, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode != http.StatusOK {
+		return nil, modelRepoHTTPError(res.StatusCode, rawData)
+	}
+
+	var data struct {
+		Data *struct {
+			CreateModelRepoUploadBatch *ModelRepoUploadBatchResult `json:"createModelRepoUploadBatch"`
+		} `json:"data"`
+		Errors []*GraphQLError `json:"errors"`
+	}
+	if err = json.Unmarshal(rawData, &data); err != nil {
+		return nil, err
+	}
+	if len(data.Errors) > 0 {
+		return nil, modelRepoGraphQLError(data.Errors[0])
+	}
+	if data.Data == nil || data.Data.CreateModelRepoUploadBatch == nil {
+		return nil, fmt.Errorf("data is nil: %s", string(rawData))
+	}
+
+	result := data.Data.CreateModelRepoUploadBatch
+	if !result.Success {
+		if result.Message != "" {
+			return nil, errors.New(result.Message)
+		}
+		return nil, fmt.Errorf("createModelRepoUploadBatch failed: %s", string(rawData))
+	}
+
+	if len(result.Uploads) != len(input.Files) {
+		return nil, fmt.Errorf("expected %d upload sessions, got %d: %s", len(input.Files), len(result.Uploads), string(rawData))
 	}
 
 	return result, nil

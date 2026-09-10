@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -104,13 +105,13 @@ func TestSetModelGraphQLTimeoutSkipsWhenInheritedFlagChanged(t *testing.T) {
 func TestRunAddModelPathWaitForHashPrintsCompactOutput(t *testing.T) {
 	resetAddModelGlobals(t)
 	oldAddModelToRepo := addModelToRepo
-	oldCreateModelRepoUpload := createModelRepoUpload
+	oldCreateModelRepoUploadBatch := createModelRepoUploadBatch
 	oldCompleteModelUploadFile := completeModelUploadFile
 	oldCompleteModelRepoUpload := completeModelRepoUpload
 	oldGetModelsForAdd := getModelsForAdd
 	t.Cleanup(func() {
 		addModelToRepo = oldAddModelToRepo
-		createModelRepoUpload = oldCreateModelRepoUpload
+		createModelRepoUploadBatch = oldCreateModelRepoUploadBatch
 		completeModelUploadFile = oldCompleteModelUploadFile
 		completeModelRepoUpload = oldCompleteModelRepoUpload
 		getModelsForAdd = oldGetModelsForAdd
@@ -138,8 +139,12 @@ func TestRunAddModelPathWaitForHashPrintsCompactOutput(t *testing.T) {
 			Provider: "huggingface",
 		}, nil
 	}
-	createModelRepoUpload = func(input *api.CreateModelRepoUploadInput) (*api.ModelRepoMutationResult, error) {
-		return &api.ModelRepoMutationResult{
+	createModelRepoUploadBatch = func(input *api.CreateModelRepoUploadBatchInput) (*api.ModelRepoUploadBatchResult, error) {
+		uploads := make([]*api.ModelRepoUpload, len(input.Files))
+		for i, file := range input.Files {
+			uploads[i] = &api.ModelRepoUpload{SessionID: "session-" + file.FileName, Key: "key-" + file.FileName}
+		}
+		return &api.ModelRepoUploadBatchResult{
 			Success: true,
 			Model: &api.Model{
 				ID:       "model-id",
@@ -148,10 +153,7 @@ func TestRunAddModelPathWaitForHashPrintsCompactOutput(t *testing.T) {
 				Provider: "LOCAL",
 			},
 			Version: &api.ModelVersion{UUID: "version-uuid"},
-			Upload: &api.ModelRepoUpload{
-				SessionID: "session-id",
-				Key:       "key",
-			},
+			Uploads: uploads,
 		}, nil
 	}
 	completeModelUploadFile = func(upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
@@ -205,13 +207,13 @@ func TestRunAddModelPathWaitForHashPrintsCompactOutput(t *testing.T) {
 func TestRunAddModelPathWaitForHashVerbosePrintsFullOutput(t *testing.T) {
 	resetAddModelGlobals(t)
 	oldAddModelToRepo := addModelToRepo
-	oldCreateModelRepoUpload := createModelRepoUpload
+	oldCreateModelRepoUploadBatch := createModelRepoUploadBatch
 	oldCompleteModelUploadFile := completeModelUploadFile
 	oldCompleteModelRepoUpload := completeModelRepoUpload
 	oldGetModelsForAdd := getModelsForAdd
 	t.Cleanup(func() {
 		addModelToRepo = oldAddModelToRepo
-		createModelRepoUpload = oldCreateModelRepoUpload
+		createModelRepoUploadBatch = oldCreateModelRepoUploadBatch
 		completeModelUploadFile = oldCompleteModelUploadFile
 		completeModelRepoUpload = oldCompleteModelRepoUpload
 		getModelsForAdd = oldGetModelsForAdd
@@ -232,12 +234,16 @@ func TestRunAddModelPathWaitForHashVerbosePrintsFullOutput(t *testing.T) {
 	addModelToRepo = func(input *api.AddModelToRepoInput) (*api.Model, error) {
 		return &api.Model{ID: "model-id", Owner: "user-id", Name: "test-model", Provider: "huggingface"}, nil
 	}
-	createModelRepoUpload = func(input *api.CreateModelRepoUploadInput) (*api.ModelRepoMutationResult, error) {
-		return &api.ModelRepoMutationResult{
+	createModelRepoUploadBatch = func(input *api.CreateModelRepoUploadBatchInput) (*api.ModelRepoUploadBatchResult, error) {
+		uploads := make([]*api.ModelRepoUpload, len(input.Files))
+		for i, file := range input.Files {
+			uploads[i] = &api.ModelRepoUpload{SessionID: "session-" + file.FileName, Key: "key-" + file.FileName}
+		}
+		return &api.ModelRepoUploadBatchResult{
 			Success: true,
 			Model:   &api.Model{ID: "model-id", Owner: "user-id", Name: "test-model", Provider: "LOCAL"},
 			Version: &api.ModelVersion{UUID: "version-uuid"},
-			Upload:  &api.ModelRepoUpload{SessionID: "session-id", Key: "key"},
+			Uploads: uploads,
 		}, nil
 	}
 	completeModelUploadFile = func(upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
@@ -534,12 +540,12 @@ func TestRunAddModelLocalUploadWithMetadataRemainsUnchanged(t *testing.T) {
 	}
 }
 
-func TestUploadModelFilesUsesModelVersionUUIDAfterFirstFile(t *testing.T) {
-	oldCreateModelRepoUpload := createModelRepoUpload
+func TestUploadModelFilesCreatesOneBatchWhenManifestFits(t *testing.T) {
+	oldCreateModelRepoUploadBatch := createModelRepoUploadBatch
 	oldCompleteModelUploadFile := completeModelUploadFile
 	oldCompleteModelRepoUpload := completeModelRepoUpload
 	t.Cleanup(func() {
-		createModelRepoUpload = oldCreateModelRepoUpload
+		createModelRepoUploadBatch = oldCreateModelRepoUploadBatch
 		completeModelUploadFile = oldCompleteModelUploadFile
 		completeModelRepoUpload = oldCompleteModelRepoUpload
 	})
@@ -550,19 +556,23 @@ func TestUploadModelFilesUsesModelVersionUUIDAfterFirstFile(t *testing.T) {
 		{AbsolutePath: "/tmp/c.bin", RelativePath: "c.bin", Size: 3},
 	}
 
-	var calls []api.CreateModelRepoUploadInput
-	createModelRepoUpload = func(input *api.CreateModelRepoUploadInput) (*api.ModelRepoMutationResult, error) {
+	var calls []api.CreateModelRepoUploadBatchInput
+	createModelRepoUploadBatch = func(input *api.CreateModelRepoUploadBatchInput) (*api.ModelRepoUploadBatchResult, error) {
 		calls = append(calls, *input)
-		return &api.ModelRepoMutationResult{
+		uploads := make([]*api.ModelRepoUpload, len(input.Files))
+		for i, file := range input.Files {
+			uploads[i] = &api.ModelRepoUpload{
+				SessionID: "session-" + file.FileName,
+				Key:       "key-" + file.FileName,
+			}
+		}
+		return &api.ModelRepoUploadBatchResult{
 			Success: true,
 			Version: &api.ModelVersion{
 				UUID: "version-uuid",
 				Hash: "version-hash",
 			},
-			Upload: &api.ModelRepoUpload{
-				SessionID: "session-" + input.FileName,
-				Key:       "key-" + input.FileName,
-			},
+			Uploads: uploads,
 		}, nil
 	}
 	var events []string
@@ -593,17 +603,21 @@ func TestUploadModelFilesUsesModelVersionUUIDAfterFirstFile(t *testing.T) {
 		t.Fatalf("expected model version uuid %q, got %q", "version-uuid", modelVersionUUID)
 	}
 
-	if len(calls) != len(files) {
-		t.Fatalf("expected %d createModelRepoUpload calls, got %d", len(files), len(calls))
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 createModelRepoUploadBatch call, got %d", len(calls))
 	}
 	if calls[0].ModelVersionUUID != "" {
-		t.Fatalf("expected first upload call to omit modelVersionUuid, got %q", calls[0].ModelVersionUUID)
+		t.Fatalf("expected the only batch call to omit modelVersionUuid, got %q", calls[0].ModelVersionUUID)
 	}
-	for i := 1; i < len(calls); i++ {
-		if calls[i].ModelVersionUUID != "version-uuid" {
-			t.Fatalf("expected call %d to use modelVersionUuid %q, got %q", i, "version-uuid", calls[i].ModelVersionUUID)
+	if len(calls[0].Files) != len(files) {
+		t.Fatalf("expected batch call to carry %d files, got %d", len(files), len(calls[0].Files))
+	}
+	for i, file := range files {
+		if calls[0].Files[i].FileName != file.RelativePath {
+			t.Fatalf("expected batch file %d name %q, got %q", i, file.RelativePath, calls[0].Files[i].FileName)
 		}
 	}
+
 	if len(uploadedArtifacts) != len(files) {
 		t.Fatalf("expected %d uploaded artifacts, got %d", len(files), len(uploadedArtifacts))
 	}
@@ -646,6 +660,78 @@ func TestUploadModelFilesUsesModelVersionUUIDAfterFirstFile(t *testing.T) {
 	for i, expected := range expectedEvents {
 		if events[i] != expected {
 			t.Fatalf("expected event %d to be %q, got %q", i, expected, events[i])
+		}
+	}
+}
+
+func TestUploadModelFilesChunksLargeManifestsAcrossMultipleBatches(t *testing.T) {
+	oldCreateModelRepoUploadBatch := createModelRepoUploadBatch
+	oldCompleteModelUploadFile := completeModelUploadFile
+	oldCompleteModelRepoUpload := completeModelRepoUpload
+	t.Cleanup(func() {
+		createModelRepoUploadBatch = oldCreateModelRepoUploadBatch
+		completeModelUploadFile = oldCompleteModelUploadFile
+		completeModelRepoUpload = oldCompleteModelRepoUpload
+	})
+
+	fileCount := modelRepoUploadBatchSize + 3
+	files := make([]modelFile, fileCount)
+	for i := range files {
+		name := fmt.Sprintf("file-%04d.bin", i)
+		files[i] = modelFile{AbsolutePath: "/tmp/" + name, RelativePath: name, Size: 1}
+	}
+
+	var batchSizes []int
+	var sawVersionUUIDOnFirstCall bool
+	callIndex := 0
+	createModelRepoUploadBatch = func(input *api.CreateModelRepoUploadBatchInput) (*api.ModelRepoUploadBatchResult, error) {
+		batchSizes = append(batchSizes, len(input.Files))
+		if callIndex == 0 && input.ModelVersionUUID != "" {
+			sawVersionUUIDOnFirstCall = true
+		}
+		if callIndex > 0 && input.ModelVersionUUID != "version-uuid" {
+			t.Fatalf("expected batch call %d to pin modelVersionUuid, got %q", callIndex, input.ModelVersionUUID)
+		}
+		callIndex++
+
+		uploads := make([]*api.ModelRepoUpload, len(input.Files))
+		for i, file := range input.Files {
+			uploads[i] = &api.ModelRepoUpload{SessionID: "session-" + file.FileName, Key: "key-" + file.FileName}
+		}
+		return &api.ModelRepoUploadBatchResult{
+			Success: true,
+			Version: &api.ModelVersion{UUID: "version-uuid"},
+			Uploads: uploads,
+		}, nil
+	}
+	completeModelUploadFile = func(upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
+		return nil
+	}
+	completeModelRepoUpload = func(sessionID string) (*api.CompleteModelRepoUploadResult, error) {
+		return &api.CompleteModelRepoUploadResult{SessionID: sessionID, Status: "completed"}, nil
+	}
+
+	uploadedFiles, _, modelVersionUUID, err := uploadModelFiles(files, &api.CreateModelRepoUploadInput{Name: "test-model"})
+	if err != nil {
+		t.Fatalf("uploadModelFiles returned error: %v", err)
+	}
+	if modelVersionUUID != "version-uuid" {
+		t.Fatalf("expected model version uuid %q, got %q", "version-uuid", modelVersionUUID)
+	}
+	if sawVersionUUIDOnFirstCall {
+		t.Fatal("expected the first batch call to omit modelVersionUuid")
+	}
+	if len(uploadedFiles) != fileCount {
+		t.Fatalf("expected %d uploaded files, got %d", fileCount, len(uploadedFiles))
+	}
+
+	expectedBatchSizes := []int{modelRepoUploadBatchSize, 3}
+	if len(batchSizes) != len(expectedBatchSizes) {
+		t.Fatalf("expected %d batch calls, got %d (%v)", len(expectedBatchSizes), len(batchSizes), batchSizes)
+	}
+	for i, expected := range expectedBatchSizes {
+		if batchSizes[i] != expected {
+			t.Fatalf("expected batch %d to contain %d files, got %d", i, expected, batchSizes[i])
 		}
 	}
 }

@@ -172,14 +172,20 @@ type progressReader struct {
 // TODO: replace the manual completion call with github.com/aws/aws-sdk-go-v2/service/s3's
 // CompleteMultipartUpload to rely on the SDK for payload formatting and signing logic.
 var (
-	addModelToRepo          = api.AddModelToRepo
-	createModelRepoUpload   = api.CreateModelRepoUpload
-	completeModelRepoUpload = api.CompleteModelRepoUpload
-	completeModelUploadFile = completeModelUploadWithProgress
-	getModelsForAdd         = api.GetModels
-	sleepModelHashPoll      = waitModelHashPoll
-	removeModelFile         = os.Remove
+	addModelToRepo             = api.AddModelToRepo
+	createModelRepoUpload      = api.CreateModelRepoUpload
+	createModelRepoUploadBatch = api.CreateModelRepoUploadBatch
+	completeModelRepoUpload    = api.CompleteModelRepoUpload
+	completeModelUploadFile    = completeModelUploadWithProgress
+	getModelsForAdd            = api.GetModels
+	sleepModelHashPoll         = waitModelHashPoll
+	removeModelFile            = os.Remove
 )
+
+// modelRepoUploadBatchSize caps the files per createModelRepoUploadBatch request, bounding both
+// the payload and the S3 calls the server fans out per invocation. Must stay <= the server's own
+// MAX_MODEL_REPO_UPLOAD_BATCH_FILES (runpod/RunPod node/graphql/schema/modelRepo.ts).
+const modelRepoUploadBatchSize = 500
 
 var addCmd = &cobra.Command{
 	Use:   "add",
@@ -857,6 +863,9 @@ func shellDoubleQuoteValue(value string) string {
 	return replacer.Replace(value)
 }
 
+// uploadModelFiles creates upload sessions for every file in files, modelRepoUploadBatchSize at
+// a time, then uploads their bytes. The first batch's response establishes modelVersionUUID and
+// every later batch is pinned to it, so a chunked manifest still lands on one model version.
 func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInput) ([]uploadedModelFile, *api.Model, string, error) {
 	var modelVersionUUID string
 	var uploadModel *api.Model
@@ -864,24 +873,41 @@ func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInp
 	totalSize := totalModelFileSize(files)
 	progress := newModelUploadProgress(totalSize)
 
-	for i, file := range files {
-		input := *baseInput
-		input.FileName = file.RelativePath
-		input.FileSizeBytes = strconv.FormatInt(file.Size, 10)
-		input.ModelVersionUUID = modelVersionUUID
-
-		result, err := createModelRepoUpload(&input)
-		if err != nil {
-			if progress != nil {
-				_ = progress.Clear()
-			}
-			return nil, nil, "", fmt.Errorf("create upload for %s: %w", file.RelativePath, err)
+	fail := func(err error) ([]uploadedModelFile, *api.Model, string, error) {
+		if progress != nil {
+			_ = progress.Clear()
 		}
-		if result.Upload == nil {
-			if progress != nil {
-				_ = progress.Clear()
+		return nil, nil, "", err
+	}
+
+	for start := 0; start < len(files); start += modelRepoUploadBatchSize {
+		end := start + modelRepoUploadBatchSize
+		if end > len(files) {
+			end = len(files)
+		}
+		chunk := files[start:end]
+
+		batchInput := api.CreateModelRepoUploadBatchInput{
+			Owner:               baseInput.Owner,
+			Name:                baseInput.Name,
+			ModelVersionUUID:    modelVersionUUID,
+			Metadata:            baseInput.Metadata,
+			CredentialType:      baseInput.CredentialType,
+			CredentialReference: baseInput.CredentialReference,
+			Files:               make([]api.ModelRepoUploadBatchFileInput, len(chunk)),
+		}
+		for i, file := range chunk {
+			batchInput.Files[i] = api.ModelRepoUploadBatchFileInput{
+				FileName:      file.RelativePath,
+				FileSizeBytes: strconv.FormatInt(file.Size, 10),
+				PartSizeBytes: baseInput.PartSizeBytes,
+				ContentType:   baseInput.ContentType,
 			}
-			return nil, nil, "", fmt.Errorf("upload response missing upload session details for %s", file.RelativePath)
+		}
+
+		result, err := createModelRepoUploadBatch(&batchInput)
+		if err != nil {
+			return fail(fmt.Errorf("create upload batch for files %d-%d: %w", start, end-1, err))
 		}
 		if result.Model != nil {
 			uploadModel = result.Model
@@ -890,42 +916,37 @@ func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInp
 			if result.Version != nil {
 				modelVersionUUID = strings.TrimSpace(result.Version.UUID)
 			}
-			if modelVersionUUID == "" && i < len(files)-1 {
-				if progress != nil {
-					_ = progress.Clear()
-				}
-				return nil, nil, "", fmt.Errorf("upload response missing model version uuid for %s", file.RelativePath)
+			if modelVersionUUID == "" && end < len(files) {
+				return fail(fmt.Errorf("upload batch response missing model version uuid"))
 			}
 		}
 
-		if err = completeModelUploadFile(result.Upload, file.AbsolutePath, progress); err != nil {
-			if progress != nil {
-				_ = progress.Clear()
+		for i, file := range chunk {
+			upload := result.Uploads[i]
+			if upload == nil {
+				return fail(fmt.Errorf("upload batch response missing upload session details for %s", file.RelativePath))
 			}
-			return nil, nil, "", fmt.Errorf("upload %s: %w", file.RelativePath, err)
-		}
 
-		if result.Upload.SessionID == "" {
-			if progress != nil {
-				_ = progress.Clear()
+			if err := completeModelUploadFile(upload, file.AbsolutePath, progress); err != nil {
+				return fail(fmt.Errorf("upload %s: %w", file.RelativePath, err))
 			}
-			return nil, nil, "", fmt.Errorf("upload %s: missing session identifier for completion", file.RelativePath)
-		}
 
-		uploadedFiles = append(uploadedFiles, uploadedModelFile{
-			RelativePath: file.RelativePath,
-			Key:          result.Upload.Key,
-			SessionID:    result.Upload.SessionID,
-		})
+			if upload.SessionID == "" {
+				return fail(fmt.Errorf("upload %s: missing session identifier for completion", file.RelativePath))
+			}
+
+			uploadedFiles = append(uploadedFiles, uploadedModelFile{
+				RelativePath: file.RelativePath,
+				Key:          upload.Key,
+				SessionID:    upload.SessionID,
+			})
+		}
 	}
 
 	for i := range uploadedFiles {
 		completion, err := completeModelRepoUpload(uploadedFiles[i].SessionID)
 		if err != nil {
-			if progress != nil {
-				_ = progress.Clear()
-			}
-			return nil, nil, "", fmt.Errorf("complete upload session for %s: %w", uploadedFiles[i].RelativePath, err)
+			return fail(fmt.Errorf("complete upload session for %s: %w", uploadedFiles[i].RelativePath, err))
 		}
 
 		uploadedFiles[i].SessionID = completion.SessionID
