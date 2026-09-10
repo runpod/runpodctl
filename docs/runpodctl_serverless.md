@@ -23,6 +23,7 @@ manage serverless endpoints on runpod
 * [runpodctl](runpodctl.md)	 - cli for runpod.io
 * [runpodctl serverless create](runpodctl_serverless_create.md)	 - create a new endpoint
 * [runpodctl serverless delete](runpodctl_serverless_delete.md)	 - delete an endpoint
+* [runpodctl serverless env](runpodctl_serverless_env.md)	 - show an endpoint's own live environment variable override
 * [runpodctl serverless get](runpodctl_serverless_get.md)	 - get endpoint details
 * [runpodctl serverless health](runpodctl_serverless_health.md)	 - get endpoint health
 * [runpodctl serverless list](runpodctl_serverless_list.md)	 - list all endpoints
