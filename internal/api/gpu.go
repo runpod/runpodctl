@@ -284,13 +284,14 @@ func (c *Client) ListServerlessGpuPools() ([]ServerlessGpuPool, error) {
 // ResolveServerlessGpuPoolID maps a --gpu-id value to the gpu pool id(s) that
 // saveEndpoint expects. it accepts a pool id (returned as-is), a gpu type id
 // (translated to its pool id), or a comma-separated mix of those (e.g. a hub
-// config's gpu list). if the pools query is unavailable it falls back to the
-// input unchanged so an already-correct pool id still works (the server
-// validates either way).
+// config's gpu list). a failed pools query is an error, not a fallback to the
+// input: the value is usually a gpu type id, and passing one through
+// unresolved gets the whole write rejected with `Invalid GPU Pool ID`, which
+// masks the lookup failure that actually caused it.
 func (c *Client) ResolveServerlessGpuPoolID(gpuID string) (string, error) {
 	pools, err := c.ListServerlessGpuPools()
 	if err != nil {
-		return gpuID, nil
+		return "", fmt.Errorf("failed to look up serverless gpu pools: %w", err)
 	}
 
 	poolIDs := make([]string, 0, len(pools))

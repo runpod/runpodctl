@@ -893,6 +893,135 @@ func TestCLI_ServerlessCreateFromHubWithModel(t *testing.T) {
 	t.Logf("created endpoint %s from hub with model %s", endpointID, resolved)
 }
 
+func TestCLI_ServerlessUpdateModelReferenceOnGPUEndpoint(t *testing.T) {
+	lookupOut, lookupErr, lookupE := runCLI("hub", "get", "runpod-workers/worker-vllm")
+	if lookupE != nil {
+		t.Fatalf("failed to resolve vllm hub listing: %v\nstderr: %s", lookupE, lookupErr)
+	}
+	var hubListing map[string]interface{}
+	if err := json.Unmarshal([]byte(lookupOut), &hubListing); err != nil {
+		t.Fatalf("failed to parse hub listing: %v\noutput: %s", err, lookupOut)
+	}
+	hubID, ok := hubListing["id"].(string)
+	if !ok || hubID == "" {
+		t.Fatal("expected id in hub listing response")
+	}
+
+	name := "e2e-test-gpu-update-" + time.Now().Format("20060102150405")
+	stdout, stderr, err := runCLI("serverless", "create",
+		"--hub-id", hubID,
+		"--name", name,
+		"--gpu-id", "NVIDIA GeForce RTX 4090",
+		"--workers-min", "0",
+		"--workers-max", "1",
+	)
+	if err != nil {
+		t.Fatalf("failed to create gpu serverless endpoint: %v\nstderr: %s", err, stderr)
+	}
+
+	var endpoint map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &endpoint); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+	endpointID, ok := endpoint["id"].(string)
+	if !ok || strings.TrimSpace(endpointID) == "" {
+		t.Fatal("expected endpoint id in response")
+	}
+	t.Cleanup(func() {
+		_, _, err := runCLI("serverless", "delete", endpointID)
+		if err != nil {
+			t.Logf("warning: failed to delete test endpoint %s: %v", endpointID, err)
+		} else {
+			t.Logf("cleaned up endpoint %s", endpointID)
+		}
+	})
+
+	// a model-only update must not touch the endpoint's gpu selection: dropping
+	// the graphql gpuIds exclusions on the write re-permits the excluded gpus,
+	// which shows up as extra entries in the gpu types rest reports.
+	gpusBefore := endpointGpuSelection(t, endpointID)
+
+	const modelRef = "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct:main"
+	if _, updateErr, err := runCLI("serverless", "update", endpointID, "--model-reference", modelRef); err != nil {
+		t.Fatalf("serverless update --model-reference failed on gpu endpoint: %v\nstderr: %s", err, updateErr)
+	}
+	// the ref is stored resolved to a commit hash, so match the model, not the
+	// ":main" that went in.
+	refs := endpointModelReferences(t, endpointID)
+	const modelPrefix = "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct:"
+	if len(refs) != 1 || !strings.HasPrefix(refs[0], modelPrefix) {
+		t.Fatalf("expected one %s* model reference after update, got: %v", modelPrefix, refs)
+	}
+	if got := endpointGpuSelection(t, endpointID); got != gpusBefore {
+		t.Errorf("--model-reference changed the gpu selection: %q -> %q", gpusBefore, got)
+	}
+
+	if _, clearErr, err := runCLI("serverless", "update", endpointID, "--clear-models"); err != nil {
+		t.Fatalf("serverless update --clear-models failed on gpu endpoint: %v\nstderr: %s", err, clearErr)
+	}
+	if cleared := endpointModelReferences(t, endpointID); len(cleared) > 0 {
+		t.Errorf("expected modelReferences cleared, got: %v", cleared)
+	}
+	if got := endpointGpuSelection(t, endpointID); got != gpusBefore {
+		t.Errorf("--clear-models changed the gpu selection: %q -> %q", gpusBefore, got)
+	}
+
+	t.Logf("gpu endpoint %s: model-reference and clear-models both succeeded, gpu selection %q preserved", endpointID, gpusBefore)
+}
+
+// endpointModelReferences returns the model references configured on an
+// endpoint.
+//
+// it goes through `serverless model-status`, not the `serverless update`
+// output: update re-reads the endpoint over rest for its output, and rest omits
+// modelReferences entirely, so asserting on the update's own output can only
+// ever see nil.
+func endpointModelReferences(t *testing.T, endpointID string) []string {
+	t.Helper()
+
+	stdout, stderr, err := runCLI("serverless", "model-status", endpointID)
+	if err != nil {
+		t.Fatalf("failed to read model status for %s: %v\nstderr: %s", endpointID, err, stderr)
+	}
+	var status struct {
+		ModelReferences []string `json:"modelReferences"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &status); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	return status.ModelReferences
+}
+
+// endpointGpuSelection returns the gpus an endpoint is allowed to run on, as
+// one comparable string sorted so it does not depend on the order the api
+// happens to list them in.
+//
+// mind the key: the cli renames rest's gpuTypeIds to "gpuIds" on output (see
+// renameGPUKeys), so these are gpu *type* names — not the pool-id string
+// graphql calls gpuIds. an empty read is fatal rather than compared, or a
+// renamed key would quietly turn every caller's assertion into "" == "".
+func endpointGpuSelection(t *testing.T, endpointID string) string {
+	t.Helper()
+
+	stdout, stderr, err := runCLI("serverless", "get", endpointID)
+	if err != nil {
+		t.Fatalf("failed to get endpoint %s: %v\nstderr: %s", endpointID, err, stderr)
+	}
+	var endpoint map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &endpoint); err != nil {
+		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
+	}
+
+	gpus := parseStringSlice(endpoint["gpuIds"])
+	if len(gpus) == 0 {
+		t.Fatalf("expected a gpu selection on endpoint %s, got: %s", endpointID, stdout)
+	}
+
+	sort.Strings(gpus)
+	return strings.Join(gpus, ",")
+}
+
 func TestCLI_EndpointList(t *testing.T) {
 	stdout, stderr, err := runCLI("serverless", "list")
 	if err != nil {

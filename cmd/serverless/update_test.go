@@ -420,9 +420,25 @@ func TestRunUpdate_ModelReferences(t *testing.T) {
 				"workersMax":  5
 			}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/":
-			if err := json.NewDecoder(r.Body).Decode(&gqlBody); err != nil {
-				t.Fatalf("decode gql request: %v", err)
+			var body map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode gql request: %v", err)
+				return
 			}
+			query, _ := body["query"].(string)
+			// gpuIds is unreadable over rest, so the update reads it over graphql
+			// before writing the config back.
+			if strings.Contains(query, "EndpointGpuIDs") {
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"data": map[string]interface{}{
+						"myself": map[string]interface{}{
+							"endpoint": map[string]interface{}{"gpuIds": "ADA_24"},
+						},
+					},
+				})
+				return
+			}
+			gqlBody = body
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"data": map[string]interface{}{
 					"saveEndpoint": map[string]interface{}{
@@ -479,5 +495,9 @@ func TestRunUpdate_ModelReferences(t *testing.T) {
 	}
 	if input["workersMax"] != float64(5) {
 		t.Errorf("workersMax not round-tripped: got %v", input["workersMax"])
+	}
+	// the gpu selection comes from the graphql read, since rest never reports it.
+	if input["gpuIds"] != "ADA_24" {
+		t.Errorf("gpuIds not round-tripped: got %v", input["gpuIds"])
 	}
 }
