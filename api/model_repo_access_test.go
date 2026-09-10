@@ -61,6 +61,10 @@ func TestModelRepoFunctionsReturnGraphQLErrorOnAccessDenied(t *testing.T) {
 			_, err := CreateModelRepoUpload(&CreateModelRepoUploadInput{Name: "m", FileName: "f.bin", FileSizeBytes: "10"})
 			return err
 		}},
+		{"GetModelRepoStorageUsage", func() error {
+			_, err := GetModelRepoStorageUsage("o")
+			return err
+		}},
 		{"CompleteModelRepoUpload", func() error {
 			_, err := CompleteModelRepoUpload("session-id")
 			return err

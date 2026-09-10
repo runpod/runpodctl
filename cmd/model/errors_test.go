@@ -324,7 +324,12 @@ func TestRunAddModelPropagatesErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			resetAddModelGlobals(t)
 			oldAdd, oldCreate := addModelToRepo, createModelRepoUpload
-			t.Cleanup(func() { addModelToRepo, createModelRepoUpload = oldAdd, oldCreate })
+			oldGetUsage := getModelRepoStorageUsage
+			getModelRepoStorageUsage = func(string) (*api.ModelRepoStorageUsage, error) { return nil, nil }
+			t.Cleanup(func() {
+				addModelToRepo, createModelRepoUpload = oldAdd, oldCreate
+				getModelRepoStorageUsage = oldGetUsage
+			})
 			tt.setup(t)
 
 			var err error

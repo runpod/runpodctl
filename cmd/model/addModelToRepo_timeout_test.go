@@ -108,12 +108,14 @@ func TestRunAddModelPathWaitForHashPrintsCompactOutput(t *testing.T) {
 	oldCompleteModelUploadFile := completeModelUploadFile
 	oldCompleteModelRepoUpload := completeModelRepoUpload
 	oldGetModelsForAdd := getModelsForAdd
+	oldGetModelRepoStorageUsage := getModelRepoStorageUsage
 	t.Cleanup(func() {
 		addModelToRepo = oldAddModelToRepo
 		createModelRepoUpload = oldCreateModelRepoUpload
 		completeModelUploadFile = oldCompleteModelUploadFile
 		completeModelRepoUpload = oldCompleteModelRepoUpload
 		getModelsForAdd = oldGetModelsForAdd
+		getModelRepoStorageUsage = oldGetModelRepoStorageUsage
 	})
 
 	modelDir := t.TempDir()
@@ -169,6 +171,9 @@ func TestRunAddModelPathWaitForHashPrintsCompactOutput(t *testing.T) {
 			Versions: []*api.ModelVersion{{UUID: "version-uuid", Hash: "hash-123", Status: api.ModelVersionStatusPodReady}},
 		}}, nil
 	}
+	getModelRepoStorageUsage = func(owner string) (*api.ModelRepoStorageUsage, error) {
+		return nil, nil
+	}
 
 	cmd := newTestAddModelCommand()
 	stdout, _ := captureStdStreams(t, func() {
@@ -209,12 +214,14 @@ func TestRunAddModelPathWaitForHashVerbosePrintsFullOutput(t *testing.T) {
 	oldCompleteModelUploadFile := completeModelUploadFile
 	oldCompleteModelRepoUpload := completeModelRepoUpload
 	oldGetModelsForAdd := getModelsForAdd
+	oldGetModelRepoStorageUsage := getModelRepoStorageUsage
 	t.Cleanup(func() {
 		addModelToRepo = oldAddModelToRepo
 		createModelRepoUpload = oldCreateModelRepoUpload
 		completeModelUploadFile = oldCompleteModelUploadFile
 		completeModelRepoUpload = oldCompleteModelRepoUpload
 		getModelsForAdd = oldGetModelsForAdd
+		getModelRepoStorageUsage = oldGetModelRepoStorageUsage
 	})
 
 	modelDir := t.TempDir()
@@ -254,6 +261,9 @@ func TestRunAddModelPathWaitForHashVerbosePrintsFullOutput(t *testing.T) {
 			Provider: "LOCAL",
 			Versions: []*api.ModelVersion{{UUID: "version-uuid", Hash: "hash-123", Status: api.ModelVersionStatusPodReady}},
 		}}, nil
+	}
+	getModelRepoStorageUsage = func(owner string) (*api.ModelRepoStorageUsage, error) {
+		return nil, nil
 	}
 
 	cmd := newTestAddModelCommand()
