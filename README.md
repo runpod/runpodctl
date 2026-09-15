@@ -326,6 +326,29 @@ runpodctl send data.txt
 runpodctl receive 8338-galileo-collect-fidel
 ```
 
+`receive` writes only inside the current directory. the sender chooses the
+filenames, so the whole list is checked before anything is written, and the
+transfer is refused outright rather than partly applied. refused: a path
+containing `..` or a backslash, an absolute path, a symlink whose target
+resolves outside the directory, the same destination declared twice with
+different contents, and a path that is both a file and a directory. the reason
+is reported to both sides.
+
+two consequences worth knowing:
+
+- a symlinked subdirectory in the destination blocks a transfer that writes
+  into it. if `./dir` is a symlink pointing anywhere outside the current
+  directory, `receive` refuses instead of following it. earlier versions
+  followed it silently, which let whoever held the codephrase pick which of
+  your symlinks to write through.
+- sending a tree that contains a symlink pointing outside it (`link ->
+  ../elsewhere`) is refused on the receiving side, because the link would
+  resolve outside the receive directory. symlinks pointing within the tree
+  transfer normally.
+
+a refused archive is left in place rather than deleted, so nothing that
+arrived is lost.
+
 ## output format
 
 default output is json (optimized for agents). `--output` takes `json` or `yaml`:
