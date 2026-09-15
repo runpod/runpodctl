@@ -22,13 +22,15 @@ _note: all pods automatically come with runpodctl installed with a pod-scoped ap
   - [commands](#commands)
     - [pod management](#pod-management)
     - [serverless endpoints](#serverless-endpoints)
-    - [waiting until a resource is usable](#waiting-until-a-resource-is-usable)
+      - [reading logs](#reading-logs)
       - [invoking an endpoint](#invoking-an-endpoint)
+    - [waiting until a resource is usable](#waiting-until-a-resource-is-usable)
     - [file transfer](#file-transfer)
   - [output format](#output-format)
     - [pod runtime status](#pod-runtime-status)
     - [error format](#error-format)
   - [environment variables](#environment-variables)
+    - [config permissions](#config-permissions)
   - [legacy commands](#legacy-commands)
   - [release process](#release-process)
   - [acknowledgements](#acknowledgements)
@@ -472,7 +474,7 @@ its errors are json with a `code` and exit 1.
 
 | variable | default | what it sets |
 | --- | --- | --- |
-| `RUNPOD_API_KEY` | — | api key. also settable via `runpodctl doctor` or `~/.runpod/config.toml` |
+| `RUNPOD_API_KEY` | — | api key. also settable via `runpodctl doctor` or `~/.runpod/config.toml` (see config permissions below) |
 | `RUNPOD_API_URL` | `https://rest.runpod.io/v1` | rest control plane (config key `restApiUrl`) |
 | `RUNPOD_GRAPHQL_URL` | `https://api.runpod.io/graphql` | graphql control plane (config key `apiUrl`) |
 | `RUNPOD_INVOKE_URL` | `https://api.runpod.ai/v2` | base for the serverless invoke urls reported by `serverless create/get/list/update`, and the host `serverless run/status/health` call (config key `invokeUrl`) |
@@ -483,6 +485,15 @@ or `RUNPOD_GRAPHQL_URL` at a non-prod host does **not** move the invoke urls.
 override `RUNPOD_INVOKE_URL` explicitly when you need that. rest v2 is separate
 again — the crud commands are still on rest v1, so moving one does not move the
 other.
+
+### config permissions
+
+on unix, new config files use `0600` inside a `0700` directory. config initialization
+narrows existing group/world permission bits on the directory, toml file, and legacy
+`~/.runpod.yaml`. failed checks or permission repairs stop the command before config
+writes. config paths must not be symlinks; both config files must be regular files.
+`--help` and `--version` skip config initialization. windows uses inherited acls;
+the cli does not configure them or guarantee private access there.
 
 ## legacy commands
 
