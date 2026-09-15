@@ -855,6 +855,39 @@ func (c *Client) transfer() (err error) {
 	return
 }
 
+// applyFileRequest handles a peer asking for a file. It reports whether the
+// request was applied, so the caller knows to skip the rest of the case.
+//
+// The request is only meaningful to a sender. A receiver acting on one adopts
+// a peer-chosen index that the loops after the transfer use to index the
+// manifest, which is a panic reachable without any consent from the user. It
+// is a separate method so that guard is testable without standing up a key
+// exchange.
+func (c *Client) applyFileRequest(remoteFile RemoteFileRequest) (applied, done bool, err error) {
+	if !c.Options.IsSender {
+		log.Debugf("ignoring a file request sent to the receiving side")
+		return false, false, nil
+	}
+	if n := remoteFile.FilesToTransferCurrentNum; n < 0 || n >= len(c.FilesToTransfer) {
+		return false, true, fmt.Errorf("peer asked for file %d of %d", n, len(c.FilesToTransfer))
+	}
+	if err := validateChunkRanges(remoteFile.CurrentFileChunkRanges); err != nil {
+		return false, true, err
+	}
+
+	c.FilesToTransferCurrentNum = remoteFile.FilesToTransferCurrentNum
+	c.CurrentFileChunkRanges = remoteFile.CurrentFileChunkRanges
+	c.CurrentFileChunks = utils.ChunkRangesToChunks(c.CurrentFileChunkRanges)
+	c.mutex.Lock()
+	c.chunkMap = make(map[uint64]struct{})
+	for _, chunk := range c.CurrentFileChunks {
+		c.chunkMap[uint64(chunk)] = struct{}{}
+	}
+	c.mutex.Unlock()
+	c.Step3RecipientRequestFile = true
+	return true, false, nil
+}
+
 // validateChunkRanges bounds a peer-supplied resume request before
 // utils.ChunkRangesToChunks expands it. That function reads chunkRanges[i+1]
 // for each count and multiplies out the totals, so a malformed or huge range
@@ -1241,29 +1274,11 @@ func (c *Client) processMessage(payload []byte) (done bool, err error) {
 		if err != nil {
 			return
 		}
-		if !c.Options.IsSender {
-			// this message asks a sender for a file. a receiver acting on it
-			// takes a peer-chosen index that the post-transfer loops then use
-			// to index the manifest.
-			log.Debugf("ignoring a file request sent to the receiving side")
-			break
+		var applied bool
+		applied, done, err = c.applyFileRequest(remoteFile)
+		if err != nil || !applied {
+			return
 		}
-		if n := remoteFile.FilesToTransferCurrentNum; n < 0 || n >= len(c.FilesToTransfer) {
-			return true, fmt.Errorf("peer asked for file %d of %d", n, len(c.FilesToTransfer))
-		}
-		if err = validateChunkRanges(remoteFile.CurrentFileChunkRanges); err != nil {
-			return true, err
-		}
-		c.FilesToTransferCurrentNum = remoteFile.FilesToTransferCurrentNum
-		c.CurrentFileChunkRanges = remoteFile.CurrentFileChunkRanges
-		c.CurrentFileChunks = utils.ChunkRangesToChunks(c.CurrentFileChunkRanges)
-		c.mutex.Lock()
-		c.chunkMap = make(map[uint64]struct{})
-		for _, chunk := range c.CurrentFileChunks {
-			c.chunkMap[uint64(chunk)] = struct{}{}
-		}
-		c.mutex.Unlock()
-		c.Step3RecipientRequestFile = true
 
 		if c.Options.Ask {
 			fmt.Fprintf(os.Stderr, "send to machine '%s'? (Y/n) ", remoteFile.MachineID)
