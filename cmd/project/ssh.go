@@ -62,11 +62,31 @@ type SSHConnection struct {
 	podPort    int
 	client     *ssh.Client
 	sshKeyPath string
+	// knownHostsPath is shared with the go client's host key callback, so a pod
+	// trusted by one path is trusted by the other.
+	knownHostsPath string
 }
 
 func (sshConn *SSHConnection) getSshOptions() []string {
 	return []string{
-		"-o", "StrictHostKeyChecking=no",
+		// accept-new records an unknown pod's key and then refuses a changed
+		// one. StrictHostKeyChecking=no accepted any key on every connection,
+		// so a substituted key was never reported at all.
+		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "UserKnownHostsFile=" + sshConn.knownHostsPath,
+		// key the entry on the pod rather than its address: runpod recycles pod
+		// ssh addresses, and an address-keyed entry would report a mismatch for
+		// users who did nothing wrong.
+		"-o", "HostKeyAlias=" + hostKeyAlias(sshConn.podId),
+		// CheckHostIP defaulted to yes before openssh 8.5, which would pin the
+		// recycled ip alongside the alias and reintroduce that false mismatch.
+		"-o", "CheckHostIP=no",
+		// keep the entry in the plain form knownhosts.Line writes, so the two
+		// clients cannot end up maintaining separate trust in one file. some
+		// distributions default this to yes.
+		"-o", "HashKnownHosts=no",
+		// note: rsync re-splits the -e string on spaces, so neither this path
+		// nor the pre-existing -i survives a home directory containing one.
 		"-o", "LogLevel=ERROR",
 		"-p", fmt.Sprint(sshConn.podPort),
 		"-i", sshConn.sshKeyPath,
@@ -310,12 +330,20 @@ func PodSSHConnection(podId string) (*SSHConnection, error) {
 	}
 
 	// Configure the SSH client
+	hostKeys, err := knownHostsPath()
+	if err != nil {
+		return nil, fmt.Errorf("resolving known hosts file: %w", err)
+	}
+	hostKeyCallback, err := podHostKeyCallback(podId, hostKeys)
+	if err != nil {
+		return nil, fmt.Errorf("preparing host key verification: %w", err)
+	}
 	config := &ssh.ClientConfig{
 		User: "root",
 		Auth: []ssh.AuthMethod{
 			ssh.PublicKeys(privateKey),
 		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: hostKeyCallback,
 	}
 
 	// Connect to the SSH server
@@ -325,5 +353,5 @@ func PodSSHConnection(podId string) (*SSHConnection, error) {
 		return nil, fmt.Errorf("establishing SSH connection to %s: %w", host, err)
 	}
 
-	return &SSHConnection{podId: podId, client: client, podIp: podIp, podPort: podPort, sshKeyPath: sshKeyPath}, nil
+	return &SSHConnection{podId: podId, client: client, podIp: podIp, podPort: podPort, sshKeyPath: sshKeyPath, knownHostsPath: hostKeys}, nil
 }
