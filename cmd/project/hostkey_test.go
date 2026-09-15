@@ -1,9 +1,11 @@
 package project
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -58,9 +60,12 @@ func startTestSSHD(t *testing.T, signer ssh.Signer) string {
 }
 
 func serveTestSSHD(conn net.Conn, cfg *ssh.ServerConfig) {
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(15 * time.Second)); err != nil {
+		return
+	}
 	serverConn, chans, reqs, err := ssh.NewServerConn(conn, cfg)
 	if err != nil {
-		conn.Close()
 		return
 	}
 	defer serverConn.Close()
@@ -71,16 +76,17 @@ func serveTestSSHD(conn net.Conn, cfg *ssh.ServerConfig) {
 			continue
 		}
 		go func() {
-			for r := range chReqs {
-				if r.WantReply {
-					r.Reply(true, nil) //nolint:errcheck // test server
+			defer ch.Close()
+			for request := range chReqs {
+				if request.WantReply {
+					request.Reply(request.Type == "exec", nil) //nolint:errcheck
+				}
+				if request.Type == "exec" {
+					ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0})) //nolint:errcheck
+					return
 				}
 			}
 		}()
-		// report success so an openssh client exits cleanly rather than
-		// complaining about the channel, which would muddy the assertions.
-		ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0})) //nolint:errcheck
-		ch.Close()
 	}
 }
 
@@ -139,9 +145,7 @@ func TestPodHostKeyCallbackTrustsOnFirstUse(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("known_hosts has %d lines, want 1: %v", len(lines), lines)
 	}
-	// pinned format: this is what openssh writes for -o HostKeyAlias, verified
-	// against openssh 10.3p1. if the two ever diverge they would maintain
-	// separate trust inside one file, each accepting keys the other never saw.
+	// HostKeyAlias is bare even on non-default ports; openssh must read this pin.
 	want := knownhosts.Line([]string{"runpod-pod-abc123"}, signer.PublicKey())
 	if lines[0] != want {
 		t.Errorf("entry =\n%q\nwant\n%q", lines[0], want)
@@ -213,6 +217,177 @@ func TestPodHostKeyCallbackSeparatesPods(t *testing.T) {
 	}
 }
 
+func TestPodHostKeyCallbackReloadsBeforeEnrollment(t *testing.T) {
+	for _, sameKey := range []bool{true, false} {
+		t.Run(fmt.Sprintf("same-key=%t", sameKey), func(t *testing.T) {
+			checkRepeatedEnrollment(t, sameKey)
+		})
+	}
+}
+
+func checkRepeatedEnrollment(t *testing.T, sameKey bool) {
+	t.Helper()
+	path := emptyKnownHosts(t)
+	trusted := newTestHostKey(t).PublicKey()
+	offered := trusted
+	if !sameKey {
+		offered = newTestHostKey(t).PublicKey()
+	}
+	first, err := podHostKeyCallback("pod-one", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := podHostKeyCallback("pod-one", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 40022}
+	if err := first(remote.String(), remote, trusted); err != nil {
+		t.Fatal(err)
+	}
+	err = second(remote.String(), remote, offered)
+	if sameKey && err != nil {
+		t.Fatalf("same key rejected: %v", err)
+	}
+	if !sameKey && (err == nil || !strings.Contains(err.Error(), "host key mismatch")) {
+		t.Fatalf("wanted mismatch, got %v", err)
+	}
+	lines := readLines(t, path)
+	if len(lines) != 1 || lines[0] != knownhosts.Line([]string{"runpod-pod-one"}, trusted) {
+		t.Fatalf("trusted entry changed: %v", lines)
+	}
+}
+
+func TestPodHostKeyCallbackConcurrentEnrollment(t *testing.T) {
+	path := emptyKnownHosts(t)
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	remote := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 40022}
+	for range 2 {
+		callback, err := podHostKeyCallback("pod-one", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		key := newTestHostKey(t).PublicKey()
+		go func() {
+			<-start
+			results <- callback(remote.String(), remote, key)
+		}()
+	}
+	close(start)
+	accepted := 0
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	for range 2 {
+		select {
+		case err := <-results:
+			if err == nil {
+				accepted++
+			} else if !strings.Contains(err.Error(), "host key mismatch") {
+				t.Errorf("unexpected enrollment error: %v", err)
+			}
+		case <-deadline.C:
+			t.Fatal("concurrent enrollment did not finish")
+		}
+	}
+	if accepted != 1 || len(readLines(t, path)) != 1 {
+		t.Fatalf("accepted %d conflicting keys; want exactly one trusted entry", accepted)
+	}
+}
+
+func TestPodHostKeyCallbackRejectsMalformedStore(t *testing.T) {
+	path := emptyKnownHosts(t)
+	if err := os.WriteFile(path, []byte("invalid host key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := podHostKeyCallback("pod-one", path); err == nil {
+		t.Fatal("malformed trust store was accepted")
+	}
+}
+
+func TestPodHostKeyCallbackFailsClosedDuringEnrollment(t *testing.T) {
+	for _, failure := range []string{"missing", "malformed", "unreadable", "unwritable", "lock unavailable"} {
+		t.Run(failure, func(t *testing.T) {
+			checkEnrollmentFailure(t, failure)
+		})
+	}
+}
+
+func checkEnrollmentFailure(t *testing.T, failure string) {
+	t.Helper()
+	path := emptyKnownHosts(t)
+	callback, err := podHostKeyCallback("pod-one", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := changeTestTrustStore(t, path, failure)
+	wantError := "reading "
+	if failure == "unwritable" {
+		wantError = "recording host key"
+	} else if failure == "lock unavailable" {
+		wantError = "opening host key lock"
+	}
+	remote := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 40022}
+	err = callback(remote.String(), remote, newTestHostKey(t).PublicKey())
+	if err == nil || !strings.Contains(err.Error(), wantError) {
+		t.Fatalf("wanted %q failure, got %v", wantError, err)
+	}
+	assertTestTrustStore(t, path, failure, expected)
+}
+
+func chmodTestTrustStore(t *testing.T, path string, mode os.FileMode) {
+	t.Helper()
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("requires posix permissions and a non-root user")
+	}
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(path, 0o600) })
+}
+
+func changeTestTrustStore(t *testing.T, path, condition string) string {
+	t.Helper()
+	expected, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	switch condition {
+	case "missing":
+		err = os.Remove(path)
+	case "malformed":
+		expected = []byte("runpod-pod-abc123 invalid key\n")
+		err = os.WriteFile(path, expected, 0o600)
+	case "unreadable":
+		chmodTestTrustStore(t, path, 0)
+	case "unwritable", "read-only":
+		chmodTestTrustStore(t, path, 0o400)
+	case "lock unavailable":
+		err = os.Mkdir(path+".lock", 0o700)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(expected)
+}
+
+func assertTestTrustStore(t *testing.T, path, condition, expected string) {
+	t.Helper()
+	if condition == "missing" {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("missing trust store was recreated: %v", err)
+		}
+		return
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != expected {
+		t.Fatalf("trust store changed: %q (%v)", data, err)
+	}
+}
+
 // TestAppendKnownHostRepairsMissingNewline guards a hand-edited file: appending
 // to a file whose last line has no newline would splice the two entries
 // together and corrupt both.
@@ -279,11 +454,11 @@ func TestGetSshOptionsPinsHostKeyChecking(t *testing.T) {
 	opts := strings.Join(conn.getSshOptions(), " ")
 
 	for _, want := range []string{
-		"StrictHostKeyChecking=accept-new",
+		"StrictHostKeyChecking=yes",
 		"UserKnownHostsFile=/tmp/known_hosts",
 		"HostKeyAlias=runpod-pod-abc123",
 		"CheckHostIP=no",
-		"HashKnownHosts=no",
+		"UpdateHostKeys=no",
 	} {
 		if !strings.Contains(opts, want) {
 			t.Errorf("ssh options %q missing %q", opts, want)
@@ -313,16 +488,24 @@ func writeClientKey(t *testing.T) string {
 	return path
 }
 
-// TestOpenSSHWritesTheSameEntry is the interop guard. The go client and the
-// openssh invocation rsync shells out to share one file, so if their entry
-// formats ever diverge they would each accept keys the other had never seen,
-// inside one file, with nothing to show it. Skipped where ssh is unavailable.
-func TestOpenSSHWritesTheSameEntry(t *testing.T) {
+func runTestOpenSSH(t *testing.T, conn *SSHConnection) ([]byte, error) {
+	t.Helper()
 	sshBin, err := exec.LookPath("ssh")
 	if err != nil {
 		t.Skip("no ssh binary available")
 	}
+	args := append([]string{"-F", os.DevNull, "-o", "GlobalKnownHostsFile=none", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"}, conn.getSshOptions()...)
+	args = append(args, "root@"+conn.podIp, "true")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, sshBin, args...).CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("openssh timed out: %s", out)
+	}
+	return out, err
+}
 
+func TestOpenSSHRequiresGoTrustedKey(t *testing.T) {
 	signer := newTestHostKey(t)
 	addr := startTestSSHD(t, signer)
 	host, port, err := net.SplitHostPort(addr)
@@ -344,28 +527,80 @@ func TestOpenSSHWritesTheSameEntry(t *testing.T) {
 		knownHostsPath: knownHosts,
 	}
 
-	// -F /dev/null so a developer's ~/.ssh/config cannot change the outcome.
-	// the exit status is ignored on purpose: the assertion is on the file, not
-	// on the session, and the test server runs no command.
-	args := append([]string{"-F", "/dev/null", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"}, conn.getSshOptions()...)
-	args = append(args, "root@"+host, "true")
-	out, _ := exec.Command(sshBin, args...).CombinedOutput()
+	if out, err := runTestOpenSSH(t, conn); err == nil || !strings.Contains(string(out), "Host key verification failed") {
+		t.Fatalf("openssh must reject an unknown key: %v (%s)", err, out)
+	}
+	if lines := readLines(t, knownHosts); len(lines) != 0 {
+		t.Fatalf("openssh enrolled an unknown key: %v", lines)
+	}
+	if err := dial(t, addr, "pod-abc123", knownHosts); err != nil {
+		t.Fatalf("go enrollment: %v", err)
+	}
+	if out, err := runTestOpenSSH(t, conn); err != nil {
+		t.Fatalf("openssh rejected go's pin: %v (%s)", err, out)
+	}
 
 	lines := readLines(t, knownHosts)
 	if len(lines) != 1 {
-		t.Fatalf("openssh wrote %d lines, want 1: %v (ssh said: %s)", len(lines), lines, out)
+		t.Fatalf("known_hosts has %d lines, want 1: %v", len(lines), lines)
 	}
 	want := knownhosts.Line([]string{"runpod-pod-abc123"}, signer.PublicKey())
 	if lines[0] != want {
-		t.Fatalf("openssh entry =\n%q\ngo client would write\n%q", lines[0], want)
+		t.Fatalf("trusted entry = %q, want %q", lines[0], want)
 	}
 
-	// and the go client must accept the entry openssh just wrote, without
-	// appending a second one.
 	if err := dial(t, addr, "pod-abc123", knownHosts); err != nil {
-		t.Errorf("go client rejected openssh's entry: %v", err)
+		t.Errorf("go client rejected the shared pin: %v", err)
 	}
 	if after := readLines(t, knownHosts); len(after) != 1 {
 		t.Errorf("go client added a duplicate entry: %v", after)
 	}
+
+	for _, condition := range []string{"different pod", "changed key", "missing", "malformed", "unreadable", "read-only"} {
+		t.Run(condition, func(t *testing.T) {
+			checkOpenSSHTrust(t, conn, addr, condition)
+		})
+	}
+}
+
+func setTestSSHAddress(t *testing.T, conn *SSHConnection, addr string) {
+	t.Helper()
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.podIp = host
+	conn.podPort, err = strconv.Atoi(port)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func checkOpenSSHTrust(t *testing.T, conn *SSHConnection, addr, condition string) {
+	t.Helper()
+	connection := *conn
+	connection.knownHostsPath = emptyKnownHosts(t)
+	if err := dial(t, addr, connection.podId, connection.knownHostsPath); err != nil {
+		t.Fatal(err)
+	}
+	path := connection.knownHostsPath
+	expected := changeTestTrustStore(t, path, condition)
+	switch condition {
+	case "different pod":
+		connection.podId = "pod-other"
+	case "changed key":
+		setTestSSHAddress(t, &connection, startTestSSHD(t, newTestHostKey(t)))
+	}
+	out, err := runTestOpenSSH(t, &connection)
+	if condition == "read-only" {
+		if err != nil {
+			t.Fatalf("read-only pin rejected: %v (%s)", err, out)
+		}
+	} else if err == nil || !strings.Contains(string(out), "Host key verification failed") {
+		t.Fatalf("wanted host verification failure: %v (%s)", err, out)
+	}
+	if condition == "changed key" && !strings.Contains(string(out), "REMOTE HOST IDENTIFICATION HAS CHANGED") {
+		t.Fatalf("missing changed-key diagnostic: %s", out)
+	}
+	assertTestTrustStore(t, path, condition, expected)
 }
