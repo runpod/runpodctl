@@ -472,7 +472,7 @@ its errors are json with a `code` and exit 1.
 
 | variable | default | what it sets |
 | --- | --- | --- |
-| `RUNPOD_API_KEY` | — | api key. also settable via `runpodctl doctor` or `~/.runpod/config.toml` |
+| `RUNPOD_API_KEY` | — | api key. also settable via `runpodctl doctor` or `~/.runpod/config.toml`, which is created `0600` inside a `0700` directory (a wider mode left by an older version is narrowed on the next run) |
 | `RUNPOD_API_URL` | `https://rest.runpod.io/v1` | rest control plane (config key `restApiUrl`) |
 | `RUNPOD_GRAPHQL_URL` | `https://api.runpod.io/graphql` | graphql control plane (config key `apiUrl`) |
 | `RUNPOD_INVOKE_URL` | `https://api.runpod.ai/v2` | base for the serverless invoke urls reported by `serverless create/get/list/update`, and the host `serverless run/status/health` call (config key `invokeUrl`) |
