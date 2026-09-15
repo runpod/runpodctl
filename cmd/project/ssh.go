@@ -69,10 +69,9 @@ type SSHConnection struct {
 
 func (sshConn *SSHConnection) getSshOptions() []string {
 	return []string{
-		// accept-new records an unknown pod's key and then refuses a changed
-		// one. StrictHostKeyChecking=no accepted any key on every connection,
-		// so a substituted key was never reported at all.
-		"-o", "StrictHostKeyChecking=accept-new",
+		// the go connection records the first key before rsync runs. require
+		// that pin here so a missing or unreadable store cannot disable trust.
+		"-o", "StrictHostKeyChecking=yes",
 		"-o", "UserKnownHostsFile=" + sshConn.knownHostsPath,
 		// key the entry on the pod rather than its address: runpod recycles pod
 		// ssh addresses, and an address-keyed entry would report a mismatch for
@@ -81,10 +80,7 @@ func (sshConn *SSHConnection) getSshOptions() []string {
 		// CheckHostIP defaulted to yes before openssh 8.5, which would pin the
 		// recycled ip alongside the alias and reintroduce that false mismatch.
 		"-o", "CheckHostIP=no",
-		// keep the entry in the plain form knownhosts.Line writes, so the two
-		// clients cannot end up maintaining separate trust in one file. some
-		// distributions default this to yes.
-		"-o", "HashKnownHosts=no",
+		"-o", "UpdateHostKeys=no",
 		// note: rsync re-splits the -e string on spaces, so neither this path
 		// nor the pre-existing -i survives a home directory containing one.
 		"-o", "LogLevel=ERROR",

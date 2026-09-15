@@ -57,18 +57,15 @@ func knownHostsPath() (string, error) {
 }
 
 // podHostKeyCallback verifies a pod's host key against path, recording the key
-// on first contact and refusing a changed one. This is the go-client half of
-// StrictHostKeyChecking=accept-new; getSshOptions is the openssh half, and they
-// share both the file and the entry format.
+// on first contact and refusing a changed one. openssh requires this pin
+// before connecting; both clients share the file and the entry format.
 //
-// accept-new is trust on first use. It stops a substituted key from being
-// accepted silently on every later connection, which is what
-// StrictHostKeyChecking=no did, but it cannot detect a machine-in-the-middle on
+// trust on first use rejects a substituted key on later connections, unlike
+// StrictHostKeyChecking=no, but it cannot detect a machine-in-the-middle on
 // the very first connection. Closing that needs the host key delivered through
 // an authenticated runpod channel and is separate work.
 func podHostKeyCallback(podID, path string) (ssh.HostKeyCallback, error) {
-	verify, err := knownhosts.New(path)
-	if err != nil {
+	if _, err := knownhosts.New(path); err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 
@@ -80,9 +77,23 @@ func podHostKeyCallback(podID, path string) (ssh.HostKeyCallback, error) {
 	// non-default port, which is also what knownhosts.Line produces.
 	lookup := net.JoinHostPort(alias, "22")
 
-	return func(_ string, remote net.Addr, key ssh.PublicKey) error {
+	return func(_ string, remote net.Addr, key ssh.PublicKey) (resultErr error) {
+		lock, err := lockKnownHosts(path)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if closeErr := lock.Close(); resultErr == nil && closeErr != nil {
+				resultErr = fmt.Errorf("releasing host key lock for %s: %w", path, closeErr)
+			}
+		}()
+
+		verify, err := knownhosts.New(path)
+		if err != nil {
+			return fmt.Errorf("reading %s: %w", path, err)
+		}
 		// the dialed address is deliberately discarded in favour of the alias.
-		err := verify(lookup, remote, key)
+		err = verify(lookup, remote, key)
 		if err == nil {
 			return nil
 		}
@@ -92,8 +103,6 @@ func podHostKeyCallback(podID, path string) (ssh.HostKeyCallback, error) {
 			if addErr := appendKnownHost(path, alias, key); addErr != nil {
 				return fmt.Errorf("recording host key for pod %s: %w", podID, addErr)
 			}
-			// stderr, not stdout: `exec python` reaches this path and its stdout
-			// is the remote program's output.
 			fmt.Fprintf(os.Stderr, "trusting new host key for pod %s (%s)\n", podID, ssh.FingerprintSHA256(key))
 			return nil
 		}
@@ -105,6 +114,18 @@ func podHostKeyCallback(podID, path string) (ssh.HostKeyCallback, error) {
 			"otherwise the connection is being intercepted: %w",
 			podID, ssh.FingerprintSHA256(key), path, alias, err)
 	}, nil
+}
+
+func lockKnownHosts(path string) (*os.File, error) {
+	file, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, knownHostsFilePerm)
+	if err != nil {
+		return nil, fmt.Errorf("opening host key lock for %s: %w", path, err)
+	}
+	if err := lockHostKeyFile(file); err != nil {
+		file.Close()
+		return nil, fmt.Errorf("locking host keys in %s: %w", path, err)
+	}
+	return file, nil
 }
 
 // appendKnownHost adds one trust line in the format openssh writes for a
@@ -138,7 +159,7 @@ func appendKnownHost(path, alias string, key ssh.PublicKey) (err error) {
 }
 
 // lacksTrailingNewline reports whether f is non-empty and its last byte is not
-// a newline. f's offset is left at the end, where O_APPEND writes anyway.
+// a newline. ReadAt leaves f's offset unchanged.
 func lacksTrailingNewline(f *os.File) (bool, error) {
 	info, err := f.Stat()
 	if err != nil {
