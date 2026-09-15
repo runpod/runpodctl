@@ -64,13 +64,13 @@ func stubAddModelUploadSeams(t *testing.T) {
 	oldAddModelToRepo := addModelToRepo
 	oldCreateModelRepoUploadBatch := createModelRepoUploadBatch
 	oldCompleteModelUploadFile := completeModelUploadFile
-	oldCompleteModelRepoUpload := completeModelRepoUpload
+	oldCompleteModelRepoUploadAll := completeModelRepoUploadAll
 	oldGetModelsForAdd := getModelsForAdd
 	t.Cleanup(func() {
 		addModelToRepo = oldAddModelToRepo
 		createModelRepoUploadBatch = oldCreateModelRepoUploadBatch
 		completeModelUploadFile = oldCompleteModelUploadFile
-		completeModelRepoUpload = oldCompleteModelRepoUpload
+		completeModelRepoUploadAll = oldCompleteModelRepoUploadAll
 		getModelsForAdd = oldGetModelsForAdd
 	})
 
@@ -92,8 +92,12 @@ func stubAddModelUploadSeams(t *testing.T) {
 	completeModelUploadFile = func(upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
 		return nil
 	}
-	completeModelRepoUpload = func(sessionID string) (*api.CompleteModelRepoUploadResult, error) {
-		return &api.CompleteModelRepoUploadResult{SessionID: sessionID, Status: "completed"}, nil
+	completeModelRepoUploadAll = func(sessionIDs []string) ([]*api.CompleteModelRepoUploadResult, error) {
+		completions := make([]*api.CompleteModelRepoUploadResult, len(sessionIDs))
+		for i, sessionID := range sessionIDs {
+			completions[i] = &api.CompleteModelRepoUploadResult{SessionID: sessionID, Status: "completed"}
+		}
+		return completions, nil
 	}
 	getModelsForAdd = func(input *api.GetModelsInput) ([]*api.Model, error) {
 		return []*api.Model{{

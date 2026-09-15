@@ -248,10 +248,18 @@ type CreateModelRepoUploadInput struct {
 }
 
 // ModelRepoUploadBatchFileInput is one file of a createModelRepoUploadBatch manifest,
-// mirroring CreateModelRepoUploadInput's per-file fields.
+// mirroring CreateModelRepoUploadInput's per-file fields (including their string typing;
+// see the field comments below for why).
 type ModelRepoUploadBatchFileInput struct {
-	FileName      string `json:"fileName"`
+	FileName string `json:"fileName"`
+	// FileSizeBytes is the file's total size in bytes, decimal-encoded as a string rather
+	// than a number because the server's fileSizeBytes GraphQL field is a String: GraphQL's
+	// Int is 32-bit, which can't represent files/parts above ~2GiB, and JSON numbers above
+	// 2^53 lose precision. Mirrors CreateModelRepoUploadInput.FileSizeBytes.
 	FileSizeBytes string `json:"fileSizeBytes"`
+	// PartSizeBytes optionally overrides the multipart upload's chunk size in bytes (same
+	// string-for-large-integer reasoning as FileSizeBytes above); the server picks a default
+	// when empty. Mirrors CreateModelRepoUploadInput.PartSizeBytes and the CLI's --part-size flag.
 	PartSizeBytes string `json:"partSizeBytes,omitempty"`
 	ContentType   string `json:"contentType,omitempty"`
 }
@@ -276,6 +284,50 @@ type ModelRepoUploadBatchResult struct {
 	Version *ModelVersion      `json:"version,omitempty"`
 	Uploads []*ModelRepoUpload `json:"uploads"`
 }
+
+// modelRepoUploadSessionFields is the GraphQL field selection for a single upload
+// session, shared by createModelRepoUpload's `upload` and createModelRepoUploadBatch's
+// `uploads`, which return the same ModelRepoUpload shape one-at-a-time vs. batched. Kept
+// as one constant so the two mutations can't drift out of sync as fields are added.
+const modelRepoUploadSessionFields = `
+                                        sessionId
+                                        status
+                                        uploadId
+                                        bucket
+                                        key
+                                        keyPrefix
+                                        partSizeBytes
+                                        partCount
+                                        expiresInSeconds
+                                        parts {
+                                                partNumber
+                                                url
+                                                expiresAt
+                                        }
+                                        completeUrl
+                                        abortUrl`
+
+// modelRepoModelFields is the GraphQL field selection for the `model` object returned
+// alongside upload-session mutations, shared for the same reason as
+// modelRepoUploadSessionFields above.
+const modelRepoModelFields = `
+                                        id
+                                        owner
+                                        name
+                                        provider
+                                        status
+                                        updatedAt`
+
+// modelRepoVersionFields is the GraphQL field selection for the `version` object
+// returned alongside upload-session mutations, shared for the same reason as
+// modelRepoUploadSessionFields above.
+const modelRepoVersionFields = `
+                                        uuid
+                                        hash
+                                        status
+                                        metadata
+                                        createdAt
+                                        updatedAt`
 
 // AddModelToRepo uploads a new model to the RunPod model repository.
 func AddModelToRepo(input *AddModelToRepoInput) (*Model, error) {
@@ -719,48 +771,20 @@ func CreateModelRepoUpload(input *CreateModelRepoUploadInput) (*ModelRepoMutatio
 	}
 
 	gqlInput := Input{
-		Query: `
+		Query: fmt.Sprintf(`
                 mutation createModelRepoUpload($input: CreateModelRepoUploadInput!) {
                         createModelRepoUpload(input: $input) {
                                 success
                                 message
-                                upload {
-                                        sessionId
-                                        status
-                                        uploadId
-                                        bucket
-                                        key
-                                        keyPrefix
-                                        partSizeBytes
-                                        partCount
-                                        expiresInSeconds
-                                        parts {
-                                                partNumber
-                                                url
-                                                expiresAt
-                                        }
-                                        completeUrl
-                                        abortUrl
+                                upload {%s
                                 }
-                                model {
-                                        id
-                                        owner
-                                        name
-                                        provider
-                                        status
-                                        updatedAt
+                                model {%s
                                 }
-                                version {
-                                        uuid
-                                        hash
-                                        status
-                                        metadata
-                                        createdAt
-                                        updatedAt
+                                version {%s
                                 }
                         }
                 }
-                `,
+                `, modelRepoUploadSessionFields, modelRepoModelFields, modelRepoVersionFields),
 		Variables: variables,
 	}
 
@@ -875,48 +899,20 @@ func CreateModelRepoUploadBatch(input *CreateModelRepoUploadBatchInput) (*ModelR
 	}
 
 	gqlInput := Input{
-		Query: `
+		Query: fmt.Sprintf(`
                 mutation createModelRepoUploadBatch($input: CreateModelRepoUploadBatchInput!) {
                         createModelRepoUploadBatch(input: $input) {
                                 success
                                 message
-                                uploads {
-                                        sessionId
-                                        status
-                                        uploadId
-                                        bucket
-                                        key
-                                        keyPrefix
-                                        partSizeBytes
-                                        partCount
-                                        expiresInSeconds
-                                        parts {
-                                                partNumber
-                                                url
-                                                expiresAt
-                                        }
-                                        completeUrl
-                                        abortUrl
+                                uploads {%s
                                 }
-                                model {
-                                        id
-                                        owner
-                                        name
-                                        provider
-                                        status
-                                        updatedAt
+                                model {%s
                                 }
-                                version {
-                                        uuid
-                                        hash
-                                        status
-                                        metadata
-                                        createdAt
-                                        updatedAt
+                                version {%s
                                 }
                         }
                 }
-                `,
+                `, modelRepoUploadSessionFields, modelRepoModelFields, modelRepoVersionFields),
 		Variables: variables,
 	}
 
@@ -1031,6 +1027,119 @@ func CompleteModelRepoUpload(sessionID string) (*CompleteModelRepoUploadResult, 
 	}
 
 	return result, nil
+}
+
+// CompleteModelRepoUploadBatch finalizes every session in sessionIDs with a single GraphQL
+// request instead of one per session: the server has no dedicated batch-complete mutation,
+// so this fans the list out as one aliased completeModelRepoUpload field (c0, c1, ...) per
+// session inside a single mutation document.
+//
+// completeModelRepoUpload's return type (CompleteModelRepoUploadResult) is non-null, so per
+// the GraphQL spec, an error thrown by *any one* aliased field (e.g. an unknown or
+// already-finalized session) nulls the entire response's top-level data -- even though the
+// server still executes every other aliased mutation field in the document (root mutation
+// fields execute serially, in document order, regardless of a sibling's error). That means
+// on any single failure this function cannot read back whether the *other* sessions in the
+// batch actually completed: it reports exactly which session(s) errored (matched via the
+// GraphQL errors' `path`), but the batch's overall outcome must be treated as unconfirmed,
+// not "everything else failed too".
+func CompleteModelRepoUploadBatch(sessionIDs []string) ([]*CompleteModelRepoUploadResult, error) {
+	if len(sessionIDs) == 0 {
+		return nil, nil
+	}
+
+	variables := make(map[string]interface{}, len(sessionIDs))
+	var query strings.Builder
+	query.WriteString("mutation completeModelRepoUploadBatch(")
+	for i, sessionID := range sessionIDs {
+		sessionID = strings.TrimSpace(sessionID)
+		if sessionID == "" {
+			return nil, fmt.Errorf("sessionIds[%d] cannot be empty", i)
+		}
+		if i > 0 {
+			query.WriteString(", ")
+		}
+		fmt.Fprintf(&query, "$input%d: CompleteModelRepoUploadInput!", i)
+		variables[fmt.Sprintf("input%d", i)] = map[string]interface{}{"sessionId": sessionID}
+	}
+	query.WriteString(") {\n")
+	for i := range sessionIDs {
+		fmt.Fprintf(&query, "\tc%d: completeModelRepoUpload(input: $input%d) {\n\t\tsuccess\n\t\tmessage\n\t\tsessionId\n\t\tstatus\n\t}\n", i, i)
+	}
+	query.WriteString("}")
+
+	gqlInput := Input{Query: query.String(), Variables: variables}
+
+	res, err := Query(gqlInput)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	rawData, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode != http.StatusOK {
+		return nil, modelRepoHTTPError(res.StatusCode, rawData)
+	}
+
+	var data struct {
+		Data   map[string]*CompleteModelRepoUploadResult `json:"data"`
+		Errors []struct {
+			Message string        `json:"message"`
+			Path    []interface{} `json:"path"`
+		} `json:"errors"`
+	}
+	if err = json.Unmarshal(rawData, &data); err != nil {
+		return nil, err
+	}
+
+	if len(data.Errors) > 0 {
+		failedByAlias := make(map[string]string, len(data.Errors))
+		for _, gqlErr := range data.Errors {
+			if len(gqlErr.Path) == 0 {
+				continue
+			}
+			if alias, ok := gqlErr.Path[0].(string); ok {
+				failedByAlias[alias] = gqlErr.Message
+			}
+		}
+		var failed []string
+		for i, sessionID := range sessionIDs {
+			if msg, ok := failedByAlias[fmt.Sprintf("c%d", i)]; ok {
+				failed = append(failed, fmt.Sprintf("%s: %s", sessionID, msg))
+			}
+		}
+		if len(failed) == 0 {
+			// Path didn't resolve to a known alias (unexpected shape); fall back to the
+			// raw first error rather than claiming zero failures.
+			return nil, modelRepoGraphQLError(&GraphQLError{Message: data.Errors[0].Message})
+		}
+		return nil, fmt.Errorf(
+			"%d of %d sessions failed to finalize (%s); the server-side outcome of the other %d sessions in this same batch request is not confirmed by this response and must be reconciled separately, not assumed failed",
+			len(failed), len(sessionIDs), strings.Join(failed, "; "), len(sessionIDs)-len(failed),
+		)
+	}
+	if data.Data == nil {
+		return nil, fmt.Errorf("data is nil: %s", string(rawData))
+	}
+
+	results := make([]*CompleteModelRepoUploadResult, len(sessionIDs))
+	for i, sessionID := range sessionIDs {
+		result := data.Data[fmt.Sprintf("c%d", i)]
+		if result == nil {
+			return nil, fmt.Errorf("missing result for session %s: %s", sessionID, string(rawData))
+		}
+		if !result.Success {
+			if result.Message != "" {
+				return nil, fmt.Errorf("session %s: %s", sessionID, result.Message)
+			}
+			return nil, fmt.Errorf("completeModelRepoUpload failed for session %s: %s", sessionID, string(rawData))
+		}
+		results[i] = result
+	}
+	return results, nil
 }
 
 // UpdateModelVersionStatus updates the status for a model version by hash.

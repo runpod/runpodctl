@@ -10,7 +10,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -107,13 +110,13 @@ func TestRunAddModelPathWaitForHashPrintsCompactOutput(t *testing.T) {
 	oldAddModelToRepo := addModelToRepo
 	oldCreateModelRepoUploadBatch := createModelRepoUploadBatch
 	oldCompleteModelUploadFile := completeModelUploadFile
-	oldCompleteModelRepoUpload := completeModelRepoUpload
+	oldCompleteModelRepoUploadAll := completeModelRepoUploadAll
 	oldGetModelsForAdd := getModelsForAdd
 	t.Cleanup(func() {
 		addModelToRepo = oldAddModelToRepo
 		createModelRepoUploadBatch = oldCreateModelRepoUploadBatch
 		completeModelUploadFile = oldCompleteModelUploadFile
-		completeModelRepoUpload = oldCompleteModelRepoUpload
+		completeModelRepoUploadAll = oldCompleteModelRepoUploadAll
 		getModelsForAdd = oldGetModelsForAdd
 	})
 
@@ -159,8 +162,12 @@ func TestRunAddModelPathWaitForHashPrintsCompactOutput(t *testing.T) {
 	completeModelUploadFile = func(upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
 		return nil
 	}
-	completeModelRepoUpload = func(sessionID string) (*api.CompleteModelRepoUploadResult, error) {
-		return &api.CompleteModelRepoUploadResult{SessionID: sessionID, Status: "completed"}, nil
+	completeModelRepoUploadAll = func(sessionIDs []string) ([]*api.CompleteModelRepoUploadResult, error) {
+		completions := make([]*api.CompleteModelRepoUploadResult, len(sessionIDs))
+		for i, sessionID := range sessionIDs {
+			completions[i] = &api.CompleteModelRepoUploadResult{SessionID: sessionID, Status: "completed"}
+		}
+		return completions, nil
 	}
 	getModelsForAdd = func(input *api.GetModelsInput) ([]*api.Model, error) {
 		return []*api.Model{{
@@ -209,13 +216,13 @@ func TestRunAddModelPathWaitForHashVerbosePrintsFullOutput(t *testing.T) {
 	oldAddModelToRepo := addModelToRepo
 	oldCreateModelRepoUploadBatch := createModelRepoUploadBatch
 	oldCompleteModelUploadFile := completeModelUploadFile
-	oldCompleteModelRepoUpload := completeModelRepoUpload
+	oldCompleteModelRepoUploadAll := completeModelRepoUploadAll
 	oldGetModelsForAdd := getModelsForAdd
 	t.Cleanup(func() {
 		addModelToRepo = oldAddModelToRepo
 		createModelRepoUploadBatch = oldCreateModelRepoUploadBatch
 		completeModelUploadFile = oldCompleteModelUploadFile
-		completeModelRepoUpload = oldCompleteModelRepoUpload
+		completeModelRepoUploadAll = oldCompleteModelRepoUploadAll
 		getModelsForAdd = oldGetModelsForAdd
 	})
 
@@ -249,8 +256,12 @@ func TestRunAddModelPathWaitForHashVerbosePrintsFullOutput(t *testing.T) {
 	completeModelUploadFile = func(upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
 		return nil
 	}
-	completeModelRepoUpload = func(sessionID string) (*api.CompleteModelRepoUploadResult, error) {
-		return &api.CompleteModelRepoUploadResult{SessionID: sessionID, Status: "completed"}, nil
+	completeModelRepoUploadAll = func(sessionIDs []string) ([]*api.CompleteModelRepoUploadResult, error) {
+		completions := make([]*api.CompleteModelRepoUploadResult, len(sessionIDs))
+		for i, sessionID := range sessionIDs {
+			completions[i] = &api.CompleteModelRepoUploadResult{SessionID: sessionID, Status: "completed"}
+		}
+		return completions, nil
 	}
 	getModelsForAdd = func(input *api.GetModelsInput) ([]*api.Model, error) {
 		return []*api.Model{{
@@ -543,11 +554,11 @@ func TestRunAddModelLocalUploadWithMetadataRemainsUnchanged(t *testing.T) {
 func TestUploadModelFilesCreatesOneBatchWhenManifestFits(t *testing.T) {
 	oldCreateModelRepoUploadBatch := createModelRepoUploadBatch
 	oldCompleteModelUploadFile := completeModelUploadFile
-	oldCompleteModelRepoUpload := completeModelRepoUpload
+	oldCompleteModelRepoUploadAll := completeModelRepoUploadAll
 	t.Cleanup(func() {
 		createModelRepoUploadBatch = oldCreateModelRepoUploadBatch
 		completeModelUploadFile = oldCompleteModelUploadFile
-		completeModelRepoUpload = oldCompleteModelRepoUpload
+		completeModelRepoUploadAll = oldCompleteModelRepoUploadAll
 	})
 
 	files := []modelFile{
@@ -575,21 +586,31 @@ func TestUploadModelFilesCreatesOneBatchWhenManifestFits(t *testing.T) {
 			Uploads: uploads,
 		}, nil
 	}
+	// uploadModelFiles now uploads a chunk's files concurrently (bounded by
+	// modelRepoUploadConcurrency), so the upload mock can be called from multiple
+	// goroutines at once: guard the shared slices, and the assertions below only
+	// check upload-side ordering as a set, not a fixed sequence. Finalizing is a
+	// single completeModelRepoUploadAll call over the whole uploadedFiles list (in
+	// file order), so it needs no such guard.
+	var mu sync.Mutex
 	var events []string
 	var uploadedArtifacts []string
 	completeModelUploadFile = func(upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
+		mu.Lock()
+		defer mu.Unlock()
 		events = append(events, "upload:"+artifactPath)
 		uploadedArtifacts = append(uploadedArtifacts, artifactPath)
 		return nil
 	}
-	var completedSessions []string
-	completeModelRepoUpload = func(sessionID string) (*api.CompleteModelRepoUploadResult, error) {
-		events = append(events, "complete:"+sessionID)
-		completedSessions = append(completedSessions, sessionID)
-		return &api.CompleteModelRepoUploadResult{
-			SessionID: sessionID,
-			Status:    "completed",
-		}, nil
+	var completeBatchCalls [][]string
+	completeModelRepoUploadAll = func(sessionIDs []string) ([]*api.CompleteModelRepoUploadResult, error) {
+		completeBatchCalls = append(completeBatchCalls, append([]string(nil), sessionIDs...))
+		events = append(events, "complete-batch:"+strings.Join(sessionIDs, ","))
+		completions := make([]*api.CompleteModelRepoUploadResult, len(sessionIDs))
+		for i, sessionID := range sessionIDs {
+			completions[i] = &api.CompleteModelRepoUploadResult{SessionID: sessionID, Status: "completed"}
+		}
+		return completions, nil
 	}
 
 	uploadedFiles, uploadModel, modelVersionUUID, err := uploadModelFiles(files, &api.CreateModelRepoUploadInput{Name: "test-model"})
@@ -618,21 +639,35 @@ func TestUploadModelFilesCreatesOneBatchWhenManifestFits(t *testing.T) {
 		}
 	}
 
+	// Chunk uploads run concurrently now, so only the set of uploaded artifacts is
+	// guaranteed, not the order the mock observed them in.
 	if len(uploadedArtifacts) != len(files) {
 		t.Fatalf("expected %d uploaded artifacts, got %d", len(files), len(uploadedArtifacts))
 	}
+	gotArtifacts := append([]string(nil), uploadedArtifacts...)
+	sort.Strings(gotArtifacts)
+	wantArtifacts := make([]string, len(files))
 	for i, file := range files {
-		if uploadedArtifacts[i] != file.AbsolutePath {
-			t.Fatalf("expected uploaded artifact %d to be %q, got %q", i, file.AbsolutePath, uploadedArtifacts[i])
+		wantArtifacts[i] = file.AbsolutePath
+	}
+	sort.Strings(wantArtifacts)
+	for i := range wantArtifacts {
+		if gotArtifacts[i] != wantArtifacts[i] {
+			t.Fatalf("expected uploaded artifacts %v, got %v", wantArtifacts, gotArtifacts)
 		}
 	}
+	// Finalizing is a single completeModelRepoUploadAll call carrying every session id
+	// in file order (the list "as it exists" once every chunk has finished uploading).
 	expectedCompletedSessions := []string{"session-a.bin", "session-b.bin", "session-c.bin"}
-	if len(completedSessions) != len(expectedCompletedSessions) {
-		t.Fatalf("expected %d completed sessions, got %d", len(expectedCompletedSessions), len(completedSessions))
+	if len(completeBatchCalls) != 1 {
+		t.Fatalf("expected 1 completeModelRepoUploadAll call, got %d", len(completeBatchCalls))
+	}
+	if len(completeBatchCalls[0]) != len(expectedCompletedSessions) {
+		t.Fatalf("expected %d session ids in the batch call, got %d", len(expectedCompletedSessions), len(completeBatchCalls[0]))
 	}
 	for i, expected := range expectedCompletedSessions {
-		if completedSessions[i] != expected {
-			t.Fatalf("expected completed session %d to be %q, got %q", i, expected, completedSessions[i])
+		if completeBatchCalls[0][i] != expected {
+			t.Fatalf("expected batch call session %d to be %q, got %q", i, expected, completeBatchCalls[0][i])
 		}
 	}
 	if len(uploadedFiles) != len(expectedCompletedSessions) {
@@ -646,32 +681,37 @@ func TestUploadModelFilesCreatesOneBatchWhenManifestFits(t *testing.T) {
 			t.Fatalf("expected uploaded file status %d to be completed, got %q", i, uploadedFiles[i].Status)
 		}
 	}
-	expectedEvents := []string{
-		"upload:/tmp/a.bin",
-		"upload:/tmp/b.bin",
-		"upload:/tmp/c.bin",
-		"complete:session-a.bin",
-		"complete:session-b.bin",
-		"complete:session-c.bin",
+	// All 3 uploads happen (concurrently, in any order) before the single finalize
+	// call, since completeModelRepoUploadAll only runs once every chunk upload has
+	// returned; the 3 upload events themselves are no longer in a fixed order, but the
+	// one finalize call is always last and always carries all 3 sessions.
+	expectedUploadEvents := []string{"upload:/tmp/a.bin", "upload:/tmp/b.bin", "upload:/tmp/c.bin"}
+	expectedCompleteEvent := "complete-batch:session-a.bin,session-b.bin,session-c.bin"
+	if len(events) != len(expectedUploadEvents)+1 {
+		t.Fatalf("expected %d upload/completion events, got %d", len(expectedUploadEvents)+1, len(events))
 	}
-	if len(events) != len(expectedEvents) {
-		t.Fatalf("expected %d upload/completion events, got %d", len(expectedEvents), len(events))
-	}
-	for i, expected := range expectedEvents {
-		if events[i] != expected {
-			t.Fatalf("expected event %d to be %q, got %q", i, expected, events[i])
+	gotUploadEvents := append([]string(nil), events[:len(expectedUploadEvents)]...)
+	sort.Strings(gotUploadEvents)
+	wantUploadEvents := append([]string(nil), expectedUploadEvents...)
+	sort.Strings(wantUploadEvents)
+	for i := range wantUploadEvents {
+		if gotUploadEvents[i] != wantUploadEvents[i] {
+			t.Fatalf("expected upload events %v, got %v", wantUploadEvents, gotUploadEvents)
 		}
+	}
+	if events[len(events)-1] != expectedCompleteEvent {
+		t.Fatalf("expected final event %q, got %q", expectedCompleteEvent, events[len(events)-1])
 	}
 }
 
 func TestUploadModelFilesChunksLargeManifestsAcrossMultipleBatches(t *testing.T) {
 	oldCreateModelRepoUploadBatch := createModelRepoUploadBatch
 	oldCompleteModelUploadFile := completeModelUploadFile
-	oldCompleteModelRepoUpload := completeModelRepoUpload
+	oldCompleteModelRepoUploadAll := completeModelRepoUploadAll
 	t.Cleanup(func() {
 		createModelRepoUploadBatch = oldCreateModelRepoUploadBatch
 		completeModelUploadFile = oldCompleteModelUploadFile
-		completeModelRepoUpload = oldCompleteModelRepoUpload
+		completeModelRepoUploadAll = oldCompleteModelRepoUploadAll
 	})
 
 	fileCount := modelRepoUploadBatchSize + 3
@@ -707,8 +747,12 @@ func TestUploadModelFilesChunksLargeManifestsAcrossMultipleBatches(t *testing.T)
 	completeModelUploadFile = func(upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
 		return nil
 	}
-	completeModelRepoUpload = func(sessionID string) (*api.CompleteModelRepoUploadResult, error) {
-		return &api.CompleteModelRepoUploadResult{SessionID: sessionID, Status: "completed"}, nil
+	completeModelRepoUploadAll = func(sessionIDs []string) ([]*api.CompleteModelRepoUploadResult, error) {
+		completions := make([]*api.CompleteModelRepoUploadResult, len(sessionIDs))
+		for i, sessionID := range sessionIDs {
+			completions[i] = &api.CompleteModelRepoUploadResult{SessionID: sessionID, Status: "completed"}
+		}
+		return completions, nil
 	}
 
 	uploadedFiles, _, modelVersionUUID, err := uploadModelFiles(files, &api.CreateModelRepoUploadInput{Name: "test-model"})
@@ -733,6 +777,182 @@ func TestUploadModelFilesChunksLargeManifestsAcrossMultipleBatches(t *testing.T)
 		if batchSizes[i] != expected {
 			t.Fatalf("expected batch %d to contain %d files, got %d", i, expected, batchSizes[i])
 		}
+	}
+}
+
+// TestUploadModelFilesFinalizesAllSessionsInOneBatchCall proves the finalize step sends
+// every uploaded session in a single completeModelRepoUploadAll call -- the list "as it
+// exists" once every upload chunk has returned -- rather than one call per file or per
+// chunk, even when the manifest spans multiple createModelRepoUploadBatch chunks.
+func TestUploadModelFilesFinalizesAllSessionsInOneBatchCall(t *testing.T) {
+	oldCreateModelRepoUploadBatch := createModelRepoUploadBatch
+	oldCompleteModelUploadFile := completeModelUploadFile
+	oldCompleteModelRepoUploadAll := completeModelRepoUploadAll
+	t.Cleanup(func() {
+		createModelRepoUploadBatch = oldCreateModelRepoUploadBatch
+		completeModelUploadFile = oldCompleteModelUploadFile
+		completeModelRepoUploadAll = oldCompleteModelRepoUploadAll
+	})
+
+	fileCount := modelRepoUploadBatchSize + 3
+	files := make([]modelFile, fileCount)
+	for i := range files {
+		name := fmt.Sprintf("file-%04d.bin", i)
+		files[i] = modelFile{AbsolutePath: "/tmp/" + name, RelativePath: name, Size: 1}
+	}
+
+	createModelRepoUploadBatch = func(input *api.CreateModelRepoUploadBatchInput) (*api.ModelRepoUploadBatchResult, error) {
+		uploads := make([]*api.ModelRepoUpload, len(input.Files))
+		for i, file := range input.Files {
+			uploads[i] = &api.ModelRepoUpload{SessionID: "session-" + file.FileName, Key: "key-" + file.FileName}
+		}
+		return &api.ModelRepoUploadBatchResult{
+			Success: true,
+			Version: &api.ModelVersion{UUID: "version-uuid"},
+			Uploads: uploads,
+		}, nil
+	}
+	completeModelUploadFile = func(upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
+		return nil
+	}
+
+	var completeBatchCalls [][]string
+	completeModelRepoUploadAll = func(sessionIDs []string) ([]*api.CompleteModelRepoUploadResult, error) {
+		completeBatchCalls = append(completeBatchCalls, append([]string(nil), sessionIDs...))
+		completions := make([]*api.CompleteModelRepoUploadResult, len(sessionIDs))
+		for i, sessionID := range sessionIDs {
+			completions[i] = &api.CompleteModelRepoUploadResult{SessionID: sessionID, Status: "completed"}
+		}
+		return completions, nil
+	}
+
+	uploadedFiles, _, _, err := uploadModelFiles(files, &api.CreateModelRepoUploadInput{Name: "test-model"})
+	if err != nil {
+		t.Fatalf("uploadModelFiles returned error: %v", err)
+	}
+
+	// One call, spanning both upload-batch chunks' sessions, in file order.
+	if len(completeBatchCalls) != 1 {
+		t.Fatalf("expected 1 completeModelRepoUploadAll call, got %d", len(completeBatchCalls))
+	}
+	if len(completeBatchCalls[0]) != fileCount {
+		t.Fatalf("expected %d session ids in the batch call, got %d", fileCount, len(completeBatchCalls[0]))
+	}
+	for i, file := range files {
+		expected := "session-" + file.RelativePath
+		if completeBatchCalls[0][i] != expected {
+			t.Fatalf("expected batch call session %d to be %q, got %q", i, expected, completeBatchCalls[0][i])
+		}
+	}
+
+	if len(uploadedFiles) != fileCount {
+		t.Fatalf("expected %d uploaded files, got %d", fileCount, len(uploadedFiles))
+	}
+	for i, file := range files {
+		if uploadedFiles[i].RelativePath != file.RelativePath {
+			t.Fatalf("expected uploaded file %d to be %q, got %q", i, file.RelativePath, uploadedFiles[i].RelativePath)
+		}
+		if uploadedFiles[i].Status != "completed" {
+			t.Fatalf("expected uploaded file %d status to be completed, got %q", i, uploadedFiles[i].Status)
+		}
+	}
+}
+
+func TestUploadModelFileChunkUploadsConcurrentlyWithinBound(t *testing.T) {
+	oldCompleteModelUploadFile := completeModelUploadFile
+	t.Cleanup(func() { completeModelUploadFile = oldCompleteModelUploadFile })
+
+	const fileCount = modelRepoUploadConcurrency * 3
+	chunk := make([]modelFile, fileCount)
+	uploads := make([]*api.ModelRepoUpload, fileCount)
+	for i := range chunk {
+		name := fmt.Sprintf("file-%02d.bin", i)
+		chunk[i] = modelFile{AbsolutePath: "/tmp/" + name, RelativePath: name, Size: 1}
+		uploads[i] = &api.ModelRepoUpload{SessionID: "session-" + name, Key: "key-" + name}
+	}
+
+	var inFlight int32
+	var maxInFlight int32
+	completeModelUploadFile = func(upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
+		current := atomic.AddInt32(&inFlight, 1)
+		defer atomic.AddInt32(&inFlight, -1)
+		for {
+			observed := atomic.LoadInt32(&maxInFlight)
+			if current <= observed || atomic.CompareAndSwapInt32(&maxInFlight, observed, current) {
+				break
+			}
+		}
+		// Hold the "upload" open briefly so concurrent calls actually overlap instead
+		// of racing to completion faster than the scheduler interleaves them.
+		time.Sleep(10 * time.Millisecond)
+		return nil
+	}
+
+	results, err := uploadModelFileChunk(chunk, uploads, nil)
+	if err != nil {
+		t.Fatalf("uploadModelFileChunk returned error: %v", err)
+	}
+	if len(results) != fileCount {
+		t.Fatalf("expected %d results, got %d", fileCount, len(results))
+	}
+	// Results are indexed by chunk position, so they must come back in the same order
+	// as the input regardless of which goroutine finished first.
+	for i, file := range chunk {
+		if results[i].RelativePath != file.RelativePath {
+			t.Fatalf("expected result %d to be %q, got %q", i, file.RelativePath, results[i].RelativePath)
+		}
+	}
+
+	got := atomic.LoadInt32(&maxInFlight)
+	if got <= 1 {
+		t.Fatalf("expected uploads to run concurrently (max in flight > 1), got %d", got)
+	}
+	if got > modelRepoUploadConcurrency {
+		t.Fatalf("expected at most %d concurrent uploads, observed %d", modelRepoUploadConcurrency, got)
+	}
+}
+
+func TestUploadModelFileChunkReturnsFirstErrorInChunkOrder(t *testing.T) {
+	oldCompleteModelUploadFile := completeModelUploadFile
+	t.Cleanup(func() { completeModelUploadFile = oldCompleteModelUploadFile })
+
+	chunk := []modelFile{
+		{AbsolutePath: "/tmp/a.bin", RelativePath: "a.bin", Size: 1},
+		{AbsolutePath: "/tmp/b.bin", RelativePath: "b.bin", Size: 1},
+		{AbsolutePath: "/tmp/c.bin", RelativePath: "c.bin", Size: 1},
+	}
+	uploads := []*api.ModelRepoUpload{
+		{SessionID: "session-a", Key: "key-a"},
+		{SessionID: "session-b", Key: "key-b"},
+		{SessionID: "session-c", Key: "key-c"},
+	}
+
+	// b.bin (chunk index 1) fails, but resolves faster than a.bin and c.bin, which
+	// succeed. The chunk-order-index-0 file (a.bin) never errors, so the deterministic
+	// first-error-by-index result should still be b.bin's error, not whichever file's
+	// goroutine happened to finish (or fail) first.
+	completeModelUploadFile = func(upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
+		switch artifactPath {
+		case "/tmp/a.bin":
+			time.Sleep(15 * time.Millisecond)
+			return nil
+		case "/tmp/b.bin":
+			return fmt.Errorf("boom")
+		case "/tmp/c.bin":
+			time.Sleep(5 * time.Millisecond)
+			return nil
+		default:
+			t.Fatalf("unexpected artifact %q", artifactPath)
+			return nil
+		}
+	}
+
+	_, err := uploadModelFileChunk(chunk, uploads, nil)
+	if err == nil {
+		t.Fatal("expected uploadModelFileChunk to return an error")
+	}
+	if !strings.Contains(err.Error(), "b.bin") || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("expected error to reference b.bin's failure, got %v", err)
 	}
 }
 

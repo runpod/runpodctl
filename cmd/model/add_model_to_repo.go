@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/runpod/runpodctl/api"
@@ -175,7 +176,7 @@ var (
 	addModelToRepo             = api.AddModelToRepo
 	createModelRepoUpload      = api.CreateModelRepoUpload
 	createModelRepoUploadBatch = api.CreateModelRepoUploadBatch
-	completeModelRepoUpload    = api.CompleteModelRepoUpload
+	completeModelRepoUploadAll = api.CompleteModelRepoUploadBatch
 	completeModelUploadFile    = completeModelUploadWithProgress
 	getModelsForAdd            = api.GetModels
 	sleepModelHashPoll         = waitModelHashPoll
@@ -186,6 +187,14 @@ var (
 // the payload and the S3 calls the server fans out per invocation. Must stay <= the server's own
 // MAX_MODEL_REPO_UPLOAD_BATCH_FILES (runpod/RunPod node/graphql/schema/modelRepo.ts).
 const modelRepoUploadBatchSize = 500
+
+// modelRepoUploadConcurrency bounds how many files within a single batch chunk are
+// uploaded to S3 at once. A whole chunk's presigned URLs (up to modelRepoUploadBatchSize)
+// are minted together in one createModelRepoUploadBatch call; transferring them one file
+// at a time left the tail of a large/slow chunk sitting on a presigned URL for close to
+// its expiresInSeconds TTL, and serialized S3 round trips were the dominant remaining
+// cost for the many-small-files case this batching work targets.
+const modelRepoUploadConcurrency = 4
 
 var addCmd = &cobra.Command{
 	Use:   "add",
@@ -916,41 +925,42 @@ func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInp
 			if result.Version != nil {
 				modelVersionUUID = strings.TrimSpace(result.Version.UUID)
 			}
+			// Only the final chunk may legitimately omit a version uuid (e.g. a
+			// degenerate one-batch response shape); any earlier chunk without one
+			// leaves later batches with nothing to pin to, so fail fast instead of
+			// silently splitting the manifest across versions.
 			if modelVersionUUID == "" && end < len(files) {
 				return fail(fmt.Errorf("upload batch response missing model version uuid"))
 			}
 		}
 
-		for i, file := range chunk {
-			upload := result.Uploads[i]
-			if upload == nil {
-				return fail(fmt.Errorf("upload batch response missing upload session details for %s", file.RelativePath))
-			}
-
-			if err := completeModelUploadFile(upload, file.AbsolutePath, progress); err != nil {
-				return fail(fmt.Errorf("upload %s: %w", file.RelativePath, err))
-			}
-
-			if upload.SessionID == "" {
-				return fail(fmt.Errorf("upload %s: missing session identifier for completion", file.RelativePath))
-			}
-
-			uploadedFiles = append(uploadedFiles, uploadedModelFile{
-				RelativePath: file.RelativePath,
-				Key:          upload.Key,
-				SessionID:    upload.SessionID,
-			})
+		chunkUploaded, err := uploadModelFileChunk(chunk, result.Uploads, progress)
+		if err != nil {
+			return fail(err)
 		}
+		uploadedFiles = append(uploadedFiles, chunkUploaded...)
 	}
 
-	for i := range uploadedFiles {
-		completion, err := completeModelRepoUpload(uploadedFiles[i].SessionID)
-		if err != nil {
-			return fail(fmt.Errorf("complete upload session for %s: %w", uploadedFiles[i].RelativePath, err))
+	// Finalize every uploaded session in one request: build the session id list as it
+	// exists now (every chunk has already finished uploading its bytes) and send it as
+	// a single completeModelRepoUploadBatch call, rather than one completeModelRepoUpload
+	// round trip per file.
+	if len(uploadedFiles) > 0 {
+		sessionIDs := make([]string, len(uploadedFiles))
+		for i := range uploadedFiles {
+			sessionIDs[i] = uploadedFiles[i].SessionID
 		}
-
-		uploadedFiles[i].SessionID = completion.SessionID
-		uploadedFiles[i].Status = completion.Status
+		completions, err := completeModelRepoUploadAll(sessionIDs)
+		if err != nil {
+			return fail(fmt.Errorf("complete upload sessions: %w", err))
+		}
+		if len(completions) != len(uploadedFiles) {
+			return fail(fmt.Errorf("expected %d completed sessions, got %d", len(uploadedFiles), len(completions)))
+		}
+		for i, completion := range completions {
+			uploadedFiles[i].SessionID = completion.SessionID
+			uploadedFiles[i].Status = completion.Status
+		}
 	}
 
 	if progress != nil {
@@ -959,6 +969,78 @@ func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInp
 	printCompletedModelUploadSize(totalSize)
 
 	return uploadedFiles, uploadModel, modelVersionUUID, nil
+}
+
+// runBounded runs fn(i) for every i in [0, n) with at most concurrency goroutines in
+// flight at once, always waits for every launched call to finish -- even after one
+// fails, since fn has no cancellation signal to stop early -- and then returns the
+// first error in index order (not completion order), so a failure is deterministic
+// regardless of goroutine scheduling.
+func runBounded(n int, concurrency int, fn func(i int) error) error {
+	errs := make([]error, n)
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			errs[i] = fn(i)
+		}(i)
+	}
+	wg.Wait()
+
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// uploadModelFileChunk uploads every file in chunk to S3, with up to
+// modelRepoUploadConcurrency transfers in flight at once (see runBounded). uploads[i]
+// is paired with chunk[i] by slice position: the server builds sessions from the same
+// ordered file list it was sent (see createModelRepoUploadBatch in
+// RunPod/node/graphql/schema/modelRepo.ts, which maps fileWork/sessions/uploads via a
+// single shared index throughout), and ModelRepoUpload carries no fileName to
+// re-correlate by. The count check in api.CreateModelRepoUploadBatch only guards
+// length, not ordering.
+//
+// Session validity (upload != nil, upload.SessionID != "") is checked synchronously
+// for the whole chunk before any goroutine is launched, so a malformed response fails
+// before wasting a single byte transfer.
+func uploadModelFileChunk(chunk []modelFile, uploads []*api.ModelRepoUpload, progress modelUploadProgress) ([]uploadedModelFile, error) {
+	for i, file := range chunk {
+		upload := uploads[i]
+		if upload == nil {
+			return nil, fmt.Errorf("upload batch response missing upload session details for %s", file.RelativePath)
+		}
+		if upload.SessionID == "" {
+			return nil, fmt.Errorf("upload %s: missing session identifier for completion", file.RelativePath)
+		}
+	}
+
+	results := make([]uploadedModelFile, len(chunk))
+	err := runBounded(len(chunk), modelRepoUploadConcurrency, func(i int) error {
+		file := chunk[i]
+		upload := uploads[i]
+		if err := completeModelUploadFile(upload, file.AbsolutePath, progress); err != nil {
+			return fmt.Errorf("upload %s: %w", file.RelativePath, err)
+		}
+		results[i] = uploadedModelFile{
+			RelativePath: file.RelativePath,
+			Key:          upload.Key,
+			SessionID:    upload.SessionID,
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
 }
 
 // printModelAddOutput and printCompactModelAddOutput return the encode error to
