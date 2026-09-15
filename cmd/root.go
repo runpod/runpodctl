@@ -3,7 +3,10 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/runpod/runpodctl/cmd/billing"
@@ -326,31 +329,104 @@ func Execute(ver string) {
 	os.Exit(1)
 }
 
+// the api key is stored in ~/.runpod/config.toml, so neither that file nor the
+// directory holding it may be readable by other users on a shared machine.
+// viper and MkdirAll only apply these modes to what they create, which is why
+// tightenConfigPermissions exists alongside them.
+const (
+	configDirPerm  = 0o700
+	configFilePerm = 0o600
+)
+
 // initConfig reads config file and ENV variables
 func initConfig() {
 	home, err := os.UserHomeDir()
 	cobra.CheckErr(err)
-	configPath := home + "/.runpod"
-	viper.AddConfigPath(configPath)
+
+	configDir := filepath.Join(home, ".runpod")
+	configFile := filepath.Join(configDir, "config.toml")
+	legacyFile := filepath.Join(home, ".runpod.yaml")
+
+	// SetConfigPermissions applies to every viper write, so the `config`,
+	// `doctor` and `project` commands inherit 0600 without their own calls.
+	viper.SetConfigPermissions(configFilePerm)
+	// SetConfigFile, not AddConfigPath + SetConfigName: viper 1.19 does not
+	// update ConfigFileUsed after WriteConfigAs, so with a *searched* path every
+	// later WriteConfig() aims at whatever the search last matched — which on a
+	// fresh machine is nothing at all, and `config --apiKey` fails with "Config
+	// File ".runpod.yaml" Not Found". Naming the file up front pins all of them
+	// to the toml.
+	viper.SetConfigFile(configFile)
 	viper.SetConfigType("toml")
-	viper.SetConfigName("config.toml")
 
 	viper.AutomaticEnv()
 
-	if err := viper.ReadInConfig(); err == nil {
+	switch err := viper.ReadInConfig(); {
+	case err == nil:
 		// config loaded
-	} else {
-		// legacy: try to migrate old config
-		viper.SetConfigType("yaml")
-		viper.AddConfigPath(home)
-		viper.SetConfigName(".runpod.yaml")
-		if yamlReadErr := viper.ReadInConfig(); yamlReadErr == nil {
+	case configFileMissing(err):
+		// no toml yet: adopt ~/.runpod.yaml if the user still has one, then
+		// create the toml. the legacy file is read through its own viper so a
+		// half-done migration cannot leave the global one pointed at the yaml.
+		legacy := viper.New()
+		legacy.SetConfigFile(legacyFile)
+		legacy.SetConfigType("yaml")
+		if legacy.ReadInConfig() == nil {
 			fmt.Fprintln(os.Stderr, "migrating config from ~/.runpod.yaml to ~/.runpod/config.toml")
+			if mergeErr := viper.MergeConfigMap(legacy.AllSettings()); mergeErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not migrate %s: %v\n", legacyFile, mergeErr)
+			}
 		}
-		viper.SetConfigType("toml")
-		// make .runpod folder if not exists
-		err := os.MkdirAll(configPath, os.ModePerm)
-		cobra.CheckErr(err)
-		viper.WriteConfigAs(configPath + "/config.toml") //nolint:errcheck
+		cobra.CheckErr(os.MkdirAll(configDir, configDirPerm))
+		if writeErr := viper.WriteConfigAs(configFile); writeErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not write %s: %v\n", configFile, writeErr)
+		}
+	default:
+		// unreadable or malformed. this used to fall into the branch above,
+		// which truncated a config that still held the user's api key. warn and
+		// leave it: the commands that need a key report no_credentials.
+		fmt.Fprintf(os.Stderr, "warning: could not read %s: %v\n", configFile, err)
+	}
+
+	tightenConfigPermissions(configDir, configFile, legacyFile)
+}
+
+// configFileMissing reports whether ReadInConfig failed only because there is
+// no config file. SetConfigFile makes viper return the raw *fs.PathError rather
+// than its own ConfigFileNotFoundError, so both are accepted.
+func configFileMissing(err error) bool {
+	var notFound viper.ConfigFileNotFoundError
+	return errors.Is(err, fs.ErrNotExist) || errors.As(err, &notFound)
+}
+
+// tightenConfigPermissions narrows anything an earlier runpodctl left group- or
+// world-accessible. MkdirAll never changes an existing directory's mode and
+// viper only sets permissions on files it creates, so without this every
+// install created before CON-1160 keeps its 0755 directory and 0644 config.
+// Tightening the directory to 0700 also covers ~/.runpod/ssh. Never fatal: a
+// mode we cannot fix is worth a warning, not a dead cli.
+func tightenConfigPermissions(configDir, configFile, legacyFile string) {
+	if runtime.GOOS == "windows" {
+		// no unix mode bits to narrow; chmod there only toggles the read-only
+		// attribute, and access is governed by acls this cli does not touch.
+		return
+	}
+	for _, target := range []struct {
+		path string
+		mode os.FileMode
+	}{
+		{configDir, configDirPerm},
+		{configFile, configFilePerm},
+		// the legacy config is remediated but never deleted: it is the user's
+		// file, and the toml already wins on every read.
+		{legacyFile, configFilePerm},
+	} {
+		info, statErr := os.Stat(target.path)
+		if statErr != nil || info.Mode().Perm()&0o077 == 0 {
+			continue
+		}
+		if chmodErr := os.Chmod(target.path, target.mode); chmodErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not restrict permissions on %s: %v\n", target.path, chmodErr)
+		}
 	}
 }
