@@ -61,6 +61,13 @@ func TestModelRepoFunctionsReturnGraphQLErrorOnAccessDenied(t *testing.T) {
 			_, err := CreateModelRepoUpload(&CreateModelRepoUploadInput{Name: "m", FileName: "f.bin", FileSizeBytes: "10"})
 			return err
 		}},
+		{"CreateModelRepoUploadBatch", func() error {
+			_, err := CreateModelRepoUploadBatch(&CreateModelRepoUploadBatchInput{
+				Name:  "m",
+				Files: []ModelRepoUploadBatchFileInput{{FileName: "f.bin", FileSizeBytes: "10"}},
+			})
+			return err
+		}},
 		{"CompleteModelRepoUpload", func() error {
 			_, err := CompleteModelRepoUpload("session-id")
 			return err
