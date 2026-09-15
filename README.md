@@ -22,13 +22,15 @@ _note: all pods automatically come with runpodctl installed with a pod-scoped ap
   - [commands](#commands)
     - [pod management](#pod-management)
     - [serverless endpoints](#serverless-endpoints)
-    - [waiting until a resource is usable](#waiting-until-a-resource-is-usable)
+      - [reading logs](#reading-logs)
       - [invoking an endpoint](#invoking-an-endpoint)
+    - [waiting until a resource is usable](#waiting-until-a-resource-is-usable)
     - [file transfer](#file-transfer)
   - [output format](#output-format)
     - [pod runtime status](#pod-runtime-status)
     - [error format](#error-format)
   - [environment variables](#environment-variables)
+    - [config permissions](#config-permissions)
   - [legacy commands](#legacy-commands)
   - [release process](#release-process)
   - [acknowledgements](#acknowledgements)
@@ -156,7 +158,7 @@ behavior worth knowing, all verified against prod:
   narrating image pull, container create/start/stop). a deploy that never comes up
   usually explains itself in the system lines.
 - `--tail` is applied **per source**, so `--tail 5` on a pod emitting both kinds
-  returns up to 5 container lines *and* up to 5 system lines.
+  returns up to 5 container lines _and_ up to 5 system lines.
 - `--since` accepts a duration (`30m`, `2h`, `7d`) or an rfc3339 timestamp, and
   overrides `--tail` server-side.
 - logs outlive the workload: a stopped pod still returns its history, including
@@ -211,13 +213,13 @@ the cli actually sends — the payload compacted and json-escaped inside
 `{"input": ...}` — so whitespace in an `--input-file` does not count against the
 limit and an `&`-heavy payload (six bytes escaped) does.
 
-| behavior | detail |
-| --- | --- |
-| waiting | `run` submits on `/run` and polls `/status` until the job is terminal, bounded by `--wait` (default 5m) |
-| `--no-wait` | submits and prints the queued job without polling (same as `--wait 0`, exit 0). follow it with `serverless status`. passing an explicit `--wait` alongside it is a `usage_error`, not a silently ignored flag |
-| stdout | always the job payload as json — including a `FAILED` job's `error`, and the last known payload when the wait ran out |
-| stderr | progress notes and the error object, never job data |
-| exit codes | 0 when the job is `COMPLETED`, and when `--wait 0` / `--no-wait` submitted it successfully. 1 when the request fails, when `--wait` runs out (`timeout`), or when the job ends `FAILED` / `CANCELLED` / `TIMED_OUT` (`job_failed`) |
+| behavior    | detail                                                                                                                                                                                                                             |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| waiting     | `run` submits on `/run` and polls `/status` until the job is terminal, bounded by `--wait` (default 5m)                                                                                                                            |
+| `--no-wait` | submits and prints the queued job without polling (same as `--wait 0`, exit 0). follow it with `serverless status`. passing an explicit `--wait` alongside it is a `usage_error`, not a silently ignored flag                      |
+| stdout      | always the job payload as json — including a `FAILED` job's `error`, and the last known payload when the wait ran out                                                                                                              |
+| stderr      | progress notes and the error object, never job data                                                                                                                                                                                |
+| exit codes  | 0 when the job is `COMPLETED`, and when `--wait 0` / `--no-wait` submitted it successfully. 1 when the request fails, when `--wait` runs out (`timeout`), or when the job ends `FAILED` / `CANCELLED` / `TIMED_OUT` (`job_failed`) |
 
 `timeout` means the cli stopped waiting, not that the endpoint is broken. when the
 message names a `serverless status` command the job is still running server-side —
@@ -244,7 +246,7 @@ other resources: `template` (alias: `tpl`), `volume` (alias: `vol`), `registry` 
 
 ### waiting until a resource is usable
 
-create returns as soon as the resource is *scheduled*: a pod reports
+create returns as soon as the resource is _scheduled_: a pod reports
 `desiredStatus: RUNNING` while its image is still being pulled. `--wait` blocks
 until it is actually usable instead, so there is no poll loop to write.
 
@@ -261,10 +263,10 @@ runpodctl pod create --image <img> --gpu-id <id> --wait --wait-timeout 3m
 
 what each one waits for, precisely:
 
-| command | ready means |
-| --- | --- |
-| `pod create --wait` | the pod's public port 22 accepts a tcp connection **and** answers with an ssh protocol banner. no key and no handshake, so it works before `runpodctl doctor` has ever run — it proves sshd is up, not that your key is installed. port 22 merely *appearing* in `runtime.ports` is not enough: prod allocates that port for images that run no sshd at all |
-| `serverless create --wait` | the endpoint's `/health` reports at least one worker `ready` or `running`. neither counter is quite "a hot handler", and `/health` exposes no stronger one: a `ready` worker is flashboot-cached (its record reads `desiredStatus: EXITED`), so the first request resumes it, and `running` is written when a worker is *scheduled*, before its container exists. `running` still has to count, because a `--workers-min` worker stays `RUNNING` for its whole life and never appears in `ready` |
+| command                    | ready means                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `pod create --wait`        | the pod's public port 22 accepts a tcp connection **and** answers with an ssh protocol banner. no key and no handshake, so it works before `runpodctl doctor` has ever run — it proves sshd is up, not that your key is installed. port 22 merely _appearing_ in `runtime.ports` is not enough: prod allocates that port for images that run no sshd at all                                                                                                                                      |
+| `serverless create --wait` | the endpoint's `/health` reports at least one worker `ready` or `running`. neither counter is quite "a hot handler", and `/health` exposes no stronger one: a `ready` worker is flashboot-cached (its record reads `desiredStatus: EXITED`), so the first request resumes it, and `running` is written when a worker is _scheduled_, before its container exists. `running` still has to count, because a `--workers-min` worker stays `RUNNING` for its whole life and never appears in `ready` |
 
 - progress goes to **stderr** on a 15s cadence; stdout stays exactly one json
   object, so `... 2>/dev/null | jq` sees a single payload.
@@ -304,7 +306,7 @@ what each one waits for, precisely:
   - a pod in a terminal state (`conflict`), or a resource that two consecutive
     reads no longer list (`not_found` — one missing read is treated as an unknown
     state, not a deletion).
-  - a resource that has never been readable *at all* after twelve consecutive
+  - a resource that has never been readable _at all_ after twelve consecutive
     reads — ~1 min at the default 5s interval, so only reachable when
     `--wait-timeout` is longer than that: `not_found`. an endpoint that never
     propagated to `/health`, or a pod terminated before it was ever listed, is no
@@ -340,10 +342,13 @@ unrecognized one is rejected rather than silently falling back to json:
 
 ```jsonc
 // runpodctl gpu list --output=table
-{"error":"invalid --output \"table\": supported formats are json and yaml","code":"usage_error"}
+{
+  "error": "invalid --output \"table\": supported formats are json and yaml",
+  "code": "usage_error",
+}
 ```
 
-a few surfaces ignore the flag's *value* — `get pod` and `get cloud` always print
+a few surfaces ignore the flag's _value_ — `get pod` and `get cloud` always print
 a table, and the legacy `create/remove/start/stop pod` and `create/remove pods`
 always print plaintext — but an unrecognized value is rejected everywhere.
 
@@ -355,21 +360,21 @@ both `RUNNING`. `pod get` and `pod list` therefore also report a derived
 `runtimeStatus`, plus a `runtimeStatusReason` token when there is more to say.
 branch on these, not on the reason text.
 
-| `runtimeStatus` | meaning |
-| --- | --- |
-| `running` | `desiredStatus` is RUNNING and the platform reports runtime telemetry: the container is up. does **not** imply any port is reachable |
-| `initializing` | `desiredStatus` is RUNNING and no telemetry is being reported. usually placed on a machine with the container not up yet — image pull, container create or boot, which the platform does not distinguish — but the same absence is what an upstream telemetry lookup failure looks like, so read it as "no container reported", not "the container is provably down". either way: keep polling |
-| `stopped` | `desiredStatus` is EXITED and `lastStatusChange` does not name a termination. container gone, disk kept, `pod start` will bring it back |
-| `terminated` | the pod is being destroyed: `desiredStatus` is TERMINATED, **or** it is EXITED and `lastStatusChange` says "terminated by ...". the second is the normal case — a terminate writes EXITED, not TERMINATED — and a terminated pod drops out of `pod list` shortly after, so this is a narrow window |
-| `unknown` | not derivable: either a `desiredStatus` the platform defines but does not surface in practice (CREATED, RESTARTING, PAUSED, DEAD), or the runtime lookup failed. read `desiredStatus`, which is in the same output |
+| `runtimeStatus` | meaning                                                                                                                                                                                                                                                                                                                                                                                        |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `running`       | `desiredStatus` is RUNNING and the platform reports runtime telemetry: the container is up. does **not** imply any port is reachable                                                                                                                                                                                                                                                           |
+| `initializing`  | `desiredStatus` is RUNNING and no telemetry is being reported. usually placed on a machine with the container not up yet — image pull, container create or boot, which the platform does not distinguish — but the same absence is what an upstream telemetry lookup failure looks like, so read it as "no container reported", not "the container is provably down". either way: keep polling |
+| `stopped`       | `desiredStatus` is EXITED and `lastStatusChange` does not name a termination. container gone, disk kept, `pod start` will bring it back                                                                                                                                                                                                                                                        |
+| `terminated`    | the pod is being destroyed: `desiredStatus` is TERMINATED, **or** it is EXITED and `lastStatusChange` says "terminated by ...". the second is the normal case — a terminate writes EXITED, not TERMINATED — and a terminated pod drops out of `pod list` shortly after, so this is a narrow window                                                                                             |
+| `unknown`       | not derivable: either a `desiredStatus` the platform defines but does not surface in practice (CREATED, RESTARTING, PAUSED, DEAD), or the runtime lookup failed. read `desiredStatus`, which is in the same output                                                                                                                                                                             |
 
-| `runtimeStatusReason` | meaning |
-| --- | --- |
-| `awaiting_container` | with `initializing`: no container is being reported for a pod that should be running |
-| `stopped_by_user` / `terminated_by_user` | you did it |
-| `stopped_by_runpod` / `terminated_by_runpod` | runpod did it. the platform records no machine-readable cause; in practice this is insufficient credit, a fatal image-pull failure, or host action |
-| `stopped_outbid` / `terminated_outbid` | a spot/community pod lost its machine to a higher bid. the only involuntary stop with a real recorded cause; retry elsewhere or at on-demand pricing |
-| `runtime_unavailable` | with `unknown`: the runtime lookup could not be made, so running and initializing cannot be told apart |
+| `runtimeStatusReason`                        | meaning                                                                                                                                              |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `awaiting_container`                         | with `initializing`: no container is being reported for a pod that should be running                                                                 |
+| `stopped_by_user` / `terminated_by_user`     | you did it                                                                                                                                           |
+| `stopped_by_runpod` / `terminated_by_runpod` | runpod did it. the platform records no machine-readable cause; in practice this is insufficient credit, a fatal image-pull failure, or host action   |
+| `stopped_outbid` / `terminated_outbid`       | a spot/community pod lost its machine to a higher bid. the only involuntary stop with a real recorded cause; retry elsewhere or at on-demand pricing |
+| `runtime_unavailable`                        | with `unknown`: the runtime lookup could not be made, so running and initializing cannot be told apart                                               |
 
 the token is a lossy read of the backend's free-text `lastStatusChange`, which
 `pod get` and `pod list` both also publish — so a phrasing this cli does not
@@ -379,7 +384,7 @@ is still there.
 `runtimeStatus` is derived from the graphql snapshot the runtime telemetry came
 from, while `desiredStatus` is rest's. the two surfaces can briefly disagree, so
 a single `pod get` can show `desiredStatus: RUNNING` next to
-`runtimeStatus: stopped`. that is deliberate: gating telemetry on the *other*
+`runtimeStatus: stopped`. that is deliberate: gating telemetry on the _other_
 surface's status is how a stopped pod's stale ports get handed back as a working
 ssh command. when they disagree, trust `runtimeStatus`.
 
@@ -416,15 +421,19 @@ data goes to stdout; errors go to stderr as a single flat json object, and the
 exit code is non-zero. branch on `code`, never on the message text:
 
 ```jsonc
-{"error":"failed to get endpoint: endpoint not found","code":"not_found","status":404}
+{
+  "error": "failed to get endpoint: endpoint not found",
+  "code": "not_found",
+  "status": 404,
+}
 ```
 
-| field | notes |
-| --- | --- |
-| `error` | human-readable message, unwrapped (never a nested json blob) |
-| `code` | stable, lowercase. present on every error from the resource commands (see the caveat below) |
-| `status` | http status, **only** when the failure came back from a rest call |
-| `id` | id of a resource the failure left behind, **only** when one exists — a `pod create --wait` that timed out has already bought a pod, and this is how you find it without parsing the message |
+| field    | notes                                                                                                                                                                                       |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `error`  | human-readable message, unwrapped (never a nested json blob)                                                                                                                                |
+| `code`   | stable, lowercase. present on every error from the resource commands (see the caveat below)                                                                                                 |
+| `status` | http status, **only** when the failure came back from a rest call                                                                                                                           |
+| `id`     | id of a resource the failure left behind, **only** when one exists — a `pod create --wait` that timed out has already bought a pod, and this is how you find it without parsing the message |
 
 `status` is deliberately absent when the api answered 200 with an empty result
 (graphql reports a missing resource that way), so `code` is the field to branch
@@ -432,19 +441,19 @@ on — `if status == 404` misses every graphql not-found.
 
 codes the cli generates:
 
-| code | meaning |
-| --- | --- |
-| `usage_error` | your invocation was wrong (unknown command/flag, bad or missing args, missing required flags). usage text is printed after the json |
-| `not_found` | the api has no such resource. during a `--wait` it can also mean a resource that *was* created has gone (or never became visible), so check for an `id` field and clean up rather than assuming nothing exists |
+| code                                                                                          | meaning                                                                                                                                                                                                                                                                                                              |
+| --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `usage_error`                                                                                 | your invocation was wrong (unknown command/flag, bad or missing args, missing required flags). usage text is printed after the json                                                                                                                                                                                  |
+| `not_found`                                                                                   | the api has no such resource. during a `--wait` it can also mean a resource that _was_ created has gone (or never became visible), so check for an `id` field and clean up rather than assuming nothing exists                                                                                                       |
 | `bad_request` `unauthorized` `forbidden` `conflict` `rate_limited` `server_error` `api_error` | derived from the rest status. `conflict` is also emitted without one, for a resource in a state no amount of waiting fixes: a terminal pod during `--wait`, an endpoint with no workers to read logs from, a model version that failed server-side hashing during `--wait-for-hash` (re-run the upload; do not poll) |
-| `graphql_error` | graphql returned an errors array (http 200) |
-| `timeout` | the cli stopped waiting. two cases, told apart by the message: a `--wait` / `--wait-for-hash` budget ran out with the work still running server-side (the message names the command to poll it — do that, do not re-invoke), or a single api call exceeded the `timeout` config key (nothing is running; retry) |
-| `job_failed` | a serverless job reached a terminal status other than `COMPLETED`. the job payload is still on stdout |
-| `no_credentials` | no api key configured — run `runpodctl doctor` or set `RUNPOD_API_KEY` |
-| `network_error` | the api could not be reached at all — dns, refused, tls, timeout. transient: retry |
-| `wait_timeout` | `--wait` gave up before the resource was usable. the resource **was created and still bills** — the last known state is in the message and the id is in `id` |
-| `wait_interrupted` | `--wait` was cancelled (ctrl-c / SIGTERM). same as above: the resource exists, and `id` names it |
-| `cli_error` | anything else local: validation, config, bad input (including a malformed `RUNPOD_API_URL`) |
+| `graphql_error`                                                                               | graphql returned an errors array (http 200)                                                                                                                                                                                                                                                                          |
+| `timeout`                                                                                     | the cli stopped waiting. two cases, told apart by the message: a `--wait` / `--wait-for-hash` budget ran out with the work still running server-side (the message names the command to poll it — do that, do not re-invoke), or a single api call exceeded the `timeout` config key (nothing is running; retry)      |
+| `job_failed`                                                                                  | a serverless job reached a terminal status other than `COMPLETED`. the job payload is still on stdout                                                                                                                                                                                                                |
+| `no_credentials`                                                                              | no api key configured — run `runpodctl doctor` or set `RUNPOD_API_KEY`                                                                                                                                                                                                                                               |
+| `network_error`                                                                               | the api could not be reached at all — dns, refused, tls, timeout. transient: retry                                                                                                                                                                                                                                   |
+| `wait_timeout`                                                                                | `--wait` gave up before the resource was usable. the resource **was created and still bills** — the last known state is in the message and the id is in `id`                                                                                                                                                         |
+| `wait_interrupted`                                                                            | `--wait` was cancelled (ctrl-c / SIGTERM). same as above: the resource exists, and `id` names it                                                                                                                                                                                                                     |
+| `cli_error`                                                                                   | anything else local: validation, config, bad input (including a malformed `RUNPOD_API_URL`)                                                                                                                                                                                                                          |
 
 the api may also return its own code, which is passed through lowercased, so
 treat the list as the set the cli generates rather than an exhaustive one.
@@ -454,10 +463,10 @@ treat the list as the set the cli generates rather than an exhaustive one.
 `send`, `receive`, `hub`, `update` and `exec`. these still print plaintext on
 stderr and carry no `code`:
 
-| surface | shape |
-| --- | --- |
+| surface                                                                      | shape                            |
+| ---------------------------------------------------------------------------- | -------------------------------- |
 | legacy `get/create/remove/start/stop pod`, `create/remove pods`, `get cloud` | `Error: <msg>` via cobra, exit 1 |
-| `project` | prints to **stdout** and exits 0 |
+| `project`                                                                    | prints to **stdout** and exits 0 |
 
 so a parser should tolerate a non-json line on stderr from those, and must not
 rely on the exit code for `project`, which is slated for deletion rather than
@@ -470,19 +479,28 @@ its errors are json with a `code` and exit 1.
 
 ## environment variables
 
-| variable | default | what it sets |
-| --- | --- | --- |
-| `RUNPOD_API_KEY` | — | api key. also settable via `runpodctl doctor` or `~/.runpod/config.toml`, which is created `0600` inside a `0700` directory (a wider mode left by an older version is narrowed on the next run) |
-| `RUNPOD_API_URL` | `https://rest.runpod.io/v1` | rest control plane (config key `restApiUrl`) |
-| `RUNPOD_GRAPHQL_URL` | `https://api.runpod.io/graphql` | graphql control plane (config key `apiUrl`) |
-| `RUNPOD_INVOKE_URL` | `https://api.runpod.ai/v2` | base for the serverless invoke urls reported by `serverless create/get/list/update`, and the host `serverless run/status/health` call (config key `invokeUrl`) |
-| `RUNPOD_REST_V2_URL` | `https://api.runpod.io/v2` | rest v2, which serves `pod logs`, `serverless logs` and the worker listing behind them (config key `restV2ApiUrl`) |
+| variable             | default                         | what it sets                                                                                                                                                   |
+| -------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RUNPOD_API_KEY`     | —                               | api key. also settable via `runpodctl doctor` or `~/.runpod/config.toml` (see config permissions below)                                                        |
+| `RUNPOD_API_URL`     | `https://rest.runpod.io/v1`     | rest control plane (config key `restApiUrl`)                                                                                                                   |
+| `RUNPOD_GRAPHQL_URL` | `https://api.runpod.io/graphql` | graphql control plane (config key `apiUrl`)                                                                                                                    |
+| `RUNPOD_INVOKE_URL`  | `https://api.runpod.ai/v2`      | base for the serverless invoke urls reported by `serverless create/get/list/update`, and the host `serverless run/status/health` call (config key `invokeUrl`) |
+| `RUNPOD_REST_V2_URL` | `https://api.runpod.io/v2`      | rest v2, which serves `pod logs`, `serverless logs` and the worker listing behind them (config key `restV2ApiUrl`)                                             |
 
 invoke is a separate service from the control plane: pointing `RUNPOD_API_URL`
 or `RUNPOD_GRAPHQL_URL` at a non-prod host does **not** move the invoke urls.
 override `RUNPOD_INVOKE_URL` explicitly when you need that. rest v2 is separate
 again — the crud commands are still on rest v1, so moving one does not move the
 other.
+
+### config permissions
+
+on unix, new config files use `0600` inside a `0700` directory. config initialization
+narrows existing group/world permission bits on the directory, toml file, and legacy
+`~/.runpod.yaml`. failed checks or permission repairs stop the command before config
+writes. config paths must not be symlinks; both config files must be regular files.
+`--help` and `--version` skip config initialization. windows uses inherited acls;
+the cli does not configure them or guarantee private access there.
 
 ## legacy commands
 
