@@ -485,3 +485,112 @@ func TestCompleteModelRepoUploadBatchReportsFailingSessionAndFlagsRestUnconfirme
 		t.Fatalf("expected error to flag the other sessions' outcome as unconfirmed, got %v", err)
 	}
 }
+
+func TestGetModelRepoStorageUsageParsesResponse(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+
+	var sentOwner interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input Input
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		sentOwner = input.Variables["owner"]
+
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": map[string]interface{}{
+				"modelRepoStorageUsage": map[string]interface{}{
+					"ownerId":        "owner-1",
+					"committedBytes": "1000",
+					"reservedBytes":  "500",
+					"usedBytes":      "1500",
+					"limitBytes":     "5000",
+					"availableBytes": "3500",
+					"enforced":       true,
+				},
+			},
+		})
+	}))
+	defer server.Close()
+	t.Setenv("RUNPOD_GRAPHQL_URL", server.URL)
+
+	usage, err := GetModelRepoStorageUsage("owner-1")
+	if err != nil {
+		t.Fatalf("GetModelRepoStorageUsage returned error: %v", err)
+	}
+	if sentOwner != "owner-1" {
+		t.Fatalf("expected owner variable to be sent, got %#v", sentOwner)
+	}
+	if usage.OwnerID != "owner-1" || usage.UsedBytes != "1500" || !usage.Enforced {
+		t.Fatalf("unexpected usage response: %#v", usage)
+	}
+	if usage.AvailableBytes == nil || *usage.AvailableBytes != "3500" {
+		t.Fatalf("expected availableBytes to decode, got %#v", usage.AvailableBytes)
+	}
+}
+
+func TestGetModelRepoStorageUsageOmitsOwnerVariableWhenEmpty(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+
+	var sawOwnerKey bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input Input
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		_, sawOwnerKey = input.Variables["owner"]
+
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": map[string]interface{}{
+				"modelRepoStorageUsage": map[string]interface{}{
+					"ownerId":        "acting-user",
+					"committedBytes": "0",
+					"reservedBytes":  "0",
+					"usedBytes":      "0",
+					"limitBytes":     nil,
+					"availableBytes": nil,
+					"enforced":       false,
+				},
+			},
+		})
+	}))
+	defer server.Close()
+	t.Setenv("RUNPOD_GRAPHQL_URL", server.URL)
+
+	usage, err := GetModelRepoStorageUsage("")
+	if err != nil {
+		t.Fatalf("GetModelRepoStorageUsage returned error: %v", err)
+	}
+	if sawOwnerKey {
+		t.Fatal("expected owner variable to be omitted when owner is empty")
+	}
+	if usage.LimitBytes != nil || usage.AvailableBytes != nil {
+		t.Fatalf("expected nil limit/available when no quota is configured, got %#v / %#v", usage.LimitBytes, usage.AvailableBytes)
+	}
+	if usage.Enforced {
+		t.Fatal("expected enforced=false when no quota is configured")
+	}
+}
+
+func TestGetModelRepoStorageUsageSurfacesGraphQLErrors(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"errors": []map[string]interface{}{{"message": "Model owner is not readable by this user"}},
+		})
+	}))
+	defer server.Close()
+	t.Setenv("RUNPOD_GRAPHQL_URL", server.URL)
+
+	_, err := GetModelRepoStorageUsage("someone-elses-namespace")
+	if err == nil || !strings.Contains(err.Error(), "not readable") {
+		t.Fatalf("expected error to surface, got %v", err)
+	}
+}
