@@ -68,6 +68,10 @@ func TestModelRepoFunctionsReturnGraphQLErrorOnAccessDenied(t *testing.T) {
 			})
 			return err
 		}},
+		{"GetModelRepoStorageUsage", func() error {
+			_, err := GetModelRepoStorageUsage("o")
+			return err
+		}},
 		{"CompleteModelRepoUpload", func() error {
 			_, err := CompleteModelRepoUpload("session-id")
 			return err
