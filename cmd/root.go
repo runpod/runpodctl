@@ -3,7 +3,10 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/runpod/runpodctl/cmd/billing"
@@ -31,6 +34,7 @@ import (
 
 var version string
 var outputFormat string
+var configInitErr error
 
 // rootCmd is the base command
 var rootCmd = &cobra.Command{
@@ -109,7 +113,7 @@ func init() {
 		if err := output.ValidateFormat(outputFormat); err != nil {
 			return &usageError{cmd: c, err: err}
 		}
-		return nil
+		return configInitErr
 	}
 	registerCommands()
 }
@@ -326,31 +330,154 @@ func Execute(ver string) {
 	os.Exit(1)
 }
 
+// the api key is stored in ~/.runpod/config.toml, so neither that file nor the
+// directory holding it may be readable by other users on a shared machine.
+// viper and MkdirAll only apply these modes to what they create, which is why
+// tightenConfigPermissions exists alongside them.
+const (
+	configDirPerm  = 0o700
+	configFilePerm = 0o600
+)
+
 // initConfig reads config file and ENV variables
 func initConfig() {
+	configInitErr = loadConfig()
+}
+
+func loadConfig() error {
 	home, err := os.UserHomeDir()
-	cobra.CheckErr(err)
-	configPath := home + "/.runpod"
-	viper.AddConfigPath(configPath)
+	if err != nil {
+		return fmt.Errorf("could not locate home directory: %w", err)
+	}
+
+	configDir := filepath.Join(home, ".runpod")
+	configFile := filepath.Join(configDir, "config.toml")
+	legacyFile := filepath.Join(home, ".runpod.yaml")
+
+	// nothing below is fatal. a read-only or foreign-owned config must not stop
+	// commands that authenticate through RUNPOD_API_KEY, and skipping a repair
+	// leaves the file no more exposed than it already was.
+	if err := os.MkdirAll(configDir, configDirPerm); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not create config directory: %v\n", err)
+	}
+	tightenConfigPermissions(configDir, configFile, legacyFile)
+
+	// SetConfigPermissions applies to every viper write, so the `config`,
+	// `doctor` and `project` commands inherit 0600 without their own calls.
+	viper.SetConfigPermissions(configFilePerm)
+	// SetConfigFile, not AddConfigPath + SetConfigName: viper 1.19 does not
+	// update ConfigFileUsed after WriteConfigAs, so with a *searched* path every
+	// later WriteConfig() aims at whatever the search last matched — which on a
+	// fresh machine is nothing at all, and `config --apiKey` fails with "Config
+	// File ".runpod.yaml" Not Found". Naming the file up front pins all of them
+	// to the toml.
+	viper.SetConfigFile(configFile)
 	viper.SetConfigType("toml")
-	viper.SetConfigName("config.toml")
 
 	viper.AutomaticEnv()
 
-	if err := viper.ReadInConfig(); err == nil {
+	switch err := viper.ReadInConfig(); {
+	case err == nil:
 		// config loaded
-	} else {
-		// legacy: try to migrate old config
-		viper.SetConfigType("yaml")
-		viper.AddConfigPath(home)
-		viper.SetConfigName(".runpod.yaml")
-		if yamlReadErr := viper.ReadInConfig(); yamlReadErr == nil {
+	case configFileMissing(err):
+		// no toml yet: adopt ~/.runpod.yaml if the user still has one, then
+		// create the toml. the legacy file is read through its own viper so a
+		// half-done migration cannot leave the global one pointed at the yaml.
+		legacy := viper.New()
+		legacy.SetConfigFile(legacyFile)
+		legacy.SetConfigType("yaml")
+		switch legacyErr := legacy.ReadInConfig(); {
+		case legacyErr == nil:
 			fmt.Fprintln(os.Stderr, "migrating config from ~/.runpod.yaml to ~/.runpod/config.toml")
+			if mergeErr := viper.MergeConfigMap(legacy.AllSettings()); mergeErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not migrate %s: %v\n", legacyFile, mergeErr)
+			}
+		case configFileMissing(legacyErr):
+			// nothing to migrate
+		default:
+			fmt.Fprintf(os.Stderr, "warning: could not read %s, not migrating it: %v\n", legacyFile, legacyErr)
 		}
-		viper.SetConfigType("toml")
-		// make .runpod folder if not exists
-		err := os.MkdirAll(configPath, os.ModePerm)
-		cobra.CheckErr(err)
-		viper.WriteConfigAs(configPath + "/config.toml") //nolint:errcheck
+		if writeErr := viper.SafeWriteConfigAs(configFile); writeErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not create %s: %v\n", configFile, writeErr)
+		}
+	default:
+		// unreadable or malformed. this used to fall into the branch above,
+		// which truncated a config that still held the user's api key. warn and
+		// leave it: the commands that need a key report no_credentials.
+		fmt.Fprintf(os.Stderr, "warning: could not read %s: %v\n", configFile, err)
 	}
+
+	return nil
+}
+
+// configFileMissing reports whether ReadInConfig failed only because there is
+// no config file. SetConfigFile makes viper return the raw *fs.PathError rather
+// than its own ConfigFileNotFoundError, so both are accepted.
+func configFileMissing(err error) bool {
+	var notFound viper.ConfigFileNotFoundError
+	return errors.Is(err, fs.ErrNotExist) || errors.As(err, &notFound)
+}
+
+// tightenConfigPermissions warns rather than fails, for the same reason as the
+// rest of loadConfig.
+func tightenConfigPermissions(configDir, configFile, legacyFile string) {
+	for _, target := range []struct {
+		path string
+		mode os.FileMode
+		dir  bool
+	}{
+		{configDir, configDirPerm, true},
+		{configFile, configFilePerm, false},
+		// the legacy config is remediated but never deleted: it is the user's
+		// file, and the toml already wins on every read.
+		{legacyFile, configFilePerm, false},
+	} {
+		if err := restrictConfigPath(target.path, target.mode, target.dir); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		}
+	}
+}
+
+// restrictConfigPath follows symlinks (stow, home-manager, a dotfile linked into
+// /workspace on a pod) and checks and narrows the file they point at. chmod only
+// removes bits, so following a link cannot widen access to anything.
+func restrictConfigPath(path string, mode os.FileMode, directory bool) error {
+	resolved, err := filepath.EvalSymlinks(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("could not inspect %s: %w", path, err)
+	}
+	info, err := os.Lstat(resolved)
+	if err != nil {
+		return fmt.Errorf("could not inspect %s: %w", resolved, err)
+	}
+	// resolved has no links left in it, so one here was swapped in since.
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("config path changed while restricting permissions: %s", path)
+	}
+	if directory && !info.IsDir() || !directory && !info.Mode().IsRegular() {
+		return fmt.Errorf("unexpected config file type, not restricting permissions: %s", resolved)
+	}
+	if runtime.GOOS == "windows" || info.Mode().Perm()&0o077 == 0 {
+		return nil
+	}
+
+	file, err := os.Open(resolved)
+	if err != nil {
+		return fmt.Errorf("could not open %s to restrict permissions: %w", resolved, err)
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("could not inspect opened config path %s: %w", resolved, err)
+	}
+	if !os.SameFile(info, opened) {
+		return fmt.Errorf("config path changed while restricting permissions: %s", path)
+	}
+	if err := file.Chmod(mode); err != nil {
+		return fmt.Errorf("could not restrict permissions on %s: %w", resolved, err)
+	}
+	return nil
 }
