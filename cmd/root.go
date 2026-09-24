@@ -354,12 +354,13 @@ func loadConfig() error {
 	configFile := filepath.Join(configDir, "config.toml")
 	legacyFile := filepath.Join(home, ".runpod.yaml")
 
+	// nothing below is fatal. a read-only or foreign-owned config must not stop
+	// commands that authenticate through RUNPOD_API_KEY, and skipping a repair
+	// leaves the file no more exposed than it already was.
 	if err := os.MkdirAll(configDir, configDirPerm); err != nil {
-		return fmt.Errorf("could not create config directory: %w", err)
+		fmt.Fprintf(os.Stderr, "warning: could not create config directory: %v\n", err)
 	}
-	if err := tightenConfigPermissions(configDir, configFile, legacyFile); err != nil {
-		return err
-	}
+	tightenConfigPermissions(configDir, configFile, legacyFile)
 
 	// SetConfigPermissions applies to every viper write, so the `config`,
 	// `doctor` and `project` commands inherit 0600 without their own calls.
@@ -385,14 +386,19 @@ func loadConfig() error {
 		legacy := viper.New()
 		legacy.SetConfigFile(legacyFile)
 		legacy.SetConfigType("yaml")
-		if legacy.ReadInConfig() == nil {
+		switch legacyErr := legacy.ReadInConfig(); {
+		case legacyErr == nil:
 			fmt.Fprintln(os.Stderr, "migrating config from ~/.runpod.yaml to ~/.runpod/config.toml")
 			if mergeErr := viper.MergeConfigMap(legacy.AllSettings()); mergeErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not migrate %s: %v\n", legacyFile, mergeErr)
 			}
+		case configFileMissing(legacyErr):
+			// nothing to migrate
+		default:
+			fmt.Fprintf(os.Stderr, "warning: could not read %s, not migrating it: %v\n", legacyFile, legacyErr)
 		}
 		if writeErr := viper.SafeWriteConfigAs(configFile); writeErr != nil {
-			return fmt.Errorf("could not create %s: %w", configFile, writeErr)
+			fmt.Fprintf(os.Stderr, "warning: could not create %s: %v\n", configFile, writeErr)
 		}
 	default:
 		// unreadable or malformed. this used to fall into the branch above,
@@ -412,7 +418,9 @@ func configFileMissing(err error) bool {
 	return errors.Is(err, fs.ErrNotExist) || errors.As(err, &notFound)
 }
 
-func tightenConfigPermissions(configDir, configFile, legacyFile string) error {
+// tightenConfigPermissions warns rather than fails, for the same reason as the
+// rest of loadConfig.
+func tightenConfigPermissions(configDir, configFile, legacyFile string) {
 	for _, target := range []struct {
 		path string
 		mode os.FileMode
@@ -425,44 +433,51 @@ func tightenConfigPermissions(configDir, configFile, legacyFile string) error {
 		{legacyFile, configFilePerm, false},
 	} {
 		if err := restrictConfigPath(target.path, target.mode, target.dir); err != nil {
-			return err
+			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 		}
 	}
-	return nil
 }
 
+// restrictConfigPath follows symlinks (stow, home-manager, a dotfile linked into
+// /workspace on a pod) and checks and narrows the file they point at. chmod only
+// removes bits, so following a link cannot widen access to anything.
 func restrictConfigPath(path string, mode os.FileMode, directory bool) error {
-	info, err := os.Lstat(path)
+	resolved, err := filepath.EvalSymlinks(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("could not inspect %s: %w", path, err)
 	}
+	info, err := os.Lstat(resolved)
+	if err != nil {
+		return fmt.Errorf("could not inspect %s: %w", resolved, err)
+	}
+	// resolved has no links left in it, so one here was swapped in since.
 	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("config path must not be a symlink: %s", path)
+		return fmt.Errorf("config path changed while restricting permissions: %s", path)
 	}
 	if directory && !info.IsDir() || !directory && !info.Mode().IsRegular() {
-		return fmt.Errorf("unexpected config file type: %s", path)
+		return fmt.Errorf("unexpected config file type, not restricting permissions: %s", resolved)
 	}
 	if runtime.GOOS == "windows" || info.Mode().Perm()&0o077 == 0 {
 		return nil
 	}
 
-	file, err := os.Open(path)
+	file, err := os.Open(resolved)
 	if err != nil {
-		return fmt.Errorf("could not open %s to restrict permissions: %w", path, err)
+		return fmt.Errorf("could not open %s to restrict permissions: %w", resolved, err)
 	}
 	defer file.Close()
 	opened, err := file.Stat()
 	if err != nil {
-		return fmt.Errorf("could not inspect opened config path %s: %w", path, err)
+		return fmt.Errorf("could not inspect opened config path %s: %w", resolved, err)
 	}
 	if !os.SameFile(info, opened) {
 		return fmt.Errorf("config path changed while restricting permissions: %s", path)
 	}
 	if err := file.Chmod(mode); err != nil {
-		return fmt.Errorf("could not restrict permissions on %s: %w", path, err)
+		return fmt.Errorf("could not restrict permissions on %s: %w", resolved, err)
 	}
 	return nil
 }

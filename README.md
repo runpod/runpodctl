@@ -490,8 +490,9 @@ other.
 
 on unix, new config files use `0600` inside a `0700` directory. config initialization
 narrows existing group/world permission bits on the directory, toml file, and legacy
-`~/.runpod.yaml`. failed checks or permission repairs stop the command before config
-writes. config paths must not be symlinks; both config files must be regular files.
+`~/.runpod.yaml`. symlinked config paths are followed and the link target is narrowed.
+a failed check, repair, or config write prints a warning on stderr and the command
+still runs, so `RUNPOD_API_KEY` works with a read-only or foreign-owned config.
 `--help` and `--version` skip config initialization. windows uses inherited acls;
 the cli does not configure them or guarantee private access there.
 

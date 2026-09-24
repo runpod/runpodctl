@@ -30,6 +30,10 @@ func tempHome(t *testing.T) string {
 		t.Fatalf("clear api key flag: %v", err)
 	}
 	flag.Changed = false
+	// ReadInConfig keeps the previous map when it fails, so without a reset a
+	// test can pass on keys an earlier one loaded.
+	resetViper(t)
+	t.Cleanup(func() { resetViper(t) })
 	outputFormat = "json"
 	t.Setenv("APIKEY", "")
 	home := t.TempDir()
@@ -37,6 +41,19 @@ func tempHome(t *testing.T) string {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	return home
+}
+
+// resetViper clears the global viper and restores the bindings cmd/config makes
+// at package init, which viper.Reset drops.
+func resetViper(t *testing.T) {
+	t.Helper()
+	viper.Reset()
+	for _, name := range []string{"apiKey", "apiUrl"} {
+		if err := viper.BindPFlag(name, config.ConfigCmd.Flags().Lookup(name)); err != nil {
+			t.Fatalf("bind %s: %v", name, err)
+		}
+	}
+	viper.SetDefault("apiKey", "")
 }
 
 func assertMode(t *testing.T, path string, want os.FileMode) {
@@ -252,127 +269,168 @@ func TestInitConfigLeavesMalformedConfigAlone(t *testing.T) {
 	}
 }
 
-func TestInitConfigRejectsUnexpectedFiles(t *testing.T) {
-	for _, testCase := range []struct {
-		path string
-		kind string
-	}{
-		{".runpod/config.toml", "directory"},
-		{".runpod/config.toml", "file symlink"},
-		{".runpod/config.toml", "directory symlink"},
-		{".runpod.yaml", "directory"},
-		{".runpod.yaml", "file symlink"},
-		{".runpod.yaml", "directory symlink"},
-	} {
-		t.Run(testCase.path+"/"+testCase.kind, func(t *testing.T) {
+// TestInitConfigFollowsSymlinks covers dotfile managers (stow, home-manager) and
+// configs linked into /workspace on a pod: the link is followed, the target is
+// narrowed, and the command still runs.
+func TestInitConfigFollowsSymlinks(t *testing.T) {
+	for _, name := range []string{".runpod/config.toml", ".runpod.yaml"} {
+		t.Run(name, func(t *testing.T) {
 			home := tempHome(t)
-			configDir := filepath.Join(home, ".runpod")
-			target, mode := unexpectedConfigFile(t, filepath.Join(home, testCase.path), testCase.kind)
-
-			initConfig()
-
-			assertConfigInitBlocked(t)
-			assertMode(t, target, mode)
-			if testCase.kind == "file symlink" {
-				assertConfigFileContents(t, target, "apikey = 'unchanged'\n")
+			target := filepath.Join(t.TempDir(), "target")
+			content := "apikey: 'linked-key'\n"
+			if strings.HasSuffix(name, ".toml") {
+				content = "apikey = 'linked-key'\n"
 			}
-			if testCase.path == ".runpod.yaml" {
-				if _, err := os.Stat(filepath.Join(configDir, "config.toml")); !errors.Is(err, fs.ErrNotExist) {
-					t.Errorf("config created despite unsafe legacy path: %v", err)
-				}
+			writeFile(t, target, content, 0o644)
+			symlinkOrSkip(t, target, filepath.Join(home, name))
+
+			stderr := captureStderr(t, initConfig)
+			assertConfigInitAllowed(t)
+
+			if strings.Contains(stderr, "warning") {
+				t.Errorf("stderr = %q, want no warnings", stderr)
+			}
+			assertMode(t, target, configFilePerm)
+			if got := viper.GetString("apiKey"); got != "linked-key" {
+				t.Errorf("apiKey = %q, want linked-key", got)
 			}
 		})
 	}
 }
 
-func assertConfigFileContents(t *testing.T, path, want string) {
-	t.Helper()
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != want {
-		t.Errorf("config contents = %q, want %q", got, want)
-	}
-}
-
-func unexpectedConfigFile(t *testing.T, path, kind string) (string, os.FileMode) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), configDirPerm); err != nil {
-		t.Fatal(err)
-	}
-	target := path
-	if kind != "directory" {
-		target = filepath.Join(t.TempDir(), "target")
-	}
-	mode := os.FileMode(0o755)
-	if kind == "file symlink" {
-		mode = 0o644
-		writeFile(t, target, "apikey = 'unchanged'\n", mode)
-	} else {
-		if err := os.Mkdir(target, mode); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chmod(target, mode); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if target != path {
-		if err := os.Symlink(target, path); err != nil {
-			if runtime.GOOS == "windows" {
-				t.Skipf("symlinks unavailable: %v", err)
-			}
-			t.Fatal(err)
-		}
-	}
-	return target, mode
-}
-
-func assertConfigInitBlocked(t *testing.T) {
-	t.Helper()
-	if configInitErr == nil {
-		t.Fatal("expected unsafe config path to fail initialization")
-	}
-	if err := rootCmd.PersistentPreRunE(config.ConfigCmd, nil); !errors.Is(err, configInitErr) {
-		t.Fatalf("config pre-run error = %v, want %v", err, configInitErr)
-	}
-}
-
-func TestInitConfigRejectsSymlinkedDirectory(t *testing.T) {
+func TestInitConfigFollowsSymlinkedDirectory(t *testing.T) {
 	home := tempHome(t)
 	target := t.TempDir()
 	if err := os.Chmod(target, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(target, filepath.Join(home, ".runpod")); err != nil {
+	symlinkOrSkip(t, target, filepath.Join(home, ".runpod"))
+
+	initConfig()
+	assertConfigInitAllowed(t)
+
+	assertMode(t, target, configDirPerm)
+	assertMode(t, filepath.Join(target, "config.toml"), configFilePerm)
+}
+
+// TestInitConfigWarnsOnUnexpectedFiles: a path that is not the expected kind is
+// reported and left alone, and never stops the command.
+func TestInitConfigWarnsOnUnexpectedFiles(t *testing.T) {
+	for _, testCase := range []struct {
+		path string
+		link bool
+	}{
+		{".runpod/config.toml", false},
+		{".runpod/config.toml", true},
+		{".runpod.yaml", false},
+		{".runpod.yaml", true},
+	} {
+		name := testCase.path + "/directory"
+		if testCase.link {
+			name += " symlink"
+		}
+		t.Run(name, func(t *testing.T) {
+			home := tempHome(t)
+			path := filepath.Join(home, testCase.path)
+			if err := os.MkdirAll(filepath.Dir(path), configDirPerm); err != nil {
+				t.Fatal(err)
+			}
+			target := path
+			if testCase.link {
+				target = filepath.Join(t.TempDir(), "target")
+			}
+			if err := os.Mkdir(target, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(target, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if testCase.link {
+				symlinkOrSkip(t, target, path)
+			}
+
+			stderr := captureStderr(t, initConfig)
+			assertConfigInitAllowed(t)
+
+			if !strings.Contains(stderr, "unexpected config file type") {
+				t.Errorf("stderr = %q, want an unexpected type warning", stderr)
+			}
+			assertMode(t, target, 0o755)
+		})
+	}
+}
+
+// TestInitConfigWarnsOnUnreadableLegacy: a legacy yaml that exists but cannot be
+// parsed is named on stderr rather than silently replaced by a defaults toml.
+func TestInitConfigWarnsOnUnreadableLegacy(t *testing.T) {
+	home := tempHome(t)
+	legacyFile := filepath.Join(home, ".runpod.yaml")
+	writeFile(t, legacyFile, "apiKey: [unclosed\n", 0o600)
+
+	stderr := captureStderr(t, initConfig)
+	assertConfigInitAllowed(t)
+
+	if !strings.Contains(stderr, "could not read "+legacyFile) {
+		t.Errorf("stderr = %q, want a warning naming %s", stderr, legacyFile)
+	}
+	if strings.Contains(stderr, "migrating config") {
+		t.Errorf("stderr = %q, want no migration notice", stderr)
+	}
+}
+
+func symlinkOrSkip(t *testing.T, target, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), configDirPerm); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
 		if runtime.GOOS == "windows" {
 			t.Skipf("symlinks unavailable: %v", err)
 		}
 		t.Fatal(err)
 	}
+}
 
-	initConfig()
-
-	assertConfigInitBlocked(t)
-	assertMode(t, target, 0o755)
-	if _, err := os.Stat(filepath.Join(target, "config.toml")); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("config created through symlink: %v", err)
+func assertConfigInitAllowed(t *testing.T) {
+	t.Helper()
+	if configInitErr != nil {
+		t.Fatalf("init error = %v, want none", configInitErr)
+	}
+	if err := rootCmd.PersistentPreRunE(config.ConfigCmd, nil); err != nil {
+		t.Fatalf("config pre-run error = %v, want none", err)
 	}
 }
 
-func TestInitConfigRejectsPermissionErrors(t *testing.T) {
+// TestInitConfigWarnsOnPermissionErrors covers read-only, foreign-owned and
+// image-baked configs: a failed inspect, repair or create is reported on stderr
+// and the command still runs, so RUNPOD_API_KEY keeps working.
+func TestInitConfigWarnsOnPermissionErrors(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("requires unix permissions")
 	}
-	for _, kind := range []string{"stat", "repair"} {
-		t.Run(kind, func(t *testing.T) {
+	for _, testCase := range []struct {
+		kind, want string
+	}{
+		{"stat", "could not inspect"},
+		{"repair", "could not open"},
+		{"create", "could not create"},
+	} {
+		t.Run(testCase.kind, func(t *testing.T) {
 			home := tempHome(t)
 			configDir := filepath.Join(home, ".runpod")
 			configFile := filepath.Join(configDir, "config.toml")
-			writeFile(t, configFile, "apikey = 'unchanged'\n", configFilePerm)
 			blocked, mode := configDir, os.FileMode(0)
-			if kind == "repair" {
+			switch testCase.kind {
+			case "repair":
+				writeFile(t, configFile, "apikey = 'unchanged'\n", configFilePerm)
 				blocked, mode = configFile, 0o044
+			case "create":
+				if err := os.MkdirAll(configDir, configDirPerm); err != nil {
+					t.Fatal(err)
+				}
+				mode = 0o500
+			default:
+				writeFile(t, configFile, "apikey = 'unchanged'\n", configFilePerm)
 			}
 			if err := os.Chmod(blocked, mode); err != nil {
 				t.Fatal(err)
@@ -382,17 +440,19 @@ func TestInitConfigRejectsPermissionErrors(t *testing.T) {
 					t.Errorf("restore fixture permissions: %v", err)
 				}
 			})
-			if _, err := os.ReadFile(configFile); !errors.Is(err, fs.ErrPermission) {
+			if testCase.kind == "create" {
+				if err := os.WriteFile(configFile, nil, configFilePerm); !errors.Is(err, fs.ErrPermission) {
+					t.Skipf("permissions are not enforced for this user: %v", err)
+				}
+			} else if _, err := os.ReadFile(configFile); !errors.Is(err, fs.ErrPermission) {
 				t.Skipf("permissions are not enforced for this user: %v", err)
 			}
 
-			initConfig()
+			stderr := captureStderr(t, initConfig)
+			assertConfigInitAllowed(t)
 
-			if !errors.Is(configInitErr, fs.ErrPermission) {
-				t.Fatalf("init error = %v, want permission error", configInitErr)
-			}
-			if err := rootCmd.PersistentPreRunE(config.ConfigCmd, nil); !errors.Is(err, fs.ErrPermission) {
-				t.Fatalf("config pre-run error = %v, want permission error", err)
+			if !strings.Contains(stderr, testCase.want) {
+				t.Errorf("stderr = %q, want a warning containing %q", stderr, testCase.want)
 			}
 		})
 	}
