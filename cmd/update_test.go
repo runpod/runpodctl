@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -143,5 +144,37 @@ func TestVerifyArchiveChecksumFailsWhenEntryMissing(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "checksum not found") {
 		t.Fatalf("expected missing checksum error, got %v", err)
+	}
+}
+
+func TestSelfUpdateDestPathFollowsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	realDir := filepath.Join(dir, "real")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(realDir, "runpodctl")
+	if err := os.WriteFile(target, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "runpodctl")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	want, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := selfUpdateDestPath(link, "linux"); got != want {
+		t.Fatalf("selfUpdateDestPath(symlink) = %q, want the link target %q", got, want)
+	}
+}
+
+func TestSelfUpdateDestPathWindowsName(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "runpodctl-windows-amd64.exe")
+	want := filepath.Join(filepath.Dir(exe), "runpodctl.exe")
+	if got := selfUpdateDestPath(exe, "windows"); got != want {
+		t.Fatalf("selfUpdateDestPath = %q, want %q", got, want)
 	}
 }

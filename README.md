@@ -493,7 +493,8 @@ once a day, in the background. when one exists, the next command asks
 `Update now? [y]es / [N]ot now / [s]kip this version` on stderr before it runs:
 
 - `y` updates, then runs your command. brew, conda and pixi installs are
-  upgraded through their package manager; other installs use `runpodctl update`.
+  upgraded through their package manager, and so is `runpodctl update`. other
+  installs download the release directly.
 - anything else, including enter, continues and asks again tomorrow.
 - `s` continues and stops asking until the next release.
 
