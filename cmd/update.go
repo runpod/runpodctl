@@ -222,6 +222,20 @@ func extractBinaryFromZip(archivePath, destPath string) error {
 	return fmt.Errorf("runpodctl.exe not found in archive")
 }
 
+// selfUpdateDestPath is the file the update replaces. it follows symlinks:
+// moving the new binary onto a symlink replaces the link with a plain file,
+// which strands whatever owns the link target (e.g. a homebrew keg).
+func selfUpdateDestPath(exe, goos string) string {
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	name := "runpodctl"
+	if goos == "windows" {
+		name = "runpodctl.exe"
+	}
+	return filepath.Join(filepath.Dir(exe), name)
+}
+
 var updateCmd = &cobra.Command{
 	Use:   "update",
 	Short: "update runpodctl cli",
@@ -229,7 +243,7 @@ var updateCmd = &cobra.Command{
 	// RunE, not Run: a failed self-update previously printed to stdout and
 	// exited 0, so `runpodctl update && ...` continued as if it had succeeded.
 	RunE: func(c *cobra.Command, args []string) error {
-		return runSelfUpdate(os.Stdout)
+		return installUpdateForChannel(os.Stdout)
 	},
 }
 
@@ -267,13 +281,7 @@ func runSelfUpdate(out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("failed to find current executable: %w", err)
 	}
-	exPath := filepath.Dir(ex)
-
-	destFilename := "runpodctl"
-	if runtime.GOOS == "windows" {
-		destFilename = "runpodctl.exe"
-	}
-	destPath := filepath.Join(exPath, destFilename)
+	destPath := selfUpdateDestPath(ex, runtime.GOOS)
 
 	// download archive to a temp file
 	tmpFile, err := os.CreateTemp("", "runpodctl-update-*")
@@ -301,12 +309,20 @@ func runSelfUpdate(out io.Writer) error {
 
 	// extract binary from archive to a temp location next to the destination
 	extractedPath := destPath + ".new"
-	defer os.Remove(extractedPath)
+	// windows cannot replace the running exe, so there the user moves this file
+	// into place after we exit and it must survive; elsewhere it is cleanup.
+	keepExtracted := false
+	defer func() {
+		if !keepExtracted {
+			os.Remove(extractedPath)
+		}
+	}()
 
 	if runtime.GOOS == "windows" {
 		if err := extractBinaryFromZip(archivePath, extractedPath); err != nil {
 			return fmt.Errorf("failed to extract update: %w", err)
 		}
+		keepExtracted = true
 		fmt.Fprintln(out, "to complete the update, run this command:")
 		fmt.Fprintf(out, "move /Y \"%s\" \"%s\"\n", extractedPath, destPath)
 	} else {
