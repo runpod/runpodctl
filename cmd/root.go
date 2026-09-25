@@ -113,7 +113,11 @@ func init() {
 		if err := output.ValidateFormat(outputFormat); err != nil {
 			return &usageError{cmd: c, err: err}
 		}
-		return configInitErr
+		if configInitErr != nil {
+			return configInitErr
+		}
+		maybePromptUpdate(c, os.Stdin, os.Stderr)
+		return nil
 	}
 	registerCommands()
 }
@@ -302,6 +306,7 @@ func Execute(ver string) {
 	rootCmd.Version = ver
 
 	err := rootCmd.Execute()
+	waitForUpdateCheck()
 	if err == nil {
 		return
 	}
