@@ -229,87 +229,95 @@ var updateCmd = &cobra.Command{
 	// RunE, not Run: a failed self-update previously printed to stdout and
 	// exited 0, so `runpodctl update && ...` continued as if it had succeeded.
 	RunE: func(c *cobra.Command, args []string) error {
-		// fetch newest github release
-		githubApiUrl := "https://api.github.com/repos/runpod/runpodctl/releases/latest"
-		apiResp, err := GetJson(githubApiUrl)
-		if err != nil {
-			return fmt.Errorf("failed to fetch latest version info for runpodctl: %w", err)
-		}
-		latestVersion := apiResp.Version
-		if semver.Compare("v"+version, latestVersion) >= 0 {
-			fmt.Printf("runpodctl %s is already up to date\n", version)
-			return nil
-		}
-
-		// find download link for current platform
-		expectedAsset := assetName()
-		downloadAsset, ok := findAsset(apiResp.Assets, expectedAsset)
-		if !ok {
-			return fmt.Errorf("platform %s-%s not supported in latest version", runtime.GOOS, runtime.GOARCH)
-		}
-
-		checksumName := checksumAssetName(latestVersion)
-		checksumAsset, ok := findAsset(apiResp.Assets, checksumName)
-		if !ok {
-			return fmt.Errorf("failed to verify update checksum: checksum asset %s not found", checksumName)
-		}
-
-		ex, err := os.Executable()
-		if err != nil {
-			return fmt.Errorf("failed to find current executable: %w", err)
-		}
-		exPath := filepath.Dir(ex)
-
-		destFilename := "runpodctl"
-		if runtime.GOOS == "windows" {
-			destFilename = "runpodctl.exe"
-		}
-		destPath := filepath.Join(exPath, destFilename)
-
-		// download archive to a temp file
-		tmpFile, err := os.CreateTemp("", "runpodctl-update-*")
-		if err != nil {
-			return fmt.Errorf("failed to create temp file: %w", err)
-		}
-		archivePath := tmpFile.Name()
-		tmpFile.Close()
-		defer os.Remove(archivePath)
-
-		fmt.Printf("downloading runpodctl %s\n", latestVersion)
-		file, err := DownloadFile(downloadAsset.Url, archivePath)
-		if err != nil {
-			return fmt.Errorf("failed to fetch the latest version of runpodctl: %w", err)
-		}
-		file.Close()
-
-		checksumText, err := DownloadBytes(checksumAsset.Url)
-		if err != nil {
-			return fmt.Errorf("failed to fetch update checksum: %w", err)
-		}
-		if err := verifyArchiveChecksum(archivePath, expectedAsset, checksumText); err != nil {
-			return fmt.Errorf("failed to verify update checksum: %w", err)
-		}
-
-		// extract binary from archive to a temp location next to the destination
-		extractedPath := destPath + ".new"
-		defer os.Remove(extractedPath)
-
-		if runtime.GOOS == "windows" {
-			if err := extractBinaryFromZip(archivePath, extractedPath); err != nil {
-				return fmt.Errorf("failed to extract update: %w", err)
-			}
-			fmt.Println("to complete the update, run this command:")
-			fmt.Printf("move /Y \"%s\" \"%s\"\n", extractedPath, destPath)
-		} else {
-			if err := extractBinaryFromTarGz(archivePath, extractedPath); err != nil {
-				return fmt.Errorf("failed to extract update: %w", err)
-			}
-			fmt.Printf("installing runpodctl %s to %s\n", latestVersion, destPath)
-			// need to run externally to current process because we're updating the running executable
-			if err := exec.Command("mv", extractedPath, destPath).Run(); err != nil {
-				return fmt.Errorf("failed to install update to %s: %w", destPath, err)
-			}
-		}
-		return nil
+		return runSelfUpdate(os.Stdout)
 	},
+}
+
+// runSelfUpdate replaces the running binary with the latest github release,
+// writing progress to out.
+func runSelfUpdate(out io.Writer) error {
+	// fetch newest github release
+	githubApiUrl := "https://api.github.com/repos/runpod/runpodctl/releases/latest"
+	apiResp, err := GetJson(githubApiUrl)
+	if err != nil {
+		return fmt.Errorf("failed to fetch latest version info for runpodctl: %w", err)
+	}
+	latestVersion := apiResp.Version
+	// release builds carry a commit suffix (2.14.0-dd55bcf) that semver reads
+	// as a pre-release, which would sort the latest release below itself.
+	if current, ok := releaseSemver(version); ok && semver.Compare(current, latestVersion) >= 0 {
+		fmt.Fprintf(out, "runpodctl %s is already up to date\n", version)
+		return nil
+	}
+
+	// find download link for current platform
+	expectedAsset := assetName()
+	downloadAsset, ok := findAsset(apiResp.Assets, expectedAsset)
+	if !ok {
+		return fmt.Errorf("platform %s-%s not supported in latest version", runtime.GOOS, runtime.GOARCH)
+	}
+
+	checksumName := checksumAssetName(latestVersion)
+	checksumAsset, ok := findAsset(apiResp.Assets, checksumName)
+	if !ok {
+		return fmt.Errorf("failed to verify update checksum: checksum asset %s not found", checksumName)
+	}
+
+	ex, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("failed to find current executable: %w", err)
+	}
+	exPath := filepath.Dir(ex)
+
+	destFilename := "runpodctl"
+	if runtime.GOOS == "windows" {
+		destFilename = "runpodctl.exe"
+	}
+	destPath := filepath.Join(exPath, destFilename)
+
+	// download archive to a temp file
+	tmpFile, err := os.CreateTemp("", "runpodctl-update-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	archivePath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(archivePath)
+
+	fmt.Fprintf(out, "downloading runpodctl %s\n", latestVersion)
+	file, err := DownloadFile(downloadAsset.Url, archivePath)
+	if err != nil {
+		return fmt.Errorf("failed to fetch the latest version of runpodctl: %w", err)
+	}
+	file.Close()
+
+	checksumText, err := DownloadBytes(checksumAsset.Url)
+	if err != nil {
+		return fmt.Errorf("failed to fetch update checksum: %w", err)
+	}
+	if err := verifyArchiveChecksum(archivePath, expectedAsset, checksumText); err != nil {
+		return fmt.Errorf("failed to verify update checksum: %w", err)
+	}
+
+	// extract binary from archive to a temp location next to the destination
+	extractedPath := destPath + ".new"
+	defer os.Remove(extractedPath)
+
+	if runtime.GOOS == "windows" {
+		if err := extractBinaryFromZip(archivePath, extractedPath); err != nil {
+			return fmt.Errorf("failed to extract update: %w", err)
+		}
+		fmt.Fprintln(out, "to complete the update, run this command:")
+		fmt.Fprintf(out, "move /Y \"%s\" \"%s\"\n", extractedPath, destPath)
+	} else {
+		if err := extractBinaryFromTarGz(archivePath, extractedPath); err != nil {
+			return fmt.Errorf("failed to extract update: %w", err)
+		}
+		fmt.Fprintf(out, "installing runpodctl %s to %s\n", latestVersion, destPath)
+		// need to run externally to current process because we're updating the running executable
+		if err := exec.Command("mv", extractedPath, destPath).Run(); err != nil {
+			return fmt.Errorf("failed to install update to %s: %w", destPath, err)
+		}
+	}
+	return nil
 }

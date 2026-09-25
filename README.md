@@ -29,6 +29,7 @@ _note: all pods automatically come with runpodctl installed with a pod-scoped ap
     - [pod runtime status](#pod-runtime-status)
     - [error format](#error-format)
   - [environment variables](#environment-variables)
+  - [update prompt](#update-prompt)
   - [legacy commands](#legacy-commands)
   - [release process](#release-process)
   - [acknowledgements](#acknowledgements)
@@ -477,12 +478,28 @@ its errors are json with a `code` and exit 1.
 | `RUNPOD_GRAPHQL_URL` | `https://api.runpod.io/graphql` | graphql control plane (config key `apiUrl`) |
 | `RUNPOD_INVOKE_URL` | `https://api.runpod.ai/v2` | base for the serverless invoke urls reported by `serverless create/get/list/update`, and the host `serverless run/status/health` call (config key `invokeUrl`) |
 | `RUNPOD_REST_V2_URL` | `https://api.runpod.io/v2` | rest v2, which serves `pod logs`, `serverless logs` and the worker listing behind them (config key `restV2ApiUrl`) |
+| `RUNPOD_NO_UPDATE_CHECK` | — | any value turns off the update check and prompt |
 
 invoke is a separate service from the control plane: pointing `RUNPOD_API_URL`
 or `RUNPOD_GRAPHQL_URL` at a non-prod host does **not** move the invoke urls.
 override `RUNPOD_INVOKE_URL` explicitly when you need that. rest v2 is separate
 again — the crud commands are still on rest v1, so moving one does not move the
 other.
+
+## update prompt
+
+in an interactive terminal, runpodctl checks github for a newer release at most
+once a day, in the background. when one exists, the next command asks
+`Update now? [y]es / [N]ot now / [s]kip this version` on stderr before it runs:
+
+- `y` updates, then runs your command. brew, conda and pixi installs are
+  upgraded through their package manager; other installs use `runpodctl update`.
+- anything else, including enter, continues and asks again tomorrow.
+- `s` continues and stops asking until the next release.
+
+there is no check or prompt when stdin or stderr is not a terminal, in ci
+(`CI` set), on pods, for dev builds, or with `RUNPOD_NO_UPDATE_CHECK` set.
+state lives in `~/.runpod/update-check.json`.
 
 ## legacy commands
 
