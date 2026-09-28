@@ -743,8 +743,10 @@ func (v *validator) checkExistingDir(rel string) error {
 // os.Root will not follow such a link, so nothing is written outside during
 // the transfer, but it will happily *create* it, and the link then outlives
 // the receive for the next thing that walks the tree. Resolution is lexical,
-// which only holds while no directory it leaves is itself a symlink, so any
-// symlink met on the way is refused rather than guessed at.
+// which only holds while no directory it leaves or descends through is a
+// symlink this transfer declares, so those are refused rather than guessed
+// at. Symlinks already on disk are either refused before a ".." or, for the
+// forward steps, followed by checkResolvedTarget.
 func (v *validator) checkSymlinkTarget(e entry) error {
 	target := e.target
 	if strings.ContainsRune(target, 0) {
@@ -777,7 +779,59 @@ func (v *validator) checkSymlinkTarget(e entry) error {
 			}
 			stack = stack[:len(stack)-1]
 		default:
+			// a declared symlink does not exist yet, so nothing under it can be
+			// checked on disk: `pwn -> sub/esc` beside `sub -> dir` resolves
+			// through dir/esc, whatever that turns out to be.
+			if err := v.refuseDeclaredSymlink(strings.Join(stack, "/")); err != nil {
+				return fmt.Errorf("symlink %q target %q: %w", e.declared, target, err)
+			}
 			stack = append(stack, part)
+		}
+	}
+	return v.checkResolvedTarget(e, strings.Join(stack, "/"))
+}
+
+// checkResolvedTarget refuses a symlink whose target stays inside by its
+// letters but leaves through a symlink already on disk. The lexical walk only
+// guards "..", so `link -> esc/x` beside an existing `esc -> /elsewhere` passes
+// it, and os.Root would create the link.
+//
+// A target this transfer declares is not looked up here. Pass four refuses
+// anything on disk at it, or above it, that leads outside, and a declared
+// symlink replaces whatever link is there. That is what keeps a chain of
+// declared links (lib.so -> lib.so.1 -> lib.so.1.2) working.
+func (v *validator) checkResolvedTarget(e entry, resolved string) error {
+	if resolved == "" {
+		return nil // the destination itself
+	}
+	aliases, err := v.aliases(resolved)
+	if err != nil {
+		return err
+	}
+	if len(aliases) > 0 {
+		return nil
+	}
+	// Stat, not Lstat, so every link on the way is followed, the last one
+	// included. os.Root reports one leaving the tree as an error, not absent.
+	if _, _, err := statThreeWay(v.root, resolved); err != nil {
+		return refusef("symlink %q target %q cannot be resolved inside the destination (%v)", e.declared, e.target, err)
+	}
+	return nil
+}
+
+// refuseDeclaredSymlink refuses a path that resolution would pass through when
+// this transfer declares it as a symlink.
+func (v *validator) refuseDeclaredSymlink(rel string) error {
+	if rel == "" {
+		return nil // the destination itself
+	}
+	aliases, err := v.aliases(rel)
+	if err != nil {
+		return err
+	}
+	for _, alias := range aliases {
+		if v.symlinks[alias] {
+			return refusef("resolution crosses %q, which this transfer declares as a symlink", alias)
 		}
 	}
 	return nil
@@ -788,15 +842,8 @@ func (v *validator) requireRealDir(rel string) error {
 	if rel == "" {
 		return nil // the destination itself
 	}
-
-	aliases, err := v.aliases(rel)
-	if err != nil {
+	if err := v.refuseDeclaredSymlink(rel); err != nil {
 		return err
-	}
-	for _, alias := range aliases {
-		if v.symlinks[alias] {
-			return refusef("resolution crosses %q, which this transfer declares as a symlink", alias)
-		}
 	}
 
 	info, ex, err := lstatThreeWay(v.root, rel)

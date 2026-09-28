@@ -184,6 +184,66 @@ func TestValidateManifest(t *testing.T) {
 				{FolderRemote: "./", Name: "sub", Symlink: "target"},
 				{FolderRemote: "./", Name: "pwn", Symlink: "sub/x/../../outside"},
 			}}},
+		// forward steps. these stay inside by their letters, so the lexical
+		// walk alone accepted them, and os.Root created the link.
+		{name: "symlink walking forward through an escaping symlink on disk", wantErr: true, wantErrContains: "cannot be resolved inside",
+			info: SenderInfo{FilesToTransfer: []FileInfo{{FolderRemote: "./", Name: "link", Symlink: "esc/x"}}},
+			setup: func(t *testing.T, dest, outside string) {
+				if err := os.Symlink(outside, filepath.Join(dest, "esc")); err != nil {
+					t.Fatalf("seeding symlink: %v", err)
+				}
+			}},
+		{name: "symlink to an escaping symlink on disk", wantErr: true, wantErrContains: "cannot be resolved inside",
+			info: SenderInfo{FilesToTransfer: []FileInfo{{FolderRemote: "./", Name: "link", Symlink: "esc"}}},
+			setup: func(t *testing.T, dest, outside string) {
+				if err := os.Symlink(outside, filepath.Join(dest, "esc")); err != nil {
+					t.Fatalf("seeding symlink: %v", err)
+				}
+			}},
+		{name: "symlink walking forward through an escaping symlink deeper down", wantErr: true, wantErrContains: "cannot be resolved inside",
+			info: SenderInfo{FilesToTransfer: []FileInfo{{FolderRemote: "sub/", Name: "link", Symlink: "../real/esc/x"}}},
+			setup: func(t *testing.T, dest, outside string) {
+				if err := os.MkdirAll(filepath.Join(dest, "real"), 0o755); err != nil {
+					t.Fatalf("seeding dir: %v", err)
+				}
+				if err := os.Symlink(outside, filepath.Join(dest, "real", "esc")); err != nil {
+					t.Fatalf("seeding symlink: %v", err)
+				}
+			}},
+		{name: "symlink walking forward through an in-tree symlink on disk",
+			info: SenderInfo{FilesToTransfer: []FileInfo{{FolderRemote: "./", Name: "link", Symlink: "sub/x"}}},
+			setup: func(t *testing.T, dest, outside string) {
+				if err := os.MkdirAll(filepath.Join(dest, "real"), 0o755); err != nil {
+					t.Fatalf("seeding dir: %v", err)
+				}
+				if err := os.Symlink("real", filepath.Join(dest, "sub")); err != nil {
+					t.Fatalf("seeding symlink: %v", err)
+				}
+			}},
+		// the declared link does not exist yet, so what lies under it cannot be
+		// checked on disk.
+		{name: "symlink walking forward through a declared symlink", wantErr: true, wantErrContains: "resolution crosses",
+			info: SenderInfo{FilesToTransfer: []FileInfo{
+				{FolderRemote: "./", Name: "sub", Symlink: "target"},
+				{FolderRemote: "./", Name: "pwn", Symlink: "sub/esc"},
+			}}},
+		{name: "chain of declared symlinks", info: SenderInfo{FilesToTransfer: []FileInfo{
+			{FolderRemote: "./", Name: "lib.so", Symlink: "lib.so.1"},
+			{FolderRemote: "./", Name: "lib.so.1", Symlink: "lib.so.1.2"},
+			file("./", "lib.so.1.2"),
+		}}},
+		// the declared target replaces the escaping link on disk, so the old one
+		// is not what the new link resolves to.
+		{name: "symlink to a declared symlink replacing an escaping one",
+			info: SenderInfo{FilesToTransfer: []FileInfo{
+				{FolderRemote: "./", Name: "link", Symlink: "esc"},
+				{FolderRemote: "./", Name: "esc", Symlink: "target"},
+			}},
+			setup: func(t *testing.T, dest, outside string) {
+				if err := os.Symlink(outside, filepath.Join(dest, "esc")); err != nil {
+					t.Fatalf("seeding symlink: %v", err)
+				}
+			}},
 
 		{name: "ancestor is an escaping symlink already on disk", wantErr: true, wantErrContains: "outside",
 			info: SenderInfo{FilesToTransfer: []FileInfo{file("sub/", "x")}},
