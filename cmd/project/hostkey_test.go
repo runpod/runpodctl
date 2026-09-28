@@ -2,8 +2,11 @@ package project
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/pem"
 	"fmt"
 	"net"
@@ -11,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -33,13 +37,29 @@ func newTestHostKey(t *testing.T) ssh.Signer {
 	return signer
 }
 
+// newTestECDSAHostKey is the type go's defaults negotiate ahead of ed25519.
+func newTestECDSAHostKey(t *testing.T) ssh.Signer {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generating host key: %v", err)
+	}
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatalf("building signer: %v", err)
+	}
+	return signer
+}
+
 // startTestSSHD runs an in-process ssh server that accepts any client and runs
 // nothing. Host key verification happens during the handshake, before auth, so
 // this is enough to exercise a real callback rather than calling it directly.
-func startTestSSHD(t *testing.T, signer ssh.Signer) string {
+func startTestSSHD(t *testing.T, signers ...ssh.Signer) string {
 	t.Helper()
 	cfg := &ssh.ServerConfig{NoClientAuth: true}
-	cfg.AddHostKey(signer)
+	for _, signer := range signers {
+		cfg.AddHostKey(signer)
+	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -121,10 +141,19 @@ func dial(t *testing.T, addr, podID, knownHosts string) error {
 	if err != nil {
 		t.Fatalf("building callback: %v", err)
 	}
+	algos, err := pinnedHostKeyAlgorithms(podID, knownHosts)
+	if err != nil {
+		t.Fatalf("reading pinned algorithms: %v", err)
+	}
+	return dialWith(addr, cb, algos)
+}
+
+func dialWith(addr string, cb ssh.HostKeyCallback, algos []string) error {
 	client, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
-		User:            "root",
-		HostKeyCallback: cb,
-		Timeout:         10 * time.Second,
+		User:              "root",
+		HostKeyCallback:   cb,
+		HostKeyAlgorithms: algos,
+		Timeout:           10 * time.Second,
 	})
 	if err == nil {
 		client.Close()
@@ -189,7 +218,8 @@ func TestPodHostKeyCallbackRefusesChangedKey(t *testing.T) {
 	if err == nil {
 		t.Fatal("a changed host key was accepted")
 	}
-	for _, want := range []string{"pod-abc123", knownHosts, ssh.FingerprintSHA256(impostor.PublicKey())} {
+	// stop/start is the benign cause users hit, so the error has to name it.
+	for _, want := range []string{"pod-abc123", knownHosts, ssh.FingerprintSHA256(impostor.PublicKey()), "stopping and starting a pod"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %q", err, want)
 		}
@@ -302,6 +332,47 @@ func TestPodHostKeyCallbackRejectsMalformedStore(t *testing.T) {
 	}
 	if _, err := podHostKeyCallback("pod-one", path); err == nil {
 		t.Fatal("malformed trust store was accepted")
+	}
+}
+
+// TestPodHostKeyCallbackGivesUpOnHeldLock guards against a stuck runpodctl
+// holding the lock: the wait must end with an error that says why, enroll
+// nothing, and succeed once the lock is free.
+func TestPodHostKeyCallbackGivesUpOnHeldLock(t *testing.T) {
+	path := emptyKnownHosts(t)
+	held, err := lockKnownHosts(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+
+	previous := hostKeyLockTimeout
+	hostKeyLockTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { hostKeyLockTimeout = previous })
+
+	callback, err := podHostKeyCallback("pod-one", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 40022}
+	key := newTestHostKey(t).PublicKey()
+	start := time.Now()
+	err = callback(remote.String(), remote, key)
+	if err == nil || !strings.Contains(err.Error(), "locked by another runpodctl process") {
+		t.Fatalf("wanted a held-lock error, got %v", err)
+	}
+	if waited := time.Since(start); waited > 5*time.Second {
+		t.Errorf("waited %s for a 200ms lock timeout", waited)
+	}
+	if lines := readLines(t, path); len(lines) != 0 {
+		t.Fatalf("enrolled while another process held the lock: %v", lines)
+	}
+
+	if err := held.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := callback(remote.String(), remote, key); err != nil {
+		t.Fatalf("enrollment after the lock was released: %v", err)
 	}
 }
 
@@ -444,12 +515,97 @@ func TestKnownHostsPathCreatesPrivateStore(t *testing.T) {
 	}
 }
 
+// TestPinnedHostKeyAlgorithms covers the lookup behind HostKeyAlgorithms:
+// only this pod's recorded types lead, rsa expands to its sha-2 names, and the
+// fallback adds plain-key algorithms without repeating or certificates.
+func TestPinnedHostKeyAlgorithms(t *testing.T) {
+	path := emptyKnownHosts(t)
+	if algos, err := pinnedHostKeyAlgorithms("pod-one", path); err != nil || algos != nil {
+		t.Fatalf("empty store: got %v, %v; want go's defaults (nil)", algos, err)
+	}
+
+	rsaPriv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsaKey, err := ssh.NewPublicKey(&rsaPriv.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := appendKnownHost(path, "runpod-pod-other", newTestHostKey(t).PublicKey()); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendKnownHost(path, "runpod-pod-one", rsaKey); err != nil {
+		t.Fatal(err)
+	}
+
+	recorded, err := recordedHostKeyAlgorithms("pod-one", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256}; !slices.Equal(recorded, want) {
+		t.Errorf("recorded = %v, want %v (another pod's ed25519 must not leak in)", recorded, want)
+	}
+
+	algos, err := pinnedHostKeyAlgorithms("pod-one", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(algos[:2], recorded) {
+		t.Errorf("pinned = %v, want the recorded %v first", algos, recorded)
+	}
+	for i, algo := range algos {
+		if strings.Contains(algo, "-cert-") || slices.Index(algos, algo) != i {
+			t.Errorf("pinned %v has a certificate or repeated algorithm %q", algos, algo)
+		}
+	}
+	if !slices.Contains(algos, ssh.KeyAlgoED25519) {
+		t.Errorf("pinned %v has no fallback for a pod that changed key type", algos)
+	}
+}
+
+// TestGoClientNegotiatesRecordedKeyType is the pin surviving a key type go
+// does not prefer. the pod offers ecdsa and ed25519 like runpod's images do,
+// and an ed25519 pin must hold even though go's defaults pick ecdsa.
+func TestGoClientNegotiatesRecordedKeyType(t *testing.T) {
+	ed := newTestHostKey(t)
+	addr := startTestSSHD(t, newTestECDSAHostKey(t), ed)
+	path := emptyKnownHosts(t)
+	if err := appendKnownHost(path, "runpod-pod-one", ed.PublicKey()); err != nil {
+		t.Fatal(err)
+	}
+
+	// control: without pinning, go picks ecdsa and calls a trusted pod intercepted.
+	cb, err := podHostKeyCallback("pod-one", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dialWith(addr, cb, nil); err == nil || !strings.Contains(err.Error(), "host key mismatch") {
+		t.Fatalf("control dial with go's defaults: wanted a mismatch, got %v", err)
+	}
+
+	if err := dial(t, addr, "pod-one", path); err != nil {
+		t.Fatalf("pinned dial rejected the recorded ed25519 key: %v", err)
+	}
+	if lines := readLines(t, path); len(lines) != 1 {
+		t.Errorf("known_hosts has %d lines, want the one pin: %v", len(lines), lines)
+	}
+
+	// a pod that no longer offers the recorded type must still get the
+	// mismatch error and its remedy, not a bare negotiation failure.
+	ecdsaOnly := startTestSSHD(t, newTestECDSAHostKey(t))
+	if err := dial(t, ecdsaOnly, "pod-one", path); err == nil || !strings.Contains(err.Error(), "host key mismatch") {
+		t.Fatalf("pod without the recorded type: wanted a mismatch, got %v", err)
+	}
+}
+
 func TestGetSshOptionsPinsHostKeyChecking(t *testing.T) {
 	conn := &SSHConnection{
-		podId:          "pod-abc123",
-		podPort:        40022,
-		sshKeyPath:     "/tmp/key",
-		knownHostsPath: "/tmp/known_hosts",
+		podId:             "pod-abc123",
+		podPort:           40022,
+		sshKeyPath:        "/tmp/key",
+		knownHostsPath:    "/tmp/known_hosts",
+		hostKeyAlgorithms: []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256},
 	}
 	opts := strings.Join(conn.getSshOptions(), " ")
 
@@ -459,6 +615,7 @@ func TestGetSshOptionsPinsHostKeyChecking(t *testing.T) {
 		"HostKeyAlias=runpod-pod-abc123",
 		"CheckHostIP=no",
 		"UpdateHostKeys=no",
+		"HostKeyAlgorithms=rsa-sha2-512,rsa-sha2-256",
 	} {
 		if !strings.Contains(opts, want) {
 			t.Errorf("ssh options %q missing %q", opts, want)
@@ -469,9 +626,9 @@ func TestGetSshOptionsPinsHostKeyChecking(t *testing.T) {
 	}
 }
 
-// writeClientKey puts a usable private key on disk so the openssh invocation
+// writeClientKey puts a usable private key in dir so the openssh invocation
 // below gets the real option list, -i included, rather than a filtered one.
-func writeClientKey(t *testing.T) string {
+func writeClientKey(t *testing.T, dir string) string {
 	t.Helper()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -481,7 +638,7 @@ func writeClientKey(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("marshalling client key: %v", err)
 	}
-	path := filepath.Join(t.TempDir(), "id_ed25519")
+	path := filepath.Join(dir, "id_ed25519")
 	if err := os.WriteFile(path, pem.EncodeToMemory(block), 0o600); err != nil {
 		t.Fatalf("writing client key: %v", err)
 	}
@@ -490,11 +647,18 @@ func writeClientKey(t *testing.T) string {
 
 func runTestOpenSSH(t *testing.T, conn *SSHConnection) ([]byte, error) {
 	t.Helper()
+	return runTestOpenSSHWithConfig(t, conn, os.DevNull)
+}
+
+// runTestOpenSSHWithConfig stands in for the user's ~/.ssh/config, which
+// rsync's ssh reads and command-line options override.
+func runTestOpenSSHWithConfig(t *testing.T, conn *SSHConnection, config string) ([]byte, error) {
+	t.Helper()
 	sshBin, err := exec.LookPath("ssh")
 	if err != nil {
 		t.Skip("no ssh binary available")
 	}
-	args := append([]string{"-F", os.DevNull, "-o", "GlobalKnownHostsFile=none", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"}, conn.getSshOptions()...)
+	args := append([]string{"-F", config, "-o", "GlobalKnownHostsFile=none", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"}, conn.getSshOptions()...)
 	args = append(args, "root@"+conn.podIp, "true")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -523,7 +687,7 @@ func TestOpenSSHRequiresGoTrustedKey(t *testing.T) {
 		podId:          "pod-abc123",
 		podIp:          host,
 		podPort:        portNum,
-		sshKeyPath:     writeClientKey(t),
+		sshKeyPath:     writeClientKey(t, t.TempDir()),
 		knownHostsPath: knownHosts,
 	}
 
@@ -603,4 +767,106 @@ func checkOpenSSHTrust(t *testing.T, conn *SSHConnection, addr, condition string
 		t.Fatalf("missing changed-key diagnostic: %s", out)
 	}
 	assertTestTrustStore(t, path, condition, expected)
+}
+
+// TestOpenSSHNegotiatesVerifiedKeyType covers a user ssh config preferring a
+// type go did not record. openssh under strict checking refuses an unknown
+// type, so without the HostKeyAlgorithms option rsync would fail on a pod go
+// had just verified.
+func TestOpenSSHNegotiatesVerifiedKeyType(t *testing.T) {
+	addr := startTestSSHD(t, newTestECDSAHostKey(t), newTestHostKey(t))
+	knownHosts := emptyKnownHosts(t)
+	if err := dial(t, addr, "pod-abc123", knownHosts); err != nil {
+		t.Fatalf("go enrollment: %v", err)
+	}
+	verified, err := recordedHostKeyAlgorithms("pod-abc123", knownHosts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(verified, []string{ssh.KeyAlgoECDSA256}) {
+		t.Fatalf("go recorded %v; this test needs go to prefer ecdsa over the config's ed25519", verified)
+	}
+
+	userConfig := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(userConfig, []byte("HostKeyAlgorithms ssh-ed25519\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	conn := &SSHConnection{
+		podId:          "pod-abc123",
+		sshKeyPath:     writeClientKey(t, t.TempDir()),
+		knownHostsPath: knownHosts,
+	}
+	setTestSSHAddress(t, conn, addr)
+
+	// control: the user's preference alone reaches a type openssh cannot verify.
+	if out, err := runTestOpenSSHWithConfig(t, conn, userConfig); err == nil {
+		t.Fatalf("control: openssh accepted an unrecorded key type (%s)", out)
+	}
+
+	conn.hostKeyAlgorithms = verified
+	if out, err := runTestOpenSSHWithConfig(t, conn, userConfig); err != nil {
+		t.Fatalf("openssh did not negotiate the verified type: %v (%s)", err, out)
+	}
+	if lines := readLines(t, knownHosts); len(lines) != 1 {
+		t.Errorf("known_hosts has %d lines, want the one pin: %v", len(lines), lines)
+	}
+}
+
+// TestRsyncHandlesSpacedPathsAndReportsRefusal runs the real rsync and openssh
+// binaries with a key and store under a directory holding a space and a quote.
+// both have to reach openssh as one argument each through rsync's -e split and
+// openssh's config parser, and openssh's refusal has to reach the caller.
+func TestRsyncHandlesSpacedPathsAndReportsRefusal(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a posix rsync and openssh")
+	}
+	for _, bin := range []string{"rsync", "ssh"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("no %s binary available", bin)
+		}
+	}
+	addr := startTestSSHD(t, newTestHostKey(t))
+	spaced := filepath.Join(t.TempDir(), "o'brien docs")
+	if err := os.Mkdir(spaced, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	knownHosts := filepath.Join(spaced, "known_hosts")
+	if err := os.WriteFile(knownHosts, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	conn := &SSHConnection{
+		podId:          "pod-abc123",
+		sshKeyPath:     writeClientKey(t, spaced),
+		knownHostsPath: knownHosts,
+	}
+	setTestSSHAddress(t, conn, addr)
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "main.py"), []byte("print(1)\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// nothing is enrolled, so openssh must get as far as verifying the key and
+	// refuse. a mis-split path fails earlier, naming a fragment as the host.
+	err := conn.Rsync(src, "/tmp/dst", true)
+	if err == nil || !strings.Contains(err.Error(), "Host key verification failed") {
+		t.Fatalf("wanted openssh's refusal in the error, got %v", err)
+	}
+
+	// once go has enrolled the pod, openssh passes verification. the test
+	// sshd runs no rsync, so the transfer itself still fails, but not on the key.
+	if err := dial(t, addr, "pod-abc123", knownHosts); err != nil {
+		t.Fatalf("go enrollment: %v", err)
+	}
+	err = conn.Rsync(src, "/tmp/dst", true)
+	if err == nil || strings.Contains(err.Error(), "Host key verification failed") || strings.Contains(err.Error(), "Could not resolve") {
+		t.Fatalf("wanted a transfer failure past host key verification, got %v", err)
+	}
+}
+
+func TestRsyncRemoteShellQuotesArguments(t *testing.T) {
+	got := rsyncRemoteShell([]string{"ssh", "-i", "/home/o'brien/my key", "-o", `UserKnownHostsFile="/a b/kh"`, "-p", "22"})
+	want := `ssh -i '/home/o''brien/my key' -o 'UserKnownHostsFile="/a b/kh"' -p 22`
+	if got != want {
+		t.Errorf("rsyncRemoteShell =\n%s\nwant\n%s", got, want)
+	}
 }

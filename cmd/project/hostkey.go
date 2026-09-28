@@ -1,12 +1,16 @@
 package project
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -23,12 +27,29 @@ const (
 
 	knownHostsDirPerm  = 0o700
 	knownHostsFilePerm = 0o600
+
+	hostKeyLockRetry = 50 * time.Millisecond
 )
+
+// hostKeyLockTimeout bounds the wait for another runpodctl's lock. the lock is
+// only held across one read/check/append, so a longer wait means that process
+// is stuck, and blocking on it would hang this one with no message.
+var hostKeyLockTimeout = 10 * time.Second
 
 // hostKeyAlias is the known_hosts key for a pod, shared by the go client and
 // the openssh -o HostKeyAlias option so both maintain one entry per pod.
 func hostKeyAlias(podID string) string {
 	return hostKeyAliasPrefix + podID
+}
+
+// hostKeyLookup is the address knownhosts must be asked about for podID.
+// knownhosts reads an unbracketed pattern as port 22 and then compares ports
+// exactly, so the lookup has to name that port for the bare alias line openssh
+// writes to match. verified against openssh 10.3: with HostKeyAlias set it
+// records the alias with no port bracket even on a non-default port, which is
+// also what knownhosts.Line produces.
+func hostKeyLookup(podID string) string {
+	return net.JoinHostPort(hostKeyAlias(podID), "22")
 }
 
 // knownHostsPath returns the trust store, creating it if needed.
@@ -70,12 +91,7 @@ func podHostKeyCallback(podID, path string) (ssh.HostKeyCallback, error) {
 	}
 
 	alias := hostKeyAlias(podID)
-	// knownhosts reads an unbracketed pattern as port 22 and then compares
-	// ports exactly, so the lookup has to name that port for the bare alias
-	// line openssh writes to match. verified against openssh 10.3: with
-	// HostKeyAlias set it records the alias with no port bracket even on a
-	// non-default port, which is also what knownhosts.Line produces.
-	lookup := net.JoinHostPort(alias, "22")
+	lookup := hostKeyLookup(podID)
 
 	return func(_ string, remote net.Addr, key ssh.PublicKey) (resultErr error) {
 		lock, err := lockKnownHosts(path)
@@ -107,13 +123,86 @@ func podHostKeyCallback(podID, path string) (ssh.HostKeyCallback, error) {
 			return nil
 		}
 
-		// never auto-heal. a mismatch is either a recreated pod or an
-		// interception, and only the user can tell which.
+		// never auto-heal. a mismatch is either a new container or an
+		// interception, and only the user can tell which. the pod id survives a
+		// stop/start but the host key usually does not: the container disk is
+		// cleared on stop, and runpod's images run ssh-keygen at boot for any
+		// missing /etc/ssh/ssh_host_* key (runpod/containers start.sh).
 		return fmt.Errorf("host key mismatch for pod %s: it offered %s, which is not the key recorded in %s. "+
-			"if the pod was recreated, delete the %q line from that file and retry. "+
-			"otherwise the connection is being intercepted: %w",
+			"stopping and starting a pod, or updating it, clears its container disk, and most images then generate a new host key. "+
+			"if that happened since your last connection, delete the %q line from that file and retry. "+
+			"otherwise the connection may be intercepted: %w",
 			podID, ssh.FingerprintSHA256(key), path, alias, err)
 	}, nil
+}
+
+// recordedHostKeyAlgorithms returns the host key algorithms of the keys
+// recorded for podID, in file order, or nil when none are. knownhosts treats a
+// key of another type as a mismatch, so a client must negotiate one of these
+// or a trusted pod reads as an interception.
+func recordedHostKeyAlgorithms(podID, path string) ([]string, error) {
+	check, err := knownhosts.New(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	// knownhosts has no lookup, so offer a key that cannot match and read the
+	// recorded ones off the mismatch (golang/go#29286).
+	err = check(hostKeyLookup(podID), &net.TCPAddr{IP: net.IPv4zero}, placeholderHostKey{})
+	var keyErr *knownhosts.KeyError
+	if !errors.As(err, &keyErr) {
+		return nil, nil
+	}
+	// Want is built from a map, so its order is not the file's.
+	recorded := slices.SortedFunc(slices.Values(keyErr.Want), func(a, b knownhosts.KnownKey) int {
+		return cmp.Compare(a.Line, b.Line)
+	})
+	var algos []string
+	for _, known := range recorded {
+		for _, algo := range signingAlgorithms(known.Key.Type()) {
+			if !slices.Contains(algos, algo) {
+				algos = append(algos, algo)
+			}
+		}
+	}
+	return algos, nil
+}
+
+// pinnedHostKeyAlgorithms is the go client's HostKeyAlgorithms for podID: the
+// recorded key's algorithms first, so the pin holds even though go's default
+// order (ecdsa before ed25519) is not openssh's and may change. the remaining
+// plain-key algorithms follow so a pod that no longer offers the recorded type
+// still reaches the callback, which reports the mismatch, rather than failing
+// negotiation with no remedy. nil, meaning go's defaults, until a key is recorded.
+func pinnedHostKeyAlgorithms(podID, path string) ([]string, error) {
+	algos, err := recordedHostKeyAlgorithms(podID, path)
+	if err != nil || len(algos) == 0 {
+		return nil, err
+	}
+	for _, algo := range ssh.SupportedAlgorithms().HostKeys {
+		if !strings.Contains(algo, "-cert-") && !slices.Contains(algos, algo) {
+			algos = append(algos, algo)
+		}
+	}
+	return algos, nil
+}
+
+// signingAlgorithms maps a recorded key type to the host key algorithms that
+// negotiate it. an rsa key signs under several names; the sha-1 ssh-rsa is
+// left out, as go's secure defaults leave it out.
+func signingAlgorithms(keyType string) []string {
+	if keyType == ssh.KeyAlgoRSA {
+		return []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256}
+	}
+	return []string{keyType}
+}
+
+// placeholderHostKey is a key no known_hosts line can match.
+type placeholderHostKey struct{}
+
+func (placeholderHostKey) Type() string    { return "runpodctl-placeholder" }
+func (placeholderHostKey) Marshal() []byte { return []byte("runpodctl-placeholder") }
+func (placeholderHostKey) Verify([]byte, *ssh.Signature) error {
+	return errors.New("placeholder host key")
 }
 
 func lockKnownHosts(path string) (*os.File, error) {
@@ -121,11 +210,22 @@ func lockKnownHosts(path string) (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening host key lock for %s: %w", path, err)
 	}
-	if err := lockHostKeyFile(file); err != nil {
-		file.Close()
-		return nil, fmt.Errorf("locking host keys in %s: %w", path, err)
+	deadline := time.Now().Add(hostKeyLockTimeout)
+	for {
+		locked, err := tryLockHostKeyFile(file)
+		if err != nil {
+			file.Close()
+			return nil, fmt.Errorf("locking host keys in %s: %w", path, err)
+		}
+		if locked {
+			return file, nil
+		}
+		if time.Now().After(deadline) {
+			file.Close()
+			return nil, fmt.Errorf("host key store %s is locked by another runpodctl process (waited %s); retry once it finishes", path, hostKeyLockTimeout)
+		}
+		time.Sleep(hostKeyLockRetry)
 	}
-	return file, nil
 }
 
 // appendKnownHost adds one trust line in the format openssh writes for a
