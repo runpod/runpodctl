@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -36,15 +37,19 @@ func newUpdatePromptHarness(t *testing.T, currentVersion string) *updatePromptHa
 
 	oldVersion, oldPath, oldInteractive := version, updateStatePath, updateInteractive
 	oldFetch, oldInstall, oldNow := fetchLatestVersion, installUpdate, updateNow
+	oldAgent, oldWait := updateAgent, waitForInput
 	t.Cleanup(func() {
 		version, updateStatePath, updateInteractive = oldVersion, oldPath, oldInteractive
 		fetchLatestVersion, installUpdate, updateNow = oldFetch, oldInstall, oldNow
+		updateAgent, waitForInput = oldAgent, oldWait
 		pendingUpdateCheck = nil
 	})
 
 	version = currentVersion
 	updateStatePath = func() string { return h.statePath }
 	updateInteractive = func() bool { return true }
+	// the suite itself may run under an agent harness (CLAUDECODE etc.)
+	updateAgent = func() string { return "" }
 	fetchLatestVersion = func(context.Context) (string, error) {
 		h.fetches++
 		return "v2.14.0", nil
@@ -86,8 +91,8 @@ func TestParseUpdateAnswer(t *testing.T) {
 
 func TestReadLineLeavesRestOfInput(t *testing.T) {
 	in := strings.NewReader("y\nsecret-api-key\n")
-	if got := readLine(in); got != "y" {
-		t.Fatalf("readLine = %q, want %q", got, "y")
+	if got, timedOut := readLine(in, time.Second); got != "y" || timedOut {
+		t.Fatalf("readLine = (%q, %v), want (%q, false)", got, timedOut, "y")
 	}
 	rest, _ := io.ReadAll(in)
 	if string(rest) != "secret-api-key\n" {
@@ -140,7 +145,7 @@ func TestShouldPromptUpdate(t *testing.T) {
 	}
 }
 
-func TestUpdatePromptEnabled(t *testing.T) {
+func TestUpdatePromptMode(t *testing.T) {
 	root := &cobra.Command{Use: "runpodctl"}
 	pod := &cobra.Command{Use: "pod"}
 	update := &cobra.Command{Use: "update"}
@@ -151,17 +156,21 @@ func TestUpdatePromptEnabled(t *testing.T) {
 		name        string
 		cmd         *cobra.Command
 		env         string
+		agent       string
 		interactive bool
-		want        bool
+		want        updateMode
 	}{
-		{name: "interactive subcommand", cmd: pod, interactive: true, want: true},
-		{name: "not a terminal", cmd: pod, interactive: false, want: false},
-		{name: "opted out", cmd: pod, env: noUpdateCheckEnv, interactive: true, want: false},
-		{name: "ci", cmd: pod, env: "CI", interactive: true, want: false},
-		{name: "on a pod", cmd: pod, env: "RUNPOD_POD_ID", interactive: true, want: false},
-		{name: "update command", cmd: update, interactive: true, want: false},
-		{name: "shell completion", cmd: complete, interactive: true, want: false},
-		{name: "bare root", cmd: root, interactive: true, want: false},
+		{name: "interactive subcommand", cmd: pod, interactive: true, want: updateModePrompt},
+		{name: "not a terminal", cmd: pod, interactive: false, want: updateModeOff},
+		{name: "agent in a terminal gets a notice, not a prompt", cmd: pod, agent: "claude-code", interactive: true, want: updateModeNotice},
+		{name: "agent without a terminal gets a notice", cmd: pod, agent: "codex", interactive: false, want: updateModeNotice},
+		{name: "opted out", cmd: pod, env: noUpdateCheckEnv, interactive: true, want: updateModeOff},
+		{name: "opted-out agent", cmd: pod, env: noUpdateCheckEnv, agent: "codex", want: updateModeOff},
+		{name: "ci", cmd: pod, env: "CI", interactive: true, want: updateModeOff},
+		{name: "on a pod", cmd: pod, env: "RUNPOD_POD_ID", interactive: true, want: updateModeOff},
+		{name: "update command", cmd: update, interactive: true, want: updateModeOff},
+		{name: "shell completion", cmd: complete, interactive: true, want: updateModeOff},
+		{name: "bare root", cmd: root, interactive: true, want: updateModeOff},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -170,8 +179,137 @@ func TestUpdatePromptEnabled(t *testing.T) {
 				t.Setenv(tt.env, "1")
 			}
 			updateInteractive = func() bool { return tt.interactive }
-			if got := updatePromptEnabled(tt.cmd); got != tt.want {
-				t.Fatalf("updatePromptEnabled = %v, want %v", got, tt.want)
+			updateAgent = func() string { return tt.agent }
+			if got := updatePromptMode(tt.cmd); got != tt.want {
+				t.Fatalf("updatePromptMode = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// uses the real command tree: a synthetic one cannot catch a subcommand that
+// shares its name with an excluded top-level command (pod update vs update).
+func TestUpdatePromptModeRealCommands(t *testing.T) {
+	tests := []struct {
+		args []string
+		want updateMode
+	}{
+		{args: []string{"completion", "generate"}, want: updateModeOff},
+		{args: []string{"completion"}, want: updateModeOff},
+		{args: []string{"update"}, want: updateModeOff},
+		{args: []string{"version"}, want: updateModeOff},
+		{args: []string{"pod", "update"}, want: updateModePrompt},
+		{args: []string{"serverless", "update"}, want: updateModePrompt},
+		{args: []string{"template", "update"}, want: updateModePrompt},
+		{args: []string{"network-volume", "update"}, want: updateModePrompt},
+		{args: []string{"pod", "list"}, want: updateModePrompt},
+	}
+	for _, tt := range tests {
+		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
+			newUpdatePromptHarness(t, "2.13.0-abc1234")
+			c, _, err := rootCmd.Find(tt.args)
+			if err != nil {
+				t.Fatalf("rootCmd.Find(%v): %v", tt.args, err)
+			}
+			if got := updatePromptMode(c); got != tt.want {
+				t.Fatalf("updatePromptMode(%v) = %v, want %v", tt.args, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAgentGetsNoticeWithoutReadingInput(t *testing.T) {
+	h := newUpdatePromptHarness(t, "2.13.0-abc1234")
+	saveUpdateState(h.statePath, updateState{CheckedAt: h.now, LatestVersion: "v2.14.0"})
+	updateAgent = func() string { return "claude-code" }
+
+	in := strings.NewReader("y\n")
+	var out bytes.Buffer
+	maybePromptUpdate(subcommand(), in, &out)
+
+	want := "runpodctl v2.14.0 is available (you have v2.13.0). to update, run: runpodctl update\n"
+	if out.String() != want {
+		t.Fatalf("output = %q, want %q", out.String(), want)
+	}
+	if in.Len() != 2 || h.installs != 0 {
+		t.Fatalf("notice consumed input (%d bytes left) or installed (%d)", in.Len(), h.installs)
+	}
+
+	out.Reset()
+	h.now = h.now.Add(time.Hour)
+	maybePromptUpdate(subcommand(), in, &out)
+	if out.Len() != 0 {
+		t.Fatalf("notice repeated within a day: %q", out.String())
+	}
+}
+
+func TestUnansweredPromptTimesOut(t *testing.T) {
+	h := newUpdatePromptHarness(t, "2.13.0-abc1234")
+	saveUpdateState(h.statePath, updateState{CheckedAt: h.now, LatestVersion: "v2.14.0"})
+	waitForInput = func(*os.File, time.Duration) bool { return false }
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	var out bytes.Buffer
+	maybePromptUpdate(subcommand(), r, &out)
+	if !strings.Contains(out.String(), "no answer after 30s, continuing") {
+		t.Fatalf("output = %q, want the timeout message", out.String())
+	}
+	if h.installs != 0 {
+		t.Fatalf("installs = %d, want a timeout to mean not now", h.installs)
+	}
+	if !loadUpdateState(h.statePath).PromptedAt.Equal(h.now) {
+		t.Fatal("a timed-out prompt must still count as today's prompt")
+	}
+}
+
+func TestReadLineWaitsForInputOnAFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no bounded console read on windows")
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	start := time.Now()
+	if got, timedOut := readLine(r, 100*time.Millisecond); got != "" || !timedOut {
+		t.Fatalf("readLine on a silent pipe = (%q, %v), want (\"\", true)", got, timedOut)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("timeout took %s", elapsed)
+	}
+
+	if _, err := w.WriteString("s\n"); err != nil {
+		t.Fatal(err)
+	}
+	if got, timedOut := readLine(r, 5*time.Second); got != "s" || timedOut {
+		t.Fatalf("readLine after input = (%q, %v), want (\"s\", false)", got, timedOut)
+	}
+}
+
+func TestNewUpdateCheckResult(t *testing.T) {
+	tests := []struct {
+		name    string
+		current string
+		want    updateCheckResult
+	}{
+		{name: "older release", current: "2.13.0-abc1234", want: updateCheckResult{CurrentVersion: "2.13.0-abc1234", LatestVersion: "v2.14.0", UpdateAvailable: true, UpdateCommand: "runpodctl update"}},
+		{name: "latest release with commit suffix", current: "2.14.0-dd55bcf", want: updateCheckResult{CurrentVersion: "2.14.0-dd55bcf", LatestVersion: "v2.14.0"}},
+		{name: "newer than latest", current: "2.15.0-abc1234", want: updateCheckResult{CurrentVersion: "2.15.0-abc1234", LatestVersion: "v2.14.0"}},
+		{name: "dev build", current: "dev-abc1234", want: updateCheckResult{CurrentVersion: "dev-abc1234", LatestVersion: "v2.14.0", UpdateAvailable: true, UpdateCommand: "runpodctl update"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := newUpdateCheckResult(tt.current, "v2.14.0"); got != tt.want {
+				t.Fatalf("newUpdateCheckResult = %+v, want %+v", got, tt.want)
 			}
 		})
 	}

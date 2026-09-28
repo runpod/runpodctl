@@ -490,17 +490,36 @@ other.
 
 in an interactive terminal, runpodctl checks github for a newer release at most
 once a day, in the background. when one exists, the next command asks
-`Update now? [y]es / [N]ot now / [s]kip this version` on stderr before it runs:
+`update now? [y]es / [N]ot now / [s]kip this version` on stderr before it runs:
 
 - `y` updates, then runs your command. brew, conda and pixi installs are
   upgraded through their package manager, and so is `runpodctl update`. other
   installs download the release directly.
-- anything else, including enter, continues and asks again tomorrow.
+- anything else, including enter, continues and asks again tomorrow. so does no
+  answer within 30 seconds (macos and linux), so an unattended terminal never
+  hangs.
 - `s` continues and stops asking until the next release.
 
-there is no check or prompt when stdin or stderr is not a terminal, in ci
-(`CI` set), on pods, for dev builds, or with `RUNPOD_NO_UPDATE_CHECK` set.
-state lives in `~/.runpod/update-check.json`.
+ai agents (claude code, codex, cursor, gemini cli and others, detected from the
+environment their harness sets) never get the prompt. once a day they get one
+line on stderr instead, and can update themselves without anything waiting on
+input:
+
+```
+runpodctl v2.15.0 is available (you have v2.14.0). to update, run: runpodctl update
+```
+
+`runpodctl update` never prompts. to check without installing:
+
+```
+$ runpodctl update --check
+{"currentVersion": "2.14.0-dd55bcf", "latestVersion": "v2.15.0", "updateAvailable": true, "updateCommand": "runpodctl update"}
+```
+
+there is no check, prompt or notice in ci (`CI` set), on pods, for dev builds,
+for `update`, `version`, `completion` and `help` (including their subcommands),
+or with `RUNPOD_NO_UPDATE_CHECK` set. outside an agent, none either when stdin
+or stderr is not a terminal. state lives in `~/.runpod/update-check.json`.
 
 ## legacy commands
 

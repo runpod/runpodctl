@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/runpod/runpodctl/internal/agent"
 	"github.com/spf13/cobra"
 	"golang.org/x/mod/semver"
 	"golang.org/x/term"
@@ -20,11 +21,14 @@ import (
 
 // startup update prompt. interactive sessions check github for a newer release
 // at most once a day, in the background, and the next run offers to install it.
-// scripts, agents, ci and pods never see the prompt and never make the request.
+// detected ai agents get a one-line notice instead, so they can run
+// `runpodctl update` themselves without anything blocking on input. scripts, ci
+// and pods see neither and never make the request.
 
 const (
 	updateCheckInterval = 24 * time.Hour
 	updateCheckTimeout  = 2 * time.Second
+	updateAnswerTimeout = 30 * time.Second
 	latestReleaseURL    = "https://api.github.com/repos/runpod/runpodctl/releases/latest"
 	noUpdateCheckEnv    = "RUNPOD_NO_UPDATE_CHECK"
 )
@@ -45,10 +49,20 @@ const (
 	answerSkip
 )
 
+type updateMode int
+
+const (
+	updateModeOff updateMode = iota
+	updateModePrompt
+	updateModeNotice
+)
+
 // seams for tests
 var (
 	updateStatePath    = defaultUpdateStatePath
 	updateInteractive  = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stderr.Fd())) }
+	updateAgent        = agent.Detect
+	waitForInput       = waitReadable
 	fetchLatestVersion = fetchLatestReleaseTag
 	installUpdate      = installUpdateForChannel
 	updateNow          = time.Now
@@ -57,8 +71,9 @@ var (
 // pendingUpdateCheck carries the background check's result to waitForUpdateCheck.
 var pendingUpdateCheck chan string
 
-// commands that never prompt: the prompt would be redundant (update, version)
-// or would corrupt output a shell consumes (completion, cobra's __complete).
+// top-level commands that never prompt, matched with their subcommands: the
+// prompt would be redundant (update, version) or would block output a shell
+// consumes (`completion generate` runs in every new shell via the rc file).
 var noUpdatePromptCommands = map[string]bool{
 	"update":     true,
 	"version":    true,
@@ -66,20 +81,38 @@ var noUpdatePromptCommands = map[string]bool{
 	"help":       true,
 }
 
-func updatePromptEnabled(c *cobra.Command) bool {
+// topLevelCommand returns the command directly under root that c belongs to,
+// so `completion generate` maps to `completion` and `pod update` to `pod`.
+func topLevelCommand(c *cobra.Command) *cobra.Command {
+	for c.HasParent() && c.Parent() != c.Root() {
+		c = c.Parent()
+	}
+	return c
+}
+
+func updatePromptMode(c *cobra.Command) updateMode {
 	if os.Getenv(noUpdateCheckEnv) != "" || os.Getenv("CI") != "" || os.Getenv("RUNPOD_POD_ID") != "" {
-		return false
+		return updateModeOff
 	}
-	if c == nil || c == c.Root() || noUpdatePromptCommands[c.Name()] || strings.HasPrefix(c.Name(), "__") {
-		return false
+	if c == nil || c == c.Root() || noUpdatePromptCommands[topLevelCommand(c).Name()] || strings.HasPrefix(c.Name(), "__") {
+		return updateModeOff
 	}
-	return updateInteractive()
+	// agents are checked before the terminal: harnesses that allocate a pty
+	// would otherwise get a prompt nobody answers.
+	if updateAgent() != "" {
+		return updateModeNotice
+	}
+	if updateInteractive() {
+		return updateModePrompt
+	}
+	return updateModeOff
 }
 
 // maybePromptUpdate runs from the root PersistentPreRunE. it never returns an
 // error: an update problem must not stop the command the user asked for.
 func maybePromptUpdate(c *cobra.Command, in io.Reader, out io.Writer) {
-	if !updatePromptEnabled(c) {
+	mode := updatePromptMode(c)
+	if mode == updateModeOff {
 		return
 	}
 	current, ok := releaseSemver(version)
@@ -97,11 +130,21 @@ func maybePromptUpdate(c *cobra.Command, in io.Reader, out io.Writer) {
 		return
 	}
 
-	fmt.Fprintf(out, "runpodctl %s is available (you have %s).\n", state.LatestVersion, current)
-	fmt.Fprint(out, "Update now? [y]es / [N]ot now / [s]kip this version: ")
-	answer := parseUpdateAnswer(readLine(in))
-
 	state.PromptedAt = now
+	if mode == updateModeNotice {
+		fmt.Fprintf(out, "runpodctl %s is available (you have %s). to update, run: runpodctl update\n", state.LatestVersion, current)
+		saveUpdateState(path, state)
+		return
+	}
+
+	fmt.Fprintf(out, "runpodctl %s is available (you have %s).\n", state.LatestVersion, current)
+	fmt.Fprint(out, "update now? [y]es / [N]ot now / [s]kip this version: ")
+	line, timedOut := readLine(in, updateAnswerTimeout)
+	if timedOut {
+		fmt.Fprintf(out, "\nno answer after %s, continuing. asking again tomorrow.\n", updateAnswerTimeout)
+	}
+	answer := parseUpdateAnswer(line)
+
 	switch answer {
 	case answerSkip:
 		state.SkippedVersion = state.LatestVersion
@@ -138,11 +181,18 @@ func parseUpdateAnswer(s string) updateAnswer {
 }
 
 // readLine reads one byte at a time so input typed after the answer stays in
-// stdin for the command that runs next.
-func readLine(in io.Reader) string {
+// stdin for the command that runs next. when in is a file that supports it, a
+// line not finished within timeout is abandoned so an unattended terminal
+// cannot hang the command; timedOut reports that case.
+func readLine(in io.Reader, timeout time.Duration) (line string, timedOut bool) {
 	var b strings.Builder
 	buf := make([]byte, 1)
+	deadline := updateNow().Add(timeout)
+	f, isFile := in.(*os.File)
 	for {
+		if isFile && !waitForInput(f, deadline.Sub(updateNow())) {
+			return b.String(), true
+		}
 		n, err := in.Read(buf)
 		if n > 0 {
 			if buf[0] == '\n' {
@@ -154,7 +204,7 @@ func readLine(in io.Reader) string {
 			break
 		}
 	}
-	return b.String()
+	return b.String(), false
 }
 
 // releaseCommitSuffix matches the "-<short commit>" goreleaser appends to the
