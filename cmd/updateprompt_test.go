@@ -268,6 +268,44 @@ func TestUnansweredPromptTimesOut(t *testing.T) {
 	}
 }
 
+func TestTimedOutPartialAnswerIsNotApplied(t *testing.T) {
+	for _, partial := range []string{"y", "s"} {
+		t.Run(partial, func(t *testing.T) {
+			h := newUpdatePromptHarness(t, "2.13.0-abc1234")
+			saveUpdateState(h.statePath, updateState{CheckedAt: h.now, LatestVersion: "v2.14.0"})
+			// input is ready for the typed byte, then nothing more arrives
+			ready := true
+			waitForInput = func(*os.File, time.Duration) bool {
+				r := ready
+				ready = false
+				return r
+			}
+
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Close()
+			defer w.Close()
+			if _, err := w.WriteString(partial); err != nil {
+				t.Fatal(err)
+			}
+
+			var out bytes.Buffer
+			maybePromptUpdate(subcommand(), r, &out)
+			if !strings.Contains(out.String(), "no answer after") {
+				t.Fatalf("output = %q, want the timeout message", out.String())
+			}
+			if h.installs != 0 {
+				t.Fatalf("installs = %d, want a timed-out %q ignored", h.installs, partial)
+			}
+			if got := loadUpdateState(h.statePath).SkippedVersion; got != "" {
+				t.Fatalf("skipped = %q, want a timed-out %q ignored", got, partial)
+			}
+		})
+	}
+}
+
 func TestReadLineWaitsForInputOnAFile(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("no bounded console read on windows")

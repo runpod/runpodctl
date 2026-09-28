@@ -139,11 +139,15 @@ func maybePromptUpdate(c *cobra.Command, in io.Reader, out io.Writer) {
 
 	fmt.Fprintf(out, "runpodctl %s is available (you have %s).\n", state.LatestVersion, current)
 	fmt.Fprint(out, "update now? [y]es / [N]ot now / [s]kip this version: ")
+	// a timeout is "not now" even if part of an answer was typed: the message
+	// says it is continuing, so it must not then install or skip.
+	answer := answerLater
 	line, timedOut := readLine(in, updateAnswerTimeout)
 	if timedOut {
 		fmt.Fprintf(out, "\nno answer after %s, continuing. asking again tomorrow.\n", updateAnswerTimeout)
+	} else {
+		answer = parseUpdateAnswer(line)
 	}
-	answer := parseUpdateAnswer(line)
 
 	switch answer {
 	case answerSkip:
