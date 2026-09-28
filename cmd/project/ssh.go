@@ -65,14 +65,20 @@ type SSHConnection struct {
 	// knownHostsPath is shared with the go client's host key callback, so a pod
 	// trusted by one path is trusted by the other.
 	knownHostsPath string
+	// hostKeyAlgorithms are those of the key the go client verified. openssh
+	// under strict checking refuses any other type, so it must not negotiate
+	// one because the user's ssh config prefers it.
+	hostKeyAlgorithms []string
 }
 
 func (sshConn *SSHConnection) getSshOptions() []string {
-	return []string{
+	opts := []string{
 		// the go connection records the first key before rsync runs. require
 		// that pin here so a missing or unreadable store cannot disable trust.
 		"-o", "StrictHostKeyChecking=yes",
-		"-o", "UserKnownHostsFile=" + sshConn.knownHostsPath,
+		// openssh splits this value on whitespace into several files, so a
+		// path with a space has to be quoted for its config parser.
+		"-o", "UserKnownHostsFile=" + quoteSSHConfigValue(sshConn.knownHostsPath),
 		// key the entry on the pod rather than its address: runpod recycles pod
 		// ssh addresses, and an address-keyed entry would report a mismatch for
 		// users who did nothing wrong.
@@ -81,12 +87,39 @@ func (sshConn *SSHConnection) getSshOptions() []string {
 		// recycled ip alongside the alias and reintroduce that false mismatch.
 		"-o", "CheckHostIP=no",
 		"-o", "UpdateHostKeys=no",
-		// note: rsync re-splits the -e string on spaces, so neither this path
-		// nor the pre-existing -i survives a home directory containing one.
 		"-o", "LogLevel=ERROR",
 		"-p", fmt.Sprint(sshConn.podPort),
 		"-i", sshConn.sshKeyPath,
 	}
+	if len(sshConn.hostKeyAlgorithms) > 0 {
+		opts = append(opts, "-o", "HostKeyAlgorithms="+strings.Join(sshConn.hostKeyAlgorithms, ","))
+	}
+	return opts
+}
+
+// quoteSSHConfigValue double-quotes a value holding whitespace, which is how
+// openssh's config parser keeps it one token.
+func quoteSSHConfigValue(value string) string {
+	if !strings.ContainsAny(value, " \t") {
+		return value
+	}
+	return `"` + value + `"`
+}
+
+// rsyncRemoteShell joins args into the command string for rsync's -e. rsync
+// splits that string on spaces itself, keeping quoted runs together, and reads
+// a doubled quote inside one as a literal quote (verified against macos's
+// openrsync; the rsync manpage documents the same). so every argument holding
+// a space or a quote is single-quoted.
+func rsyncRemoteShell(args []string) string {
+	quoted := make([]string, len(args))
+	for i, arg := range args {
+		if strings.ContainsAny(arg, ` '"`) {
+			arg = "'" + strings.ReplaceAll(arg, "'", "''") + "'"
+		}
+		quoted[i] = arg
+	}
+	return strings.Join(quoted, " ")
 }
 
 func (sshConn *SSHConnection) Rsync(localDir string, remoteDir string, quiet bool) error {
@@ -105,7 +138,7 @@ func (sshConn *SSHConnection) Rsync(localDir string, remoteDir string, quiet boo
 	rsyncCmdArgs = append(rsyncCmdArgs, "--filter=:- .runpodignore")
 
 	// Prepare SSH options for rsync
-	sshOptions := fmt.Sprintf("ssh %s", strings.Join(sshConn.getSshOptions(), " "))
+	sshOptions := rsyncRemoteShell(append([]string{"ssh"}, sshConn.getSshOptions()...))
 	rsyncCmdArgs = append(rsyncCmdArgs, "-e", sshOptions, localDir, fmt.Sprintf("root@%s:%s", sshConn.podIp, remoteDir))
 
 	// Perform a dry run to check if files need syncing
@@ -115,6 +148,11 @@ func (sshConn *SSHConnection) Rsync(localDir string, remoteDir string, quiet boo
 	dryRunCmd.Stdout = &dryRunBuf
 	dryRunCmd.Stderr = &dryRunBuf
 	if err := dryRunCmd.Run(); err != nil {
+		// the output holds openssh's own diagnostic, such as a refused or
+		// changed host key, which is the part of this failure a user can act on.
+		if output := strings.TrimSpace(dryRunBuf.String()); output != "" {
+			return fmt.Errorf("running rsync dry run: %w: %s", err, output)
+		}
 		return fmt.Errorf("running rsync dry run: %w", err)
 	}
 	dryRunOutput := dryRunBuf.String()
@@ -334,12 +372,17 @@ func PodSSHConnection(podId string) (*SSHConnection, error) {
 	if err != nil {
 		return nil, fmt.Errorf("preparing host key verification: %w", err)
 	}
+	hostKeyAlgorithms, err := pinnedHostKeyAlgorithms(podId, hostKeys)
+	if err != nil {
+		return nil, fmt.Errorf("preparing host key verification: %w", err)
+	}
 	config := &ssh.ClientConfig{
 		User: "root",
 		Auth: []ssh.AuthMethod{
 			ssh.PublicKeys(privateKey),
 		},
-		HostKeyCallback: hostKeyCallback,
+		HostKeyCallback:   hostKeyCallback,
+		HostKeyAlgorithms: hostKeyAlgorithms,
 	}
 
 	// Connect to the SSH server
@@ -349,5 +392,12 @@ func PodSSHConnection(podId string) (*SSHConnection, error) {
 		return nil, fmt.Errorf("establishing SSH connection to %s: %w", host, err)
 	}
 
-	return &SSHConnection{podId: podId, client: client, podIp: podIp, podPort: podPort, sshKeyPath: sshKeyPath, knownHostsPath: hostKeys}, nil
+	// read after the dial, which recorded the key on first contact.
+	verifiedAlgorithms, err := recordedHostKeyAlgorithms(podId, hostKeys)
+	if err != nil {
+		client.Close()
+		return nil, fmt.Errorf("reading verified host key: %w", err)
+	}
+
+	return &SSHConnection{podId: podId, client: client, podIp: podIp, podPort: podPort, sshKeyPath: sshKeyPath, knownHostsPath: hostKeys, hostKeyAlgorithms: verifiedAlgorithms}, nil
 }
