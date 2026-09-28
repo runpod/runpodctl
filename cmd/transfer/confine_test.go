@@ -217,6 +217,75 @@ func TestValidateManifest(t *testing.T) {
 				}
 			}},
 
+		// the entry's own path. os.Root follows a final symlink when a file is
+		// opened by name, so these used to fail at the write, mid-transfer.
+		{name: "file over an escaping symlink already on disk", wantErr: true, wantErrContains: "as a symlink",
+			info: SenderInfo{FilesToTransfer: []FileInfo{file("./", "a.txt")}},
+			setup: func(t *testing.T, dest, outside string) {
+				if err := os.Symlink(filepath.Join(outside, "x"), filepath.Join(dest, "a.txt")); err != nil {
+					t.Fatalf("seeding symlink: %v", err)
+				}
+			}},
+		{name: "file over an in-tree symlink already on disk", wantErr: true, wantErrContains: "as a symlink",
+			info: SenderInfo{FilesToTransfer: []FileInfo{file("./", "a.txt")}},
+			setup: func(t *testing.T, dest, outside string) {
+				if err := os.WriteFile(filepath.Join(dest, "other.txt"), []byte("mine"), 0o644); err != nil {
+					t.Fatalf("seeding file: %v", err)
+				}
+				if err := os.Symlink("other.txt", filepath.Join(dest, "a.txt")); err != nil {
+					t.Fatalf("seeding symlink: %v", err)
+				}
+			}},
+		{name: "file over an existing directory", wantErr: true, wantErrContains: "already exists as a directory",
+			info: SenderInfo{FilesToTransfer: []FileInfo{file("./", "a.txt")}},
+			setup: func(t *testing.T, dest, outside string) {
+				if err := os.MkdirAll(filepath.Join(dest, "a.txt"), 0o755); err != nil {
+					t.Fatalf("seeding dir: %v", err)
+				}
+			}},
+		{name: "symlink over an existing directory", wantErr: true, wantErrContains: "already exists as a directory",
+			info: SenderInfo{FilesToTransfer: []FileInfo{{FolderRemote: "./", Name: "link", Symlink: "target"}}},
+			setup: func(t *testing.T, dest, outside string) {
+				if err := os.MkdirAll(filepath.Join(dest, "link"), 0o755); err != nil {
+					t.Fatalf("seeding dir: %v", err)
+				}
+			}},
+		{name: "empty folder over an existing file", wantErr: true, wantErrContains: "already exists as a file",
+			info: SenderInfo{EmptyFoldersToTransfer: []FileInfo{{FolderRemote: "empty/"}}},
+			setup: func(t *testing.T, dest, outside string) {
+				if err := os.WriteFile(filepath.Join(dest, "empty"), []byte("no"), 0o644); err != nil {
+					t.Fatalf("seeding file: %v", err)
+				}
+			}},
+		{name: "empty folder over an escaping symlink", wantErr: true, wantErrContains: "outside",
+			info: SenderInfo{EmptyFoldersToTransfer: []FileInfo{{FolderRemote: "empty/"}}},
+			setup: func(t *testing.T, dest, outside string) {
+				if err := os.Symlink(outside, filepath.Join(dest, "empty")); err != nil {
+					t.Fatalf("seeding symlink: %v", err)
+				}
+			}},
+		// what a repeated receive of the same tree finds, which has to keep
+		// working: a file over a file, a link over a link, a folder over a folder.
+		{name: "entries over their own earlier copies",
+			info: SenderInfo{
+				FilesToTransfer: []FileInfo{
+					file("./", "a.txt"),
+					{FolderRemote: "./", Name: "link", Symlink: "a.txt"},
+				},
+				EmptyFoldersToTransfer: []FileInfo{{FolderRemote: "empty/"}},
+			},
+			setup: func(t *testing.T, dest, outside string) {
+				if err := os.WriteFile(filepath.Join(dest, "a.txt"), []byte("old"), 0o644); err != nil {
+					t.Fatalf("seeding file: %v", err)
+				}
+				if err := os.Symlink("a.txt", filepath.Join(dest, "link")); err != nil {
+					t.Fatalf("seeding symlink: %v", err)
+				}
+				if err := os.MkdirAll(filepath.Join(dest, "empty"), 0o755); err != nil {
+					t.Fatalf("seeding dir: %v", err)
+				}
+			}},
+
 		// whether two spellings are one destination is a filesystem property,
 		// so these expectations are measured, never hardcoded by GOOS.
 		{name: "case variants with different content", wantErr: folds,

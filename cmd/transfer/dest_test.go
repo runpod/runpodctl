@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"crypto/rand"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -205,6 +206,63 @@ func TestExtractZipOverwritesWithoutPrompting(t *testing.T) {
 	}
 	if string(got) != "new" {
 		t.Errorf("a.txt = %q, want the archive's content", got)
+	}
+}
+
+// TestExtractZipIgnoresEntryModes pins that an archive entry gets the mode any
+// other received file does. The entry's mode is peer-controlled. Comparing with
+// a file created through the manifest path keeps this independent of umask.
+func TestExtractZipIgnoresEntryModes(t *testing.T) {
+	dest, _ := destPair(t)
+	declared := map[string]fs.FileMode{
+		"open":    0o777,
+		"script":  0o755,
+		"private": 0o600,
+		"plain":   0o644,
+	}
+
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	for name, mode := range declared {
+		header := &zip.FileHeader{Name: name, Method: zip.Deflate}
+		header.SetMode(mode)
+		f, err := w.CreateHeader(header)
+		if err != nil {
+			t.Fatalf("adding %s: %v", name, err)
+		}
+		if _, err := f.Write([]byte(name)); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("closing archive: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dest, "payload.zip"), buf.Bytes(), 0o600); err != nil {
+		t.Fatalf("writing archive: %v", err)
+	}
+
+	d := openTestDest(t, dest)
+	if err := d.createEmpty("reference"); err != nil {
+		t.Fatalf("creating the reference file: %v", err)
+	}
+	reference, err := os.Stat(filepath.Join(dest, "reference"))
+	if err != nil {
+		t.Fatalf("stat reference: %v", err)
+	}
+	want := reference.Mode().Perm()
+
+	if err := d.extractZip("payload.zip"); err != nil {
+		t.Fatalf("extractZip: %v", err)
+	}
+	for name, mode := range declared {
+		info, err := os.Stat(filepath.Join(dest, name))
+		if err != nil {
+			t.Errorf("stat %s: %v", name, err)
+			continue
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Errorf("%s declared %o, got %o, want %o like any received file", name, mode, got, want)
+		}
 	}
 }
 

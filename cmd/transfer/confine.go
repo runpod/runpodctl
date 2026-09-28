@@ -313,6 +313,13 @@ func statThreeWay(root *os.Root, rel string) (fs.FileInfo, existence, error) {
 // case-insensitively, by asking the filesystem rather than by reading GOOS.
 // The answer is per directory because ext4 carries the casefold attribute that
 // way, and it is cached because a manifest can collide many times over.
+//
+// It measures case only. Filesystems alias names in other ways it does not
+// see: APFS treats NFC and NFD spellings of one name as the same file, and
+// windows ignores trailing dots and spaces and resolves 8.3 short names. Two
+// such declarations with different contents are not refused, and the last
+// write wins. Both land inside the destination, so this costs the
+// "same destination, different contents" check, not confinement.
 type foldProbe struct {
 	root  *os.Root
 	cache map[string]bool
@@ -647,7 +654,8 @@ func checkEntries(root *os.Root, entries []entry) error {
 
 	// pass four: what is already on disk. every ancestor that exists must be a
 	// real directory we can descend, and a pre-existing escaping symlink is
-	// reported by os.Root as an error rather than as absent.
+	// reported by os.Root as an error rather than as absent. each entry's own
+	// path is checked too, after its ancestors so their refusal reads better.
 	checked := map[string]bool{}
 	for _, e := range entries {
 		for _, dir := range ancestors(e.rel) {
@@ -659,8 +667,40 @@ func checkEntries(root *os.Root, entries []entry) error {
 				return err
 			}
 		}
+		if err := v.checkExistingLeaf(e); err != nil {
+			return err
+		}
 	}
 
+	return nil
+}
+
+// checkExistingLeaf refuses an entry whose own path is already on disk as
+// something the write cannot replace. Without it the conflict surfaces at the
+// write, after earlier entries have landed.
+func (v *validator) checkExistingLeaf(e entry) error {
+	if e.kind == kindDir {
+		// a declared directory needs exactly what an ancestor does.
+		return v.checkExistingDir(e.rel)
+	}
+
+	info, ex, err := lstatThreeWay(v.root, e.rel)
+	if err != nil {
+		return refusef("cannot inspect %q in the destination: %v", e.rel, err)
+	}
+	if ex == absent {
+		return nil
+	}
+	if info.IsDir() {
+		return refusef("%q already exists as a directory, but the transfer declares it as a %s", e.rel, e.kind)
+	}
+	if e.kind == kindFile && info.Mode()&fs.ModeSymlink != 0 {
+		// a declared symlink replaces whatever link is there, but a file is
+		// opened by name and os.Root follows a final symlink. out of the tree
+		// that fails mid-transfer; inside it, it writes some other file than
+		// the one declared.
+		return refusef("%q already exists in the destination as a symlink", e.rel)
+	}
 	return nil
 }
 
