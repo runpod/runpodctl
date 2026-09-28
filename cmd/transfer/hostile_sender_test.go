@@ -249,6 +249,45 @@ func TestHostileSenderCannotPlantAnEscapingSymlink(t *testing.T) {
 	}
 }
 
+// TestHostileSenderCannotLinkThroughAnExistingEscapingSymlink is the forward
+// version of the previous test. `pwn -> esc/x` never says "..", so the lexical
+// check passed it, but the receiver's own `esc` already points out of the
+// destination, and os.Root creates the link without following it.
+func TestHostileSenderCannotLinkThroughAnExistingEscapingSymlink(t *testing.T) {
+	quietStderr(t)
+	base, src, dest := hostileDirs(t)
+	if err := os.MkdirAll(filepath.Join(base, "outside"), 0o755); err != nil {
+		t.Fatalf("creating outside: %v", err)
+	}
+	if err := os.Symlink("../outside", filepath.Join(dest, "esc")); err != nil {
+		t.Fatalf("seeding symlink: %v", err)
+	}
+
+	if err := os.Symlink("esc/x", filepath.Join(src, "pwn")); err != nil {
+		t.Fatalf("seeding symlink: %v", err)
+	}
+	hash, err := utils.HashFile(filepath.Join(src, "pwn"), "xxhash")
+	if err != nil {
+		t.Fatalf("hashing the link: %v", err)
+	}
+	entry := FileInfo{
+		Name: "pwn", FolderRemote: "./", FolderSource: src,
+		Mode: os.ModeSymlink, Hash: hash, ModTime: time.Now(),
+	}
+
+	sendErr, recvErr := runPair(t, []FileInfo{entry}, nil, dest)
+
+	if _, err := os.Lstat(filepath.Join(dest, "pwn")); err == nil {
+		t.Error("a symlink resolving outside the destination was created")
+	}
+	if !refusedByReceiver(recvErr) {
+		t.Errorf("receiver error = %v, want a refusal", recvErr)
+	}
+	if sendErr == nil || !strings.Contains(sendErr.Error(), "refusing files") {
+		t.Errorf("sender error = %v, want the refusal reported back", sendErr)
+	}
+}
+
 // TestSymlinkWithinTheTreeStillTransfers is the other side of the previous
 // test: `send` of a directory containing an ordinary relative symlink has to
 // keep working.
