@@ -28,6 +28,11 @@ type RelayResponse struct {
 	Relays []Relay `json:"relays"`
 }
 
+// relayURL is fetched at runtime by every released binary, so cmd/croc/ keeps
+// existing purely to hold relays.json at this path. The Go files that used to
+// sit beside it were an unreferenced copy of the client in cmd/transfer,
+// carrying the same unvalidated receive path; they were deleted rather than
+// fixed in parallel. Moving the json needs a deprecation window, not a commit.
 var relayURL = "https://raw.githubusercontent.com/runpod/runpodctl/main/cmd/croc/relays.json"
 
 var sendCode string

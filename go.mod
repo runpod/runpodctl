@@ -3,6 +3,7 @@ module github.com/runpod/runpodctl
 go 1.26.6
 
 require (
+	github.com/cespare/xxhash v1.1.0
 	github.com/denisbrodbeck/machineid v1.0.1
 	github.com/fatih/color v1.16.0
 	github.com/gobwas/glob v0.2.3
@@ -27,7 +28,6 @@ require (
 )
 
 require (
-	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/chzyer/readline v1.5.1 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
