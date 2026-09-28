@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -58,7 +59,19 @@ func NewV2Client() (*V2Client, error) {
 
 // get issues a GET against the v2 api and returns the raw body.
 func (c *V2Client) get(ctx context.Context, path string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	return c.request(ctx, http.MethodGet, path, nil)
+}
+
+func (c *V2Client) request(ctx context.Context, method, path string, body interface{}) ([]byte, error) {
+	var requestBody io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal request body: %w", err)
+		}
+		requestBody = bytes.NewReader(encoded)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -72,15 +85,25 @@ func (c *V2Client) get(ctx context.Context, path string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, parseAPIError(body, resp.StatusCode)
+		return nil, parseAPIError(responseBody, resp.StatusCode)
 	}
-	return body, nil
+	return responseBody, nil
+}
+
+func (c *V2Client) requestWithTimeout(method, path string, body interface{}) ([]byte, error) {
+	timeout := viper.GetDuration("timeout")
+	if timeout <= 0 {
+		timeout = DefaultTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return c.request(ctx, method, path, body)
 }
 
 // Worker is one worker backing a serverless endpoint, as reported by v2.

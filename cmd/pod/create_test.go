@@ -178,14 +178,11 @@ func TestResolveWaitTimeout(t *testing.T) {
 			wantErr:     "--wait waits for ssh, so it cannot be combined with --ssh=false",
 		},
 		{
-			// cpu pods go through rest, which cannot request runpod-managed ssh;
-			// prod still allocates a public port 22, so this warns instead of
-			// refusing outright.
-			name:        "cpu warns that ssh depends on the image",
+			// api v2 supports the managed ssh setup for cpu pods.
+			name:        "cpu does not warn about the v1 ssh limitation",
 			setup:       func() { createWait = true },
 			computeType: "CPU",
 			want:        10 * time.Minute,
-			wantStderr:  "cpu pods are created through the rest api",
 		},
 		{
 			// no public ip means no publicly mapped port 22 to probe, so this wait

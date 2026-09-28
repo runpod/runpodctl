@@ -21,12 +21,12 @@ var deleteCmd = &cobra.Command{
 func runDelete(cmd *cobra.Command, args []string) error {
 	podID := args[0]
 
-	client, err := api.NewClient()
+	client, err := api.NewV2Client()
 	if err != nil {
 		return err
 	}
 
-	if err := client.DeletePod(podID); err != nil {
+	if err := client.DeletePodV2(podID); err != nil {
 		return fmt.Errorf("failed to delete pod: %w", err)
 	}
 

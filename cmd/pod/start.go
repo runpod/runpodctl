@@ -20,12 +20,12 @@ var startCmd = &cobra.Command{
 func runStart(cmd *cobra.Command, args []string) error {
 	podID := args[0]
 
-	client, err := api.NewClient()
+	client, err := api.NewV2Client()
 	if err != nil {
 		return err
 	}
 
-	pod, err := client.StartPod(podID)
+	pod, err := client.StartPodV2(podID)
 	if err != nil {
 		return fmt.Errorf("failed to start pod: %w", err)
 	}

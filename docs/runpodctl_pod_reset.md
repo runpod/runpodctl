@@ -1,10 +1,10 @@
 ## runpodctl pod reset
 
-reset a pod
+reset is not supported by api v2
 
 ### Synopsis
 
-reset a pod (stops and starts it)
+api v2 has no reset action. use `runpodctl pod restart <pod-id>` to restart a pod.
 
 ```
 runpodctl pod reset <pod-id> [flags]
@@ -25,4 +25,3 @@ runpodctl pod reset <pod-id> [flags]
 ### SEE ALSO
 
 * [runpodctl pod](runpodctl_pod.md)	 - manage gpu pods
-

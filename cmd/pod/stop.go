@@ -20,12 +20,12 @@ var stopCmd = &cobra.Command{
 func runStop(cmd *cobra.Command, args []string) error {
 	podID := args[0]
 
-	client, err := api.NewClient()
+	client, err := api.NewV2Client()
 	if err != nil {
 		return err
 	}
 
-	pod, err := client.StopPod(podID)
+	pod, err := client.StopPodV2(podID)
 	if err != nil {
 		return fmt.Errorf("failed to stop pod: %w", err)
 	}
