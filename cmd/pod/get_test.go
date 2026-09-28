@@ -14,32 +14,20 @@ import (
 
 func TestRunGetPrintsIncludedNetworkVolume(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/pods/pod-123" {
-			// fetchPodDetails degrades gracefully when its optional GraphQL
-			// enrichment is unavailable. Keep that request local to this test.
-			http.Error(w, "graphql unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		if got := r.URL.Query().Get("includeNetworkVolume"); got != "true" {
-			t.Errorf("expected includeNetworkVolume=true, got %q", r.URL.RawQuery)
-		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"id": "pod-123",
-			"name": "my-pod",
-			"networkVolumeId": "vol-123",
-			"networkVolume": {
-				"id": "vol-123",
-				"name": "my-volume",
-				"dataCenterId": "US-TX-1",
-				"size": 10
-			}
-		}`))
+		switch r.URL.Path {
+		case "/pods/pod-123":
+			_, _ = w.Write([]byte(`{"id":"pod-123","name":"my-pod","status":"RUNNING","image":"ubuntu:22.04","mounts":{"network":[{"volumeId":"vol-123","path":"/workspace"}]}}`))
+		case "/network-volumes/vol-123":
+			_, _ = w.Write([]byte(`{"id":"vol-123","name":"my-volume","dataCenterId":"US-TX-1","size":10}`))
+		default:
+			http.Error(w, "graphql unavailable", http.StatusServiceUnavailable)
+		}
 	}))
 	defer server.Close()
 
 	t.Setenv("RUNPOD_API_KEY", "test-key")
-	t.Setenv("RUNPOD_API_URL", server.URL)
+	t.Setenv("RUNPOD_REST_V2_URL", server.URL)
 	t.Setenv("RUNPOD_GRAPHQL_URL", server.URL)
 
 	oldIncludeMachine := getIncludeMachine

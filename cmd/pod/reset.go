@@ -1,8 +1,7 @@
 package pod
 
 import (
-	"github.com/runpod/runpodctl/internal/api"
-	"github.com/runpod/runpodctl/internal/output"
+	"fmt"
 
 	"github.com/spf13/cobra"
 )
@@ -10,24 +9,11 @@ import (
 var resetCmd = &cobra.Command{
 	Use:   "reset <pod-id>",
 	Short: "reset a pod",
-	Long:  "reset a pod (stops and starts it)",
+	Long:  "reset a pod (not supported by api v2; use restart to restart it)",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runReset,
 }
 
 func runReset(cmd *cobra.Command, args []string) error {
-	podID := args[0]
-
-	client, err := api.NewClient()
-	if err != nil {
-		return err
-	}
-
-	pod, err := client.ResetPod(podID)
-	if err != nil {
-		return err
-	}
-
-	format := output.ParseFormat(cmd.Flag("output").Value.String())
-	return output.Print(pod, &output.Config{Format: format})
+	return fmt.Errorf("pod reset is not supported by api v2; use 'runpodctl pod restart' to restart a pod")
 }

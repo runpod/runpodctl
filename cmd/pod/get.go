@@ -54,12 +54,12 @@ func runGet(cmd *cobra.Command, args []string) error {
 // create response: the point of waiting is to hand back a pod you can connect
 // to, and neither create response carries the ssh command.
 func fetchPodDetails(podID string, includeMachine, includeNetworkVolume bool) (*podDetails, error) {
-	client, err := api.NewClient()
+	client, err := api.NewV2Client()
 	if err != nil {
 		return nil, err
 	}
 
-	pod, err := client.GetPod(podID, includeMachine, includeNetworkVolume)
+	pod, err := client.GetPodV2(podID, includeMachine, includeNetworkVolume)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get pod: %w", err)
 	}

@@ -2,6 +2,7 @@ package pod
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,6 +38,13 @@ func TestPodCmd_Structure(t *testing.T) {
 		if !found {
 			t.Errorf("expected subcommand %s not found", expected)
 		}
+	}
+}
+
+func TestRunResetReportsV2Limitation(t *testing.T) {
+	err := runReset(nil, []string{"pod-1"})
+	if err == nil || !strings.Contains(err.Error(), "pod reset is not supported by api v2") {
+		t.Fatalf("expected the v2 reset limitation, got %v", err)
 	}
 }
 

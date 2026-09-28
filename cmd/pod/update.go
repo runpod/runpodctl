@@ -42,21 +42,21 @@ func init() {
 func runUpdate(cmd *cobra.Command, args []string) error {
 	podID := args[0]
 
-	client, err := api.NewClient()
+	client, err := api.NewV2Client()
 	if err != nil {
 		return err
 	}
 
-	req := &api.PodUpdateRequest{}
+	req := &api.PodV2UpdateRequest{}
 
 	if updateName != "" {
 		req.Name = updateName
 	}
 	if updateImageName != "" {
-		req.ImageName = updateImageName
+		req.Image = updateImageName
 	}
 	if updateContainerDiskInGb > 0 {
-		req.ContainerDiskInGb = updateContainerDiskInGb
+		req.Disk = updateContainerDiskInGb
 	}
 	if updateVolumeInGb > 0 {
 		req.VolumeInGb = updateVolumeInGb
@@ -72,14 +72,14 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("invalid env json: %w", err)
 		}
-		pod, err := client.GetPod(podID, false, false)
+		pod, err := client.GetPodV2(podID, false, false)
 		if err != nil {
 			return fmt.Errorf("failed to get existing pod env: %w", err)
 		}
 		req.Env = mergeEnvMaps(pod.Env, env)
 	}
 
-	pod, err := client.UpdatePod(podID, req)
+	pod, err := client.UpdatePodV2(podID, req)
 	if err != nil {
 		return fmt.Errorf("failed to update pod: %w", err)
 	}
