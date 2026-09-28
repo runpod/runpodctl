@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -15,7 +16,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
+	"github.com/runpod/runpodctl/internal/output"
 	"github.com/spf13/cobra"
 	"golang.org/x/mod/semver"
 )
@@ -222,29 +225,79 @@ func extractBinaryFromZip(archivePath, destPath string) error {
 	return fmt.Errorf("runpodctl.exe not found in archive")
 }
 
-// selfUpdateDestPath is the file the update replaces. it follows symlinks:
-// moving the new binary onto a symlink replaces the link with a plain file,
-// which strands whatever owns the link target (e.g. a homebrew keg).
-func selfUpdateDestPath(exe, goos string) string {
+// selfUpdateDestPath is the file the update replaces: the running binary,
+// with symlinks followed. moving the new binary onto a symlink replaces the
+// link with a plain file, which strands whatever owns the link target (e.g. a
+// homebrew keg). the file keeps its own name, so a binary still named after its
+// release asset (runpodctl-darwin-arm64) is replaced in place rather than
+// gaining a `runpodctl` sibling that is not on PATH.
+func selfUpdateDestPath(exe string) string {
 	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = resolved
 	}
-	name := "runpodctl"
-	if goos == "windows" {
-		name = "runpodctl.exe"
-	}
-	return filepath.Join(filepath.Dir(exe), name)
+	return exe
 }
+
+var updateCheckOnly bool
 
 var updateCmd = &cobra.Command{
 	Use:   "update",
 	Short: "update runpodctl cli",
-	Long:  "update runpodctl cli to the latest version",
+	Long: `update runpodctl cli to the latest version. never prompts, so agents and
+scripts can run it directly. brew, conda and pixi installs are upgraded through
+their package manager.
+
+--check reports whether an update exists without installing it.`,
 	// RunE, not Run: a failed self-update previously printed to stdout and
 	// exited 0, so `runpodctl update && ...` continued as if it had succeeded.
 	RunE: func(c *cobra.Command, args []string) error {
+		if updateCheckOnly {
+			return runUpdateCheck(c)
+		}
 		return installUpdateForChannel(os.Stdout)
 	},
+}
+
+func init() {
+	updateCmd.Flags().BoolVar(&updateCheckOnly, "check", false, "report whether a newer release exists, without installing it")
+}
+
+type updateCheckResult struct {
+	CurrentVersion  string `json:"currentVersion"`
+	LatestVersion   string `json:"latestVersion"`
+	UpdateAvailable bool   `json:"updateAvailable"`
+	UpdateCommand   string `json:"updateCommand,omitempty"`
+}
+
+func newUpdateCheckResult(current, latest string) updateCheckResult {
+	res := updateCheckResult{CurrentVersion: current, LatestVersion: latest}
+	// matches runSelfUpdate: only a comparable version at or past the latest
+	// release counts as current, so a dev build reports an update
+	if v, ok := releaseSemver(current); !ok || semver.Compare(v, latest) < 0 {
+		res.UpdateAvailable = true
+		res.UpdateCommand = "runpodctl update"
+	}
+	return res
+}
+
+// runUpdateCheck always asks github (the daily cache may be a day old) and
+// records the answer, so the startup prompt does not re-check the same day.
+func runUpdateCheck(c *cobra.Command) error {
+	ctx, cancel := context.WithTimeout(c.Context(), 10*time.Second)
+	defer cancel()
+	latest, err := fetchLatestVersion(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to fetch latest version info for runpodctl: %w", err)
+	}
+
+	path := updateStatePath()
+	state := loadUpdateState(path)
+	state.CheckedAt = updateNow()
+	state.LatestVersion = latest
+	saveUpdateState(path, state)
+
+	format := output.ParseFormat(c.Flag("output").Value.String())
+	return output.Print(newUpdateCheckResult(version, latest), &output.Config{Format: format})
 }
 
 // runSelfUpdate replaces the running binary with the latest github release,
@@ -281,7 +334,7 @@ func runSelfUpdate(out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("failed to find current executable: %w", err)
 	}
-	destPath := selfUpdateDestPath(ex, runtime.GOOS)
+	destPath := selfUpdateDestPath(ex)
 
 	// download archive to a temp file
 	tmpFile, err := os.CreateTemp("", "runpodctl-update-*")

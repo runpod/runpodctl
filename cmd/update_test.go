@@ -166,15 +166,21 @@ func TestSelfUpdateDestPathFollowsSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := selfUpdateDestPath(link, "linux"); got != want {
+	if got := selfUpdateDestPath(link); got != want {
 		t.Fatalf("selfUpdateDestPath(symlink) = %q, want the link target %q", got, want)
 	}
 }
 
-func TestSelfUpdateDestPathWindowsName(t *testing.T) {
-	exe := filepath.Join(t.TempDir(), "runpodctl-windows-amd64.exe")
-	want := filepath.Join(filepath.Dir(exe), "runpodctl.exe")
-	if got := selfUpdateDestPath(exe, "windows"); got != want {
-		t.Fatalf("selfUpdateDestPath = %q, want %q", got, want)
+func TestSelfUpdateDestPathKeepsAssetName(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "runpodctl-darwin-arm64")
+	if err := os.WriteFile(exe, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := selfUpdateDestPath(exe); got != want {
+		t.Fatalf("selfUpdateDestPath = %q, want the running file %q", got, want)
 	}
 }
