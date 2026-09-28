@@ -112,6 +112,9 @@ type Client struct {
 	// SuccessfulTransfer flag can clear the error, because that flag is
 	// peer-controlled and a refusal it can launder is not a refusal.
 	refused error
+	// aborted records a receive that a data goroutine had to end. It is
+	// guarded by mutex, and checked alongside refused for the same reason.
+	aborted error
 
 	CurrentFile            *os.File
 	CurrentFileChunkRanges []int64
@@ -800,6 +803,12 @@ func (c *Client) transfer() (err error) {
 	if c.refused != nil {
 		return c.refused
 	}
+	c.mutex.Lock()
+	aborted := c.aborted
+	c.mutex.Unlock()
+	if aborted != nil {
+		return aborted
+	}
 	if c.SuccessfulTransfer {
 		if err != nil {
 			log.Debugf("purging error: %s", err)
@@ -871,7 +880,8 @@ func (c *Client) applyFileRequest(remoteFile RemoteFileRequest) (applied, done b
 	if n := remoteFile.FilesToTransferCurrentNum; n < 0 || n >= len(c.FilesToTransfer) {
 		return false, true, fmt.Errorf("peer asked for file %d of %d", n, len(c.FilesToTransfer))
 	}
-	if err := validateChunkRanges(remoteFile.CurrentFileChunkRanges); err != nil {
+	size := c.FilesToTransfer[remoteFile.FilesToTransferCurrentNum].Size
+	if err := validateChunkRanges(remoteFile.CurrentFileChunkRanges, size); err != nil {
 		return false, true, err
 	}
 
@@ -892,7 +902,7 @@ func (c *Client) applyFileRequest(remoteFile RemoteFileRequest) (applied, done b
 // utils.ChunkRangesToChunks expands it. That function reads chunkRanges[i+1]
 // for each count and multiplies out the totals, so a malformed or huge range
 // list is either an out-of-range read or an allocation the peer chose.
-func validateChunkRanges(ranges []int64) error {
+func validateChunkRanges(ranges []int64, size int64) error {
 	if len(ranges) == 0 {
 		return nil
 	}
@@ -903,6 +913,7 @@ func validateChunkRanges(ranges []int64) error {
 	if ranges[0] <= 0 {
 		return fmt.Errorf("peer sent a resume request with chunk size %d", ranges[0])
 	}
+	limit := min(fileChunks(size), maxResumeChunks)
 	var total int64
 	for i := 1; i < len(ranges); i += 2 {
 		if ranges[i] < 0 {
@@ -913,16 +924,27 @@ func validateChunkRanges(ranges []int64) error {
 			return fmt.Errorf("peer sent a negative resume length (%d)", count)
 		}
 		total += count
-		if total > maxResumeChunks {
-			return fmt.Errorf("peer sent a resume request covering %d chunks", total)
+		if total > limit {
+			return fmt.Errorf("peer sent a resume request covering %d chunks of a file with %d", total, limit)
 		}
 	}
 	return nil
 }
 
-// maxResumeChunks bounds what a peer may ask to resume. At croc's chunk size
-// this is far more than any real transfer needs, and it keeps
-// ChunkRangesToChunks from being asked for an arbitrary allocation.
+// fileChunks is how many chunks sendData reads for a file of size bytes, and
+// so the most a resume request can usefully name. It uses the chunk size the
+// sender reads with rather than ranges[0]: that one is peer-chosen, and a chunk
+// size of 1 would make the bound the file's size in bytes.
+func fileChunks(size int64) int64 {
+	const chunk = models.TCP_BUFFER_SIZE / 2
+	if size <= 0 {
+		return 0
+	}
+	return (size-1)/chunk + 1
+}
+
+// maxResumeChunks is a ceiling on fileChunks for very large files, so the
+// allocation ChunkRangesToChunks makes stays bounded whatever the file.
 const maxResumeChunks = 1 << 24
 
 // refuse records a rejected manifest, tells the peer, and stops the transfer.
@@ -1385,10 +1407,20 @@ func (c *Client) recipientGetFileReady(finished bool) (err error) {
 			Type: message.TypeFinished,
 		})
 		if err != nil {
-			panic(err)
+			// a data goroutine that aborted the receive closes conn[0], so this
+			// can fail without the process being at fault.
+			return err
 		}
 		c.SuccessfulTransfer = true
 		c.FilesHasFinished[c.FilesToTransferCurrentNum] = struct{}{}
+		// nothing is left to request, and the sender exits on TypeFinished
+		// without reading a trailing TypeRecipientReady. opening the current
+		// file here is not harmless: the index can point at a declared symlink
+		// that was just created, which os.Root follows to its in-tree target and
+		// then truncates to the size declared for the link (the length of its
+		// target, as lstat reports it on the sender).
+		c.Step3RecipientRequestFile = true
+		return nil
 	}
 
 	err = c.recipientInitializeFile()
@@ -1538,8 +1570,9 @@ func (c *Client) updateIfRecipientHasFileInfo() (err error) {
 			break
 		}
 	}
-	c.recipientGetFileReady(finished) //nolint
-	return
+	// the error matters: when this fails no TypeRecipientReady goes out, and
+	// without returning it both peers wait on each other.
+	return c.recipientGetFileReady(finished)
 }
 
 func (c *Client) fmtPrintUpdate() {
@@ -1651,7 +1684,7 @@ func (c *Client) receiveData(i int) {
 
 		data, err = crypt.Decrypt(data, c.Key)
 		if err != nil {
-			log.Errorf("could not decrypt a chunk: %v", err)
+			c.abortReceive(fmt.Errorf("could not decrypt a chunk: %w", err))
 			return
 		}
 		if !c.Options.NoCompress {
@@ -1662,14 +1695,14 @@ func (c *Client) receiveData(i int) {
 		// used to be a slice bounds panic on this goroutine, which takes the
 		// whole process with it.
 		if len(data) < 8 {
-			log.Errorf("peer sent a %d byte chunk, too short to carry an offset", len(data))
+			c.abortReceive(fmt.Errorf("peer sent a %d byte chunk, too short to carry an offset", len(data)))
 			return
 		}
 		var position uint64
 		rbuf := bytes.NewReader(data[:8])
 		err = binary.Read(rbuf, binary.LittleEndian, &position)
 		if err != nil {
-			log.Errorf("could not read a chunk offset: %v", err)
+			c.abortReceive(fmt.Errorf("could not read a chunk offset: %w", err))
 			return
 		}
 		positionInt64 := int64(position)
@@ -1679,20 +1712,26 @@ func (c *Client) receiveData(i int) {
 		// without a bound the peer can write anywhere in the file, or grow it
 		// well past the size it declared and the receiver accepted.
 		if !c.currentFileInRange() {
-			log.Errorf("peer sent a chunk for file %d of %d", c.FilesToTransferCurrentNum, len(c.FilesToTransfer))
+			c.abortReceive(fmt.Errorf("peer sent a chunk for file %d of %d", c.FilesToTransferCurrentNum, len(c.FilesToTransfer)))
 			return
 		}
 		declaredSize := c.FilesToTransfer[c.FilesToTransferCurrentNum].Size
-		if positionInt64 < 0 || positionInt64+int64(len(payload)) > declaredSize {
-			log.Errorf("peer sent %d bytes at offset %d, past the declared size %d", len(payload), positionInt64, declaredSize)
+		if !chunkFits(positionInt64, len(payload), declaredSize) {
+			c.abortReceive(fmt.Errorf("peer sent %d bytes at offset %d, past the declared size %d", len(payload), positionInt64, declaredSize))
 			return
 		}
 
 		c.mutex.Lock()
+		if c.aborted != nil {
+			// another data goroutine ended the receive and closed conn[0], so
+			// the TypeCloseSender below would fail, and that failure panics.
+			c.mutex.Unlock()
+			return
+		}
 		_, err = c.CurrentFile.WriteAt(payload, positionInt64)
 		if err != nil {
 			c.mutex.Unlock()
-			log.Errorf("could not write a chunk: %v", err)
+			c.abortReceive(fmt.Errorf("could not write a chunk: %w", err))
 			return
 		}
 		c.bar.Add(len(payload)) //nolint
@@ -1720,6 +1759,36 @@ func (c *Client) receiveData(i int) {
 		}
 		c.mutex.Unlock()
 	}
+}
+
+// abortReceive ends a receive from a data goroutine. Returning from
+// receiveData alone leaves transfer() blocked reading conn[0] until comm's
+// three hour read deadline, with the peer waiting on it. So the peer is told
+// why, and conn[0] is closed, which unblocks that read and lets transfer()
+// return the reason. Only the first failure is kept. The caller must not hold
+// c.mutex.
+func (c *Client) abortReceive(err error) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	if c.aborted != nil {
+		return
+	}
+	c.aborted = fmt.Errorf("receive failed: %w", err)
+	if sendErr := message.Send(c.conn[0], c.Key, message.Message{
+		Type:    message.TypeError,
+		Message: c.aborted.Error(),
+	}); sendErr != nil {
+		log.Debugf("could not tell the peer why: %v", sendErr)
+	}
+	c.conn[0].Close()
+}
+
+// chunkFits reports whether n bytes written at offset stay within size. The
+// offset is peer-supplied, so this is written to not overflow: offset+n wraps
+// negative for an offset near MaxInt64 and would pass a plain sum.
+func chunkFits(offset int64, n int, size int64) bool {
+	length := int64(n)
+	return offset >= 0 && length <= size && offset <= size-length
 }
 
 func (c *Client) sendData(i int) {

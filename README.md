@@ -333,8 +333,9 @@ filenames, so the whole list is checked before anything is written, and the
 transfer is refused outright rather than partly applied. refused: a path
 containing `..` or a backslash, an absolute path, a symlink whose target
 resolves outside the directory, the same destination declared twice with
-different contents, and a path that is both a file and a directory. the reason
-is reported to both sides.
+different contents, a path that is both a file and a directory, and a path
+that already exists as the wrong kind (a file where a directory is needed, or
+the reverse). the reason is reported to both sides.
 
 two consequences worth knowing:
 
@@ -342,7 +343,9 @@ two consequences worth knowing:
   into it. if `./dir` is a symlink pointing anywhere outside the current
   directory, `receive` refuses instead of following it. earlier versions
   followed it silently, which let whoever held the codephrase pick which of
-  your symlinks to write through.
+  your symlinks to write through. the same goes for a symlink at the path of
+  an incoming file: it is refused wherever it points, since writing through
+  it would change some other file than the one sent.
 - sending a tree that contains a symlink pointing outside it (`link ->
   ../elsewhere`) is refused on the receiving side, because the link would
   resolve outside the receive directory. symlinks pointing within the tree

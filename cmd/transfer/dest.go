@@ -296,11 +296,6 @@ func (d *confinedDest) extractZip(zipRel string) error {
 }
 
 func (d *confinedDest) writeZipEntry(entry *zip.File, rel string) (err error) {
-	perm := entry.Mode().Perm()
-	if perm == 0 {
-		perm = 0o644
-	}
-
 	src, err := entry.Open()
 	if err != nil {
 		return err
@@ -310,7 +305,12 @@ func (d *confinedDest) writeZipEntry(entry *zip.File, rel string) (err error) {
 	// receive is non-interactive (NoPrompt and Overwrite are hardcoded), so an
 	// existing file is truncated rather than prompted about, which is what the
 	// rest of the receive path does.
-	dst, err := d.root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	//
+	// the entry's own mode is ignored for the same reason FileInfo.Mode is. it
+	// costs nothing legitimate: utils.ZipDirectory writes entries with
+	// zip.Writer.Create, which records no unix mode, so a runpodctl sender
+	// never sets one.
+	dst, err := d.root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, receivedFilePerm)
 	if err != nil {
 		return err
 	}

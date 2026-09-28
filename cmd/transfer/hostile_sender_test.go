@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/schollz/croc/v9/src/models"
 	"github.com/schollz/croc/v9/src/tcp"
 	"github.com/schollz/croc/v9/src/utils"
 )
@@ -32,38 +34,49 @@ import (
 var (
 	relayOnce   sync.Once
 	relayPorts  []string
+	relayErr    error
 	roomCounter atomic.Int64
 )
 
 // startTestRelay runs croc's relay in-process. tcp.Run never returns, so the
 // goroutines live for the test binary; there is no shutdown to call. It is
 // started once and shared, which is why rooms have to be kept apart below.
+//
+// A startup failure is kept rather than reported inside the Once: t.Fatal
+// there fails only the first test, and every later one would index an empty
+// relayPorts and panic without the cause.
 func startTestRelay(t *testing.T) []string {
 	t.Helper()
-	relayOnce.Do(func() {
-		first := 40000 + rand.Intn(20000) //nolint:gosec // test port selection
-		open := utils.FindOpenPorts("localhost", first, 4)
-		if len(open) < 4 {
-			t.Fatalf("only found %d open ports", len(open))
-		}
-		for _, p := range open {
-			relayPorts = append(relayPorts, strconv.Itoa(p))
-		}
-		// "localhost" rather than 127.0.0.1: tcp.Run rewrites the latter to
-		// 0.0.0.0, which would expose the relay off the machine.
-		go tcp.Run("error", "localhost", relayPorts[0], "testpw", strings.Join(relayPorts[1:], ",")) //nolint:errcheck
-		for _, p := range relayPorts[1:] {
-			go tcp.Run("error", "localhost", p, "testpw") //nolint:errcheck
-		}
-		for range 100 {
-			if err := tcp.PingServer("localhost:" + relayPorts[0]); err == nil {
-				return
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
-		t.Fatal("test relay never came up")
-	})
+	relayOnce.Do(func() { relayPorts, relayErr = runTestRelay() })
+	if relayErr != nil {
+		t.Fatalf("starting the test relay: %v", relayErr)
+	}
 	return relayPorts
+}
+
+func runTestRelay() ([]string, error) {
+	first := 40000 + rand.Intn(20000) //nolint:gosec // test port selection
+	open := utils.FindOpenPorts("localhost", first, 4)
+	if len(open) < 4 {
+		return nil, fmt.Errorf("only found %d open ports", len(open))
+	}
+	ports := make([]string, 0, len(open))
+	for _, p := range open {
+		ports = append(ports, strconv.Itoa(p))
+	}
+	// "localhost" rather than 127.0.0.1: tcp.Run rewrites the latter to
+	// 0.0.0.0, which would expose the relay off the machine.
+	go tcp.Run("error", "localhost", ports[0], "testpw", strings.Join(ports[1:], ",")) //nolint:errcheck
+	for _, p := range ports[1:] {
+		go tcp.Run("error", "localhost", p, "testpw") //nolint:errcheck
+	}
+	for range 100 {
+		if err := tcp.PingServer("localhost:" + ports[0]); err == nil {
+			return ports, nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return nil, fmt.Errorf("relay on port %s never came up", ports[0])
 }
 
 func testOptions(t *testing.T, isSender bool, secret, dest string) Options {
@@ -366,6 +379,100 @@ func TestSendSameFileTwiceStillWorks(t *testing.T) {
 	}
 }
 
+// TestHostileSenderCannotWriteThroughAnExistingLeafSymlink covers a symlink
+// already in the destination at the declared file's own path. os.Root refuses
+// to follow it out, but the failure used to land mid-transfer, where it was
+// discarded, so neither peer ever heard of it and both waited forever.
+func TestHostileSenderCannotWriteThroughAnExistingLeafSymlink(t *testing.T) {
+	quietStderr(t)
+	base, src, dest := hostileDirs(t)
+	if err := os.Symlink("../escaped.txt", filepath.Join(dest, "payload.txt")); err != nil {
+		t.Fatalf("seeding symlink: %v", err)
+	}
+
+	entry := sendable(t, src, "payload.txt", "owned")
+	sendErr, recvErr := runPair(t, []FileInfo{entry}, nil, dest)
+
+	if _, err := os.Lstat(filepath.Join(base, "escaped.txt")); err == nil {
+		t.Error("the sender wrote outside the destination")
+	}
+	if !refusedByReceiver(recvErr) {
+		t.Errorf("receiver error = %v, want a refusal", recvErr)
+	}
+	if sendErr == nil || !strings.Contains(sendErr.Error(), "refusing files") {
+		t.Errorf("sender error = %v, want the refusal reported back", sendErr)
+	}
+}
+
+// TestSymlinkOnlyTransferLeavesItsTargetAlone is `send link` with nothing else
+// to transfer. Finishing used to open the current entry anyway, which was the
+// link just created: os.Root followed it to the existing in-tree target and
+// truncated that to the link's declared size of zero.
+func TestSymlinkOnlyTransferLeavesItsTargetAlone(t *testing.T) {
+	quietStderr(t)
+	_, src, dest := hostileDirs(t)
+	if err := os.WriteFile(filepath.Join(dest, "data.bin"), []byte("precious"), 0o644); err != nil {
+		t.Fatalf("seeding target: %v", err)
+	}
+	if err := os.Symlink("data.bin", filepath.Join(src, "link")); err != nil {
+		t.Fatalf("seeding symlink: %v", err)
+	}
+	hash, err := utils.HashFile(filepath.Join(src, "link"), "xxhash")
+	if err != nil {
+		t.Fatalf("hashing the link: %v", err)
+	}
+	link := FileInfo{
+		Name: "link", FolderRemote: "./", FolderSource: src,
+		Mode: os.ModeSymlink, Hash: hash, ModTime: time.Now(),
+	}
+
+	sendErr, recvErr := runPair(t, []FileInfo{link}, nil, dest)
+	if sendErr != nil || recvErr != nil {
+		t.Fatalf("transfer failed: send=%v recv=%v", sendErr, recvErr)
+	}
+
+	if got, err := os.Readlink(filepath.Join(dest, "link")); err != nil || got != "data.bin" {
+		t.Errorf("link = %q (%v), want data.bin", got, err)
+	}
+	got, err := os.ReadFile(filepath.Join(dest, "data.bin"))
+	if err != nil {
+		t.Fatalf("reading the target: %v", err)
+	}
+	if string(got) != "precious" {
+		t.Errorf("target = %q, want it untouched", got)
+	}
+}
+
+// TestChunkPastTheDeclaredSizeEndsBothSides covers the data goroutine's
+// failure paths. The sender declares a smaller size than the file it sends, so
+// the first chunk is out of bounds. That goroutine used to just return, which
+// left the receive blocked on its control connection and the sender waiting on
+// it, for as long as comm's three hour read deadline.
+func TestChunkPastTheDeclaredSizeEndsBothSides(t *testing.T) {
+	quietStderr(t)
+	_, src, dest := hostileDirs(t)
+
+	entry := sendable(t, src, "payload.txt", "0123456789")
+	entry.Size = 4
+
+	// runPair fails the test if either side is still running after its bound.
+	sendErr, recvErr := runPair(t, []FileInfo{entry}, nil, dest)
+
+	if recvErr == nil || !strings.Contains(recvErr.Error(), "past the declared size") {
+		t.Errorf("receiver error = %v, want the bound named", recvErr)
+	}
+	if sendErr == nil {
+		t.Error("sender reported success for a receive that failed")
+	}
+	got, err := os.ReadFile(filepath.Join(dest, "payload.txt"))
+	if err != nil {
+		t.Fatalf("reading the received file: %v", err)
+	}
+	if len(got) > 4 {
+		t.Errorf("received file grew to %d bytes past its declared size of 4", len(got))
+	}
+}
+
 // TestReceiverIgnoresFileRequest pins the guard on TypeRecipientReady, which
 // asks a *sender* for a file. A receiver acting on it adopts a peer-chosen
 // index that the loops after the transfer use to index the manifest.
@@ -412,28 +519,85 @@ func TestSenderRejectsOutOfRangeFileRequest(t *testing.T) {
 // each count into that many entries, so a large one is an allocation the peer
 // chose.
 func TestSenderRejectsMalformedResumeRequest(t *testing.T) {
+	const chunk = models.TCP_BUFFER_SIZE / 2
+	const size = 3 * chunk // a file sendData reads as exactly three chunks
+
 	for _, ranges := range [][]int64{
-		{1024, 0},          // even length: the panic
-		{0, 0, 1},          // zero chunk size
-		{-1, 0, 1},         // negative chunk size
-		{1024, -1, 1},      // negative offset
-		{1024, 0, -1},      // negative count
-		{1024, 0, 1 << 40}, // an allocation the peer chose
+		{chunk, 0},          // even length: the panic
+		{0, 0, 1},           // zero chunk size
+		{-1, 0, 1},          // negative chunk size
+		{chunk, -1, 1},      // negative offset
+		{chunk, 0, -1},      // negative count
+		{chunk, 0, 1 << 40}, // an allocation the peer chose
+		{chunk, 0, 4},       // more chunks than the file has
+		{chunk, 0, 2, chunk * 2, 2},
+		// a chunk size of 1 would make a bound of size/ranges[0] the file's
+		// size in bytes, so the peer's chunk size does not count.
+		{1, 0, 4},
 	} {
 		c := &Client{Options: Options{IsSender: true}, mutex: &sync.Mutex{}}
-		c.FilesToTransfer = []FileInfo{{Name: "a", Size: 4096}}
+		c.FilesToTransfer = []FileInfo{{Name: "a", Size: size}}
 
 		if _, _, err := c.applyFileRequest(RemoteFileRequest{CurrentFileChunkRanges: ranges}); err == nil {
 			t.Errorf("resume request %v accepted", ranges)
 		}
 	}
 
-	// a well-formed request still works, so the bound is not simply refusing
-	// every resume.
-	c := &Client{Options: Options{IsSender: true}, mutex: &sync.Mutex{}}
-	c.FilesToTransfer = []FileInfo{{Name: "a", Size: 4096}}
-	applied, _, err := c.applyFileRequest(RemoteFileRequest{CurrentFileChunkRanges: []int64{1024, 0, 2}})
-	if err != nil || !applied {
-		t.Errorf("a valid resume request was refused: applied=%v err=%v", applied, err)
+	// well-formed requests still work, up to every chunk of the file, so the
+	// bound is not simply refusing every resume.
+	for _, ranges := range [][]int64{
+		{chunk, 0, 1},
+		{chunk, 0, 3},
+		{chunk, 0, 1, chunk * 2, 1},
+	} {
+		c := &Client{Options: Options{IsSender: true}, mutex: &sync.Mutex{}}
+		c.FilesToTransfer = []FileInfo{{Name: "a", Size: size}}
+		applied, _, err := c.applyFileRequest(RemoteFileRequest{CurrentFileChunkRanges: ranges})
+		if err != nil || !applied {
+			t.Errorf("valid resume request %v refused: applied=%v err=%v", ranges, applied, err)
+		}
+	}
+}
+
+func TestFileChunks(t *testing.T) {
+	const chunk = models.TCP_BUFFER_SIZE / 2
+	for size, want := range map[int64]int64{
+		0:         0,
+		1:         1,
+		chunk - 1: 1,
+		chunk:     1,
+		chunk + 1: 2,
+		3 * chunk: 3,
+	} {
+		if got := fileChunks(size); got != want {
+			t.Errorf("fileChunks(%d) = %d, want %d", size, got, want)
+		}
+	}
+}
+
+// TestChunkFits pins the bound on a peer-supplied chunk offset. The cases near
+// MaxInt64 are the reason it is not written as offset+n > size: that sum wraps
+// negative and passes.
+func TestChunkFits(t *testing.T) {
+	for _, tc := range []struct {
+		offset int64
+		n      int
+		size   int64
+		want   bool
+	}{
+		{offset: 0, n: 4, size: 4, want: true},
+		{offset: 2, n: 2, size: 4, want: true},
+		{offset: 4, n: 0, size: 4, want: true},
+		{offset: 0, n: 0, size: 0, want: true},
+		{offset: 1, n: 4, size: 4},
+		{offset: 0, n: 5, size: 4},
+		{offset: -1, n: 1, size: 4},
+		{offset: math.MaxInt64, n: 1, size: 4},
+		{offset: math.MaxInt64 - 1, n: 10, size: 4},
+		{offset: math.MaxInt64 - 1, n: 10, size: math.MaxInt64},
+	} {
+		if got := chunkFits(tc.offset, tc.n, tc.size); got != tc.want {
+			t.Errorf("chunkFits(%d, %d, %d) = %v, want %v", tc.offset, tc.n, tc.size, got, tc.want)
+		}
 	}
 }
