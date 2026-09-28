@@ -29,6 +29,7 @@ _note: all pods automatically come with runpodctl installed with a pod-scoped ap
     - [pod runtime status](#pod-runtime-status)
     - [error format](#error-format)
   - [environment variables](#environment-variables)
+  - [update prompt](#update-prompt)
   - [legacy commands](#legacy-commands)
   - [release process](#release-process)
   - [acknowledgements](#acknowledgements)
@@ -477,12 +478,48 @@ its errors are json with a `code` and exit 1.
 | `RUNPOD_GRAPHQL_URL` | `https://api.runpod.io/graphql` | graphql control plane (config key `apiUrl`) |
 | `RUNPOD_INVOKE_URL` | `https://api.runpod.ai/v2` | base for the serverless invoke urls reported by `serverless create/get/list/update`, and the host `serverless run/status/health` call (config key `invokeUrl`) |
 | `RUNPOD_REST_V2_URL` | `https://api.runpod.io/v2` | rest v2, which serves `pod logs`, `serverless logs` and the worker listing behind them (config key `restV2ApiUrl`) |
+| `RUNPOD_NO_UPDATE_CHECK` | — | any value turns off the update check and prompt |
 
 invoke is a separate service from the control plane: pointing `RUNPOD_API_URL`
 or `RUNPOD_GRAPHQL_URL` at a non-prod host does **not** move the invoke urls.
 override `RUNPOD_INVOKE_URL` explicitly when you need that. rest v2 is separate
 again — the crud commands are still on rest v1, so moving one does not move the
 other.
+
+## update prompt
+
+in an interactive terminal, runpodctl checks github for a newer release at most
+once a day, in the background. when one exists, the next command asks
+`update now? [y]es / [N]ot now / [s]kip this version` on stderr before it runs:
+
+- `y` updates, then runs your command. brew, conda and pixi installs are
+  upgraded through their package manager, and so is `runpodctl update`. other
+  installs download the release directly.
+- anything else, including enter, continues and asks again tomorrow. so does no
+  answer within 30 seconds (macos and linux), so an unattended terminal never
+  hangs.
+- `s` continues and stops asking until the next release.
+
+ai agents (claude code, codex, cursor, gemini cli and others, detected from the
+environment their harness sets) never get the prompt. once a day they get one
+line on stderr instead, and can update themselves without anything waiting on
+input:
+
+```
+runpodctl v2.15.0 is available (you have v2.14.0). to update, run: runpodctl update
+```
+
+`runpodctl update` never prompts. to check without installing:
+
+```
+$ runpodctl update --check
+{"currentVersion": "2.14.0-dd55bcf", "latestVersion": "v2.15.0", "updateAvailable": true, "updateCommand": "runpodctl update"}
+```
+
+there is no check, prompt or notice in ci (`CI` set), on pods, for dev builds,
+for `update`, `version`, `completion` and `help` (including their subcommands),
+or with `RUNPOD_NO_UPDATE_CHECK` set. outside an agent, none either when stdin
+or stderr is not a terminal. state lives in `~/.runpod/update-check.json`.
 
 ## legacy commands
 
