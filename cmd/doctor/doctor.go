@@ -112,15 +112,18 @@ func checkAPIKey() checkResult {
 
 	// save to config
 	viper.Set("apiKey", apiKey)
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		result.Error = fmt.Sprintf("failed to locate home directory: %v", err)
+		return result
+	}
 	configPath := home + "/.runpod"
-	os.MkdirAll(configPath, 0700)
 
-	if err := viper.WriteConfig(); err != nil {
-		if err := viper.WriteConfigAs(configPath + "/config.toml"); err != nil {
-			result.Error = fmt.Sprintf("failed to save config: %v", err)
-			return result
-		}
+	// WriteSecureConfig creates the dir 0700 and clamps the file to 0600 so the
+	// api key is not readable by other users.
+	if err := configenv.WriteSecureConfig(configPath); err != nil {
+		result.Error = fmt.Sprintf("failed to save config: %v", err)
+		return result
 	}
 
 	fmt.Fprintln(os.Stderr, "")

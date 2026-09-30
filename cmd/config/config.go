@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/runpod/runpodctl/api"
 	"github.com/runpod/runpodctl/cmd/ssh"
@@ -51,6 +52,11 @@ var ConfigCmd = &cobra.Command{
 func saveConfig() error {
 	if err := viper.WriteConfig(); err != nil {
 		return err
+	}
+	// the config file holds the api key; keep it owner-only in case it was
+	// created (or left) with looser perms by an older cli.
+	if f := viper.ConfigFileUsed(); f != "" {
+		os.Chmod(f, 0o600) //nolint:errcheck
 	}
 	fmt.Println("Configuration saved to file:", viper.ConfigFileUsed())
 	return nil

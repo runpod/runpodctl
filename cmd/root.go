@@ -23,6 +23,7 @@ import (
 	"github.com/runpod/runpodctl/cmd/user"
 	"github.com/runpod/runpodctl/cmd/volume"
 	"github.com/runpod/runpodctl/internal/api"
+	"github.com/runpod/runpodctl/internal/configenv"
 	"github.com/runpod/runpodctl/internal/output"
 
 	"github.com/spf13/cobra"
@@ -348,9 +349,8 @@ func initConfig() {
 			fmt.Fprintln(os.Stderr, "migrating config from ~/.runpod.yaml to ~/.runpod/config.toml")
 		}
 		viper.SetConfigType("toml")
-		// make .runpod folder if not exists
-		err := os.MkdirAll(configPath, os.ModePerm)
-		cobra.CheckErr(err)
-		viper.WriteConfigAs(configPath + "/config.toml") //nolint:errcheck
+		// persist an empty/migrated config with owner-only perms; the file may
+		// hold the api key. best-effort: env-only auth still works if it fails.
+		configenv.WriteSecureConfig(configPath) //nolint:errcheck
 	}
 }
