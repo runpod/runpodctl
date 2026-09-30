@@ -1,10 +1,7 @@
 package api
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 )
 
 type GetCloudInput struct {
@@ -37,31 +34,11 @@ func GetCloud(in *GetCloudInput) (gpuTypes []interface{}, err error) {
 	if err != nil {
 		return
 	}
-	defer res.Body.Close()
-	rawData, err := io.ReadAll(res.Body)
+	gqldata, rawData, err := parseGraphQLData(res)
 	if err != nil {
 		return
 	}
-	if res.StatusCode != 200 {
-		err = fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
-		return
-	}
-	data := make(map[string]interface{})
-	if err = json.Unmarshal(rawData, &data); err != nil {
-		return
-	}
-	gqlErrors, ok := data["errors"].([]interface{})
-	if ok && len(gqlErrors) > 0 {
-		firstErr, _ := gqlErrors[0].(map[string]interface{})
-		err = errors.New(firstErr["message"].(string))
-		return
-	}
-	gqldata, ok := data["data"].(map[string]interface{})
-	if !ok || gqldata == nil {
-		err = fmt.Errorf("data is nil: %s", string(rawData))
-		return
-	}
-	gpuTypes, ok = gqldata["gpuTypes"].([]interface{})
+	gpuTypes, ok := gqldata["gpuTypes"].([]interface{})
 	if !ok || gpuTypes == nil {
 		err = fmt.Errorf("gpuTypes is nil: %s", string(rawData))
 		return

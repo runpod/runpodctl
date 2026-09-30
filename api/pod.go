@@ -187,31 +187,11 @@ func CreatePod(podInput *CreatePodInput) (pod map[string]interface{}, err error)
 	if err != nil {
 		return
 	}
-	defer res.Body.Close()
-	rawData, err := io.ReadAll(res.Body)
+	gqldata, rawData, err := parseGraphQLData(res)
 	if err != nil {
 		return
 	}
-	if res.StatusCode != 200 {
-		err = fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
-		return
-	}
-	data := make(map[string]interface{})
-	if err = json.Unmarshal(rawData, &data); err != nil {
-		return
-	}
-	gqlErrors, ok := data["errors"].([]interface{})
-	if ok && len(gqlErrors) > 0 {
-		firstErr, _ := gqlErrors[0].(map[string]interface{})
-		err = errors.New(firstErr["message"].(string))
-		return
-	}
-	gqldata, ok := data["data"].(map[string]interface{})
-	if !ok || gqldata == nil {
-		err = fmt.Errorf("data is nil: %s", string(rawData))
-		return
-	}
-	pod, ok = gqldata["podFindAndDeployOnDemand"].(map[string]interface{})
+	pod, ok := gqldata["podFindAndDeployOnDemand"].(map[string]interface{})
 	if !ok || pod == nil {
 		err = fmt.Errorf("pod is nil: %s", string(rawData))
 		return
@@ -236,31 +216,11 @@ func StopPod(id string) (podStop map[string]interface{}, err error) {
 	if err != nil {
 		return
 	}
-	if res.StatusCode != 200 {
-		err = fmt.Errorf("statuscode %d", res.StatusCode)
-		return
-	}
-	defer res.Body.Close()
-	rawData, err := io.ReadAll(res.Body)
+	gqldata, rawData, err := parseGraphQLData(res)
 	if err != nil {
 		return
 	}
-	data := make(map[string]interface{})
-	if err = json.Unmarshal(rawData, &data); err != nil {
-		return
-	}
-	gqlErrors, ok := data["errors"].([]interface{})
-	if ok && len(gqlErrors) > 0 {
-		firstErr, _ := gqlErrors[0].(map[string]interface{})
-		err = errors.New(firstErr["message"].(string))
-		return
-	}
-	gqldata, ok := data["data"].(map[string]interface{})
-	if !ok || gqldata == nil {
-		err = fmt.Errorf("data is nil: %s", string(rawData))
-		return
-	}
-	podStop, ok = gqldata["podStop"].(map[string]interface{})
+	podStop, ok := gqldata["podStop"].(map[string]interface{})
 	if !ok || podStop == nil {
 		err = fmt.Errorf("podStop is nil: %s", string(rawData))
 		return
@@ -281,28 +241,8 @@ func RemovePod(id string) (ok bool, err error) {
 	if err != nil {
 		return
 	}
-	if res.StatusCode != 200 {
-		err = fmt.Errorf("statuscode %d", res.StatusCode)
-		return
-	}
-	defer res.Body.Close()
-	rawData, err := io.ReadAll(res.Body)
+	gqldata, _, err := parseGraphQLData(res)
 	if err != nil {
-		return
-	}
-	data := make(map[string]interface{})
-	if err = json.Unmarshal(rawData, &data); err != nil {
-		return
-	}
-	gqlErrors, ok := data["errors"].([]interface{})
-	if ok && len(gqlErrors) > 0 {
-		firstErr, _ := gqlErrors[0].(map[string]interface{})
-		err = errors.New(firstErr["message"].(string))
-		return
-	}
-	gqldata, ok := data["data"].(map[string]interface{})
-	if !ok || gqldata == nil {
-		err = fmt.Errorf("data is nil: %s", string(rawData))
 		return
 	}
 	_, ok = gqldata["podTerminate"]
@@ -327,31 +267,11 @@ func StartOnDemandPod(id string) (pod map[string]interface{}, err error) {
 	if err != nil {
 		return
 	}
-	if res.StatusCode != 200 {
-		err = fmt.Errorf("PodBidResume: statuscode %d", res.StatusCode)
-		return
-	}
-	defer res.Body.Close()
-	rawData, err := io.ReadAll(res.Body)
+	gqldata, rawData, err := parseGraphQLData(res)
 	if err != nil {
 		return
 	}
-	data := make(map[string]interface{})
-	if err = json.Unmarshal(rawData, &data); err != nil {
-		return
-	}
-	gqlErrors, ok := data["errors"].([]interface{})
-	if ok && len(gqlErrors) > 0 {
-		firstErr, _ := gqlErrors[0].(map[string]interface{})
-		err = errors.New(firstErr["message"].(string))
-		return
-	}
-	gqldata, ok := data["data"].(map[string]interface{})
-	if !ok || gqldata == nil {
-		err = fmt.Errorf("data is nil: %s", string(rawData))
-		return
-	}
-	pod, ok = gqldata["podResume"].(map[string]interface{})
+	pod, ok := gqldata["podResume"].(map[string]interface{})
 	if !ok || pod == nil {
 		err = fmt.Errorf("pod is nil: %s", string(rawData))
 		return
@@ -377,31 +297,11 @@ func StartSpotPod(id string, bidPerGpu float32, gpuCount int) (podBidResume map[
 	if err != nil {
 		return
 	}
-	if res.StatusCode != 200 {
-		err = fmt.Errorf("PodBidResume: statuscode %d", res.StatusCode)
-		return
-	}
-	defer res.Body.Close()
-	rawData, err := io.ReadAll(res.Body)
+	gqldata, rawData, err := parseGraphQLData(res)
 	if err != nil {
 		return
 	}
-	data := make(map[string]interface{})
-	if err = json.Unmarshal(rawData, &data); err != nil {
-		return
-	}
-	gqlErrors, ok := data["errors"].([]interface{})
-	if ok && len(gqlErrors) > 0 {
-		firstErr, _ := gqlErrors[0].(map[string]interface{})
-		err = errors.New(firstErr["message"].(string))
-		return
-	}
-	gqldata, ok := data["data"].(map[string]interface{})
-	if !ok || gqldata == nil {
-		err = fmt.Errorf("data is nil: %s", string(rawData))
-		return
-	}
-	podBidResume, ok = gqldata["podBidResume"].(map[string]interface{})
+	podBidResume, ok := gqldata["podBidResume"].(map[string]interface{})
 	if !ok || podBidResume == nil {
 		err = fmt.Errorf("podBidResume is nil: %s", string(rawData))
 		return
