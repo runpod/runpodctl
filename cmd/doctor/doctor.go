@@ -17,12 +17,23 @@ import (
 	sshcrypto "golang.org/x/crypto/ssh"
 )
 
+var apiKeyFlag string
+
 // Cmd is the doctor command
 var Cmd = &cobra.Command{
 	Use:   "doctor",
 	Short: "diagnose and fix cli issues",
 	Long:  "check runpod connectivity and fix configuration issues",
-	RunE:  runDoctor,
+	Example: `  # interactive: prompts for the api key and saves it
+  runpodctl doctor
+
+  # non-interactive (ci, containers, agents): pass the key
+  runpodctl doctor --api-key "$RUNPOD_API_KEY"`,
+	RunE: runDoctor,
+}
+
+func init() {
+	Cmd.Flags().StringVar(&apiKeyFlag, "api-key", "", "api key to save (skips the interactive prompt)")
 }
 
 type checkResult struct {
@@ -45,7 +56,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	}
 
 	// check 1: api key configured
-	apiKeyCheck := checkAPIKey()
+	apiKeyCheck := checkAPIKey(apiKeyFlag)
 	report.Checks = append(report.Checks, apiKeyCheck)
 	if apiKeyCheck.Status == "fail" && !apiKeyCheck.Fixed {
 		report.Healthy = false
@@ -73,7 +84,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	return output.Print(report, &output.Config{Format: format})
 }
 
-func checkAPIKey() checkResult {
+func checkAPIKey(providedKey string) checkResult {
 	result := checkResult{Name: "api_key"}
 
 	apiKey := configenv.APIKey()
@@ -86,25 +97,29 @@ func checkAPIKey() checkResult {
 	result.Status = "fail"
 	result.Error = "no api key configured"
 
-	// try to fix: prompt for api key
-	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "no api key found.")
-	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "to get your api key:")
-	fmt.Fprintln(os.Stderr, "  1. go to https://www.runpod.io/console/user/settings")
-	fmt.Fprintln(os.Stderr, "  2. click 'api keys' and create a new key")
-	fmt.Fprintln(os.Stderr, "  3. copy the key and paste it below")
-	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprint(os.Stderr, "enter your runpod api key: ")
+	// prefer a key passed via --api-key (non-interactive: CI, containers,
+	// agents), falling back to an interactive prompt only on a TTY.
+	apiKey = strings.TrimSpace(providedKey)
+	if apiKey == "" {
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "no api key found.")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "to get your api key:")
+		fmt.Fprintln(os.Stderr, "  1. go to https://www.runpod.io/console/user/settings")
+		fmt.Fprintln(os.Stderr, "  2. click 'api keys' and create a new key")
+		fmt.Fprintln(os.Stderr, "  3. copy the key and paste it below")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprint(os.Stderr, "enter your runpod api key: ")
 
-	reader := bufio.NewReader(os.Stdin)
-	input, err := reader.ReadString('\n')
-	if err != nil {
-		result.Error = "failed to read input"
-		return result
+		reader := bufio.NewReader(os.Stdin)
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			result.Error = "failed to read input (use --api-key for non-interactive use)"
+			return result
+		}
+		apiKey = strings.TrimSpace(input)
 	}
 
-	apiKey = strings.TrimSpace(input)
 	if apiKey == "" {
 		result.Error = "no api key provided"
 		return result
@@ -127,6 +142,8 @@ func checkAPIKey() checkResult {
 	fmt.Fprintf(os.Stderr, "api key saved to %s/config.toml\n", configPath)
 	fmt.Fprintln(os.Stderr, "")
 
+	// the initial "no api key configured" no longer applies now that we fixed it
+	result.Error = ""
 	result.Fixed = true
 	result.Status = "pass"
 	return result
