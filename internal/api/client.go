@@ -87,49 +87,68 @@ func (c *Client) request(method, endpoint string, params url.Values, body interf
 // service, see InvokeClient.EndpointHealth) but must still share auth, user agent and the
 // structured APIError handling.
 func (c *Client) requestURL(method, u string, body interface{}) ([]byte, error) {
-	var reqBody io.Reader
+	var jsonBody []byte
 	if body != nil {
-		jsonBody, err := json.Marshal(body)
+		var err error
+		jsonBody, err = json.Marshal(body)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal request body: %w", err)
 		}
-		reqBody = bytes.NewBuffer(jsonBody)
 	}
 
-	req, err := http.NewRequest(method, u, reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", c.userAgent)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
-		// redirects are never followed (see noRedirects); name it, or the
-		// caller only sees an opaque status or an html body.
-		return nil, &APIError{
-			Status:  resp.StatusCode,
-			Code:    codeForStatus(resp.StatusCode),
-			Message: fmt.Sprintf("api redirected (status %d) to %q; redirects are not followed", resp.StatusCode, resp.Header.Get("Location")),
+	var lastErr error
+	for attempt := 1; attempt <= maxRetryAttempts; attempt++ {
+		var reqBody io.Reader
+		if jsonBody != nil {
+			reqBody = bytes.NewReader(jsonBody) // fresh reader each attempt
 		}
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, parseAPIError(respBody, resp.StatusCode)
-	}
 
-	return respBody, nil
+		req, err := http.NewRequest(method, u, reqBody)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", c.userAgent)
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("request failed: %w", err)
+			// a network error may or may not have reached the server; only retry
+			// idempotent reads.
+			if attempt < maxRetryAttempts && idempotentMethod(method) {
+				time.Sleep(retryDelay(nil, attempt))
+				continue
+			}
+			return nil, lastErr
+		}
+
+		respBody, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("failed to read response: %w", readErr)
+		}
+
+		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+			// redirects are never followed (see noRedirects); name it, or the
+			// caller only sees an opaque status or an html body.
+			return nil, &APIError{
+				Status:  resp.StatusCode,
+				Code:    codeForStatus(resp.StatusCode),
+				Message: fmt.Sprintf("api redirected (status %d) to %q; redirects are not followed", resp.StatusCode, resp.Header.Get("Location")),
+			}
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			if attempt < maxRetryAttempts && retryableStatus(method, resp.StatusCode) {
+				time.Sleep(retryDelay(resp, attempt))
+				continue
+			}
+			return nil, parseAPIError(respBody, resp.StatusCode)
+		}
+
+		return respBody, nil
+	}
+	return nil, lastErr
 }
 
 // v2URL is the rest v2 base url: the client's override when set, otherwise the
