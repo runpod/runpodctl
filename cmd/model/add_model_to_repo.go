@@ -193,6 +193,11 @@ const modelRepoUploadBatchSize = 500
 // cost for the many-small-files case this batching work targets.
 const modelRepoUploadConcurrency = 4
 
+// modelPartUploadConcurrency bounds how many multipart PUTs of a *single* file
+// run at once. Kept modest because it multiplies with modelRepoUploadConcurrency
+// when several multi-part files upload together (4x4 worst case).
+const modelPartUploadConcurrency = 4
+
 // checkModelRepoStorageQuota rejects an upload of requestedBytes that would exceed the
 // account's quota, before anything is created server-side. Deliberately fails open: an
 // unreachable or unparseable usage query only warns, because a client-side pre-check must
@@ -1211,63 +1216,62 @@ func completeModelUploadWithProgress(upload *api.ModelRepoUpload, artifactPath s
 		return fmt.Errorf("invalid part size %d", partSize)
 	}
 
-	var offset int64
-	completed := make([]completedPart, 0, len(parts))
-
-	for _, part := range parts {
+	// parts are contiguous and uniform (partSize each) except the last, so a
+	// part's offset is a pure function of its position — no accumulation. This
+	// lets the PUTs run in parallel: a model repo is commonly one large file, so
+	// uploading its parts sequentially left the pipe mostly idle.
+	completed := make([]completedPart, len(parts))
+	uploadErr := runBounded(len(parts), modelPartUploadConcurrency, func(i int) error {
+		part := parts[i]
+		offset := int64(i) * partSize
 		remaining := totalSize - offset
 		if remaining <= 0 {
 			return fmt.Errorf("no data remaining for part %d", part.PartNumber)
 		}
+		chunkSize := min(partSize, remaining)
 
-		chunkSize := partSize
-		if remaining < chunkSize {
-			chunkSize = remaining
-		}
-
-		partOffset, partChunk := offset, chunkSize
 		resp, err := doModelUploadRequest(fmt.Sprintf("upload part %d", part.PartNumber), func() (*http.Request, error) {
 			// fresh SectionReader per attempt so a retry re-reads the chunk.
-			req, reqErr := http.NewRequest(http.MethodPut, part.URL, io.NewSectionReader(file, partOffset, partChunk))
+			// os.File.ReadAt (used by SectionReader) is safe for concurrent use.
+			req, reqErr := http.NewRequest(http.MethodPut, part.URL, io.NewSectionReader(file, offset, chunkSize))
 			if reqErr != nil {
 				return nil, fmt.Errorf("create request for part %d: %w", part.PartNumber, reqErr)
 			}
-			req.ContentLength = partChunk
+			req.ContentLength = chunkSize
 			return req, nil
 		})
 		if err != nil {
 			return err
 		}
-		func() {
-			defer resp.Body.Close()
-			// a non-retryable status reaches here (2xx handled below, 4xx errors out).
-			if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-				body, _ := io.ReadAll(resp.Body)
-				err = fmt.Errorf("upload part %d failed: status %d: %s", part.PartNumber, resp.StatusCode, strings.TrimSpace(string(body)))
-				return
-			}
-			etag := strings.Trim(resp.Header.Get("ETag"), "\"")
-			if etag == "" {
-				err = fmt.Errorf("upload part %d missing ETag", part.PartNumber)
-				return
-			}
-			completed = append(completed, completedPart{PartNumber: part.PartNumber, ETag: fmt.Sprintf("%q", etag)})
-		}()
-		if err != nil {
-			return err
+		defer resp.Body.Close()
+
+		// a non-retryable status reaches here (2xx ok, 4xx errors out).
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			body, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("upload part %d failed: status %d: %s", part.PartNumber, resp.StatusCode, strings.TrimSpace(string(body)))
 		}
+		etag := strings.Trim(resp.Header.Get("ETag"), "\"")
+		if etag == "" {
+			return fmt.Errorf("upload part %d missing ETag", part.PartNumber)
+		}
+		completed[i] = completedPart{PartNumber: part.PartNumber, ETag: fmt.Sprintf("%q", etag)}
 
 		// account for the part once it succeeds, so a retried part is not
 		// double-counted (coarser than per-byte, but correct under retry).
 		if progress != nil {
 			_ = progress.Add64(chunkSize)
 		}
-
-		offset += chunkSize
+		return nil
+	})
+	if uploadErr != nil {
+		return uploadErr
 	}
 
-	if offset != totalSize {
-		return fmt.Errorf("uploaded %d bytes but artifact size is %d bytes", offset, totalSize)
+	// verify the parts fully covered the file. The last part carries the
+	// remainder; if the plan stopped short the artifact was under-uploaded.
+	lastOffset := int64(len(parts)-1) * partSize
+	if covered := lastOffset + min(partSize, totalSize-lastOffset); covered != totalSize {
+		return fmt.Errorf("uploaded %d bytes but artifact size is %d bytes", covered, totalSize)
 	}
 
 	completePayload := completeMultipartUpload{
