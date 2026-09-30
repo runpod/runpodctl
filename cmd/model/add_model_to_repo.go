@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -163,11 +164,6 @@ type modelUploadProgress interface {
 	Add64(int64) error
 	Finish() error
 	Clear() error
-}
-
-type progressReader struct {
-	reader   io.Reader
-	progress modelUploadProgress
 }
 
 // TODO: replace the manual completion call with github.com/aws/aws-sdk-go-v2/service/s3's
@@ -552,14 +548,6 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 	})
 
 	return files, nil
-}
-
-func (r progressReader) Read(p []byte) (int, error) {
-	n, err := r.reader.Read(p)
-	if n > 0 && r.progress != nil {
-		_ = r.progress.Add64(int64(n))
-	}
-	return n, err
 }
 
 func totalModelFileSize(files []modelFile) int64 {
@@ -1123,6 +1111,68 @@ func completeModelUpload(upload *api.ModelRepoUpload, artifactPath string) error
 	return completeModelUploadWithProgress(upload, artifactPath, nil)
 }
 
+const modelUploadMaxAttempts = 3
+
+// modelUploadRetryBackoff is the base delay for the exponential backoff between
+// retries of a transient S3 request. It is a var so tests can shorten it.
+var modelUploadRetryBackoff = 500 * time.Millisecond
+
+// modelUploadHTTPClient talks straight to object storage for the part/complete
+// requests (not the control plane), so it gets its own transport. The
+// ResponseHeaderTimeout guards a stalled server once the body has been sent
+// without capping a legitimately long large-part upload; http.DefaultClient
+// (used before) had no timeouts at all, so a hung connection blocked forever.
+var modelUploadHTTPClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   15 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: 5 * time.Minute,
+	},
+}
+
+// isRetryableUploadStatus reports whether an HTTP status is a transient
+// server-side condition worth retrying, as opposed to a 4xx the caller must fix.
+func isRetryableUploadStatus(code int) bool {
+	return code == http.StatusTooManyRequests || code >= http.StatusInternalServerError
+}
+
+// doModelUploadRequest issues the request built by newReq and retries transient
+// failures (network errors, 429, 5xx) with exponential backoff. newReq is called
+// once per attempt so the request body can be re-read on retry. On success or a
+// non-retryable status it returns the response for the caller to validate; if
+// every attempt fails transiently it returns the last error.
+func doModelUploadRequest(what string, newReq func() (*http.Request, error)) (*http.Response, error) {
+	var lastErr error
+	for attempt := 1; attempt <= modelUploadMaxAttempts; attempt++ {
+		req, err := newReq()
+		if err != nil {
+			return nil, err
+		}
+
+		resp, err := modelUploadHTTPClient.Do(req)
+		switch {
+		case err != nil:
+			lastErr = fmt.Errorf("%s: %w", what, err)
+		case isRetryableUploadStatus(resp.StatusCode):
+			snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			resp.Body.Close()
+			lastErr = fmt.Errorf("%s failed: status %d: %s", what, resp.StatusCode, strings.TrimSpace(string(snippet)))
+		default:
+			return resp, nil
+		}
+
+		if attempt < modelUploadMaxAttempts {
+			time.Sleep(modelUploadRetryBackoff * time.Duration(1<<(attempt-1)))
+		}
+	}
+	return nil, lastErr
+}
+
 func completeModelUploadWithProgress(upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
 	if upload == nil {
 		return fmt.Errorf("upload details are required")
@@ -1175,23 +1225,22 @@ func completeModelUploadWithProgress(upload *api.ModelRepoUpload, artifactPath s
 			chunkSize = remaining
 		}
 
-		var body io.Reader = io.NewSectionReader(file, offset, chunkSize)
-		if progress != nil {
-			body = progressReader{reader: body, progress: progress}
-		}
-
-		req, err := http.NewRequest(http.MethodPut, part.URL, body)
+		partOffset, partChunk := offset, chunkSize
+		resp, err := doModelUploadRequest(fmt.Sprintf("upload part %d", part.PartNumber), func() (*http.Request, error) {
+			// fresh SectionReader per attempt so a retry re-reads the chunk.
+			req, reqErr := http.NewRequest(http.MethodPut, part.URL, io.NewSectionReader(file, partOffset, partChunk))
+			if reqErr != nil {
+				return nil, fmt.Errorf("create request for part %d: %w", part.PartNumber, reqErr)
+			}
+			req.ContentLength = partChunk
+			return req, nil
+		})
 		if err != nil {
-			return fmt.Errorf("create request for part %d: %w", part.PartNumber, err)
-		}
-		req.ContentLength = chunkSize
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return fmt.Errorf("upload part %d: %w", part.PartNumber, err)
+			return err
 		}
 		func() {
 			defer resp.Body.Close()
+			// a non-retryable status reaches here (2xx handled below, 4xx errors out).
 			if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 				body, _ := io.ReadAll(resp.Body)
 				err = fmt.Errorf("upload part %d failed: status %d: %s", part.PartNumber, resp.StatusCode, strings.TrimSpace(string(body)))
@@ -1206,6 +1255,12 @@ func completeModelUploadWithProgress(upload *api.ModelRepoUpload, artifactPath s
 		}()
 		if err != nil {
 			return err
+		}
+
+		// account for the part once it succeeds, so a retried part is not
+		// double-counted (coarser than per-byte, but correct under retry).
+		if progress != nil {
+			_ = progress.Add64(chunkSize)
 		}
 
 		offset += chunkSize
@@ -1227,15 +1282,16 @@ func completeModelUploadWithProgress(upload *api.ModelRepoUpload, artifactPath s
 
 	payload := append([]byte(xml.Header), body...)
 
-	completeReq, err := http.NewRequest(http.MethodPost, upload.CompleteURL, bytes.NewReader(payload))
+	resp, err := doModelUploadRequest("complete upload", func() (*http.Request, error) {
+		completeReq, reqErr := http.NewRequest(http.MethodPost, upload.CompleteURL, bytes.NewReader(payload))
+		if reqErr != nil {
+			return nil, fmt.Errorf("create completion request: %w", reqErr)
+		}
+		completeReq.Header.Set("Content-Type", "application/xml")
+		return completeReq, nil
+	})
 	if err != nil {
-		return fmt.Errorf("create completion request: %w", err)
-	}
-	completeReq.Header.Set("Content-Type", "application/xml")
-
-	resp, err := http.DefaultClient.Do(completeReq)
-	if err != nil {
-		return fmt.Errorf("complete upload: %w", err)
+		return err
 	}
 	defer resp.Body.Close()
 
