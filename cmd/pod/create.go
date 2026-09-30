@@ -39,6 +39,9 @@ examples:
   # block until the pod's ssh is actually reachable, then print it
   runpodctl pod create --image runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404 --gpu-id "NVIDIA GeForce RTX 4090" --wait
 
+  # block until the container is up, without needing ssh (works for cpu pods)
+  runpodctl pod create --compute-type cpu --image ubuntu:22.04 --wait-for running
+
   # find templates first
   runpodctl template search pytorch
   runpodctl template list --type official`,
@@ -70,6 +73,7 @@ var (
 	createCountryCode       string
 	createCompliance        string
 	createWait              bool
+	createWaitFor           string
 	createWaitTimeout       string
 )
 
@@ -97,6 +101,7 @@ func init() {
 	createCmd.Flags().StringVar(&createCountryCode, "country-code", "", "limit pod to a specific country (e.g., US, DE)")
 	createCmd.Flags().StringVar(&createCompliance, "compliance", "", "comma-separated compliance requirements (e.g., HIPAA,SOC_2_TYPE_2)")
 	createCmd.Flags().BoolVar(&createWait, "wait", false, "block until ssh is reachable (tcp connect to the pod's public port 22 answers with an ssh banner; no key or handshake needed), then print the pod as 'pod get' does. needs a publicly mapped port 22, so community cloud also needs --public-ip")
+	createCmd.Flags().StringVar(&createWaitFor, "wait-for", "ssh", "what --wait waits for: 'ssh' (port 22 reachable; needs sshd) or 'running' (pod's container is up; no ssh needed, works for cpu pods without sshd). setting this implies --wait")
 	createCmd.Flags().StringVar(&createWaitTimeout, "wait-timeout", defaultWaitTimeout, "max time to wait with --wait, e.g. 90s, 10m, 1h; on timeout the pod is kept and the error carries its id")
 }
 
@@ -159,7 +164,11 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	waitTimeout, err := resolveWaitTimeout(cmd, computeType, cloudType, supportPublicIP)
+	waitMode, err := resolveWaitMode(cmd)
+	if err != nil {
+		return err
+	}
+	waitTimeout, err := resolveWaitTimeout(cmd, waitMode, computeType, cloudType, supportPublicIP)
 	if err != nil {
 		return err
 	}
@@ -182,13 +191,20 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
 
-	if createWait {
+	if waitMode != "" {
 		podID, idErr := podIDFrom(result)
 		if idErr != nil {
 			// the pod exists but we cannot address it; say so rather than waiting.
 			return idErr
 		}
-		details, waitErr := waitForReadyPod(cmd, podID, waitTimeout)
+		var details *podDetails
+		var waitErr error
+		switch waitMode {
+		case "running":
+			details, waitErr = waitForRunningPod(cmd, podID, waitTimeout)
+		default:
+			details, waitErr = waitForReadyPod(cmd, podID, waitTimeout)
+		}
 		if waitErr != nil {
 			return waitErr
 		}
@@ -198,19 +214,35 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	return output.Print(result, &output.Config{Format: format})
 }
 
-// resolveWaitTimeout validates the --wait flag combination and returns the
-// timeout to use. It runs before the pod is created so an unsatisfiable
-// combination costs nothing.
-func resolveWaitTimeout(cmd *cobra.Command, computeType, cloudType string, supportPublicIP bool) (time.Duration, error) {
-	if !createWait {
+// resolveWaitMode returns the readiness the caller wants to wait for ("ssh",
+// "running", or "" for no wait) from --wait / --wait-for. Setting --wait-for
+// implies waiting, so `--wait-for running` alone is enough.
+func resolveWaitMode(cmd *cobra.Command) (string, error) {
+	if !createWait && !cmd.Flags().Changed("wait-for") {
+		return "", nil
+	}
+	mode := strings.ToLower(strings.TrimSpace(createWaitFor))
+	if mode == "" {
+		mode = "ssh"
+	}
+	switch mode {
+	case "ssh", "running":
+		return mode, nil
+	default:
+		return "", fmt.Errorf("invalid --wait-for %q (use ssh or running)", createWaitFor)
+	}
+}
+
+// resolveWaitTimeout validates the wait flag combination and returns the timeout
+// to use. It runs before the pod is created so an unsatisfiable combination costs
+// nothing. The ssh-specific constraints apply only to the ssh wait; the running
+// wait polls pod status and needs neither ssh nor a public port.
+func resolveWaitTimeout(cmd *cobra.Command, waitMode, computeType, cloudType string, supportPublicIP bool) (time.Duration, error) {
+	if waitMode == "" {
 		if cmd.Flags().Changed("wait-timeout") {
 			fmt.Fprintln(cmd.ErrOrStderr(), "note: --wait-timeout has no effect without --wait; ignoring")
 		}
 		return 0, nil
-	}
-
-	if !createSSH {
-		return 0, fmt.Errorf("--wait waits for ssh, so it cannot be combined with --ssh=false")
 	}
 
 	timeout, err := duration.Parse(createWaitTimeout)
@@ -218,22 +250,28 @@ func resolveWaitTimeout(cmd *cobra.Command, computeType, cloudType string, suppo
 		return 0, fmt.Errorf("invalid --wait-timeout: %w", err)
 	}
 
-	if computeType == "CPU" {
-		// cpu pods are created over rest, which rejects startSsh, so runpod does
-		// not set ssh up for them. prod does still allocate a public port 22, and
-		// an image that runs its own sshd is reachable there — but plain images
-		// are not, and that only shows up as a timeout. warn instead of guessing.
-		fmt.Fprintln(cmd.ErrOrStderr(), "note: cpu pods are created through the rest api, which cannot request runpod-managed ssh; --wait only succeeds if the image starts sshd itself")
-	}
+	if waitMode == "ssh" {
+		if !createSSH {
+			return 0, fmt.Errorf("--wait waits for ssh, so it cannot be combined with --ssh=false (use --wait-for running to wait without ssh)")
+		}
 
-	if cloudType == "COMMUNITY" && !supportPublicIP {
-		// ssh readiness needs port 22 mapped to a public ip. on community cloud
-		// that only happens on a machine with a public ip, which is what
-		// --public-ip asks the scheduler for; without it the pod can land
-		// somewhere that never publishes a port and the wait can only time out.
-		// a warning rather than a refusal: the pod may still land on a machine
-		// that does publish one, and refusing would remove a working combination.
-		fmt.Fprintln(cmd.ErrOrStderr(), "note: community cloud only maps a public ssh port on machines with a public ip; add --public-ip (or use --cloud-type SECURE) or --wait may never see one")
+		if computeType == "CPU" {
+			// cpu pods are created over rest, which rejects startSsh, so runpod does
+			// not set ssh up for them. prod does still allocate a public port 22, and
+			// an image that runs its own sshd is reachable there — but plain images
+			// are not, and that only shows up as a timeout. steer to the running wait.
+			fmt.Fprintln(cmd.ErrOrStderr(), "note: cpu pods are created through the rest api, which cannot request runpod-managed ssh; --wait only succeeds if the image starts sshd itself. use --wait-for running to wait for the container without ssh")
+		}
+
+		if cloudType == "COMMUNITY" && !supportPublicIP {
+			// ssh readiness needs port 22 mapped to a public ip. on community cloud
+			// that only happens on a machine with a public ip, which is what
+			// --public-ip asks the scheduler for; without it the pod can land
+			// somewhere that never publishes a port and the wait can only time out.
+			// a warning rather than a refusal: the pod may still land on a machine
+			// that does publish one, and refusing would remove a working combination.
+			fmt.Fprintln(cmd.ErrOrStderr(), "note: community cloud only maps a public ssh port on machines with a public ip; add --public-ip (or use --cloud-type SECURE) or --wait may never see one")
+		}
 	}
 
 	return timeout, nil
@@ -275,6 +313,43 @@ func waitForReadyPod(cmd *cobra.Command, podID string, timeout time.Duration) (*
 	// re-read: the create response (either shape) has no live ssh info, and
 	// handing back a pod you can connect to is the entire point of --wait.
 	return podDetailsWithSSH(ctx, podID, addr)
+}
+
+// waitForRunningPod is the --wait-for running counterpart of waitForReadyPod: it
+// waits for the pod's container to be up (desiredStatus RUNNING plus runtime
+// telemetry), never probing ssh, then returns the pod as `pod get` does. This is
+// the path that makes a cpu pod without sshd waitable. A cancelled or timed-out
+// wait leaves the pod billing, so the error carries its id and the delete command,
+// exactly like the ssh wait.
+func waitForRunningPod(cmd *cobra.Command, podID string, timeout time.Duration) (*podDetails, error) {
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, stop := waitfor.SignalContext(ctx, notifyWaitSignals, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	lister, err := newPodWaitLister()
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := waitfor.Until(ctx, waitfor.PodRunningPoller(lister, podID), waitfor.Options{
+		Label:    "pod " + podID + " to be running",
+		Timeout:  timeout,
+		Interval: waitPollInterval,
+		Progress: cmd.ErrOrStderr(),
+	}); err != nil {
+		return nil, output.WithResourceID(podID, fmt.Errorf("%w; pod %s was created: 'runpodctl pod get %s' to inspect it, 'runpodctl pod delete %s' if it is still running (pods bill by the second)", err, podID, podID, podID))
+	}
+
+	// re-read so the payload matches `pod get`. running mode makes no ssh promise,
+	// so unlike the ssh wait there is no retry-until-ssh-present here.
+	details, err := fetchPodDetailsFn(podID, false, false)
+	if err != nil {
+		return nil, output.WithResourceID(podID, fmt.Errorf("pod %s is running but could not be read back: %w", podID, err))
+	}
+	return details, nil
 }
 
 // waitForPodSSH blocks until the pod's ssh is reachable and returns the address
