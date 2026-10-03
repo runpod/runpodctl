@@ -303,3 +303,24 @@ func TestDeletePod(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+// a network volume's size belongs to the volume, so a pod update must refuse
+// to "resize" it rather than send a patch that changes nothing
+func TestUpdatePodRefusesToResizeANetworkVolume(t *testing.T) {
+	patched := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			patched = true
+		}
+		_, _ = w.Write([]byte(`{"id":"p","status":"RUNNING","mounts":{"network":[{"volumeId":"vol-1","path":"/workspace"}]}}`))
+	}))
+	defer server.Close()
+
+	_, err := newV2TestClient(t, server).UpdatePod("p", &PodUpdateRequest{VolumeInGb: 100})
+	if err == nil || !strings.Contains(err.Error(), "volume update vol-1") {
+		t.Fatalf("expected a pointer to volume update, got %v", err)
+	}
+	if patched {
+		t.Error("nothing may be patched")
+	}
+}

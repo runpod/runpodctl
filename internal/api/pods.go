@@ -13,7 +13,6 @@ type Pod struct {
 	Name              string                 `json:"name"`
 	DesiredStatus     string                 `json:"desiredStatus"`
 	CreatedAt         interface{}            `json:"createdAt,omitempty"`
-	LastStatusChange  interface{}            `json:"lastStatusChange,omitempty"`
 	UptimeSeconds     interface{}            `json:"uptimeSeconds,omitempty"`
 	ImageName         string                 `json:"imageName"`
 	GpuTypeID         string                 `json:"gpuTypeId,omitempty"`
@@ -220,6 +219,9 @@ func (c *Client) UpdatePod(podID string, req *PodUpdateRequest) (*Pod, error) {
 		if current.NetworkVolumeID != "" {
 			// a network volume's size belongs to the volume, not the pod; only
 			// its mount path can change
+			if req.VolumeInGb > 0 {
+				return nil, fmt.Errorf("pod %s uses network volume %s, which a pod update cannot resize; use 'runpodctl volume update %s --size <gb>'", podID, current.NetworkVolumeID, current.NetworkVolumeID)
+			}
 			body.Mounts = &v2PodMounts{Network: []v2NetworkMount{{VolumeID: current.NetworkVolumeID, Path: path}}}
 		} else {
 			size := req.VolumeInGb
