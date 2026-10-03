@@ -166,6 +166,13 @@ func TestParseCreatedAt(t *testing.T) {
 			wantTime: time.Unix(1750000000, 0),
 		},
 		{
+			// what pod reads print as createdAt; list used to drop it
+			name:     "go time.String layout",
+			input:    "2026-10-02 05:28:38.366 +0000 UTC",
+			wantZero: false,
+			wantTime: time.Date(2026, 10, 2, 5, 28, 38, 366000000, time.UTC),
+		},
+		{
 			name:     "invalid string",
 			input:    "not-a-date",
 			wantZero: true,
