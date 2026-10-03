@@ -256,6 +256,11 @@ func (c *Client) renameEndpointV1(endpointID, name string) error {
 
 // rp-migrate: keep-v1 end
 
+// rp-migrate: keep-v1 start
+// endpoint templates stay on graphql: rest v2 copies a template into a hidden
+// per-endpoint template, on create and on a templateId patch alike, so the
+// endpoint stops receiving later edits to the template. graphql links it.
+
 // UpdateEndpointTemplate updates the template attached to an endpoint via GraphQL.
 func (c *Client) UpdateEndpointTemplate(endpointID, templateID string) error {
 	query := `
@@ -295,6 +300,8 @@ func (c *Client) UpdateEndpointTemplate(endpointID, templateID string) error {
 
 	return nil
 }
+
+// rp-migrate: keep-v1 end
 
 // DeleteEndpoint deletes an endpoint
 func (c *Client) DeleteEndpoint(endpointID string) error {
@@ -519,7 +526,10 @@ type EndpointTemplateInput struct {
 	Env               []*PodEnvVar `json:"env"`
 }
 
-// CreateEndpointGQL creates an endpoint via GraphQL (saveEndpoint mutation)
+// rp-migrate: keep-v1 start
+// CreateEndpointGQL creates an endpoint via GraphQL (saveEndpoint mutation).
+// rest v2 has no hubReleaseId or modelReferences, and it copies --template-id
+// into a hidden template instead of linking it, so creates stay here.
 func (c *Client) CreateEndpointGQL(req *EndpointCreateGQLInput) (*Endpoint, error) {
 	query := `
 		mutation SaveEndpoint($input: EndpointInput!) {
@@ -584,3 +594,5 @@ func (c *Client) CreateEndpointGQL(req *EndpointCreateGQLInput) (*Endpoint, erro
 
 	return resp.Data.SaveEndpoint, nil
 }
+
+// rp-migrate: keep-v1 end
