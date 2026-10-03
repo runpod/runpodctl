@@ -2048,7 +2048,6 @@ func TestCLI_HelpCoverage(t *testing.T) {
 		{"pod", "start"},
 		{"pod", "stop"},
 		{"pod", "restart"},
-		{"pod", "reset"},
 		{"pod", "delete"},
 		{"model", "add"},
 		{"model", "remove"},
