@@ -73,7 +73,7 @@ func TestParseDockerArgs(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd, entrypoint := parseDockerArgs(tc.in)
+			cmd, entrypoint := api.ParseDockerArgs(tc.in)
 			assertTokens(t, "cmd", cmd, tc.wantCmd)
 			assertTokens(t, "entrypoint", entrypoint, tc.wantEntrypoint)
 		})
@@ -682,7 +682,7 @@ func TestPodDetailsWithSSH(t *testing.T) {
 // no dockerArgs field and 400s on it, so the request must serialize the start
 // command as dockerStartCmd and never as dockerArgs.
 func TestPodCreateRequestDockerArgsWireFormat(t *testing.T) {
-	cmd, entrypoint := parseDockerArgs("sleep infinity")
+	cmd, entrypoint := api.ParseDockerArgs("sleep infinity")
 	body, err := json.Marshal(&api.PodCreateRequest{
 		ImageName:        "ubuntu:22.04",
 		ComputeType:      "CPU",

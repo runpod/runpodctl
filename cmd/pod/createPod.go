@@ -2,9 +2,10 @@ package pod
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
-	"github.com/runpod/runpodctl/api"
+	"github.com/runpod/runpodctl/internal/api"
 
 	"github.com/spf13/cobra"
 )
@@ -56,47 +57,50 @@ var CreatePodCmd = &cobra.Command{
 			cobra.CheckErr(fmt.Errorf("gpuType is required for GPU pods"))
 		}
 
-		input := &api.CreatePodInput{
+		if err := rejectUnsupportedCreateFlags(cmd); err != nil {
+			cobra.CheckErr(err)
+		}
+		input := &api.LegacyPodCreate{
 			ContainerDiskInGb: containerDiskInGb,
-			DeployCost:        deployCost,
-			DataCenterId:      dataCenterId,
+			DataCenterID:      dataCenterId,
 			DockerArgs:        dockerArgs,
 			GpuCount:          gpuCount,
-			GpuTypeId:         gpuTypeId,
+			GpuTypeID:         gpuTypeId,
 			ImageName:         imageName,
-			MinMemoryInGb:     minMemoryInGb,
-			MinVcpuCount:      minVcpuCount,
 			Name:              name,
 			StartSSH:          startSSH,
-			TemplateId:        templateId,
+			TemplateID:        templateId,
 			VolumeInGb:        volumeInGb,
 			VolumeMountPath:   volumeMountPath,
-			NetworkVolumeId:   networkVolumeId,
+			NetworkVolumeID:   networkVolumeId,
 		}
 		if len(ports) > 0 {
-			input.Ports = strings.Join(ports, ",")
+			input.Ports = ports
 		}
-		input.Env = make([]*api.PodEnv, len(env))
-		for i, v := range env {
+		input.Env = make(map[string]string, len(env))
+		for _, v := range env {
 			e := strings.Split(v, "=")
 			if len(e) != 2 {
 				cobra.CheckErr(fmt.Errorf("wrong env value: %s", e))
 			}
-			input.Env[i] = &api.PodEnv{Key: e[0], Value: e[1]}
+			input.Env[e[0]] = e[1]
 		}
 		if secureCloud {
 			input.CloudType = "SECURE"
 		} else {
 			input.CloudType = "COMMUNITY"
 		}
-		pod, err := api.CreatePod(input)
+
+		client, err := api.NewClient()
+		cobra.CheckErr(err)
+		pod, _, err := client.CreatePodV2(input.V2Request())
 		cobra.CheckErr(err)
 
-		if pod["desiredStatus"] == "RUNNING" {
-			fmt.Printf(`pod "%s" created for $%.3f / hr`, pod["id"], pod["costPerHr"])
+		if pod.DesiredStatus == "RUNNING" {
+			fmt.Printf(`pod "%s" created for $%.3f / hr`, pod.ID, pod.CostPerHr)
 			fmt.Println()
 		} else {
-			cobra.CheckErr(fmt.Errorf(`pod %v start failed; status is %v`, pod["id"], pod["desiredStatus"]))
+			cobra.CheckErr(fmt.Errorf(`pod %v start failed; status is %v`, pod.ID, pod.DesiredStatus))
 		}
 	},
 }
@@ -105,7 +109,7 @@ func init() {
 	CreatePodCmd.Flags().BoolVar(&communityCloud, "communityCloud", false, "create in community cloud")
 	CreatePodCmd.Flags().BoolVar(&secureCloud, "secureCloud", false, "create in secure cloud")
 	CreatePodCmd.Flags().IntVar(&containerDiskInGb, "containerDiskSize", 20, "container disk size in GB")
-	CreatePodCmd.Flags().Float32Var(&deployCost, "cost", 0, "$/hr price ceiling, if not defined, pod will be created with lowest price available")
+	CreatePodCmd.Flags().Float32Var(&deployCost, "cost", 0, "no longer supported (rest v2 cannot enforce a price ceiling)")
 	CreatePodCmd.Flags().StringVar(&dockerArgs, "args", "", "container arguments")
 	CreatePodCmd.Flags().StringSliceVar(&env, "env", nil, "container arguments")
 	CreatePodCmd.Flags().IntVar(&gpuCount, "gpuCount", 1, "number of GPUs for the pod")
@@ -124,4 +128,23 @@ func init() {
 	CreatePodCmd.Flags().BoolVar(&startSSH, "startSSH", false, "enable SSH login")
 
 	CreatePodCmd.MarkFlagRequired("imageName") //nolint
+}
+
+// rejectUnsupportedCreateFlags handles the podFindAndDeployOnDemand filters
+// rest v2 has no field for. a price ceiling that cannot be enforced must not be
+// ignored, so --cost is refused; --mem and --vcpu were minimums the scheduler
+// matched machines against, while v2 sizes a pod by its gpu, so they only warn.
+func rejectUnsupportedCreateFlags(cmd *cobra.Command) error {
+	if cmd.Flags().Changed("cost") {
+		return fmt.Errorf("--cost is no longer supported; use 'runpodctl gpu list' to check prices, then 'runpodctl pod create'")
+	}
+	if volumeInGb > 0 && volumeInGb < api.MinPodVolumeInGb && networkVolumeId == "" {
+		fmt.Fprintf(os.Stderr, "note: volume raised from %d gb to the minimum of %d gb\n", volumeInGb, api.MinPodVolumeInGb)
+	}
+	for _, flag := range []string{"mem", "vcpu"} {
+		if cmd.Flags().Changed(flag) {
+			fmt.Fprintf(os.Stderr, "warning: --%s is no longer applied; memory and vcpus are sized by the gpu type\n", flag)
+		}
+	}
+	return nil
 }
