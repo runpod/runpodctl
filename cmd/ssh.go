@@ -177,7 +177,7 @@ func runSSHConnectLegacy(cmd *cobra.Command, args []string) error {
 }
 
 func runSSHInfoWithArgs(cmd *cobra.Command, args []string, allowAll bool) error {
-	client, err := api.NewGraphQLClient()
+	client, err := api.NewClient()
 	if err != nil {
 		return err
 	}
@@ -188,11 +188,7 @@ func runSSHInfoWithArgs(cmd *cobra.Command, args []string, allowAll bool) error 
 	}
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
-	var keyLister sshconnect.SSHKeyLister
-	if restClient, restErr := api.NewClient(); restErr == nil {
-		keyLister = restClient
-	}
-	keyInfo := sshconnect.ResolveKeyInfo(keyLister)
+	keyInfo := sshconnect.ResolveKeyInfo(client)
 
 	if allowAll && len(args) == 0 {
 		connections := sshconnect.ListConnections(pods, keyInfo)

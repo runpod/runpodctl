@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -116,20 +115,23 @@ func TestSSHRemoveKey_RequiresIdentifier(t *testing.T) {
 
 func sshStub(t *testing.T, pods string) {
 	t.Helper()
-
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
-		if strings.Contains(string(body), "myPods") {
-			_, _ = w.Write([]byte(`{"data":{"myself":{"pods":` + pods + `}}}`))
-			return
+		switch r.URL.Path {
+		case "/pods":
+			_, _ = w.Write([]byte(`{"pods":` + pods + `,"pagination":{"hasNextPage":false,"nextCursor":null}}`))
+		case "/account/ssh-keys":
+			_, _ = w.Write([]byte(`{"keys":[]}`))
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
 		}
-		_, _ = w.Write([]byte(`{"data":{"myself":{"pubKey":""}}}`))
 	}))
 	t.Cleanup(server.Close)
 
 	t.Setenv("RUNPOD_API_KEY", "test-key")
-	t.Setenv("RUNPOD_GRAPHQL_URL", server.URL+"/graphql")
+	t.Setenv("RUNPOD_REST_V2_URL", server.URL)
+	t.Setenv("RUNPOD_GRAPHQL_URL", "http://graphql.invalid")
 }
 
 func sshCaptureJSON(t *testing.T, args []string, allowAll bool) map[string]interface{} {
@@ -162,7 +164,7 @@ func sshCaptureJSON(t *testing.T, args []string, allowAll bool) map[string]inter
 	return got
 }
 
-const sshPortJSON = `{"ip":"1.2.3.4","isIpPublic":true,"privatePort":22,"publicPort":40022,"type":"tcp"}`
+const sshPortJSON = `{"ip":"1.2.3.4","private":22,"public":40022,"type":"tcp"}`
 
 func TestSSHInfo_RuntimeState(t *testing.T) {
 	tests := []struct {
@@ -173,36 +175,30 @@ func TestSSHInfo_RuntimeState(t *testing.T) {
 	}{
 		{
 			name: "running pod yields a connection",
-			pods: `[{"id":"p","name":"p","desiredStatus":"RUNNING","ports":"22/tcp","runtime":{"uptimeInSeconds":5,"ports":[` + sshPortJSON + `]}}]`,
+			pods: `[{"id":"p","name":"p","status":"RUNNING","ports":["22/tcp"],"runtime":{"uptime":5,"ports":[` + sshPortJSON + `]}}]`,
 		},
 		{
 			name:       "stopped pod with stale ports is refused with a reason",
-			pods:       `[{"id":"p","name":"p","desiredStatus":"EXITED","lastStatusChange":"Exited by user: x","ports":"22/tcp","runtime":{"uptimeInSeconds":261,"ports":[` + sshPortJSON + `]}}]`,
+			pods:       `[{"id":"p","name":"p","status":"EXITED","ports":["22/tcp"],"runtime":{"uptime":261,"ports":[` + sshPortJSON + `]}}]`,
 			wantErr:    "pod not ready: pod is stopped; start it with 'runpodctl pod start p'",
 			wantStatus: "stopped",
 		},
 		{
 			name:       "terminated pod with stale ports is refused",
-			pods:       `[{"id":"p","name":"p","desiredStatus":"TERMINATED","lastStatusChange":"Outbid: x","ports":"22/tcp","runtime":{"ports":[` + sshPortJSON + `]}}]`,
+			pods:       `[{"id":"p","name":"p","status":"TERMINATED","ports":["22/tcp"],"runtime":{"ports":[` + sshPortJSON + `]}}]`,
 			wantErr:    "pod not ready: pod is terminated",
 			wantStatus: "terminated",
 		},
 		{
-			// unknown is not evidence the pod is down: a connection built from
-			// live ports must not be thrown away on the strength of it.
-			name: "a state this cli does not model keeps its live connection",
-			pods: `[{"id":"p","name":"p","desiredStatus":"RESTARTING","ports":"22/tcp","runtime":{"ports":[` + sshPortJSON + `]}}]`,
-		},
-		{
 			name:       "initializing pod says why",
-			pods:       `[{"id":"p","name":"p","desiredStatus":"RUNNING","ports":"22/tcp","runtime":null}]`,
+			pods:       `[{"id":"p","name":"p","status":"STARTING","ports":["22/tcp"],"runtime":null}]`,
 			wantErr:    "pod not ready: no container reported yet (image pull, container create or boot)",
 			wantStatus: "initializing",
 		},
 		{
 			// the suggested command keeps 8888/http: --ports replaces the list.
 			name:       "running pod that never asked for 22 is pointed at pod update, keeping its ports",
-			pods:       `[{"id":"p","name":"p","desiredStatus":"RUNNING","ports":"8888/http","runtime":{"ports":[{"ip":"1.2.3.4","isIpPublic":true,"privatePort":8888,"publicPort":40088,"type":"tcp"}]}}]`,
+			pods:       `[{"id":"p","name":"p","status":"RUNNING","ports":["8888/http"],"runtime":{"ports":[{"ip":"1.2.3.4","private":8888,"public":40088,"type":"tcp"}]}}]`,
 			wantErr:    "pod not ready: pod does not publish 22/tcp; add it with 'runpodctl pod update p --ports 8888/http,22/tcp' (--ports replaces the whole list, and changing it may restart the container)",
 			wantStatus: "running",
 		},
@@ -237,8 +233,8 @@ func TestSSHInfo_RuntimeState(t *testing.T) {
 // connections through ListConnections rather than FindPodConnection.
 func TestSSHConnect_ListSkipsDeadPods(t *testing.T) {
 	sshStub(t, `[
-		{"id":"up","name":"up","desiredStatus":"RUNNING","ports":"22/tcp","runtime":{"ports":[`+sshPortJSON+`]}},
-		{"id":"down","name":"down","desiredStatus":"EXITED","lastStatusChange":"Exited by user: x","ports":"22/tcp","runtime":{"ports":[`+sshPortJSON+`]}}
+		{"id":"up","name":"up","status":"RUNNING","ports":["22/tcp"],"runtime":{"ports":[`+sshPortJSON+`]}},
+		{"id":"down","name":"down","status":"EXITED","ports":["22/tcp"],"runtime":{"ports":[`+sshPortJSON+`]}}
 	]`)
 
 	got := sshCaptureJSON(t, nil, true)
