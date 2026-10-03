@@ -16,7 +16,7 @@ runpodctl create pods [flags]
       --args string             container arguments
       --communityCloud          create in community cloud
       --containerDiskSize int   container disk size in GB (default 20)
-      --cost float32            $/hr price ceiling, if not defined, pod will be created with lowest price available
+      --cost float32            no longer supported (rest v2 cannot enforce a price ceiling)
       --env strings             container arguments
       --gpuCount int            number of GPUs for the pod (default 1)
       --gpuType string          gpu type id, e.g. 'NVIDIA GeForce RTX 3090'
