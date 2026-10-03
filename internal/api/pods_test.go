@@ -206,74 +206,100 @@ func TestCreatePod(t *testing.T) {
 	}
 }
 
-func TestStartPod(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Errorf("expected POST, got %s", r.Method)
-		}
-		if r.URL.Path != "/pods/pod-123/start" {
-			t.Errorf("expected /pods/pod-123/start, got %s", r.URL.Path)
-		}
-		json.NewEncoder(w).Encode(Pod{ID: "pod-123", DesiredStatus: "RUNNING"})
-	}))
-	defer server.Close()
-
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-
-	client, _ := NewClient()
-	client.baseURL = server.URL
-
-	pod, err := client.StartPod("pod-123")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestPodActions(t *testing.T) {
+	tests := []struct {
+		name   string
+		call   func(c *Client) (*Pod, error)
+		action string
+		body   string // the action response; empty means 204
+	}{
+		{name: "start", call: func(c *Client) (*Pod, error) { return c.StartPod("pod-1") }, action: "start", body: `{"id":"pod-1","status":"STARTING"}`},
+		{name: "stop", call: func(c *Client) (*Pod, error) { return c.StopPod("pod-1") }, action: "stop", body: `{"id":"pod-1","status":"EXITED"}`},
+		{name: "restart answered with 204 reads the pod", call: func(c *Client) (*Pod, error) { return c.RestartPod("pod-1") }, action: "restart", body: ""},
 	}
-	if pod.DesiredStatus != "RUNNING" {
-		t.Errorf("expected RUNNING, got %s", pod.DesiredStatus)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodPost && r.URL.Path == "/pods/pod-1/action":
+					var body map[string]string
+					_ = json.NewDecoder(r.Body).Decode(&body)
+					if body["action"] != tt.action {
+						t.Errorf("action = %q, want %q", body["action"], tt.action)
+					}
+					if tt.body == "" {
+						w.WriteHeader(http.StatusNoContent)
+						return
+					}
+					_, _ = io.WriteString(w, tt.body)
+				case r.Method == http.MethodGet && r.URL.Path == "/pods/pod-1":
+					_, _ = io.WriteString(w, `{"id":"pod-1","status":"RUNNING"}`)
+				default:
+					t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+				}
+			}))
+			defer server.Close()
+
+			pod, err := tt.call(newV2TestClient(t, server))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if pod.ID != "pod-1" || pod.DesiredStatus == "" {
+				t.Fatalf("pod = %+v", *pod)
+			}
+		})
 	}
 }
 
-func TestStopPod(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/pods/pod-123/stop" {
-			t.Errorf("expected /pods/pod-123/stop, got %s", r.URL.Path)
-		}
-		json.NewEncoder(w).Encode(Pod{ID: "pod-123", DesiredStatus: "EXITED"})
-	}))
-	defer server.Close()
-
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-
-	client, _ := NewClient()
-	client.baseURL = server.URL
-
-	pod, err := client.StopPod("pod-123")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestUpdatePodCompletesVolumeFromCurrentMount(t *testing.T) {
+	tests := []struct {
+		name       string
+		current    string
+		req        PodUpdateRequest
+		wantMounts string
+	}{
+		{name: "size only keeps the path", current: `{"id":"p","status":"RUNNING","mounts":{"persistent":{"size":20,"path":"/workspace"}}}`,
+			req: PodUpdateRequest{VolumeInGb: 40}, wantMounts: `{"persistent":{"size":40,"path":"/workspace"}}`},
+		{name: "path only keeps the size", current: `{"id":"p","status":"RUNNING","mounts":{"persistent":{"size":20,"path":"/workspace"}}}`,
+			req: PodUpdateRequest{VolumeMountPath: "/data"}, wantMounts: `{"persistent":{"size":20,"path":"/data"}}`},
+		{name: "a network volume only moves its path", current: `{"id":"p","status":"RUNNING","mounts":{"network":[{"volumeId":"v1","path":"/workspace"}]}}`,
+			req: PodUpdateRequest{VolumeMountPath: "/data"}, wantMounts: `{"network":[{"volumeId":"v1","path":"/data"}]}`},
+		{name: "no volume change sends no mounts", current: "", req: PodUpdateRequest{Name: "n"}, wantMounts: ""},
 	}
-	if pod.DesiredStatus != "EXITED" {
-		t.Errorf("expected EXITED, got %s", pod.DesiredStatus)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.Method {
+				case http.MethodGet:
+					_, _ = io.WriteString(w, tt.current)
+				case http.MethodPatch:
+					var body map[string]json.RawMessage
+					_ = json.NewDecoder(r.Body).Decode(&body)
+					if got := string(body["mounts"]); got != tt.wantMounts {
+						t.Errorf("mounts = %s, want %s", got, tt.wantMounts)
+					}
+					_, _ = io.WriteString(w, `{"id":"p","status":"RUNNING"}`)
+				}
+			}))
+			defer server.Close()
+
+			if _, err := newV2TestClient(t, server).UpdatePod("p", &tt.req); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
 	}
 }
 
 func TestDeletePod(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodDelete {
-			t.Errorf("expected DELETE, got %s", r.Method)
-		}
-		if r.URL.Path != "/pods/pod-123" {
-			t.Errorf("expected /pods/pod-123, got %s", r.URL.Path)
+		if r.Method != http.MethodDelete || r.URL.Path != "/pods/pod-123" {
+			t.Errorf("expected DELETE /pods/pod-123, got %s %s", r.Method, r.URL.Path)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
 
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-
-	client, _ := NewClient()
-	client.baseURL = server.URL
-
-	err := client.DeletePod("pod-123")
-	if err != nil {
+	if err := newV2TestClient(t, server).DeletePod("pod-123"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
