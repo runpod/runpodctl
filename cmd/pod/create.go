@@ -155,7 +155,10 @@ func runCreate(cmd *cobra.Command, args []string) error {
 			fmt.Fprintln(os.Stderr, "note: secure cloud pods always have public ips; --public-ip has no effect")
 		}
 		if cloudType == "COMMUNITY" {
-			supportPublicIP = true
+			// rest v2 has no way to ask for a community machine with a public ip;
+			// dropping the requirement silently could leave the pod with no
+			// reachable ssh port, so refuse instead.
+			return fmt.Errorf("--public-ip is not supported on community cloud: the api no longer accepts a public ip requirement; use --cloud-type SECURE, whose pods always have a public ip")
 		}
 	}
 
@@ -164,15 +167,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	var result interface{}
-
-	if computeType == "CPU" {
-		// CPU pods use the REST API (GraphQL requires gpuTypeId)
-		result, err = createPodREST(computeType, gpuTypeID, cloudType, supportPublicIP)
-	} else {
-		// GPU pods use GraphQL (supports startSsh)
-		result, err = createPodGraphQL(gpuTypeID, cloudType, supportPublicIP)
-	}
+	result, err := createPodV2(computeType, gpuTypeID, cloudType)
 	if err != nil {
 		if createGlobalNetworking {
 			err = decorateGlobalNetworkingError(err, createDataCenterIDs)
@@ -391,120 +386,47 @@ func podIDFrom(result interface{}) (string, error) {
 	return "", fmt.Errorf("pod was created but the response carried no id, so --wait cannot poll it; find it with 'runpodctl pod list'")
 }
 
-func createPodGraphQL(gpuTypeID, cloudType string, supportPublicIP bool) (map[string]interface{}, error) {
-	gqlClient, err := api.NewGraphQLClient()
-	if err != nil {
-		return nil, err
-	}
-
-	req := &api.CreatePodGQLInput{
-		CloudType:         cloudType,
-		ContainerDiskInGb: createContainerDiskInGb,
-		GpuCount:          createGpuCount,
-		GpuTypeId:         gpuTypeID,
-		ImageName:         createImageName,
-		Name:              createName,
-		StartSsh:          createSSH,
-		SupportPublicIp:   supportPublicIP,
-		TemplateId:        createTemplateID,
-		VolumeInGb:        createVolumeInGb,
-		VolumeMountPath:   createVolumeMountPath,
-	}
-
-	if createNetworkVolumeID != "" {
-		req.NetworkVolumeId = createNetworkVolumeID
-	}
-
-	if createPorts != "" {
-		req.Ports = createPorts
-	}
-
-	// GraphQL only supports a single dataCenterId
-	if createDataCenterIDs != "" {
-		ids := strings.Split(createDataCenterIDs, ",")
-		req.DataCenterId = strings.TrimSpace(ids[0])
-		if len(ids) > 1 {
-			fmt.Fprintln(os.Stderr, "note: only the first data center id is used; graphql api supports a single data center")
-		}
-	}
-
-	if createMinCudaVersion != "" {
-		req.MinCudaVersion = createMinCudaVersion
-	}
-
-	if createDockerArgs != "" {
-		req.DockerArgs = createDockerArgs
-	}
-
-	if trimmed := strings.TrimSpace(createRegistryAuthID); trimmed != "" {
-		req.ContainerRegistryAuthId = trimmed
-	}
-
-	if createCountryCode != "" {
-		req.CountryCode = createCountryCode
-	}
-
-	if createCompliance != "" {
-		req.Compliance = strings.Split(createCompliance, ",")
-	}
-
-	if createEnv != "" {
-		var envMap map[string]string
-		if err := json.Unmarshal([]byte(createEnv), &envMap); err != nil {
-			return nil, fmt.Errorf("invalid env json: %w", err)
-		}
-		for k, v := range envMap {
-			req.Env = append(req.Env, &api.PodEnvVar{Key: k, Value: v})
-		}
-	}
-
-	return gqlClient.CreatePod(req)
-}
-
-func createPodREST(computeType, gpuTypeID, cloudType string, supportPublicIP bool) (*api.Pod, error) {
+// createPodV2 creates the pod over rest v2. a gpu create prints the shape the
+// graphql create did; a cpu create prints the pod as the rest v1 create did.
+func createPodV2(computeType, gpuTypeID, cloudType string) (interface{}, error) {
 	client, err := api.NewClient()
 	if err != nil {
 		return nil, err
 	}
 
-	req := &api.PodCreateRequest{
-		Name:              createName,
-		ImageName:         createImageName,
-		TemplateID:        createTemplateID,
-		ComputeType:       computeType,
-		GlobalNetworking:  createGlobalNetworking,
-		SupportPublicIp:   supportPublicIP,
-		GpuCount:          0,
-		VolumeInGb:        createVolumeInGb,
-		ContainerDiskInGb: createContainerDiskInGb,
-		VolumeMountPath:   createVolumeMountPath,
-		CloudType:         cloudType,
+	req := &api.PodCreateV2Request{
+		Name:             createName,
+		ImageName:        createImageName,
+		TemplateID:       createTemplateID,
+		CloudType:        cloudType,
+		ContainerDisk:    createContainerDiskInGb,
+		VolumeInGb:       createVolumeInGb,
+		VolumeMountPath:  createVolumeMountPath,
+		NetworkVolumeID:  createNetworkVolumeID,
+		MinCudaVersion:   createMinCudaVersion,
+		RegistryAuthID:   strings.TrimSpace(createRegistryAuthID),
+		GlobalNetworking: createGlobalNetworking,
+		CountryCode:      strings.TrimSpace(createCountryCode),
 	}
-
-	if gpuTypeID != "" {
-		req.GpuTypeIDs = []string{gpuTypeID}
+	if computeType == "GPU" {
+		req.GpuTypeID = gpuTypeID
+		req.GpuCount = createGpuCount
+		// v1 could not request runpod-managed ssh for a cpu pod; graphql could
+		// for a gpu pod
+		req.StartSSH = createSSH
 	}
-
-	if createNetworkVolumeID != "" {
-		req.NetworkVolumeID = createNetworkVolumeID
-	}
-
 	if createPorts != "" {
 		req.Ports = strings.Split(createPorts, ",")
 	}
-
 	if createDataCenterIDs != "" {
 		req.DataCenterIDs = strings.Split(createDataCenterIDs, ",")
 	}
-
-	if createMinCudaVersion != "" {
-		req.MinCudaVersion = createMinCudaVersion
+	if createCompliance != "" {
+		req.Compliance = strings.Split(createCompliance, ",")
 	}
-
 	if createDockerArgs != "" {
-		req.DockerStartCmd, req.DockerEntrypoint = parseDockerArgs(createDockerArgs)
+		req.Cmd, req.Entrypoint = parseDockerArgs(createDockerArgs)
 	}
-
 	if createEnv != "" {
 		var env map[string]string
 		if err := json.Unmarshal([]byte(createEnv), &env); err != nil {
@@ -513,7 +435,14 @@ func createPodREST(computeType, gpuTypeID, cloudType string, supportPublicIP boo
 		req.Env = env
 	}
 
-	return client.CreatePod(req)
+	pod, _, err := client.CreatePodV2(req)
+	if err != nil {
+		return nil, err
+	}
+	if computeType == "GPU" {
+		return api.LegacyCreateOutput(pod), nil
+	}
+	return pod, nil
 }
 
 // parseDockerArgs converts the --docker-args string into the dockerStartCmd /
