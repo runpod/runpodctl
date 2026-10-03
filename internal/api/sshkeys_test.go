@@ -62,8 +62,10 @@ func TestAddPublicSSHKey(t *testing.T) {
 		wantPuts [][]string
 	}{
 		{name: "appends a new key", existing: []string{testKeyFirst}, add: testKeySecond, wantPuts: [][]string{{testKeyFirst, testKeySecond}}},
-		// as with graphql, the check compares against the stored key without its
-		// comment, so only a comment-less key is recognised as already present
+		// as with graphql, the client-side check compares against the stored key
+		// without its comment, so only a comment-less key skips the write. the
+		// server deduplicates the rest (verified 2026-10-03), so nothing is
+		// stored twice either way
 		{name: "an existing comment-less key is a no-op", existing: []string{testKeyFirst}, add: strings.Join(strings.Fields(testKeyFirst)[:2], " ") + "\n", wantPuts: nil},
 		{name: "first key on an empty account", existing: []string{}, add: testKeyFirst, wantPuts: [][]string{{testKeyFirst}}},
 	}
