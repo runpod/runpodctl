@@ -21,6 +21,5 @@ func init() {
 	Cmd.AddCommand(startCmd)
 	Cmd.AddCommand(stopCmd)
 	Cmd.AddCommand(restartCmd)
-	Cmd.AddCommand(resetCmd)
 	Cmd.AddCommand(deleteCmd)
 }
