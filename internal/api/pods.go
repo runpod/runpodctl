@@ -177,54 +177,91 @@ func (c *Client) CreatePod(req *PodCreateRequest) (*Pod, error) {
 	return &pod, nil
 }
 
-// UpdatePod updates an existing pod
+// v2PodUpdate is the rest v2 pod PATCH body.
+type v2PodUpdate struct {
+	Name   string            `json:"name,omitempty"`
+	Image  string            `json:"image,omitempty"`
+	Disk   int               `json:"disk,omitempty"`
+	Ports  []string          `json:"ports,omitempty"`
+	Env    map[string]string `json:"env,omitempty"`
+	Mounts *v2PodMounts      `json:"mounts,omitempty"`
+}
+
+type v2NetworkMount struct {
+	VolumeID string `json:"volumeId"`
+	Path     string `json:"path"`
+}
+
+type v2PodMounts struct {
+	Persistent *v2PersistentMount `json:"persistent,omitempty"`
+	Network    []v2NetworkMount   `json:"network,omitempty"`
+}
+
+// UpdatePod updates an existing pod. v2 takes a mount whole (size and path) and
+// keeps its kind, where v1 took volumeInGb or volumeMountPath alone, so a volume
+// change is completed from the pod's current mount.
 func (c *Client) UpdatePod(podID string, req *PodUpdateRequest) (*Pod, error) {
-	data, err := c.Patch("/pods/"+podID, req)
+	body := &v2PodUpdate{
+		Name:  req.Name,
+		Image: req.ImageName,
+		Disk:  req.ContainerDiskInGb,
+		Ports: req.Ports,
+		Env:   req.Env,
+	}
+	if req.VolumeInGb > 0 || req.VolumeMountPath != "" {
+		current, err := c.GetPod(podID, false, false)
+		if err != nil {
+			return nil, err
+		}
+		path := req.VolumeMountPath
+		if path == "" {
+			path = current.VolumeMountPath
+		}
+		if current.NetworkVolumeID != "" {
+			// a network volume's size belongs to the volume, not the pod; only
+			// its mount path can change
+			body.Mounts = &v2PodMounts{Network: []v2NetworkMount{{VolumeID: current.NetworkVolumeID, Path: path}}}
+		} else {
+			size := req.VolumeInGb
+			if size == 0 {
+				size = current.VolumeInGb
+			}
+			body.Mounts = &v2PodMounts{Persistent: &v2PersistentMount{Size: size, Path: path}}
+		}
+	}
+	data, err := c.PatchV2("/pods/"+url.PathEscape(podID), body)
 	if err != nil {
 		return nil, err
 	}
+	return parseV2Pod(data)
+}
 
-	var pod Pod
-	if err := json.Unmarshal(data, &pod); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+// podAction triggers a v2 lifecycle action and returns the pod as it stands
+// afterwards.
+func (c *Client) podAction(podID, action string) (*Pod, error) {
+	data, err := c.PostV2("/pods/"+url.PathEscape(podID)+"/action", map[string]string{"action": action})
+	if err != nil {
+		return nil, err
 	}
-
-	return &pod, nil
+	if len(strings.TrimSpace(string(data))) > 0 {
+		return parseV2Pod(data)
+	}
+	return c.GetPod(podID, false, false)
 }
 
 // StartPod starts a stopped pod
 func (c *Client) StartPod(podID string) (*Pod, error) {
-	data, err := c.Post("/pods/"+podID+"/start", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var pod Pod
-	if err := json.Unmarshal(data, &pod); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return &pod, nil
+	return c.podAction(podID, "start")
 }
 
 // StopPod stops a running pod
 func (c *Client) StopPod(podID string) (*Pod, error) {
-	data, err := c.Post("/pods/"+podID+"/stop", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var pod Pod
-	if err := json.Unmarshal(data, &pod); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return &pod, nil
+	return c.podAction(podID, "stop")
 }
 
 // DeletePod deletes a pod
 func (c *Client) DeletePod(podID string) error {
-	_, err := c.Delete("/pods/" + podID)
+	_, err := c.DeleteV2("/pods/" + url.PathEscape(podID))
 	return err
 }
 
@@ -245,15 +282,5 @@ func (c *Client) ResetPod(podID string) (*Pod, error) {
 
 // RestartPod restarts a pod
 func (c *Client) RestartPod(podID string) (*Pod, error) {
-	data, err := c.Post("/pods/"+podID+"/restart", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var pod Pod
-	if err := json.Unmarshal(data, &pod); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return &pod, nil
+	return c.podAction(podID, "restart")
 }
