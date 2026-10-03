@@ -4,7 +4,7 @@ view pod billing history
 
 ### Synopsis
 
-view billing history for gpu pods
+view billing history for pods, one record per pod per time bucket, split into gpu, cpu and disk cost
 
 ```
 runpodctl billing pods [flags]
@@ -15,8 +15,6 @@ runpodctl billing pods [flags]
 ```
       --bucket-size string   bucket size (hour, day, week, month, year) (default "day")
       --end-time string      end time (RFC3339 format)
-      --gpu-id string        filter by gpu id
-      --grouping string      grouping (podId, gpuId) (default "gpuId")
   -h, --help                 help for pods
       --pod-id string        filter by pod id
       --start-time string    start time (RFC3339 format)
