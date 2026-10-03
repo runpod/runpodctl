@@ -230,3 +230,65 @@ func (c *Client) GetPods() ([]*LegacyPod, error) {
 	}
 	return out, nil
 }
+
+// GetLegacyPods returns every pod as the legacy `get pod` and `ssh connect`
+// commands print it: the runtime view plus the graphql machine block and
+// podType. v2 reports neither, so the gpu display name comes from the catalog
+// and the location from the data center id (legacyLocation). v2 cannot tell a
+// spot pod from an on-demand one, so podType is always RESERVED.
+func (c *Client) GetLegacyPods() ([]*LegacyPod, error) {
+	pods, err := c.listV2Pods()
+	if err != nil {
+		return nil, err
+	}
+	var gpuNames map[string]string
+	out := make([]*LegacyPod, 0, len(pods))
+	for i := range pods {
+		p := &pods[i]
+		legacy := p.toLegacyPod()
+		legacy.PodType = "RESERVED"
+		machine := &LegacyMachine{GpuDisplayName: "unknown", Location: legacyLocation(p.DataCenterID)}
+		if p.Gpu != nil && p.Gpu.ID != "" {
+			if gpuNames == nil {
+				gpuNames = c.catalogGpuNames()
+			}
+			machine.GpuDisplayName = p.Gpu.ID
+			if name := gpuNames[p.Gpu.ID]; name != "" {
+				machine.GpuDisplayName = name
+			}
+		}
+		legacy.Machine = machine
+		out = append(out, legacy)
+	}
+	return out, nil
+}
+
+// catalogGpuNames maps gpu type ids to the display names graphql reported as
+// machine.gpuDisplayName (the catalog's name is the same string). best-effort:
+// on failure the caller falls back to the gpu type id.
+func (c *Client) catalogGpuNames() map[string]string {
+	names := map[string]string{}
+	gpus, err := c.listCatalogGpus(nil)
+	if err != nil {
+		return names
+	}
+	for _, gpu := range gpus {
+		names[gpu.ID] = gpu.Name
+	}
+	return names
+}
+
+// legacyLocation approximates graphql's machine.location, a country code, from
+// a data center id: "US-NC-2" -> "US", "EU-RO-1" -> "RO". ids that lead with a
+// region rather than a country take the second segment.
+func legacyLocation(dataCenterID string) string {
+	parts := strings.Split(dataCenterID, "-")
+	if len(parts) < 2 {
+		return dataCenterID
+	}
+	switch parts[0] {
+	case "EU", "EUR", "AP", "OC", "SEA", "SA", "AF", "ME":
+		return parts[1]
+	}
+	return parts[0]
+}

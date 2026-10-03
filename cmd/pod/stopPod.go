@@ -3,7 +3,7 @@ package pod
 import (
 	"fmt"
 
-	"github.com/runpod/runpodctl/api"
+	"github.com/runpod/runpodctl/internal/api"
 
 	"github.com/spf13/cobra"
 )
@@ -14,13 +14,15 @@ var StopPodCmd = &cobra.Command{
 	Short: "stop a pod",
 	Long:  "stop a pod from runpod.io",
 	Run: func(cmd *cobra.Command, args []string) {
-		pod, err := api.StopPod(args[0])
+		client, err := api.NewClient()
+		cobra.CheckErr(err)
+		pod, err := client.StopPod(args[0])
 		cobra.CheckErr(err)
 
-		if pod["desiredStatus"] == "EXITED" {
+		if pod.DesiredStatus == "EXITED" {
 			fmt.Printf(`pod "%s" stopped`, args[0])
 		} else {
-			fmt.Printf(`pod "%s" stop failed; status is %s`, args[0], pod["desiredStatus"])
+			fmt.Printf(`pod "%s" stop failed; status is %s`, args[0], pod.DesiredStatus)
 		}
 		fmt.Println()
 	},
