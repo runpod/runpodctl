@@ -90,14 +90,18 @@ func (c *Client) ListPods(opts *PodListOptions) ([]Pod, error) {
 	}
 
 	// v1 filtered server-side; v2 ignores unknown query parameters (returning
-	// every pod), so the filters v1 honoured are applied here. v1's name filter
-	// is an exact, case-insensitive match. its computeType filter had no effect
-	// (a cpu pod came back for computeType=GPU), so it is not applied either.
+	// every pod), so the filters are applied here. the name filter is an exact,
+	// case-insensitive match, as v1's was.
 	pods := make([]Pod, 0, len(v2Pods))
 	for i := range v2Pods {
 		p := &v2Pods[i]
 		if opts != nil {
 			if opts.Name != "" && !strings.EqualFold(p.Name, opts.Name) {
+				continue
+			}
+			// a pod reports gpu or cpu, never both
+			if strings.EqualFold(opts.ComputeType, "GPU") && p.Gpu == nil ||
+				strings.EqualFold(opts.ComputeType, "CPU") && p.Gpu != nil {
 				continue
 			}
 			if len(opts.GpuTypeIDs) > 0 && (p.Gpu == nil || !containsFold(opts.GpuTypeIDs, p.Gpu.ID)) {
