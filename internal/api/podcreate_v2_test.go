@@ -126,6 +126,33 @@ func TestCreatePodV2PlacementWithNoMatchFails(t *testing.T) {
 	}
 }
 
+// the v2 POST /pods schema has no dockerArgs field, so docker args are sent as
+// cmd/entrypoint arrays and never as dockerArgs
+func TestCreatePodV2SendsDockerArgsAsCmd(t *testing.T) {
+	var posts []map[string]interface{}
+	server := createServer(t, nil, &posts)
+	defer server.Close()
+
+	cmd, entrypoint := ParseDockerArgs("sleep infinity")
+	if _, _, err := newV2TestClient(t, server).CreatePodV2(&PodCreateV2Request{
+		Name: "n", ImageName: "img", GpuTypeID: "NVIDIA A40", GpuCount: 1, Cmd: cmd, Entrypoint: entrypoint,
+	}); err != nil {
+		t.Fatalf("CreatePodV2: %v", err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("posts = %v", posts)
+	}
+	if _, ok := posts[0]["dockerArgs"]; ok {
+		t.Errorf("body must not carry dockerArgs: %v", posts[0])
+	}
+	if !reflect.DeepEqual(posts[0]["cmd"], []interface{}{"sleep", "infinity"}) {
+		t.Errorf("cmd = %v", posts[0]["cmd"])
+	}
+	if _, ok := posts[0]["entrypoint"]; ok {
+		t.Errorf("a plain args string sets no entrypoint: %v", posts[0])
+	}
+}
+
 // a create whose reply cannot be read may still have bought a pod, so the cpu
 // walk must stop there rather than try (and maybe buy) the next flavor
 func TestCreatePodV2CpuWalkStopsOnUnreadableReply(t *testing.T) {

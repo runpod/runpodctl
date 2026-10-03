@@ -3,7 +3,6 @@ package pod
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"reflect"
@@ -676,26 +675,4 @@ func TestPodDetailsWithSSH(t *testing.T) {
 			t.Errorf("error id = %q, want pod-1", resourceIDOf(err))
 		}
 	})
-}
-
-// The CON-842 regression was the wire format: the rest POST /pods schema has
-// no dockerArgs field and 400s on it, so the request must serialize the start
-// command as dockerStartCmd and never as dockerArgs.
-func TestPodCreateRequestDockerArgsWireFormat(t *testing.T) {
-	cmd, entrypoint := api.ParseDockerArgs("sleep infinity")
-	body, err := json.Marshal(&api.PodCreateRequest{
-		ImageName:        "ubuntu:22.04",
-		ComputeType:      "CPU",
-		DockerStartCmd:   cmd,
-		DockerEntrypoint: entrypoint,
-	})
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
-	if strings.Contains(string(body), "dockerArgs") {
-		t.Fatalf("request body must not contain dockerArgs: %s", body)
-	}
-	if !strings.Contains(string(body), `"dockerStartCmd":["sleep","infinity"]`) {
-		t.Fatalf("request body missing dockerStartCmd tokens: %s", body)
-	}
 }

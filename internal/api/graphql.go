@@ -3,7 +3,6 @@ package api
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -56,15 +55,6 @@ func NewGraphQLClient() (*GraphQLClient, error) {
 		httpClient: &http.Client{Timeout: timeout},
 		userAgent:  buildUserAgent(),
 	}, nil
-}
-
-// LimitTimeout lowers this client's http timeout for best-effort side-calls
-// whose result is optional. It only ever shortens: an operator who configured a
-// tighter graphqlTimeout keeps theirs.
-func (c *GraphQLClient) LimitTimeout(d time.Duration) {
-	if d > 0 && d < c.httpClient.Timeout {
-		c.httpClient.Timeout = d
-	}
 }
 
 // Query executes a GraphQL query
@@ -129,93 +119,6 @@ type PodEnvVar struct {
 	Value string `json:"value"`
 }
 
-// CreatePodGQLInput is the input for creating a pod via GraphQL
-type CreatePodGQLInput struct {
-	CloudType               string       `json:"cloudType,omitempty"`
-	ContainerDiskInGb       int          `json:"containerDiskInGb"`
-	DataCenterId            string       `json:"dataCenterId,omitempty"`
-	Env                     []*PodEnvVar `json:"env,omitempty"`
-	GpuCount                int          `json:"gpuCount"`
-	GpuTypeId               string       `json:"gpuTypeId,omitempty"`
-	ImageName               string       `json:"imageName,omitempty"`
-	Name                    string       `json:"name,omitempty"`
-	Ports                   string       `json:"ports,omitempty"`
-	StartSsh                bool         `json:"startSsh"`
-	SupportPublicIp         bool         `json:"supportPublicIp,omitempty"`
-	TemplateId              string       `json:"templateId,omitempty"`
-	VolumeInGb              int          `json:"volumeInGb,omitempty"`
-	VolumeMountPath         string       `json:"volumeMountPath,omitempty"`
-	NetworkVolumeId         string       `json:"networkVolumeId,omitempty"`
-	MinCudaVersion          string       `json:"minCudaVersion,omitempty"`
-	DockerArgs              string       `json:"dockerArgs,omitempty"`
-	ContainerRegistryAuthId string       `json:"containerRegistryAuthId,omitempty"`
-	CountryCode             string       `json:"countryCode,omitempty"`
-	Compliance              []string     `json:"compliance,omitempty"`
-}
-
-// CreatePod creates a pod via GraphQL (podFindAndDeployOnDemand)
-func (c *GraphQLClient) CreatePod(input *CreatePodGQLInput) (map[string]interface{}, error) {
-	gqlInput := GraphQLInput{
-		Query: `
-		mutation createPod($input: PodFindAndDeployOnDemandInput!) {
-			podFindAndDeployOnDemand(input: $input) {
-				id
-				name
-				imageName
-				desiredStatus
-				costPerHr
-				containerDiskInGb
-				volumeInGb
-				volumeMountPath
-				gpuCount
-				memoryInGb
-				vcpuCount
-				ports
-				lastStatusChange
-				env
-				machine {
-					gpuDisplayName
-					location
-				}
-			}
-		}
-		`,
-		Variables: map[string]interface{}{"input": input},
-	}
-
-	body, err := c.Query(gqlInput)
-	if err != nil {
-		return nil, err
-	}
-
-	var data struct {
-		Data struct {
-			Pod map[string]interface{} `json:"podFindAndDeployOnDemand"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-
-	if err := json.Unmarshal(body, &data); err != nil {
-		return nil, err
-	}
-
-	if len(data.Errors) > 0 {
-		// typed, so it carries graphql_error and — importantly — bails out of
-		// asUsageError before the string fallback. this was the only site where a
-		// server-controlled message could reach that fallback and be misread as a
-		// usage error; the other 18 already used newGraphQLError.
-		return nil, newGraphQLError(data.Errors[0].Message)
-	}
-
-	if data.Data.Pod == nil {
-		return nil, fmt.Errorf("pod creation returned nil response")
-	}
-
-	return data.Data.Pod, nil
-}
-
 // LegacyPod is the pod structure from GraphQL API (for backwards compatibility)
 type LegacyPod struct {
 	ID                string         `json:"id"`
@@ -267,127 +170,4 @@ type LegacyPort struct {
 	PrivatePort int    `json:"privatePort"`
 	PublicPort  int    `json:"publicPort"`
 	PortType    string `json:"type"`
-}
-
-// GetPods gets pods via GraphQL (for ssh connect which needs runtime info)
-func (c *GraphQLClient) GetPods() ([]*LegacyPod, error) {
-	input := GraphQLInput{
-		Query: `
-		query myPods {
-			myself {
-			  pods {
-				id
-				containerDiskInGb
-				costPerHr
-				desiredStatus
-				lastStatusChange
-				uptimeSeconds
-				dockerArgs
-				env
-				gpuCount
-				imageName
-				memoryInGb
-				name
-				podType
-				ports
-				vcpuCount
-				volumeInGb
-				volumeMountPath
-				machine {
-				  gpuDisplayName
-				  location
-				}
-				runtime {
-				  uptimeInSeconds
-				  ports {
-					ip
-					isIpPublic
-					privatePort
-					publicPort
-					type
-				  }
-				}
-			  }
-			}
-		}
-		`,
-	}
-
-	body, err := c.Query(input)
-	if err != nil {
-		return nil, err
-	}
-
-	var data struct {
-		Data struct {
-			Myself struct {
-				Pods []*LegacyPod `json:"pods"`
-			} `json:"myself"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-
-	if err := json.Unmarshal(body, &data); err != nil {
-		return nil, err
-	}
-
-	if len(data.Errors) > 0 {
-		return nil, newGraphQLError(data.Errors[0].Message)
-	}
-
-	return data.Data.Myself.Pods, nil
-}
-
-// LegacyNetworkVolume is the network volume structure from GraphQL API
-type LegacyNetworkVolume struct {
-	ID           string `json:"id"`
-	DataCenterID string `json:"dataCenterId"`
-	Name         string `json:"name"`
-	Size         int    `json:"size"`
-}
-
-// GetNetworkVolumes gets network volumes via GraphQL
-func (c *GraphQLClient) GetNetworkVolumes() ([]*LegacyNetworkVolume, error) {
-	input := GraphQLInput{
-		Query: `
-		query getNetworkVolumes {
-			myself {
-			  networkVolumes {
-				dataCenterId
-				id
-				name
-				size
-			  }
-			}
-		}
-		`,
-	}
-
-	body, err := c.Query(input)
-	if err != nil {
-		return nil, err
-	}
-
-	var data struct {
-		Data struct {
-			Myself struct {
-				NetworkVolumes []*LegacyNetworkVolume `json:"networkVolumes"`
-			} `json:"myself"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-
-	if err := json.Unmarshal(body, &data); err != nil {
-		return nil, err
-	}
-
-	if len(data.Errors) > 0 {
-		return nil, newGraphQLError(data.Errors[0].Message)
-	}
-
-	return data.Data.Myself.NetworkVolumes, nil
 }
