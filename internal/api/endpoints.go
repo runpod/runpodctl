@@ -141,7 +141,11 @@ func (c *Client) ListEndpoints(opts *EndpointListOptions) ([]Endpoint, error) {
 	if err != nil {
 		return nil, err
 	}
-	poolTypes, _ := c.gpuPoolTypes()
+	// without the catalog, gpuIds would print empty, which reads as "no gpus"
+	poolTypes, err := c.gpuPoolTypes()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read the gpu catalog: %w", err)
+	}
 	endpoints := make([]Endpoint, 0, len(v2Endpoints))
 	for i := range v2Endpoints {
 		out := v2Endpoints[i].toEndpoint(poolTypes)
@@ -157,7 +161,10 @@ func (c *Client) GetEndpoint(endpointID string, includeTemplate, includeWorkers 
 	if err != nil {
 		return nil, err
 	}
-	poolTypes, _ := c.gpuPoolTypes()
+	poolTypes, err := c.gpuPoolTypes()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read the gpu catalog: %w", err)
+	}
 	out := e.toEndpoint(poolTypes)
 	c.decorateEndpoint(&out, e, &EndpointListOptions{IncludeTemplate: includeTemplate, IncludeWorkers: includeWorkers})
 	return &out, nil
@@ -240,6 +247,7 @@ func (c *Client) UpdateEndpoint(endpointID string, req *EndpointUpdateRequest) (
 	if err := json.Unmarshal(data, &e); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
+	// the write has already succeeded, so the gpu expansion is best-effort here
 	poolTypes, _ := c.gpuPoolTypes()
 	out := e.toEndpoint(poolTypes)
 	return &out, nil
