@@ -4,50 +4,33 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
-
-	"github.com/spf13/viper"
 )
 
 // TestListGpuTypes_PricingAndPerDC verifies that gpu list carries on-demand
-// pricing straight through and derives both the best overall stock status and
-// the per-data-center breakdown from the dataCenters query.
+// pricing straight through from the v2 catalog, spells availability the way
+// the cli always has (High, not HIGH), and keeps the per-data-center breakdown.
 func TestListGpuTypes_PricingAndPerDC(t *testing.T) {
-	viper.Reset()
-	t.Cleanup(viper.Reset)
-
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		q := string(body)
-		switch {
-		case strings.Contains(q, "gpuTypes"):
-			w.Write([]byte(`{"data":{"gpuTypes":[
-				{"id":"NVIDIA A40","displayName":"A40","memoryInGb":48,"secureCloud":true,"communityCloud":true,"securePrice":0.39,"communityPrice":0.29},
-				{"id":"NVIDIA GeForce RTX 4090","displayName":"RTX 4090","memoryInGb":24,"secureCloud":false,"communityCloud":true,"securePrice":0,"communityPrice":0.69},
-				{"id":"unknown","displayName":"unknown","memoryInGb":0}
-			]}}`))
-		case strings.Contains(q, "dataCenters"):
-			w.Write([]byte(`{"data":{"dataCenters":[
-				{"id":"US-GA-1","name":"Georgia","location":"US","gpuAvailability":[{"gpuTypeId":"NVIDIA A40","displayName":"A40","stockStatus":"Low"}]},
-				{"id":"EU-RO-1","name":"Romania","location":"EU","gpuAvailability":[{"gpuTypeId":"NVIDIA A40","displayName":"A40","stockStatus":"High"},{"gpuTypeId":"NVIDIA GeForce RTX 4090","displayName":"RTX 4090","stockStatus":"Medium"}]},
-				{"id":"US-KS-2","name":"Kansas","location":"US","gpuAvailability":[{"gpuTypeId":"NVIDIA A40","displayName":"A40","stockStatus":""}]}
-			]}}`))
-		default:
-			t.Errorf("unexpected graphql query: %s", q)
+		if r.URL.Path != "/catalog/gpus" || r.URL.Query().Get("include") != "AVAILABILITY" || r.URL.Query().Get("product") != "POD" {
+			t.Errorf("unexpected request %s?%s", r.URL.Path, r.URL.RawQuery)
 		}
+		_, _ = io.WriteString(w, `{"gpus":[
+			{"id":"NVIDIA A40","name":"A40","memory":48,"secure":true,"community":true,"pool":"AMPERE_48",
+			 "price":{"secure":0.39,"community":0.29},"availability":"HIGH",
+			 "dataCenters":[{"id":"US-GA-1","availability":"LOW"},{"id":"EU-RO-1","availability":"HIGH"},{"id":"US-KS-2","availability":"NONE"}]},
+			{"id":"NVIDIA GeForce RTX 4090","name":"RTX 4090","memory":24,"secure":false,"community":true,"pool":"ADA_24",
+			 "price":{"secure":0,"community":0.69},"availability":"NONE","dataCenters":[]},
+			{"id":"NVIDIA RTX A4000","name":"RTX A4000","memory":16,"secure":true,"availability":"NONE",
+			 "dataCenters":[{"id":"EUR-IS-1","availability":"LOW"}]},
+			{"id":"unknown","name":"unknown","memory":0,"availability":"LOW"}
+		]}`)
 	}))
 	defer server.Close()
 
-	viper.Set("apiUrl", server.URL)
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-
-	client, err := NewClient()
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
-
-	gpus, err := client.ListGpuTypes(false)
+	gpus, err := newV2TestClient(t, server).ListGpuTypes(false)
 	if err != nil {
 		t.Fatalf("ListGpuTypes: %v", err)
 	}
@@ -61,27 +44,54 @@ func TestListGpuTypes_PricingAndPerDC(t *testing.T) {
 	if !ok {
 		t.Fatal("expected A40 in results")
 	}
+	if a40.DisplayName != "A40" || a40.MemoryInGb != 48 || !a40.SecureCloud || !a40.CommunityCloud {
+		t.Errorf("A40 = %+v", a40.GpuType)
+	}
 	if a40.SecurePrice != 0.39 || a40.CommunityPrice != 0.29 {
 		t.Errorf("A40 pricing = %v/%v, want 0.39/0.29", a40.SecurePrice, a40.CommunityPrice)
 	}
-	if a40.StockStatus != "High" {
-		t.Errorf("A40 best stock = %q, want High", a40.StockStatus)
-	}
-	if len(a40.DataCenterAvailability) != 3 {
-		t.Fatalf("A40 per-dc availability len = %d, want 3", len(a40.DataCenterAvailability))
+	if a40.StockStatus != "High" || !a40.Available {
+		t.Errorf("A40 stock = %q available=%v, want High/true", a40.StockStatus, a40.Available)
 	}
 	seen := map[string]string{}
 	for _, dc := range a40.DataCenterAvailability {
 		seen[dc.DataCenterID] = dc.StockStatus
 	}
-	// every dc the gpu appears in is listed; an unreported status is "none",
-	// never an empty string.
-	if seen["US-GA-1"] != "Low" || seen["EU-RO-1"] != "High" || seen["US-KS-2"] != "none" {
+	// a NONE entry is "none", never an empty string.
+	if len(seen) != 3 || seen["US-GA-1"] != "Low" || seen["EU-RO-1"] != "High" || seen["US-KS-2"] != "none" {
 		t.Errorf("A40 per-dc availability = %+v", a40.DataCenterAvailability)
 	}
-
+	if _, ok := byID["NVIDIA GeForce RTX 4090"]; ok {
+		t.Error("a gpu with no stock should be filtered out without --include-unavailable")
+	}
 	if _, ok := byID["unknown"]; ok {
 		t.Error("the 'unknown' gpu type should be filtered out")
+	}
+	// v2's top level can read NONE while a data center has stock; the data
+	// center wins, so the gpu is not hidden
+	if a4000 := byID["NVIDIA RTX A4000"]; a4000.StockStatus != "Low" || !a4000.Available {
+		t.Errorf("A4000 stock = %q available=%v, want Low/true from its data center", a4000.StockStatus, a4000.Available)
+	}
+}
+
+func TestListServerlessGpuPoolsGroupsCatalogByPool(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"gpus":[
+			{"id":"NVIDIA A40","pool":"AMPERE_48"},{"id":"NVIDIA RTX A6000","pool":"AMPERE_48"},
+			{"id":"NVIDIA GeForce RTX 4090","pool":"ADA_24"},{"id":"NVIDIA B200","pool":""}]}`)
+	}))
+	defer server.Close()
+
+	client := newV2TestClient(t, server)
+	got, err := client.ResolveServerlessGpuPoolID("NVIDIA RTX A6000, ADA_24,NVIDIA A40")
+	if err != nil {
+		t.Fatalf("ResolveServerlessGpuPoolID: %v", err)
+	}
+	if got != "AMPERE_48,ADA_24" {
+		t.Fatalf("resolved = %q, want AMPERE_48,ADA_24", got)
+	}
+	if _, err := client.ResolveServerlessGpuPoolID("NVIDIA B200"); err == nil {
+		t.Fatal("a gpu with no pool must not resolve")
 	}
 }
 
@@ -90,27 +100,15 @@ func TestListGpuTypes_PricingAndPerDC(t *testing.T) {
 // rejected the write with `Invalid GPU Pool ID`, hiding the outage that caused
 // it (found live on PR #340).
 func TestResolveServerlessGpuPoolID_PoolQueryFailurePropagates(t *testing.T) {
-	viper.Reset()
-	t.Cleanup(viper.Reset)
-
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		if !strings.Contains(string(body), "serverlessGpuPools") {
-			t.Errorf("unexpected graphql query: %s", body)
+		if r.URL.Path != "/catalog/gpus" {
+			t.Errorf("unexpected request %s", r.URL.Path)
 		}
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer server.Close()
 
-	viper.Set("apiUrl", server.URL)
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-
-	client, err := NewClient()
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
-
-	got, err := client.ResolveServerlessGpuPoolID("NVIDIA A40")
+	got, err := newV2TestClient(t, server).ResolveServerlessGpuPoolID("NVIDIA A40")
 	if err == nil {
 		t.Fatal("expected an error when the pools query fails")
 	}
@@ -119,6 +117,27 @@ func TestResolveServerlessGpuPoolID_PoolQueryFailurePropagates(t *testing.T) {
 	}
 	if got != "" {
 		t.Errorf("resolved = %q, want empty; an unresolved gpu type id must never reach a caller", got)
+	}
+}
+
+func TestListDataCentersCarriesRegionAndLegacyStock(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/catalog/datacenters" || r.URL.Query().Get("include") != "GPU_AVAILABILITY" {
+			t.Errorf("unexpected request %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+		_, _ = io.WriteString(w, `{"dataCenters":[{"id":"AP-IN-1","name":"AP-IN-1","region":"ASIA",
+			"gpuAvailability":[{"id":"NVIDIA H100 80GB HBM3","name":"H100 SXM","availability":"MEDIUM"}]}]}`)
+	}))
+	defer server.Close()
+
+	dcs, err := newV2TestClient(t, server).ListDataCenters()
+	if err != nil {
+		t.Fatalf("ListDataCenters: %v", err)
+	}
+	want := DataCenter{ID: "AP-IN-1", Name: "AP-IN-1", Location: "ASIA", GpuAvailability: []GpuAvailabilityInDataCenter{
+		{GpuTypeID: "NVIDIA H100 80GB HBM3", DisplayName: "H100 SXM", StockStatus: "Medium"}}}
+	if len(dcs) != 1 || !reflect.DeepEqual(dcs[0], want) {
+		t.Fatalf("data centers = %+v, want %+v", dcs, want)
 	}
 }
 
