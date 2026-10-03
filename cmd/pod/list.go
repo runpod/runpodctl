@@ -45,12 +45,6 @@ type podListOutput struct {
 	CostPerHr           float64 `json:"costPerHr,omitempty"`
 	CreatedAt           string  `json:"createdAt,omitempty"`
 	UptimeSeconds       *int    `json:"uptimeSeconds,omitempty"`
-	// LastStatusChange is the backend's free-text note about the last
-	// transition ("Rented by User: ...", "Exited by user: ...", "Outbid: ..."),
-	// which runtimeStatusReason is a lossy tokenisation of. It is carried here
-	// so a phrasing this cli does not recognise still reaches the caller,
-	// instead of leaving `pod list` with no explanation at all.
-	LastStatusChange string `json:"lastStatusChange,omitempty"`
 }
 
 var (
@@ -150,7 +144,6 @@ func runList(cmd *cobra.Command, args []string) error {
 		// same derivation.
 		state := podstate.Derive(podstate.Signals{DesiredStatus: p.DesiredStatus})
 		var runtime *api.LegacyRuntime
-		lastStatusChange := p.LastStatusChange
 		if view := p.Legacy(); view != nil {
 			state = sshconnect.PodState(view)
 			runtime = view.Runtime
@@ -174,19 +167,11 @@ func runList(cmd *cobra.Command, args []string) error {
 			CostPerHr:           p.CostPerHr,
 			CreatedAt:           createdAtStr,
 			UptimeSeconds:       uptime,
-			LastStatusChange:    statusText(lastStatusChange),
 		})
 	}
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
 	return output.Print(items, &output.Config{Format: format})
-}
-
-// statusText coerces the api's interface{} lastStatusChange to a string, and to
-// "" for anything else so the field is simply omitted.
-func statusText(v interface{}) string {
-	s, _ := v.(string)
-	return s
 }
 
 // parseCreatedAt parses the createdAt field from the API response.

@@ -124,3 +124,29 @@ func TestCreatePodV2PlacementWithNoMatchFails(t *testing.T) {
 		t.Fatalf("err = %v, posts = %d; want a refusal before any create", err, len(posts))
 	}
 }
+
+// a create whose reply cannot be read may still have bought a pod, so the cpu
+// walk must stop there rather than try (and maybe buy) the next flavor
+func TestCreatePodV2CpuWalkStopsOnUnreadableReply(t *testing.T) {
+	posts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/catalog/cpus":
+			_, _ = io.WriteString(w, `{"cpus":[{"id":"cpu5g","availability":"HIGH"},{"id":"cpu3g","availability":"LOW"}]}`)
+		case "/pods":
+			posts++
+			w.WriteHeader(http.StatusCreated)
+			_, _ = io.WriteString(w, `{"id":`) // truncated
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	if _, _, err := newV2TestClient(t, server).CreatePodV2(&PodCreateV2Request{Name: "n", ImageName: "img"}); err == nil {
+		t.Fatal("expected the unreadable reply to be an error")
+	}
+	if posts != 1 {
+		t.Errorf("posted %d creates, want 1", posts)
+	}
+}

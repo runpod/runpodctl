@@ -124,8 +124,11 @@ func (c *Client) CreatePodV2(req *PodCreateV2Request) (*Pod, map[string]interfac
 		if err == nil {
 			return pod, raw, nil
 		}
+		// only a clean refusal moves on to the next flavor. a timeout or an
+		// unreadable reply may mean the pod was created, and trying another
+		// flavor would buy a second one.
 		var apiErr *APIError
-		if errors.As(err, &apiErr) && apiErr.Status != 400 && apiErr.Status != 409 {
+		if !errors.As(err, &apiErr) || (apiErr.Status != 400 && apiErr.Status != 409) {
 			return nil, nil, err
 		}
 		lastErr = err
