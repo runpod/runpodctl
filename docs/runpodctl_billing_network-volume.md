@@ -4,7 +4,7 @@ view network volume billing history
 
 ### Synopsis
 
-view billing history for network volumes
+view billing history for network volumes, one record per volume per time bucket, split into standard and high-performance storage cost
 
 ```
 runpodctl billing network-volume [flags]
