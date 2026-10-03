@@ -24,9 +24,15 @@ type KeyInfo struct {
 	InAccount   *bool  `json:"in_account,omitempty"`
 }
 
+// SSHKeyLister reads the account's registered ssh keys.
+type SSHKeyLister interface {
+	GetPublicSSHKeys() (string, []api.SSHKey, error)
+}
+
 // ResolveKeyInfo returns local key info and whether it exists in the account.
-// This never returns an error; missing data is simply omitted.
-func ResolveKeyInfo(client *api.GraphQLClient) KeyInfo {
+// This never returns an error; missing data is simply omitted. A nil client
+// skips the account check.
+func ResolveKeyInfo(client SSHKeyLister) KeyInfo {
 	keyPath, exists := defaultKeyPath()
 	info := KeyInfo{
 		Path:   keyPath,
@@ -43,7 +49,7 @@ func ResolveKeyInfo(client *api.GraphQLClient) KeyInfo {
 	}
 	info.Fingerprint = pubFingerprint
 
-	if client == nil {
+	if client == nil || isNilLister(client) {
 		return info
 	}
 	_, keys, err := client.GetPublicSSHKeys()
@@ -198,4 +204,11 @@ func readPublicKeyFingerprint(path string) (string, error) {
 		return "", err
 	}
 	return sshcrypto.FingerprintSHA256(pubKey), nil
+}
+
+// isNilLister catches a typed nil (e.g. a nil *api.Client) stored in the
+// interface, which `client == nil` does not.
+func isNilLister(client SSHKeyLister) bool {
+	c, ok := client.(*api.Client)
+	return ok && c == nil
 }

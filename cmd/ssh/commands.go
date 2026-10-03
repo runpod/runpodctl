@@ -8,6 +8,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/runpod/runpodctl/api"
+	internalapi "github.com/runpod/runpodctl/internal/api"
 
 	"github.com/spf13/cobra"
 )
@@ -18,7 +19,12 @@ var ListKeysCmd = &cobra.Command{
 	Short: "list all ssh keys",
 	Long:  `list all the ssh keys associated with the current user's account.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		_, keys, err := api.GetPublicSSHKeys()
+		client, err := internalapi.NewClient()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error getting SSH keys: %v\n", err)
+			return
+		}
+		_, keys, err := client.GetPublicSSHKeys()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error getting SSH keys: %v\n", err)
 			return
@@ -34,7 +40,7 @@ var ListKeysCmd = &cobra.Command{
 }
 
 // displaySSHKeys prints the SSH keys in a tabulated format.
-func displaySSHKeys(keys []api.SSHKey) {
+func displaySSHKeys(keys []internalapi.SSHKey) {
 	w := tabwriter.NewWriter(os.Stdout, 8, 8, 2, ' ', 0)
 
 	fmt.Fprintln(w, "Name\tType\tFingerprint")
@@ -82,7 +88,12 @@ var AddKeyCmd = &cobra.Command{
 			}
 		}
 
-		if err := api.AddPublicSSHKey(publicKey); err != nil {
+		client, err := internalapi.NewClient()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to add the SSH key: %v\n", err)
+			return
+		}
+		if err := client.AddPublicSSHKey(publicKey); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to add the SSH key: %v\n", err)
 			return
 		}
