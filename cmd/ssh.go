@@ -103,7 +103,7 @@ func init() {
 }
 
 func runSSHListKeys(cmd *cobra.Command, args []string) error {
-	client, err := api.NewGraphQLClient()
+	client, err := api.NewClient()
 	if err != nil {
 		return err
 	}
@@ -141,7 +141,7 @@ func runSSHAddKey(cmd *cobra.Command, args []string) error {
 		publicKey = []byte(sshKey)
 	}
 
-	client, err := api.NewGraphQLClient()
+	client, err := api.NewClient()
 	if err != nil {
 		return err
 	}
@@ -155,7 +155,7 @@ func runSSHAddKey(cmd *cobra.Command, args []string) error {
 }
 
 func runSSHRemoveKey(cmd *cobra.Command, args []string) error {
-	client, err := api.NewGraphQLClient()
+	client, err := api.NewClient()
 	if err != nil {
 		return err
 	}
@@ -188,7 +188,11 @@ func runSSHInfoWithArgs(cmd *cobra.Command, args []string, allowAll bool) error 
 	}
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
-	keyInfo := sshconnect.ResolveKeyInfo(client)
+	var keyLister sshconnect.SSHKeyLister
+	if restClient, restErr := api.NewClient(); restErr == nil {
+		keyLister = restClient
+	}
+	keyInfo := sshconnect.ResolveKeyInfo(keyLister)
 
 	if allowAll && len(args) == 0 {
 		connections := sshconnect.ListConnections(pods, keyInfo)

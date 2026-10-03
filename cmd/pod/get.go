@@ -77,7 +77,7 @@ func fetchPodDetails(podID string, includeMachine, includeNetworkVolume bool) (*
 
 	if gqlClient, gqlClientErr := api.NewGraphQLClient(); gqlClientErr == nil {
 		if pods, gqlErr := gqlClient.GetPods(); gqlErr == nil {
-			keyInfo := sshconnect.ResolveKeyInfo(gqlClient)
+			keyInfo := sshconnect.ResolveKeyInfo(client)
 			sshPod, conn := sshconnect.FindPodConnection(pods, podID, keyInfo)
 			if sshPod != nil {
 				if pod.LastStatusChange == nil && sshPod.LastStatusChange != nil {
