@@ -500,3 +500,21 @@ func TestUpdateEndpoint_FractionalQueueDelaySurvives(t *testing.T) {
 		t.Errorf("queueDelay = %v, want 0.5 kept", scaling["queueDelay"])
 	}
 }
+
+// a missing catalog must not print as an endpoint with no gpus
+func TestGetEndpoint_CatalogFailureIsAnError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/catalog/gpus" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"title":"Service Unavailable","status":503}`))
+			return
+		}
+		_, _ = w.Write([]byte(v2GpuEndpoint))
+	}))
+	defer server.Close()
+	client := newV2TestClient(t, server)
+
+	if _, err := client.GetEndpoint("ep-1", false, false); err == nil || !strings.Contains(err.Error(), "gpu catalog") {
+		t.Fatalf("expected a catalog error, got %v", err)
+	}
+}
