@@ -39,30 +39,45 @@ const (
 )
 
 type templateSaveState struct {
-	ID                      string            `json:"id"`
-	Name                    string            `json:"name"`
-	ImageName               string            `json:"imageName"`
-	DockerArgs              string            `json:"dockerArgs"`
-	Env                     []templateEnvPair `json:"env"`
-	Ports                   templatePorts     `json:"ports"`
-	VolumeMountPath         string            `json:"volumeMountPath"`
-	VolumeInGb              int               `json:"volumeInGb"`
-	ContainerDiskInGb       int               `json:"containerDiskInGb"`
-	ContainerRegistryAuthID string            `json:"containerRegistryAuthId"`
-	StartJupyter            bool              `json:"startJupyter"`
-	StartSSH                bool              `json:"startSsh"`
-	StartScript             string            `json:"startScript"`
-	IsServerless            bool              `json:"isServerless"`
-	IsPublic                bool              `json:"isPublic"`
-	Readme                  string            `json:"readme"`
-	AdvancedStart           bool              `json:"advancedStart"`
-	Category                string            `json:"category"`
+	ID                      string               `json:"id"`
+	Name                    string               `json:"name"`
+	ImageName               string               `json:"imageName"`
+	DockerArgs              string               `json:"dockerArgs"`
+	Env                     []templateEnvPair    `json:"env"`
+	Ports                   templatePorts        `json:"ports"`
+	VolumeMountPath         string               `json:"volumeMountPath"`
+	VolumeInGb              int                  `json:"volumeInGb"`
+	ContainerDiskInGb       int                  `json:"containerDiskInGb"`
+	ContainerRegistryAuthID string               `json:"containerRegistryAuthId"`
+	StartJupyter            bool                 `json:"startJupyter"`
+	StartSSH                bool                 `json:"startSsh"`
+	StartScript             string               `json:"startScript"`
+	IsServerless            bool                 `json:"isServerless"`
+	IsPublic                bool                 `json:"isPublic"`
+	Readme                  string               `json:"readme"`
+	AdvancedStart           bool                 `json:"advancedStart"`
+	Category                string               `json:"category"`
+	PortsConfig             []TemplatePortConfig `json:"portsConfig"`
 }
 
 // UpdateTemplatePortLabels updates the dashboard labels for a template's
 // exposed ports. Port labels are available through GraphQL's portsConfig
 // field, but not through the public REST template schema.
 func (c *GraphQLClient) UpdateTemplatePortLabels(templateID string, labels []TemplatePortConfig, overrides *TemplatePortLabelOverrides) error {
+	return c.saveTemplateGraphQLFields(templateID, labels, false, overrides)
+}
+
+// UpdateTemplateReadme writes a template's readme, which rest v2 has no field
+// for. saveTemplate replaces the whole template, so the current port labels are
+// read back and re-sent rather than cleared.
+func (c *GraphQLClient) UpdateTemplateReadme(templateID string, overrides *TemplatePortLabelOverrides) error {
+	return c.saveTemplateGraphQLFields(templateID, nil, true, overrides)
+}
+
+// saveTemplateGraphQLFields re-saves a template over graphql to set the fields
+// only graphql has (port labels, readme). keepLabels re-sends the template's
+// existing labels instead of labels.
+func (c *GraphQLClient) saveTemplateGraphQLFields(templateID string, labels []TemplatePortConfig, keepLabels bool, overrides *TemplatePortLabelOverrides) error {
 	var (
 		state *templateSaveState
 		err   error
@@ -86,9 +101,18 @@ func (c *GraphQLClient) UpdateTemplatePortLabels(templateID string, labels []Tem
 
 	applyTemplatePortLabelOverrides(state, overrides)
 
-	normalizedLabels, err := normalizeTemplatePortLabels(labels, state.Ports)
-	if err != nil {
-		return err
+	// kept labels are re-sent as stored, without validating them against the
+	// ports: v1's readme update never touched labels, so a label for a port the
+	// same update removed survived, and it still does.
+	normalizedLabels := state.PortsConfig
+	if normalizedLabels == nil {
+		normalizedLabels = []TemplatePortConfig{}
+	}
+	if !keepLabels {
+		normalizedLabels, err = normalizeTemplatePortLabels(labels, state.Ports)
+		if err != nil {
+			return err
+		}
 	}
 
 	env := state.Env
@@ -188,6 +212,10 @@ func (c *GraphQLClient) getTemplateSaveState(templateID string) (*templateSaveSt
 					readme
 					advancedStart
 					category
+					portsConfig {
+						port
+						name
+					}
 				}
 			}
 		}

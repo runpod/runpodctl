@@ -262,6 +262,43 @@ func TestUpdateTemplatePortLabelsRejectsUnknownPort(t *testing.T) {
 	}
 }
 
+func TestUpdateTemplateReadmeKeepsStoredLabels(t *testing.T) {
+	var saved map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Query     string                 `json:"query"`
+			Variables map[string]interface{} `json:"variables"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if strings.Contains(body.Query, "saveTemplate") {
+			saved = body.Variables["input"].(map[string]interface{})
+			_, _ = w.Write([]byte(`{"data":{"saveTemplate":{"id":"tpl-123"}}}`))
+			return
+		}
+		// the stored label is for a port the template no longer exposes: v1's
+		// readme update left such labels alone, so they must survive
+		_, _ = w.Write([]byte(`{"data":{"myself":{"podTemplates":[{
+			"id":"tpl-123","name":"test","imageName":"image","dockerArgs":"","env":[],
+			"ports":"8888/http","readme":"old","volumeInGb":0,"containerDiskInGb":20,
+			"portsConfig":[{"port":"7860","name":"Gradio"}]
+		}]}}}`))
+	}))
+	defer server.Close()
+
+	client := &GraphQLClient{url: server.URL, apiKey: "test-key", httpClient: server.Client()}
+	readme := "new"
+	if err := client.UpdateTemplateReadme("tpl-123", &TemplatePortLabelOverrides{Readme: &readme}); err != nil {
+		t.Fatalf("UpdateTemplateReadme: %v", err)
+	}
+	if saved["readme"] != "new" {
+		t.Fatalf("readme = %#v, want new", saved["readme"])
+	}
+	labels, _ := json.Marshal(saved["portsConfig"])
+	if string(labels) != `[{"name":"Gradio","port":"7860"}]` {
+		t.Fatalf("portsConfig = %s, want the stored label re-sent", labels)
+	}
+}
+
 func TestTemplateFromGraphQLIncludesRegistryAuthAndPortLabels(t *testing.T) {
 	template := templateFromGraphQL(&templateGraphQL{
 		ID:                      "tpl-123",
