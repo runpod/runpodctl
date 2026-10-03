@@ -58,8 +58,8 @@ func TestListPods_WithOptions(t *testing.T) {
 		{name: "a partial name matches nothing", opts: PodListOptions{Name: "test-pod"}, want: nil},
 		{name: "gpu type", opts: PodListOptions{GpuTypeIDs: []string{"nvidia a40"}}, want: []string{"pod-1"}},
 		{name: "data center", opts: PodListOptions{DataCenterIDs: []string{"US-NC-2"}}, want: []string{"pod-2"}},
-		// v1 ignored computeType; preserved here
-		{name: "compute type has no effect", opts: PodListOptions{ComputeType: "GPU"}, want: []string{"pod-1", "pod-2"}},
+		{name: "compute type gpu", opts: PodListOptions{ComputeType: "GPU"}, want: []string{"pod-1"}},
+		{name: "compute type cpu", opts: PodListOptions{ComputeType: "cpu"}, want: []string{"pod-2"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
