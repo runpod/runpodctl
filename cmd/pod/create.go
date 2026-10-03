@@ -241,7 +241,7 @@ func resolveWaitTimeout(cmd *cobra.Command, computeType, cloudType string, suppo
 
 // injection points for the wait, so its tests neither sleep nor hit the network.
 var (
-	newPodWaitLister    = func() (waitfor.PodLister, error) { return api.NewGraphQLClient() }
+	newPodWaitLister    = func() (waitfor.PodLister, error) { return api.NewClient() }
 	podSSHProbe         waitfor.Prober // nil means waitfor.ProbeSSH
 	waitPollInterval    = waitfor.DefaultInterval
 	notifyWaitSignals   = signal.NotifyContext
