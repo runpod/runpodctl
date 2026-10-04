@@ -4,7 +4,7 @@ view serverless billing history
 
 ### Synopsis
 
-view billing history for serverless endpoints, one record per endpoint per time bucket, split into gpu, cpu, disk and fee cost
+view billing history for serverless endpoints, one record per endpoint per time bucket, split into gpu, cpu and disk cost
 
 ```
 runpodctl billing serverless [flags]

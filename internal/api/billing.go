@@ -30,7 +30,6 @@ type ServerlessBillingRecord struct {
 	GpuAmount    float64 `json:"gpuAmount"`
 	CpuAmount    float64 `json:"cpuAmount"`
 	DiskAmount   float64 `json:"diskAmount"`
-	FeeAmount    float64 `json:"feeAmount"`
 }
 
 // NetworkVolumeBillingRecord is one network volume's cost for one time bucket.
