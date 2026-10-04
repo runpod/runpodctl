@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/runpod/runpodctl/internal/configenv"
@@ -279,6 +280,7 @@ func (c *Client) ResolveServerlessGpuPoolID(gpuID string) (string, error) {
 	for _, p := range pools {
 		poolIDs = append(poolIDs, p.ID)
 	}
+	sort.Strings(poolIDs) // the catalog's order is arbitrary
 
 	resolveOne := func(id string) (string, bool) {
 		for _, p := range pools {

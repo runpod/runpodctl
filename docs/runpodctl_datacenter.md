@@ -21,5 +21,5 @@ list datacenters and their gpu availability
 ### SEE ALSO
 
 * [runpodctl](runpodctl.md)	 - cli for runpod.io
-* [runpodctl datacenter list](runpodctl_datacenter_list.md)	 - list all datacenters
+* [runpodctl datacenter list](runpodctl_datacenter_list.md)	 - list deployable datacenters
 
