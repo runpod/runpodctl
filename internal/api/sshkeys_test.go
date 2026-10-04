@@ -42,12 +42,9 @@ func TestGetPublicSSHKeys(t *testing.T) {
 	server := sshKeyServer(t, []string{testKeyFirst, "not a key", testKeySecond}, &puts)
 	defer server.Close()
 
-	raw, keys, err := newV2TestClient(t, server).GetPublicSSHKeys()
+	keys, err := newV2TestClient(t, server).GetPublicSSHKeys()
 	if err != nil {
 		t.Fatalf("GetPublicSSHKeys: %v", err)
-	}
-	if !strings.Contains(raw, testKeyFirst) || !strings.Contains(raw, testKeySecond) {
-		t.Fatalf("raw = %q, want both keys", raw)
 	}
 	if len(keys) != 2 || keys[0].Name != "first" || keys[1].Name != "second" || keys[0].Fingerprint == "" {
 		t.Fatalf("keys = %+v, want the two parseable keys", keys)
@@ -62,11 +59,12 @@ func TestAddPublicSSHKey(t *testing.T) {
 		wantPuts [][]string
 	}{
 		{name: "appends a new key", existing: []string{testKeyFirst}, add: testKeySecond, wantPuts: [][]string{{testKeyFirst, testKeySecond}}},
-		// as with graphql, the client-side check compares against the stored key
-		// without its comment, so only a comment-less key skips the write. the
-		// server deduplicates the rest (verified 2026-10-03), so nothing is
-		// stored twice either way
-		{name: "an existing comment-less key is a no-op", existing: []string{testKeyFirst}, add: strings.Join(strings.Fields(testKeyFirst)[:2], " ") + "\n", wantPuts: nil},
+		// keys compare by fingerprint, so neither a comment nor its absence makes
+		// a registered key look new
+		{name: "a registered key is a no-op", existing: []string{testKeyFirst}, add: testKeyFirst + "\n", wantPuts: nil},
+		{name: "a registered key without its comment is a no-op", existing: []string{testKeyFirst}, add: strings.Join(strings.Fields(testKeyFirst)[:2], " "), wantPuts: nil},
+		// v2 stores one key per entry
+		{name: "several pasted keys are stored one per entry", existing: []string{testKeyFirst}, add: testKeyFirst + "\n\n" + testKeySecond + "\n", wantPuts: [][]string{{testKeyFirst, testKeySecond}}},
 		{name: "first key on an empty account", existing: []string{}, add: testKeyFirst, wantPuts: [][]string{{testKeyFirst}}},
 	}
 	for _, tt := range tests {

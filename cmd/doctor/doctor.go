@@ -192,7 +192,7 @@ func checkSSHKey() checkResult {
 		result.Error = fmt.Sprintf("failed to get cloud ssh keys: %v", err)
 		return result
 	}
-	_, cloudKeys, err := client.GetPublicSSHKeys()
+	cloudKeys, err := client.GetPublicSSHKeys()
 	if err != nil {
 		result.Status = "fail"
 		result.Error = fmt.Sprintf("failed to get cloud ssh keys: %v", err)

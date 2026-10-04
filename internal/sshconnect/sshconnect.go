@@ -26,7 +26,7 @@ type KeyInfo struct {
 
 // SSHKeyLister reads the account's registered ssh keys.
 type SSHKeyLister interface {
-	GetPublicSSHKeys() (string, []api.SSHKey, error)
+	GetPublicSSHKeys() ([]api.SSHKey, error)
 }
 
 // ResolveKeyInfo returns local key info and whether it exists in the account.
@@ -49,10 +49,10 @@ func ResolveKeyInfo(client SSHKeyLister) KeyInfo {
 	}
 	info.Fingerprint = pubFingerprint
 
-	if client == nil || isNilLister(client) {
+	if client == nil {
 		return info
 	}
-	_, keys, err := client.GetPublicSSHKeys()
+	keys, err := client.GetPublicSSHKeys()
 	if err != nil {
 		return info
 	}
@@ -204,11 +204,4 @@ func readPublicKeyFingerprint(path string) (string, error) {
 		return "", err
 	}
 	return sshcrypto.FingerprintSHA256(pubKey), nil
-}
-
-// isNilLister catches a typed nil (e.g. a nil *api.Client) stored in the
-// interface, which `client == nil` does not.
-func isNilLister(client SSHKeyLister) bool {
-	c, ok := client.(*api.Client)
-	return ok && c == nil
 }

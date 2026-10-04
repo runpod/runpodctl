@@ -83,7 +83,7 @@ func ensureSSHKeyInCloud(publicKey []byte) error {
 	if err != nil {
 		return fmt.Errorf("failed to get SSH keys from the cloud: %w", err)
 	}
-	_, cloudKeys, err := client.GetPublicSSHKeys()
+	cloudKeys, err := client.GetPublicSSHKeys()
 	if err != nil {
 		return fmt.Errorf("failed to get SSH keys from the cloud: %w", err)
 	}

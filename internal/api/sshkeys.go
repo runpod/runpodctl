@@ -48,13 +48,12 @@ func parseSSHKey(line string) (SSHKey, bool) {
 	}, true
 }
 
-// GetPublicSSHKeys returns the account's keys as one newline-joined block and
-// parsed. lines that do not parse as a public key are left out of the parsed
-// list, as before.
-func (c *Client) GetPublicSSHKeys() (string, []SSHKey, error) {
+// GetPublicSSHKeys returns the account's keys. lines that do not parse as a
+// public key are left out, as before.
+func (c *Client) GetPublicSSHKeys() ([]SSHKey, error) {
 	lines, err := c.getSSHKeyLines()
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 	var keys []SSHKey
 	for _, line := range lines {
@@ -62,22 +61,43 @@ func (c *Client) GetPublicSSHKeys() (string, []SSHKey, error) {
 			keys = append(keys, key)
 		}
 	}
-	return strings.Join(lines, "\n"), keys, nil
+	return keys, nil
 }
 
-// AddPublicSSHKey adds key to the account unless it is already there.
+// AddPublicSSHKey adds each key in key (one per line) that the account does
+// not already have. keys are compared by fingerprint, so a comment does not
+// make a registered key look new. v2 stores one key per entry, so a pasted
+// block of several keys is split.
 func (c *Client) AddPublicSSHKey(key []byte) error {
 	lines, err := c.getSSHKeyLines()
 	if err != nil {
 		return fmt.Errorf("failed to get existing SSH keys: %w", err)
 	}
-	newKey := strings.TrimSpace(string(key))
+	have := map[string]bool{}
 	for _, line := range lines {
-		if existing, ok := parseSSHKey(line); ok && strings.TrimSpace(existing.Key) == newKey {
-			return nil
+		if existing, ok := parseSSHKey(line); ok {
+			have[existing.Fingerprint] = true
 		}
 	}
-	if err := c.putSSHKeyLines(append(lines, newKey)); err != nil {
+	added := false
+	for _, newKey := range strings.Split(string(key), "\n") {
+		newKey = strings.TrimSpace(newKey)
+		if newKey == "" {
+			continue
+		}
+		if parsed, ok := parseSSHKey(newKey); ok {
+			if have[parsed.Fingerprint] {
+				continue
+			}
+			have[parsed.Fingerprint] = true
+		}
+		lines = append(lines, newKey)
+		added = true
+	}
+	if !added {
+		return nil
+	}
+	if err := c.putSSHKeyLines(lines); err != nil {
 		return fmt.Errorf("failed to update SSH keys: %w", err)
 	}
 	return nil
