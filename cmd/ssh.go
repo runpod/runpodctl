@@ -108,7 +108,7 @@ func runSSHListKeys(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	_, keys, err := client.GetPublicSSHKeys()
+	keys, err := client.GetPublicSSHKeys()
 	if err != nil {
 		return fmt.Errorf("failed to get ssh keys: %w", err)
 	}
