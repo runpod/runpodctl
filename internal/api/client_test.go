@@ -447,3 +447,41 @@ func TestV2URLFollowsConfig(t *testing.T) {
 		t.Fatalf("v2URL = %q, want the configured url without a trailing slash", got)
 	}
 }
+
+// v2 redirects an empty path segment to the collection; following it would
+// turn `delete ""` into a successful read of the list
+func TestRequestV2RefusesEmptyIDAndRedirects(t *testing.T) {
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		if r.URL.Path == "/old" {
+			http.Redirect(w, r, "/registries", http.StatusMovedPermanently)
+			return
+		}
+		_, _ = w.Write([]byte(`{"registries":[]}`))
+	}))
+	defer server.Close()
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+	client, err := NewClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.baseURL = "http://v1.invalid"
+	client.v2BaseURL = server.URL
+
+	_, err = client.DeleteV2("/registries/")
+	var usage interface{ ErrorCode() string }
+	if !errors.As(err, &usage) || usage.ErrorCode() != "usage_error" {
+		t.Fatalf("empty id: err = %v, want a usage_error", err)
+	}
+	if hits != 0 {
+		t.Fatalf("an empty id must not reach the api, got %d requests", hits)
+	}
+
+	if _, err := client.DeleteV2("/old"); err == nil {
+		t.Fatal("a redirected delete must fail, not follow the redirect")
+	}
+	if hits != 1 {
+		t.Errorf("redirect was followed: %d requests", hits)
+	}
+}
