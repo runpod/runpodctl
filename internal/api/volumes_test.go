@@ -103,9 +103,11 @@ func TestUpdateNetworkVolume(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var gotMethod string
+			var gotMethod, gotBody string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				gotMethod = r.Method
+				body, _ := io.ReadAll(r.Body)
+				gotBody = string(body)
 				if r.URL.Path != "/network-volumes/vol-123" {
 					t.Errorf("expected /network-volumes/vol-123, got %s", r.URL.Path)
 				}
@@ -119,6 +121,10 @@ func TestUpdateNetworkVolume(t *testing.T) {
 			}
 			if gotMethod != tt.wantMethod {
 				t.Fatalf("method = %s, want %s", gotMethod, tt.wantMethod)
+			}
+			// v2 rejects name:"", so an unset name must not be sent
+			if tt.wantMethod == http.MethodPatch && gotBody != `{"size":20}` {
+				t.Fatalf("patch body = %s, want {\"size\":20}", gotBody)
 			}
 			if volume.DataCenterID != "EU-RO-1" {
 				t.Fatalf("volume = %+v", *volume)
