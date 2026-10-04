@@ -21,8 +21,7 @@ func TestListContainerRegistryAuths(t *testing.T) {
 
 	t.Setenv("RUNPOD_API_KEY", "test-key")
 
-	client, _ := NewClient()
-	client.v2BaseURL = server.URL
+	client := registryTestClient(t, server)
 
 	auths, err := client.ListContainerRegistryAuths()
 	if err != nil {
@@ -48,8 +47,7 @@ func TestGetContainerRegistryAuth(t *testing.T) {
 
 	t.Setenv("RUNPOD_API_KEY", "test-key")
 
-	client, _ := NewClient()
-	client.v2BaseURL = server.URL
+	client := registryTestClient(t, server)
 
 	auth, err := client.GetContainerRegistryAuth("reg-123")
 	if err != nil {
@@ -77,8 +75,7 @@ func TestCreateContainerRegistryAuth(t *testing.T) {
 
 	t.Setenv("RUNPOD_API_KEY", "test-key")
 
-	client, _ := NewClient()
-	client.v2BaseURL = server.URL
+	client := registryTestClient(t, server)
 
 	auth, err := client.CreateContainerRegistryAuth(&ContainerRegistryAuthCreateRequest{
 		Name:     "test-registry",
@@ -104,11 +101,23 @@ func TestDeleteContainerRegistryAuth(t *testing.T) {
 
 	t.Setenv("RUNPOD_API_KEY", "test-key")
 
-	client, _ := NewClient()
-	client.v2BaseURL = server.URL
+	client := registryTestClient(t, server)
 
 	err := client.DeleteContainerRegistryAuth("reg-123")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+// registryTestClient points both control planes away from production: v2 at
+// the fake server, v1 at an unroutable host.
+func registryTestClient(t *testing.T, server *httptest.Server) *Client {
+	t.Helper()
+	client, err := NewClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.baseURL = "http://v1.invalid"
+	client.v2BaseURL = server.URL
+	return client
 }
