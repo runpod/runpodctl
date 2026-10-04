@@ -114,7 +114,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	if hasRESTUpdate {
-		if _, err := client.UpdateEndpoint(endpointID, req); err != nil {
+		if err := client.UpdateEndpoint(endpointID, req); err != nil {
 			return fmt.Errorf("failed to update endpoint: %w", err)
 		}
 	}

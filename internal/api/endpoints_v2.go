@@ -153,28 +153,39 @@ func (c *Client) listV2Endpoints() ([]v2Endpoint, error) {
 
 // decorateEndpoint applies the --include-template / --include-workers
 // expansions. workers come from the v2 worker listing (the v1 expansion
-// reported every worker of a warm endpoint as EXITED).
-func (c *Client) decorateEndpoint(out *Endpoint, e *v2Endpoint, opts *EndpointListOptions) {
+// reported every worker of a warm endpoint as EXITED). a failed worker read is
+// an error: without it the endpoint would print as one with no workers.
+func (c *Client) decorateEndpoint(out *Endpoint, e *v2Endpoint, opts *EndpointListOptions, workers *V2Client) error {
 	if opts == nil {
-		return
+		return nil
 	}
 	if opts.IncludeTemplate {
 		out.Template = e.inlineTemplate()
 	}
 	if opts.IncludeWorkers {
-		v2, err := NewV2Client()
+		list, err := workers.ListEndpointWorkersWithTimeout(e.ID)
 		if err != nil {
-			return
+			return fmt.Errorf("failed to read workers of endpoint %s: %w", e.ID, err)
 		}
-		if c.v2BaseURL != "" {
-			v2.baseURL = c.v2URL()
-			v2.httpClient = c.httpClient
-		}
-		if workers, err := v2.ListEndpointWorkersWithTimeout(e.ID); err == nil {
-			out.Workers = []interface{}{}
-			for _, w := range workers.Workers {
-				out.Workers = append(out.Workers, w)
-			}
+		out.Workers = make([]interface{}, 0, len(list.Workers))
+		for _, w := range list.Workers {
+			out.Workers = append(out.Workers, w)
 		}
 	}
+	return nil
+}
+
+// workerClient returns the v2 client for the worker listing, sharing this
+// client's v2 host and transport. nil when workers are not requested.
+func (c *Client) workerClient(opts *EndpointListOptions) (*V2Client, error) {
+	if opts == nil || !opts.IncludeWorkers {
+		return nil, nil
+	}
+	v2, err := NewV2Client()
+	if err != nil {
+		return nil, err
+	}
+	v2.baseURL = c.v2URL()
+	v2.httpClient = c.httpClient
+	return v2, nil
 }

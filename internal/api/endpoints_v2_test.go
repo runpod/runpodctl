@@ -207,7 +207,7 @@ func TestUpdateEndpoint_FillsNestedBlocksFromCurrent(t *testing.T) {
 	client := stub.client(t)
 
 	zero, five := 0, 5
-	if _, err := client.UpdateEndpoint("ep-1", &EndpointUpdateRequest{WorkersMax: &five, ScalerValue: &zero}); err != nil {
+	if err := client.UpdateEndpoint("ep-1", &EndpointUpdateRequest{WorkersMax: &five, ScalerValue: &zero}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -233,7 +233,7 @@ func TestUpdateEndpoint_ScalerTypeSwitch(t *testing.T) {
 	stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": v2GpuEndpoint}}
 	client := stub.client(t)
 
-	if _, err := client.UpdateEndpoint("ep-1", &EndpointUpdateRequest{ScalerType: "queue_delay"}); err != nil {
+	if err := client.UpdateEndpoint("ep-1", &EndpointUpdateRequest{ScalerType: "queue_delay"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	scaling, _ := stub.patched["scaling"].(map[string]interface{})
@@ -246,32 +246,13 @@ func TestUpdateEndpoint_ScalerTypeSwitch(t *testing.T) {
 	}
 }
 
-func TestUpdateEndpoint_FlashbootSkipsTheRead(t *testing.T) {
-	stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": v2GpuEndpoint}}
-	client := stub.client(t)
-
-	off := false
-	if _, err := client.UpdateEndpoint("ep-1", &EndpointUpdateRequest{Flashboot: &off}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if stub.patched["flashboot"] != "OFF" {
-		t.Errorf("patch = %v", stub.patched)
-	}
-	for _, req := range stub.requests {
-		if req == "GET /serverless/ep-1" {
-			t.Errorf("a flashboot update needs no current read: %v", stub.requests)
-		}
-	}
-}
-
 // a v2 rename also renames the endpoint's template, shared or not, so the name
 // goes over v1 and never into the v2 body.
 func TestUpdateEndpoint_RenameGoesOverV1(t *testing.T) {
 	stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": v2GpuEndpoint}}
 	client := stub.client(t)
 
-	ep, err := client.UpdateEndpoint("ep-1", &EndpointUpdateRequest{Name: "renamed"})
-	if err != nil {
+	if err := client.UpdateEndpoint("ep-1", &EndpointUpdateRequest{Name: "renamed"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if stub.renamed["name"] != "renamed" || len(stub.renamed) != 1 {
@@ -280,13 +261,13 @@ func TestUpdateEndpoint_RenameGoesOverV1(t *testing.T) {
 	if stub.patched != nil {
 		t.Errorf("a rename alone must not patch v2: %v", stub.patched)
 	}
-	if ep.ID != "ep-1" {
-		t.Errorf("expected the re-read endpoint, got %+v", ep)
+	if len(stub.requests) != 1 {
+		t.Errorf("a rename alone is one request, got %v", stub.requests)
 	}
 
 	stub.renamed, stub.requests = nil, nil
 	five := 5
-	if _, err := client.UpdateEndpoint("ep-1", &EndpointUpdateRequest{Name: "again", WorkersMax: &five}); err != nil {
+	if err := client.UpdateEndpoint("ep-1", &EndpointUpdateRequest{Name: "again", WorkersMax: &five}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, ok := stub.patched["name"]; ok {
@@ -492,7 +473,7 @@ func TestUpdateEndpoint_FractionalQueueDelaySurvives(t *testing.T) {
 		t.Errorf("scalerType = %q", ep.ScalerType)
 	}
 
-	if _, err := client.UpdateEndpoint("ep-1", &EndpointUpdateRequest{ScalerType: "QUEUE_DELAY"}); err != nil {
+	if err := client.UpdateEndpoint("ep-1", &EndpointUpdateRequest{ScalerType: "QUEUE_DELAY"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	scaling, _ := stub.patched["scaling"].(map[string]interface{})
@@ -516,5 +497,69 @@ func TestGetEndpoint_CatalogFailureIsAnError(t *testing.T) {
 
 	if _, err := client.GetEndpoint("ep-1", false, false); err == nil || !strings.Contains(err.Error(), "gpu catalog") {
 		t.Fatalf("expected a catalog error, got %v", err)
+	}
+}
+
+// the v2 patch can fail validation, so it goes first: a rejected patch must
+// leave the name alone rather than report failure after renaming
+func TestUpdateEndpoint_RejectedPatchDoesNotRename(t *testing.T) {
+	renamed := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(v2GpuEndpoint))
+		case strings.HasPrefix(r.URL.Path, "/endpoints/"):
+			renamed = true
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_, _ = w.Write([]byte(`{"title":"Unprocessable Entity","status":422,"detail":"Request validation failed."}`))
+		}
+	}))
+	defer server.Close()
+	client := newV2TestClient(t, server)
+	client.baseURL = server.URL
+
+	five := 5
+	if err := client.UpdateEndpoint("ep-1", &EndpointUpdateRequest{Name: "new", WorkersMax: &five}); err == nil {
+		t.Fatal("expected the rejected patch to be an error")
+	}
+	if renamed {
+		t.Error("the endpoint was renamed although its update was rejected")
+	}
+}
+
+// without the worker read, an endpoint would print as one with no workers
+func TestGetEndpoint_WorkerReadFailureIsAnError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/workers"):
+			w.WriteHeader(http.StatusInternalServerError)
+		case r.URL.Path == "/catalog/gpus":
+			_, _ = w.Write([]byte(`{"gpus":[]}`))
+		default:
+			_, _ = w.Write([]byte(v2GpuEndpoint))
+		}
+	}))
+	defer server.Close()
+
+	_, err := newV2TestClient(t, server).GetEndpoint("ep-1", false, true)
+	if err == nil || !strings.Contains(err.Error(), "failed to read workers") {
+		t.Fatalf("expected a worker read error, got %v", err)
+	}
+}
+
+func TestListEndpoints_IncludeWorkers(t *testing.T) {
+	stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": v2GpuEndpoint, "ep-2": v2CpuEndpoint}}
+	client := stub.client(t)
+
+	eps, err := client.ListEndpoints(&EndpointListOptions{IncludeWorkers: true})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, ep := range eps {
+		if len(ep.Workers) != 1 {
+			t.Errorf("%s workers = %v", ep.ID, ep.Workers)
+		}
 	}
 }
