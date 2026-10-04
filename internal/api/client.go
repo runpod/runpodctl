@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/runpod/runpodctl/internal/agent"
+	"github.com/runpod/runpodctl/internal/clierr"
 	"github.com/runpod/runpodctl/internal/configenv"
 	"github.com/spf13/viper"
 )
@@ -60,9 +61,16 @@ func NewClient() (*Client, error) {
 	return &Client{
 		baseURL:    baseURL,
 		apiKey:     apiKey,
-		httpClient: &http.Client{Timeout: timeout},
+		httpClient: &http.Client{Timeout: timeout, CheckRedirect: noRedirects},
 		userAgent:  buildUserAgent(),
 	}, nil
+}
+
+// noRedirects stops the client following redirects. go replays a redirected
+// delete, patch or post as a get, so following one turns a write into a read of
+// whatever the api pointed at and reports it as success.
+func noRedirects(*http.Request, []*http.Request) error {
+	return http.ErrUseLastResponse
 }
 
 // request makes an HTTP request to the API
@@ -126,6 +134,12 @@ func (c *Client) v2URL() string {
 
 // requestV2 is request against the rest v2 api.
 func (c *Client) requestV2(method, endpoint string, params url.Values, body interface{}) ([]byte, error) {
+	// an empty id leaves an empty path segment ("/registries/"), which v2
+	// redirects to the collection: a get would print an empty object and a
+	// delete would report success without deleting anything.
+	if strings.HasSuffix(endpoint, "/") || strings.Contains(endpoint, "//") {
+		return nil, clierr.Usagef("a resource id is required")
+	}
 	u := c.v2URL() + endpoint
 	if len(params) > 0 {
 		u += "?" + params.Encode()
