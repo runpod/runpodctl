@@ -125,6 +125,9 @@ func runCreate(cmd *cobra.Command, args []string) error {
 			req.Ports = template.Ports
 		}
 		what := "port labels"
+		if len(portLabels) > 0 && req.Readme != "" {
+			what = "port labels and readme"
+		}
 		graphqlClient, gqlErr := api.NewGraphQLClient()
 		if gqlErr == nil {
 			if len(portLabels) > 0 {

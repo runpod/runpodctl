@@ -109,6 +109,9 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	if portLabelsChanged || readmeChanged {
 		what := "port labels"
+		if portLabelsChanged && readmeChanged {
+			what = "port labels and readme"
+		}
 		graphqlClient, graphqlErr := api.NewGraphQLClient()
 		if graphqlErr == nil {
 			if portLabelsChanged {

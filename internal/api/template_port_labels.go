@@ -159,7 +159,7 @@ func (c *GraphQLClient) saveTemplateGraphQLFields(templateID string, labels []Te
 		Variables: map[string]interface{}{"input": input},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to update template port labels: %w", err)
+		return fmt.Errorf("failed to save template: %w", err)
 	}
 
 	var response struct {
