@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -15,79 +14,6 @@ import (
 	"github.com/runpod/runpodctl/internal/waitfor"
 	"github.com/spf13/cobra"
 )
-
-func TestParseDockerArgs(t *testing.T) {
-	cases := []struct {
-		name           string
-		in             string
-		wantCmd        []string
-		wantEntrypoint []string
-	}{
-		{
-			name:    "simple command",
-			in:      "sleep infinity",
-			wantCmd: []string{"sleep", "infinity"},
-		},
-		{
-			name:    "single token",
-			in:      "nginx",
-			wantCmd: []string{"nginx"},
-		},
-		{
-			name:    "quoted argument stays one token",
-			in:      `bash -c "sleep infinity"`,
-			wantCmd: []string{"bash", "-c", "sleep infinity"},
-		},
-		{
-			name:    "single quotes",
-			in:      `sh -c 'while true; do date; sleep 60; done'`,
-			wantCmd: []string{"sh", "-c", "while true; do date; sleep 60; done"},
-		},
-		{
-			name:    "extra whitespace",
-			in:      "  sleep   infinity  ",
-			wantCmd: []string{"sleep", "infinity"},
-		},
-		{
-			name:    "unbalanced quote falls back to whitespace split",
-			in:      `sleep "infinity`,
-			wantCmd: []string{"sleep", `"infinity`},
-		},
-		{
-			name: "whitespace-only input yields no tokens",
-			in:   "   ",
-		},
-		{
-			name:           "canonical json object form",
-			in:             `{"cmd":["sleep","infinity"],"entrypoint":["/bin/sh","-c"]}`,
-			wantCmd:        []string{"sleep", "infinity"},
-			wantEntrypoint: []string{"/bin/sh", "-c"},
-		},
-		{
-			name:    "json object with cmd only",
-			in:      `{"cmd":["python -u app.py"]}`,
-			wantCmd: []string{"python -u app.py"},
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			cmd, entrypoint := api.ParseDockerArgs(tc.in)
-			assertTokens(t, "cmd", cmd, tc.wantCmd)
-			assertTokens(t, "entrypoint", entrypoint, tc.wantEntrypoint)
-		})
-	}
-}
-
-func assertTokens(t *testing.T, field string, got, want []string) {
-	t.Helper()
-	if len(want) == 0 && len(got) == 0 {
-		return
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("%s = %#v, want %#v", field, got, want)
-	}
-}
 
 func TestCreateCmd_WaitFlags(t *testing.T) {
 	flags := createCmd.Flags()

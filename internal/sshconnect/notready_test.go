@@ -30,17 +30,17 @@ func TestNotReadyMessage(t *testing.T) {
 		{
 			name:  "stopped points at pod start with the real pod id",
 			podID: "abc123",
-			state: podstate.State{Status: podstate.StatusStopped, Reason: podstate.ReasonStoppedByUser},
+			state: podstate.State{Status: podstate.StatusStopped},
 			want:  "pod not ready: pod is stopped; start it with 'runpodctl pod start abc123'",
 		},
 		{
 			name:  "stopped without a pod id keeps the placeholder",
-			state: podstate.State{Status: podstate.StatusStopped, Reason: podstate.ReasonStoppedByUser},
+			state: podstate.State{Status: podstate.StatusStopped},
 			want:  "pod not ready: pod is stopped; start it with 'runpodctl pod start <pod-id>'",
 		},
 		{
 			name:  "terminated says so",
-			state: podstate.State{Status: podstate.StatusTerminated, Reason: podstate.ReasonTerminatedOutbid},
+			state: podstate.State{Status: podstate.StatusTerminated},
 			want:  "pod not ready: pod is terminated",
 		},
 		{
@@ -214,7 +214,7 @@ func TestListConnectionsSkipsDeadPods(t *testing.T) {
 	stale := &api.LegacyRuntime{Ports: []*api.LegacyPort{port(22, 40022, true)}}
 	pods := []*api.LegacyPod{
 		{ID: "up", Name: "up", DesiredStatus: "RUNNING", Runtime: stale},
-		{ID: "stopped", Name: "stopped", DesiredStatus: "EXITED", LastStatusChange: "Exited by user: x", Runtime: stale},
+		{ID: "stopped", Name: "stopped", DesiredStatus: "EXITED", Runtime: stale},
 		{ID: "gone", Name: "gone", DesiredStatus: "TERMINATED", Runtime: stale},
 	}
 
@@ -234,7 +234,7 @@ func TestListConnectionsSkipsDeadPods(t *testing.T) {
 func TestListConnectionsEmptyIsAnArrayNotNull(t *testing.T) {
 	stale := &api.LegacyRuntime{Ports: []*api.LegacyPort{port(22, 40022, true)}}
 	pods := []*api.LegacyPod{
-		{ID: "stopped", Name: "stopped", DesiredStatus: "EXITED", LastStatusChange: "Exited by user: x", Runtime: stale},
+		{ID: "stopped", Name: "stopped", DesiredStatus: "EXITED", Runtime: stale},
 		{ID: "gone", Name: "gone", DesiredStatus: "TERMINATED", Runtime: stale},
 	}
 

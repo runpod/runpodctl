@@ -149,10 +149,9 @@ func PodState(pod *api.LegacyPod) podstate.State {
 		return podstate.State{Status: podstate.StatusUnknown, Reason: podstate.ReasonRuntimeUnavailable}
 	}
 	return podstate.Derive(podstate.Signals{
-		DesiredStatus:    pod.DesiredStatus,
-		LastStatusChange: pod.LastStatusChange,
-		RuntimeProbed:    true,
-		RuntimeReported:  pod.Runtime != nil,
+		DesiredStatus:   pod.DesiredStatus,
+		RuntimeProbed:   true,
+		RuntimeReported: pod.Runtime != nil,
 	})
 }
 

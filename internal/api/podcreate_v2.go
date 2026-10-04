@@ -384,8 +384,9 @@ type LegacyPodCreate struct {
 const MinPodVolumeInGb = 10
 
 // V2Request maps the legacy create onto a v2 create. an empty name defaults to
-// the image name without its tag, as the legacy create always did, and a
-// volume below v2's minimum is raised to it so the legacy mount still exists.
+// the image name without its tag, as the legacy create always did; a gpu pod's
+// volume below v2's minimum is raised to it so the legacy mount still exists,
+// and a cpu pod gets none.
 func (l *LegacyPodCreate) V2Request() *PodCreateV2Request {
 	name := l.Name
 	if name == "" {
@@ -404,7 +405,11 @@ func (l *LegacyPodCreate) V2Request() *PodCreateV2Request {
 		Env:             l.Env,
 		StartSSH:        l.StartSSH,
 	}
-	if req.VolumeInGb > 0 && req.VolumeInGb < MinPodVolumeInGb {
+	switch {
+	case l.GpuTypeID == "":
+		// a cpu pod cannot have a pod volume, and the legacy default is 1 gb
+		req.VolumeInGb = 0
+	case req.VolumeInGb > 0 && req.VolumeInGb < MinPodVolumeInGb:
 		req.VolumeInGb = MinPodVolumeInGb
 	}
 	if l.GpuTypeID != "" {
@@ -418,4 +423,13 @@ func (l *LegacyPodCreate) V2Request() *PodCreateV2Request {
 		req.Cmd, req.Entrypoint = ParseDockerArgs(l.DockerArgs)
 	}
 	return req
+}
+
+// VolumeNote is the stderr note for a gpu pod volume V2Request raises to v2's
+// minimum, or "" when none is due.
+func (l *LegacyPodCreate) VolumeNote() string {
+	if l.GpuTypeID == "" || l.NetworkVolumeID != "" || l.VolumeInGb <= 0 || l.VolumeInGb >= MinPodVolumeInGb {
+		return ""
+	}
+	return fmt.Sprintf("note: volume raised from %d gb to the minimum of %d gb", l.VolumeInGb, MinPodVolumeInGb)
 }

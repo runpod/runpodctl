@@ -119,15 +119,13 @@ type PodEnvVar struct {
 	Value string `json:"value"`
 }
 
-// LegacyPod is the pod structure from GraphQL API (for backwards compatibility)
+// LegacyPod is the graphql-shaped pod view the ssh paths and the legacy commands
+// use, built from rest v2 (toLegacyPod) so their output is unchanged.
 type LegacyPod struct {
 	ID                string         `json:"id"`
 	ContainerDiskInGb int            `json:"containerDiskInGb"`
 	CostPerHr         float32        `json:"costPerHr"`
 	DesiredStatus     string         `json:"desiredStatus"`
-	LastStatusChange  interface{}    `json:"lastStatusChange,omitempty"`
-	UptimeSeconds     interface{}    `json:"uptimeSeconds,omitempty"`
-	DockerArgs        string         `json:"dockerArgs"`
 	Env               []string       `json:"env"`
 	GpuCount          int            `json:"gpuCount"`
 	ImageName         string         `json:"imageName"`
@@ -142,28 +140,22 @@ type LegacyPod struct {
 	Runtime           *LegacyRuntime `json:"runtime"`
 }
 
-// LegacyMachine is the machine structure from GraphQL API
+// LegacyMachine is the graphql-shaped machine block the legacy commands print, built from rest v2
 type LegacyMachine struct {
 	GpuDisplayName string `json:"gpuDisplayName"`
 	Location       string `json:"location"`
 }
 
-// LegacyRuntime is the runtime structure from GraphQL API.
-//
-// This is the entire public runtime surface: there is no pulling/starting/ready
-// enum anywhere on it. `runtime` itself being null is the only signal that the
-// container is not up yet (the resolver returns null when the host daemon has
-// nothing for the pod). See internal/podstate.
+// LegacyRuntime is a pod's runtime telemetry. there is no pulling/starting/ready
+// state on it: `runtime` itself being null is the only signal that the
+// container is not up yet. See internal/podstate.
 type LegacyRuntime struct {
 	Ports []*LegacyPort `json:"ports"`
-	// UptimeInSeconds is the real container uptime. Note the name: the
-	// deprecated top-level Pod.uptimeSeconds is a different field and is always
-	// 0 in prod, despite its deprecation notice pointing at a
-	// "runtime.uptimeSeconds" that does not exist.
+	// UptimeInSeconds is the container's uptime.
 	UptimeInSeconds *int `json:"uptimeInSeconds"`
 }
 
-// LegacyPort is the port structure from GraphQL API
+// LegacyPort is one runtime port mapping.
 type LegacyPort struct {
 	Ip          string `json:"ip"`
 	IsIpPublic  bool   `json:"isIpPublic"`
