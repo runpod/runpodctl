@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -213,5 +214,26 @@ func TestTemplatePortsUnmarshal(t *testing.T) {
 	}
 	if len(ports) != 2 || ports[0] != "22/tcp" || ports[1] != "80/http" {
 		t.Errorf("unexpected ports: %v", ports)
+	}
+}
+
+// v1 listed templates by name ignoring case, which --limit/--offset page by;
+// v2 lists newest first
+func TestListTemplatesSortsByNameIgnoringCase(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"templates":[{"id":"3","name":"zeta"},{"id":"1","name":"AI crew"},{"id":"2","name":"a111"}],"pagination":{"hasNextPage":false}}`))
+	}))
+	defer server.Close()
+
+	templates, err := newV2TestClient(t, server).ListTemplates()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var names []string
+	for _, tpl := range templates {
+		names = append(names, tpl.Name)
+	}
+	if strings.Join(names, ",") != "a111,AI crew,zeta" {
+		t.Errorf("order = %v", names)
 	}
 }

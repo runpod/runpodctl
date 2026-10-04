@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 )
 
@@ -227,13 +228,18 @@ func (c *Client) ListTemplates() ([]Template, error) {
 	if err != nil {
 		return nil, err
 	}
+	// v1 listed templates by name, ignoring case; v2 lists newest first. keep
+	// v1's order so --limit/--offset page through the same templates.
+	sort.SliceStable(templates, func(i, j int) bool {
+		return strings.ToLower(templates[i].Name) < strings.ToLower(templates[j].Name)
+	})
 	return templates, nil
 }
 
+// rp-migrate: keep-v1 start
 // backfillUserTemplateReadmes fills in readme, which rest v2 has no field for,
 // from one graphql read of the user's templates. best-effort: a failure leaves
 // the readmes empty rather than failing the listing.
-// rp-migrate: keep-v1 start
 func (c *Client) backfillUserTemplateReadmes(templates []Template) {
 	if len(templates) == 0 {
 		return

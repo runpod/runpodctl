@@ -5,7 +5,7 @@ This document exists for non-obvious, error-prone shortcomings in the codebase, 
 
 ## pitfalls
 
-- templates are multi-source: official from the rest v2 catalog, community via graphql (the v2 catalog caps community at ~100 against ~1,200), user via rest v2; list/search merge results and apply search/pagination client-side; failures of each source are intentionally best-effort. readme and port labels exist only on graphql, so `template get` and the user listing backfill them from there, and create/update write them with a follow-up graphql `saveTemplate` (which re-sends every field, so it must carry the current ports and labels or it blanks them).
+- templates are multi-source: official from the rest v2 catalog, community via graphql (the v2 catalog caps community at ~100 against ~1,200), user via rest v2; list/search merge results and apply search/pagination client-side; failures of each source are intentionally best-effort. readme and port labels exist only on graphql, so `template get` backfills both from there and the user listing backfills the readme, and create/update write them with a follow-up graphql `saveTemplate` (which re-sends every field, so it must carry the current ports and labels or it blanks them).
 - rest v2 template writes: `registry: ""` clears the registry, `null` is silently ignored; and a create without `ports` stores none, where v1 stored `8888/http,22/tcp` — the cli sends v1's default.
 - graphql template shapes are inconsistent: `ports` may be string or array, `env` is key/value pairs; normalize before output and only return `readme/env/ports` on `template get`.
 - `doctor` is the only mutating setup path (api key + ssh sync); onboarding/ssh changes must update both `cmd/doctor` and `internal/sshconnect` hints.
