@@ -11,7 +11,7 @@ var serverlessCmd = &cobra.Command{
 	Use:     "serverless",
 	Aliases: []string{"sls", "endpoints"},
 	Short:   "view serverless billing history",
-	Long:    "view billing history for serverless endpoints, one record per endpoint per time bucket, split into gpu, cpu, disk and fee cost",
+	Long:    "view billing history for serverless endpoints, one record per endpoint per time bucket, split into gpu, cpu and disk cost",
 	Args:    cobra.NoArgs,
 	RunE:    runServerlessBilling,
 }
