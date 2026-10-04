@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -31,7 +32,7 @@ func createServer(t *testing.T, postStatus []int, posts *[]map[string]interface{
 			*posts = append(*posts, body)
 			if n := len(*posts); n <= len(postStatus) && postStatus[n-1] != http.StatusCreated {
 				w.WriteHeader(postStatus[n-1])
-				_, _ = io.WriteString(w, `{"title":"x","status":`+http.StatusText(postStatus[n-1])[:0]+`0,"detail":"There are no longer any instances available"}`)
+				_, _ = fmt.Fprintf(w, `{"title":"x","status":%d,"detail":"There are no longer any instances available"}`, postStatus[n-1])
 				return
 			}
 			w.WriteHeader(http.StatusCreated)
@@ -148,5 +149,32 @@ func TestCreatePodV2CpuWalkStopsOnUnreadableReply(t *testing.T) {
 	}
 	if posts != 1 {
 		t.Errorf("posted %d creates, want 1", posts)
+	}
+}
+
+// what v2 cannot honour is refused before anything is created
+func TestCreatePodV2RefusesUnplaceableRequests(t *testing.T) {
+	cases := []struct {
+		name string
+		req  PodCreateV2Request
+		want string
+	}{
+		{"community country", PodCreateV2Request{CloudType: "COMMUNITY", GpuTypeID: "NVIDIA A40", CountryCode: "US"}, "--country-code is only supported on secure cloud"},
+		{"community compliance", PodCreateV2Request{CloudType: "COMMUNITY", GpuTypeID: "NVIDIA A40", Compliance: []string{"GDPR"}}, "--compliance is only supported on secure cloud"},
+		{"cpu country", PodCreateV2Request{CloudType: "SECURE", CountryCode: "US"}, "only supported for gpu pods"},
+		{"cpu pod volume", PodCreateV2Request{CloudType: "SECURE", VolumeInGb: 20}, "cpu pods cannot have a pod volume"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				t.Errorf("no request may be made, got %s %s", r.Method, r.URL.Path)
+			}))
+			defer server.Close()
+			tc.req.Name, tc.req.ImageName = "n", "img"
+			_, _, err := newV2TestClient(t, server).CreatePodV2(&tc.req)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+		})
 	}
 }

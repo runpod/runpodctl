@@ -91,8 +91,9 @@ func TestCreateCmd_Flags(t *testing.T) {
 	if flags.Lookup("global-networking") == nil {
 		t.Error("expected --global-networking flag")
 	}
-	if flags.Lookup("public-ip") == nil {
-		t.Error("expected --public-ip flag")
+	// the api cannot ask for a public ip, so the flag is gone
+	if flags.Lookup("public-ip") != nil {
+		t.Error("--public-ip must not be registered")
 	}
 	if flags.Lookup("ssh") == nil {
 		t.Error("expected --ssh flag")

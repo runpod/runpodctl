@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -165,16 +166,17 @@ func TestRunList_RuntimeStatus(t *testing.T) {
 			wantUptime: map[string]interface{}{"p-up": float64(111), "p-init": nil},
 		},
 		{
-			// v2's observed lifecycle states are printed as the requested state
+			// v2's live lifecycle states are printed as the requested state
 			// desiredStatus has always carried
-			name: "provisioning, starting and error pods were asked to run",
+			// ERROR is unrecoverable, so it is not folded into RUNNING
+			name: "provisioning and starting pods were asked to run; error pods are not",
 			pods: []map[string]interface{}{
 				v2Pod("p-prov", "PROVISIONING", nil, nil),
 				v2Pod("p-start", "STARTING", nil, nil),
 				v2Pod("p-err", "ERROR", nil, nil),
 			},
-			wantStatus:  map[string]string{"p-prov": "initializing", "p-start": "initializing", "p-err": "initializing"},
-			wantDesired: map[string]string{"p-prov": "RUNNING", "p-start": "RUNNING", "p-err": "RUNNING"},
+			wantStatus:  map[string]string{"p-prov": "initializing", "p-start": "initializing", "p-err": "unknown"},
+			wantDesired: map[string]string{"p-prov": "RUNNING", "p-start": "RUNNING", "p-err": "ERROR"},
 		},
 		{
 			// stale telemetry outlives a stopped container: observed live with
@@ -311,5 +313,27 @@ func TestRunGet_RuntimeStatus(t *testing.T) {
 				t.Errorf("ssh_command must not be offered for an unreachable pod: %v", ssh)
 			}
 		})
+	}
+}
+
+// v2's RFC 3339 createdAt is re-rendered in v1's layout; --since must still
+// parse it, or every pod is filtered out
+func TestRunList_SinceFiltersOnV2CreatedAt(t *testing.T) {
+	recent := time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339Nano)
+	old := time.Now().Add(-3 * time.Hour).UTC().Format(time.RFC3339Nano)
+	s := &stub{pods: []map[string]interface{}{
+		v2Pod("p-new", "RUNNING", nil, map[string]interface{}{"createdAt": recent}),
+		v2Pod("p-old", "RUNNING", nil, map[string]interface{}{"createdAt": old}),
+	}}
+	s.start(t)
+	resetListFlags(t)
+	listSince = "1h"
+
+	items := runListJSON(t)
+	if len(items) != 1 || items[0]["id"] != "p-new" {
+		t.Fatalf("--since 1h = %v, want only p-new", items)
+	}
+	if created, _ := items[0]["createdAt"].(string); created == "" {
+		t.Errorf("createdAt missing: %v", items[0])
 	}
 }

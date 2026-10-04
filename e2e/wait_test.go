@@ -245,8 +245,8 @@ func TestCLI_PodCreateWaitInterrupted(t *testing.T) {
 
 // TestCLI_PodCreateWait proves the success path: --wait blocks until ssh really
 // answers and then prints one json object carrying the live ssh command.
-// Secure cloud on purpose — a community pod without --public-ip never gets a
-// publicly mapped port 22, so there would be nothing to connect to.
+// Secure cloud on purpose — a community pod is not guaranteed a publicly mapped
+// port 22, so there may be nothing to connect to.
 func TestCLI_PodCreateWait(t *testing.T) {
 	name := "e2e-wait-ssh-" + time.Now().Format("20060102150405")
 	sweepPodsByName(t, name)

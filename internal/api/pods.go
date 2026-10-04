@@ -154,9 +154,13 @@ func (c *Client) GetPod(podID string, includeMachine, includeNetworkVolume bool)
 		}
 	}
 	if includeNetworkVolume && pod.NetworkVolumeID != "" {
-		if volume, err := c.GetNetworkVolume(pod.NetworkVolumeID); err == nil {
-			pod.NetworkVolume = volume
+		// v1 embedded the volume in the pod read; a failed lookup must not
+		// print as a pod without one
+		volume, err := c.GetNetworkVolume(pod.NetworkVolumeID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read network volume %s: %w", pod.NetworkVolumeID, err)
 		}
+		pod.NetworkVolume = volume
 	}
 	return &pod, nil
 }

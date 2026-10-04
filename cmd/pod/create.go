@@ -57,7 +57,6 @@ var (
 	createContainerDiskInGb int
 	createVolumeMountPath   string
 	createGlobalNetworking  bool
-	createPublicIP          bool
 	createPorts             string
 	createEnv               string
 	createCloudType         string
@@ -84,7 +83,6 @@ func init() {
 	createCmd.Flags().IntVar(&createContainerDiskInGb, "container-disk-in-gb", 20, "container disk size in gb")
 	createCmd.Flags().StringVar(&createVolumeMountPath, "volume-mount-path", "/workspace", "volume mount path")
 	createCmd.Flags().BoolVar(&createGlobalNetworking, "global-networking", false, "enable global networking (secure cloud only)")
-	createCmd.Flags().BoolVar(&createPublicIP, "public-ip", false, "require public ip (community cloud only)")
 	createCmd.Flags().StringVar(&createPorts, "ports", "", "comma-separated list of ports (e.g., '8888/http,22/tcp')")
 	createCmd.Flags().StringVar(&createEnv, "env", "", "environment variables as json object")
 	createCmd.Flags().StringVar(&createCloudType, "cloud-type", "SECURE", "cloud type (SECURE or COMMUNITY)")
@@ -96,7 +94,7 @@ func init() {
 	createCmd.Flags().StringVar(&createRegistryAuthID, "registry-auth-id", "", "container registry auth id (from 'runpodctl registry list')")
 	createCmd.Flags().StringVar(&createCountryCode, "country-code", "", "limit pod to a specific country (e.g., US, DE)")
 	createCmd.Flags().StringVar(&createCompliance, "compliance", "", "comma-separated compliance requirements (e.g., HIPAA,SOC_2_TYPE_2)")
-	createCmd.Flags().BoolVar(&createWait, "wait", false, "block until ssh is reachable (tcp connect to the pod's public port 22 answers with an ssh banner; no key or handshake needed), then print the pod as 'pod get' does. needs a publicly mapped port 22, so community cloud also needs --public-ip")
+	createCmd.Flags().BoolVar(&createWait, "wait", false, "block until ssh is reachable (tcp connect to the pod's public port 22 answers with an ssh banner; no key or handshake needed), then print the pod as 'pod get' does. needs a publicly mapped port 22, which community cloud does not guarantee")
 	createCmd.Flags().StringVar(&createWaitTimeout, "wait-timeout", defaultWaitTimeout, "max time to wait with --wait, e.g. 90s, 10m, 1h; on timeout the pod is kept and the error carries its id")
 }
 
@@ -149,20 +147,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	supportPublicIP := false
-	if createPublicIP {
-		if cloudType == "SECURE" {
-			fmt.Fprintln(os.Stderr, "note: secure cloud pods always have public ips; --public-ip has no effect")
-		}
-		if cloudType == "COMMUNITY" {
-			// rest v2 has no way to ask for a community machine with a public ip;
-			// dropping the requirement silently could leave the pod with no
-			// reachable ssh port, so refuse instead.
-			return fmt.Errorf("--public-ip is not supported on community cloud: the api no longer accepts a public ip requirement; use --cloud-type SECURE, whose pods always have a public ip")
-		}
-	}
-
-	waitTimeout, err := resolveWaitTimeout(cmd, computeType, cloudType, supportPublicIP)
+	waitTimeout, err := resolveWaitTimeout(cmd, cloudType)
 	if err != nil {
 		return err
 	}
@@ -196,7 +181,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 // resolveWaitTimeout validates the --wait flag combination and returns the
 // timeout to use. It runs before the pod is created so an unsatisfiable
 // combination costs nothing.
-func resolveWaitTimeout(cmd *cobra.Command, computeType, cloudType string, supportPublicIP bool) (time.Duration, error) {
+func resolveWaitTimeout(cmd *cobra.Command, cloudType string) (time.Duration, error) {
 	if !createWait {
 		if cmd.Flags().Changed("wait-timeout") {
 			fmt.Fprintln(cmd.ErrOrStderr(), "note: --wait-timeout has no effect without --wait; ignoring")
@@ -213,22 +198,12 @@ func resolveWaitTimeout(cmd *cobra.Command, computeType, cloudType string, suppo
 		return 0, fmt.Errorf("invalid --wait-timeout: %w", err)
 	}
 
-	if computeType == "CPU" {
-		// cpu pods are created over rest, which rejects startSsh, so runpod does
-		// not set ssh up for them. prod does still allocate a public port 22, and
-		// an image that runs its own sshd is reachable there — but plain images
-		// are not, and that only shows up as a timeout. warn instead of guessing.
-		fmt.Fprintln(cmd.ErrOrStderr(), "note: cpu pods are created through the rest api, which cannot request runpod-managed ssh; --wait only succeeds if the image starts sshd itself")
-	}
-
-	if cloudType == "COMMUNITY" && !supportPublicIP {
+	if cloudType == "COMMUNITY" {
 		// ssh readiness needs port 22 mapped to a public ip. on community cloud
-		// that only happens on a machine with a public ip, which is what
-		// --public-ip asks the scheduler for; without it the pod can land
-		// somewhere that never publishes a port and the wait can only time out.
-		// a warning rather than a refusal: the pod may still land on a machine
-		// that does publish one, and refusing would remove a working combination.
-		fmt.Fprintln(cmd.ErrOrStderr(), "note: community cloud only maps a public ssh port on machines with a public ip; add --public-ip (or use --cloud-type SECURE) or --wait may never see one")
+		// that only happens on a machine with a public ip, which the api cannot
+		// ask for, so the pod can land somewhere that never publishes a port. a
+		// warning rather than a refusal: it may still land on one that does.
+		fmt.Fprintln(cmd.ErrOrStderr(), "note: community cloud only maps a public ssh port on machines with a public ip, which the api cannot request; use --cloud-type SECURE or --wait may never see one")
 	}
 
 	return timeout, nil
@@ -305,8 +280,8 @@ func waitForPodSSH(ctx context.Context, cmd *cobra.Command, podID string, timeou
 // podDetailsWithSSH re-reads the pod once ssh is up, retrying while the read
 // comes back without live ssh info.
 //
-// fetchPodDetails degrades to an {"error": ...} ssh blob when its graphql read
-// fails. For `pod get` that best-effort answer is right, but for
+// fetchPodDetails degrades to an {"error": ...} ssh blob when it has no live
+// ssh info. For `pod get` that best-effort answer is right, but for
 // `pod create --wait` it would mean exiting 0 with the one field the flag exists
 // to produce missing — a caller reading .ssh.ssh_command would get nothing and no
 // signal. The failure is transient by nature (the wait just read that same list
@@ -325,9 +300,8 @@ func podDetailsWithSSH(ctx context.Context, podID, addr string) (*podDetails, er
 				return nil, interruptedReadError(podID, addr, reason)
 			}
 		}
-		// includeMachine: the graphql create response this replaces selected
-		// machine { gpuDisplayName location }, so without it --wait would hand back
-		// strictly less than a plain create did.
+		// includeMachine: the create response this replaces carried placement,
+		// so --wait hands back at least as much.
 		details, err := fetchPodDetailsFn(podID, true, false)
 		switch {
 		case err != nil:
@@ -370,8 +344,8 @@ func sleepUnlessCancelled(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// podIDFrom pulls the pod id out of either create response shape: the rest path
-// returns *api.Pod, the graphql path an untyped map.
+// podIDFrom pulls the pod id out of either create output shape: a cpu create
+// prints *api.Pod, a gpu create the LegacyCreateOutput map.
 func podIDFrom(result interface{}) (string, error) {
 	switch typed := result.(type) {
 	case *api.Pod:
@@ -387,7 +361,8 @@ func podIDFrom(result interface{}) (string, error) {
 }
 
 // createPodV2 creates the pod over rest v2. a gpu create prints the shape the
-// graphql create did; a cpu create prints the pod as the rest v1 create did.
+// graphql create did and a cpu create the shape the rest v1 create did, so the
+// output of either is unchanged.
 func createPodV2(computeType, gpuTypeID, cloudType string) (interface{}, error) {
 	client, err := api.NewClient()
 	if err != nil {
@@ -405,15 +380,13 @@ func createPodV2(computeType, gpuTypeID, cloudType string) (interface{}, error) 
 		NetworkVolumeID:  createNetworkVolumeID,
 		MinCudaVersion:   createMinCudaVersion,
 		RegistryAuthID:   strings.TrimSpace(createRegistryAuthID),
+		StartSSH:         createSSH,
 		GlobalNetworking: createGlobalNetworking,
 		CountryCode:      strings.TrimSpace(createCountryCode),
 	}
 	if computeType == "GPU" {
 		req.GpuTypeID = gpuTypeID
 		req.GpuCount = createGpuCount
-		// v1 could not request runpod-managed ssh for a cpu pod; graphql could
-		// for a gpu pod
-		req.StartSSH = createSSH
 	}
 	if createPorts != "" {
 		req.Ports = strings.Split(createPorts, ",")

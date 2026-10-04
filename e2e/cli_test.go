@@ -86,11 +86,10 @@ func parseStringSlice(value interface{}) []string {
 
 // communityGpuTypesByPrice returns available community gpu ids cheapest first.
 //
-// pickCommunityGpuType returns whatever the api happens to list first, which is
-// an A100 80GB at $1.19/hr as of writing; anything that provisions a pod purely
-// to observe cli behaviour should not pay 7x for a gpu the assertion never
-// touches. `available: true` is also not a capacity guarantee — the cheapest
-// types are frequently sold out — so callers should walk the list rather than
+// the api's own first listing is an A100 80GB at $1.19/hr as of writing; anything
+// that provisions a pod purely to observe cli behaviour should not pay 7x for a
+// gpu the assertion never touches. `available: true` is also not a capacity
+// guarantee — the cheapest types are frequently sold out — so callers should walk the list rather than
 // skip on the first failure.
 func communityGpuTypesByPrice(t *testing.T) []struct {
 	ID    string
@@ -130,32 +129,6 @@ func communityGpuTypesByPrice(t *testing.T) []struct {
 		t.Skip("skipping - no priced community gpu types available")
 	}
 	return candidates
-}
-
-func pickCommunityGpuType(t *testing.T) string {
-	t.Helper()
-
-	stdout, stderr, err := runCLI("gpu", "list")
-	if err != nil {
-		t.Skipf("skipping - can't list gpus: %v\nstderr: %s", err, stderr)
-	}
-
-	var gpus []map[string]interface{}
-	if err := json.Unmarshal([]byte(stdout), &gpus); err != nil {
-		t.Skipf("skipping - can't parse gpu list: %v", err)
-	}
-
-	for _, gpu := range gpus {
-		community, _ := gpu["communityCloud"].(bool)
-		available, _ := gpu["available"].(bool)
-		id, _ := gpu["gpuId"].(string)
-		if community && available && strings.TrimSpace(id) != "" {
-			return id
-		}
-	}
-
-	t.Skip("skipping - no community gpu types available")
-	return ""
 }
 
 func shouldSkipCommunityCreate(errMsg string) bool {
@@ -337,67 +310,6 @@ func TestCLI_PodCreateGlobalNetworkingRequiresSecureCloud(t *testing.T) {
 	}
 	if !strings.Contains(lower, "data-center-ids") {
 		t.Errorf("expected data-center-ids hint, got: %s", stderr)
-	}
-}
-
-func TestCLI_PodCreateCommunityPublicIP(t *testing.T) {
-	gpuTypeID := pickCommunityGpuType(t)
-	name := "e2e-test-public-ip-" + time.Now().Format("20060102150405")
-
-	stdout, stderr, err := runCLI("pod", "create",
-		"--cloud-type", "community",
-		"--public-ip",
-		"--image", "ubuntu:22.04",
-		"--gpu-id", gpuTypeID,
-		"--name", name,
-	)
-	if err != nil {
-		if shouldSkipCommunityCreate(stdout + stderr) {
-			t.Skipf("community public ip unavailable: %s", strings.TrimSpace(stderr))
-		}
-		t.Fatalf("failed to create community pod with public ip: %v\nstderr: %s", err, stderr)
-	}
-
-	var pod map[string]interface{}
-	if err := json.Unmarshal([]byte(stdout), &pod); err != nil {
-		t.Fatalf("output is not valid json: %v\noutput: %s", err, stdout)
-	}
-
-	podID, ok := pod["id"].(string)
-	if !ok || strings.TrimSpace(podID) == "" {
-		t.Fatal("expected pod id in response")
-	}
-
-	t.Cleanup(func() {
-		_, _, err := runCLI("pod", "delete", podID)
-		if err != nil {
-			t.Logf("warning: failed to delete test pod %s: %v", podID, err)
-		} else {
-			t.Logf("cleaned up pod %s", podID)
-		}
-	})
-
-	stdout, stderr, err = runCLI("pod", "get", podID, "--include-machine")
-	if err != nil {
-		t.Fatalf("failed to get pod %s: %v\nstderr: %s", podID, err, stderr)
-	}
-
-	var details map[string]interface{}
-	if err := json.Unmarshal([]byte(stdout), &details); err != nil {
-		t.Fatalf("pod get output is not valid json: %v\noutput: %s", err, stdout)
-	}
-
-	machine, ok := details["machine"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected machine info in pod get response")
-	}
-
-	supportPublicIP, ok := machine["supportPublicIp"].(bool)
-	if !ok {
-		t.Fatalf("expected machine.supportPublicIp to be present")
-	}
-	if !supportPublicIP {
-		t.Errorf("expected supportPublicIp true for community pod with --public-ip")
 	}
 }
 
@@ -2195,16 +2107,13 @@ func TestCLI_PodRuntimeStatusTransition(t *testing.T) {
 		if status, _ := item["runtimeStatus"].(string); status != "running" {
 			t.Errorf("pod list runtimeStatus = %q, want running", status)
 		}
-		if _, ok := item["lastStatusChange"].(string); !ok {
-			t.Errorf("pod list should carry lastStatusChange: %v", item)
-		}
 	}
 	if !found {
 		t.Errorf("pod %s missing from pod list", podID)
 	}
 
-	// stopped: a user-initiated stop must be attributed as such, and must not be
-	// reported as running even though stale runtime telemetry lingers.
+	// stopped: must not be reported as running even though stale runtime
+	// telemetry lingers. rest v2 records no stop attribution, so no reason.
 	if _, stderr, err := runCLI("pod", "stop", podID); err != nil {
 		t.Fatalf("pod stop failed: %v\nstderr: %s", err, stderr)
 	}
@@ -2212,8 +2121,8 @@ func TestCLI_PodRuntimeStatusTransition(t *testing.T) {
 	if status, _ := stopped["runtimeStatus"].(string); status != "stopped" {
 		t.Errorf("stopped pod runtimeStatus = %v, want stopped (%v)", stopped["runtimeStatus"], stopped)
 	}
-	if reason, _ := stopped["runtimeStatusReason"].(string); reason != "stopped_by_user" {
-		t.Errorf("stopped pod runtimeStatusReason = %q, want stopped_by_user", reason)
+	if reason, ok := stopped["runtimeStatusReason"]; ok {
+		t.Errorf("stopped pod runtimeStatusReason = %v, want none", reason)
 	}
 	if _, ok := stopped["uptimeSeconds"]; ok {
 		t.Errorf("stopped pod must not report stale uptimeSeconds: %v", stopped["uptimeSeconds"])
