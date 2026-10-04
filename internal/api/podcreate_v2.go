@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
+
+	"github.com/runpod/runpodctl/internal/clierr"
 )
 
 // PodCreateV2Request is a pod create, in the cli's own terms. CreatePodV2 turns
@@ -77,6 +80,9 @@ var stockOrderV2 = map[string]int{"HIGH": 0, "MEDIUM": 1, "LOW": 2, "NONE": 3}
 // available flavor first. A 422 is a bad body, not scarce capacity, so it ends
 // the walk at once.
 func (c *Client) CreatePodV2(req *PodCreateV2Request) (*Pod, map[string]interface{}, error) {
+	if err := checkPlacement(req); err != nil {
+		return nil, nil, err
+	}
 	body := &v2PodCreate{
 		Name:             req.Name,
 		Image:            req.ImageName,
@@ -139,6 +145,24 @@ func (c *Client) CreatePodV2(req *PodCreateV2Request) (*Pod, map[string]interfac
 	return nil, nil, lastErr
 }
 
+// checkPlacement refuses, before anything is created, what v2 cannot honour.
+// --country-code resolves through the gpu catalog, and community stock has no
+// data center to resolve to; a cpu pod cannot have a persistent volume.
+func checkPlacement(req *PodCreateV2Request) error {
+	community := strings.EqualFold(req.CloudType, "COMMUNITY")
+	switch {
+	case community && req.CountryCode != "":
+		return clierr.Usagef("--country-code is only supported on secure cloud")
+	case community && len(cleanList(req.Compliance)) > 0:
+		return clierr.Usagef("--compliance is only supported on secure cloud")
+	case req.GpuTypeID == "" && req.CountryCode != "":
+		return clierr.Usagef("--country-code is only supported for gpu pods; use --data-center-ids")
+	case req.GpuTypeID == "" && req.VolumeInGb > 0 && req.NetworkVolumeID == "":
+		return clierr.Usagef("cpu pods cannot have a pod volume; use --network-volume-id")
+	}
+	return nil
+}
+
 func (c *Client) postPod(body *v2PodCreate) (*Pod, map[string]interface{}, error) {
 	data, err := c.PostV2("/pods", body)
 	if err != nil {
@@ -147,11 +171,24 @@ func (c *Client) postPod(body *v2PodCreate) (*Pod, map[string]interface{}, error
 	var raw map[string]interface{}
 	_ = json.Unmarshal(data, &raw)
 	pod, err := parseV2Pod(data)
-	return pod, raw, err
+	if err != nil {
+		// the create was accepted, so a pod may exist and bill: say so, or the
+		// obvious next step (running the create again) buys a second one
+		id, _ := raw["id"].(string)
+		if id == "" {
+			id = "unknown"
+		}
+		return nil, raw, fmt.Errorf("the create was accepted but its reply could not be read (%v); pod id %s; check 'runpodctl pod list' before retrying", err, id)
+	}
+	return pod, raw, nil
 }
 
 func (c *Client) cpuFlavorsByStock() ([]string, error) {
-	data, err := c.GetV2("/catalog/cpus", url.Values{"include": {"AVAILABILITY"}, "product": {"POD"}})
+	data, err := c.GetV2("/catalog/cpus", url.Values{
+		"include":   {"AVAILABILITY"},
+		"product":   {"POD"},
+		"vcpuCount": {strconv.Itoa(v1DefaultCpuVcpus)},
+	})
 	if err != nil {
 		return nil, err
 	}

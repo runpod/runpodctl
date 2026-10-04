@@ -49,13 +49,12 @@ runpodctl pod create [flags]
       --name string                pod name
       --network-volume-id string   network volume id to attach
       --ports string               comma-separated list of ports (e.g., '8888/http,22/tcp')
-      --public-ip                  require public ip (community cloud only)
       --registry-auth-id string    container registry auth id (from 'runpodctl registry list')
       --ssh                        enable ssh on the pod (default true)
       --template-id string         template id (use 'runpodctl template search' to find templates)
       --volume-in-gb int           volume size in gb
       --volume-mount-path string   volume mount path (default "/workspace")
-      --wait                       block until ssh is reachable (tcp connect to the pod's public port 22 answers with an ssh banner; no key or handshake needed), then print the pod as 'pod get' does. needs a publicly mapped port 22, so community cloud also needs --public-ip
+      --wait                       block until ssh is reachable (tcp connect to the pod's public port 22 answers with an ssh banner; no key or handshake needed), then print the pod as 'pod get' does. needs a publicly mapped port 22, which community cloud does not guarantee
       --wait-timeout string        max time to wait with --wait, e.g. 90s, 10m, 1h; on timeout the pod is kept and the error carries its id (default "10m")
 ```
 

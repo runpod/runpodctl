@@ -46,9 +46,8 @@ func runGet(cmd *cobra.Command, args []string) error {
 	return output.Print(details, &output.Config{Format: format})
 }
 
-// fetchPodDetails reads a pod over rest and enriches it with the derived runtime
-// state and the live ssh connection info from graphql (rest leaves runtime null,
-// so it has neither telemetry nor ports).
+// fetchPodDetails reads a pod and enriches it with the derived runtime state and
+// the live ssh connection info, all from the one rest v2 read.
 //
 // `pod create --wait` prints this same shape once ssh is up, instead of the
 // create response: the point of waiting is to hand back a pod you can connect
@@ -107,9 +106,8 @@ func fetchPodDetails(podID string, includeMachine, includeNetworkVolume bool) (*
 	}, nil
 }
 
-// podDetails is a pod read over rest enriched with the derived runtime state and
-// the live ssh block from graphql. It is the `pod get` payload, and the
-// `pod create --wait` payload.
+// podDetails is a pod read enriched with the derived runtime state and the live
+// ssh block. It is the `pod get` payload, and the `pod create --wait` payload.
 type podDetails struct {
 	*api.Pod
 	RuntimeStatus       string                 `json:"runtimeStatus"`

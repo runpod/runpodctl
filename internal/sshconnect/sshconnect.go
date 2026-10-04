@@ -128,8 +128,7 @@ func ListConnections(pods []*api.LegacyPod, keyInfo KeyInfo) []map[string]interf
 	// filters more pods than it used to, so the empty case is now common.
 	connections := make([]map[string]interface{}, 0, len(pods))
 	for _, pod := range pods {
-		// nil: graphql lists are nullable, and BuildConnection would dereference
-		// it. known-down: a stopped pod keeps reporting stale runtime ports, so it
+		// nil: BuildConnection would dereference it. known-down: a stopped pod keeps reporting stale runtime ports, so it
 		// would be listed with a command that cannot connect.
 		if pod == nil || PodState(pod).IsKnownDown() {
 			continue
@@ -142,7 +141,7 @@ func ListConnections(pods []*api.LegacyPod, keyInfo KeyInfo) []map[string]interf
 	return connections
 }
 
-// PodState derives the runtime state of a graphql pod. It lives here so every
+// PodState derives the runtime state of a pod. It lives here so every
 // ssh path uses one derivation with one set of signals, instead of each caller
 // assembling podstate.Signals slightly differently.
 func PodState(pod *api.LegacyPod) podstate.State {
@@ -159,8 +158,8 @@ func PodState(pod *api.LegacyPod) podstate.State {
 
 // FindPodConnection finds a pod by id or name and returns its connection.
 //
-// A nil entry in the list is skipped rather than dereferenced: graphql lists are
-// nullable, and `pod create --wait` re-reads this list right after telling the
+// A nil entry in the list is skipped rather than dereferenced: `pod create
+// --wait` re-reads this list right after telling the
 // user the pod is ready, where a panic would replace the single json error object
 // with a go stack trace on stderr and exit 2.
 func FindPodConnection(pods []*api.LegacyPod, nameOrID string, keyInfo KeyInfo) (*api.LegacyPod, map[string]interface{}) {

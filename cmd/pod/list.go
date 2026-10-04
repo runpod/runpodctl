@@ -185,8 +185,8 @@ func parseCreatedAt(v interface{}) time.Time {
 	if t, err := time.Parse(time.RFC3339, s); err == nil {
 		return t
 	}
-	// the api's own layout, which pod reads print as createdAt (go's
-	// time.String, e.g. "2026-10-02 05:28:38.366 +0000 UTC")
+	// the layout pod reads print createdAt in, which v1 used and the cli keeps
+	// (go's time.String, e.g. "2026-10-02 05:28:38.366 +0000 UTC")
 	if t, err := time.Parse("2006-01-02 15:04:05.999999999 -0700 MST", s); err == nil {
 		return t
 	}

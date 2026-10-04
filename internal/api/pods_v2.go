@@ -58,11 +58,13 @@ type v2Pod struct {
 }
 
 // legacyDesiredStatus maps v2's observed status onto the requested-state value
-// the cli has always printed as desiredStatus: a pod being provisioned, started,
-// or failing was asked to run.
+// the cli has always printed as desiredStatus: a pod being provisioned or
+// started was asked to run.
 func legacyDesiredStatus(status string) string {
 	switch strings.ToUpper(status) {
-	case "PROVISIONING", "STARTING", "RUNNING", "ERROR":
+	// ERROR is v2's "unrecoverable" state and is passed through, so a wait
+	// ends instead of treating a dead pod as one still booting
+	case "PROVISIONING", "STARTING", "RUNNING":
 		return "RUNNING"
 	default:
 		return strings.ToUpper(status)
