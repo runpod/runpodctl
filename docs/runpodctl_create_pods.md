@@ -16,18 +16,15 @@ runpodctl create pods [flags]
       --args string             container arguments
       --communityCloud          create in community cloud
       --containerDiskSize int   container disk size in GB (default 20)
-      --cost float32            no longer supported (rest v2 cannot enforce a price ceiling)
       --env strings             container arguments
       --gpuCount int            number of GPUs for the pod (default 1)
       --gpuType string          gpu type id, e.g. 'NVIDIA GeForce RTX 3090'
   -h, --help                    help for pods
       --imageName string        container image name
-      --mem int                 minimum system memory needed (default 20)
       --name string             any pod name for easy reference
       --podCount int            number of pods to create with the same name (default 1)
       --ports strings           ports to expose; max only 1 http and 1 tcp allowed; e.g. '8888/http'
       --secureCloud             create in secure cloud
-      --vcpu int                minimum vCPUs needed (default 1)
       --volumePath string       container volume path (default "/runpod")
       --volumeSize int          persistent volume disk size in GB (default 1)
 ```

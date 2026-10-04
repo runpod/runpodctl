@@ -90,8 +90,28 @@ func TestLegacyPodCreate_V2Request(t *testing.T) {
 		t.Errorf("volume/ssh = %d %q %v", req.VolumeInGb, req.VolumeMountPath, req.StartSSH)
 	}
 
-	cpu := (&LegacyPodCreate{ImageName: "busybox", Name: "named", GpuCount: 0, VolumeInGb: 0}).V2Request()
+	// a cpu pod cannot have a pod volume, and the legacy default is 1 gb
+	cpu := (&LegacyPodCreate{ImageName: "busybox", Name: "named", GpuCount: 0, VolumeInGb: 1}).V2Request()
 	if cpu.GpuTypeID != "" || cpu.GpuCount != 0 || cpu.Name != "named" || cpu.VolumeInGb != 0 {
 		t.Errorf("cpu create = %+v", cpu)
+	}
+}
+
+func TestLegacyPodCreate_VolumeNote(t *testing.T) {
+	cases := []struct {
+		name string
+		in   LegacyPodCreate
+		want string
+	}{
+		{"gpu default volume is raised", LegacyPodCreate{GpuTypeID: "g", VolumeInGb: 1}, "note: volume raised from 1 gb to the minimum of 10 gb"},
+		{"gpu volume at the minimum", LegacyPodCreate{GpuTypeID: "g", VolumeInGb: 10}, ""},
+		{"no volume", LegacyPodCreate{GpuTypeID: "g"}, ""},
+		{"network volume replaces the pod volume", LegacyPodCreate{GpuTypeID: "g", VolumeInGb: 1, NetworkVolumeID: "v"}, ""},
+		{"cpu has no pod volume to raise", LegacyPodCreate{VolumeInGb: 1}, ""},
+	}
+	for _, tc := range cases {
+		if got := tc.in.VolumeNote(); got != tc.want {
+			t.Errorf("%s: note = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

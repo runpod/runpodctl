@@ -13,14 +13,11 @@ import (
 var (
 	communityCloud    bool
 	containerDiskInGb int
-	deployCost        float32
 	dockerArgs        string
 	env               []string
 	gpuCount          int
 	gpuTypeId         string
 	imageName         string
-	minMemoryInGb     int
-	minVcpuCount      int
 	name              string
 	podCount          int
 	ports             []string
@@ -38,9 +35,6 @@ var CreatePodsCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		gpus := strings.Split(gpuTypeId, ",")
 		gpusIndex := 0
-		if err := rejectUnsupportedCreateFlags(cmd); err != nil {
-			cobra.CheckErr(err)
-		}
 		input := &api.LegacyPodCreate{
 			ContainerDiskInGb: containerDiskInGb,
 			DockerArgs:        dockerArgs,
@@ -68,6 +62,11 @@ var CreatePodsCmd = &cobra.Command{
 			input.CloudType = "COMMUNITY"
 		}
 
+		input.GpuTypeID = gpus[0]
+		if note := input.VolumeNote(); note != "" {
+			fmt.Fprintln(os.Stderr, note)
+		}
+
 		client, err := api.NewClient()
 		cobra.CheckErr(err)
 		for x := 0; x < podCount; x++ {
@@ -93,11 +92,8 @@ var CreatePodsCmd = &cobra.Command{
 func init() {
 	CreatePodsCmd.Flags().BoolVar(&communityCloud, "communityCloud", false, "create in community cloud")
 	CreatePodsCmd.Flags().BoolVar(&secureCloud, "secureCloud", false, "create in secure cloud")
-	CreatePodsCmd.Flags().Float32Var(&deployCost, "cost", 0, "no longer supported (rest v2 cannot enforce a price ceiling)")
 	CreatePodsCmd.Flags().IntVar(&containerDiskInGb, "containerDiskSize", 20, "container disk size in GB")
 	CreatePodsCmd.Flags().IntVar(&gpuCount, "gpuCount", 1, "number of GPUs for the pod")
-	CreatePodsCmd.Flags().IntVar(&minMemoryInGb, "mem", 20, "minimum system memory needed")
-	CreatePodsCmd.Flags().IntVar(&minVcpuCount, "vcpu", 1, "minimum vCPUs needed")
 	CreatePodsCmd.Flags().IntVar(&podCount, "podCount", 1, "number of pods to create with the same name")
 	CreatePodsCmd.Flags().IntVar(&volumeInGb, "volumeSize", 1, "persistent volume disk size in GB")
 	CreatePodsCmd.Flags().StringSliceVar(&env, "env", nil, "container arguments")
@@ -112,23 +108,4 @@ func init() {
 	CreatePodsCmd.MarkFlagRequired("gpuType")   //nolint
 	CreatePodsCmd.MarkFlagRequired("imageName") //nolint
 	CreatePodsCmd.MarkFlagRequired("name")      //nolint
-}
-
-// rejectUnsupportedCreateFlags handles the podFindAndDeployOnDemand filters
-// rest v2 has no field for. a price ceiling that cannot be enforced must not be
-// ignored, so --cost is refused; --mem and --vcpu were minimums the scheduler
-// matched machines against, while v2 sizes a pod by its gpu, so they only warn.
-func rejectUnsupportedCreateFlags(cmd *cobra.Command) error {
-	if cmd.Flags().Changed("cost") {
-		return fmt.Errorf("--cost is no longer supported; use 'runpodctl gpu list' to check prices, then 'runpodctl pod create'")
-	}
-	if volumeInGb > 0 && volumeInGb < api.MinPodVolumeInGb {
-		fmt.Fprintf(os.Stderr, "note: volume raised from %d gb to the minimum of %d gb\n", volumeInGb, api.MinPodVolumeInGb)
-	}
-	for _, flag := range []string{"mem", "vcpu"} {
-		if cmd.Flags().Changed(flag) {
-			fmt.Fprintf(os.Stderr, "warning: --%s is no longer applied; memory and vcpus are sized by the gpu type\n", flag)
-		}
-	}
-	return nil
 }
