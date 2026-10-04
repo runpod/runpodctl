@@ -23,7 +23,7 @@ var (
 )
 
 func init() {
-	getCmd.Flags().BoolVar(&getIncludeTemplate, "include-template", false, "include template info")
+	getCmd.Flags().BoolVar(&getIncludeTemplate, "include-template", false, "include the container config (image, disk, args, env, ports)")
 	getCmd.Flags().BoolVar(&getIncludeWorkers, "include-workers", false, "include workers info")
 }
 

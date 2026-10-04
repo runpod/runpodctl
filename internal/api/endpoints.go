@@ -17,7 +17,7 @@ type Endpoint struct {
 	ID                 string                  `json:"id"`
 	Name               string                  `json:"name"`
 	TemplateID         string                  `json:"templateId,omitempty"`
-	GpuIDs             string                  `json:"gpuIds,omitempty"`     // graphql write side only: pool ids
+	GpuIDs             string                  `json:"gpuIds,omitempty"`     // graphql only (read and write): pool ids with "-<type>" exclusions
 	GpuTypeIDs         []string                `json:"gpuTypeIds,omitempty"` // rest read side only: gpu type ids
 	InstanceIDs        []string                `json:"instanceIds,omitempty"`
 	NetworkVolumeID    string                  `json:"networkVolumeId,omitempty"`
@@ -94,39 +94,20 @@ type EndpointNetworkVolume struct {
 	DataCenterID    string `json:"dataCenterId,omitempty"`
 }
 
-// UnmarshalJSON tolerates both shapes of networkVolumeIds: the rest read
-// endpoint returns bare id strings (["vol-1"]) while the graphql saveEndpoint
-// write path uses objects ([{"networkVolumeId":"vol-1"}]).
-func (v *EndpointNetworkVolume) UnmarshalJSON(data []byte) error {
-	var id string
-	if err := json.Unmarshal(data, &id); err == nil {
-		v.NetworkVolumeID = id
-		return nil
-	}
-
-	type alias EndpointNetworkVolume
-	var obj alias
-	if err := json.Unmarshal(data, &obj); err != nil {
-		return err
-	}
-	*v = EndpointNetworkVolume(obj)
-	return nil
-}
-
 // EndpointListResponse is the response from listing endpoints
 type EndpointListResponse struct {
 	Endpoints []Endpoint `json:"endpoints"`
 }
 
-// EndpointUpdateRequest is the request to update an endpoint
+// EndpointUpdateRequest is an endpoint update in the cli's terms; nil and ""
+// leave a setting unchanged. UpdateEndpoint maps it onto the v2 body.
 type EndpointUpdateRequest struct {
-	Name        string `json:"name,omitempty"`
-	WorkersMin  *int   `json:"workersMin,omitempty"`
-	WorkersMax  *int   `json:"workersMax,omitempty"`
-	IdleTimeout *int   `json:"idleTimeout,omitempty"`
-	ScalerType  string `json:"scalerType,omitempty"`
-	ScalerValue *int   `json:"scalerValue,omitempty"`
-	Flashboot   *bool  `json:"flashboot,omitempty"`
+	Name        string
+	WorkersMin  *int
+	WorkersMax  *int
+	IdleTimeout *int
+	ScalerType  string
+	ScalerValue *int
 }
 
 // EndpointListOptions are options for listing endpoints
@@ -146,10 +127,16 @@ func (c *Client) ListEndpoints(opts *EndpointListOptions) ([]Endpoint, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read the gpu catalog: %w", err)
 	}
+	workers, err := c.workerClient(opts)
+	if err != nil {
+		return nil, err
+	}
 	endpoints := make([]Endpoint, 0, len(v2Endpoints))
 	for i := range v2Endpoints {
 		out := v2Endpoints[i].toEndpoint(poolTypes)
-		c.decorateEndpoint(&out, &v2Endpoints[i], opts)
+		if err := c.decorateEndpoint(&out, &v2Endpoints[i], opts, workers); err != nil {
+			return nil, err
+		}
 		endpoints = append(endpoints, out)
 	}
 	return endpoints, nil
@@ -165,37 +152,33 @@ func (c *Client) GetEndpoint(endpointID string, includeTemplate, includeWorkers 
 	if err != nil {
 		return nil, fmt.Errorf("failed to read the gpu catalog: %w", err)
 	}
+	opts := &EndpointListOptions{IncludeTemplate: includeTemplate, IncludeWorkers: includeWorkers}
+	workers, err := c.workerClient(opts)
+	if err != nil {
+		return nil, err
+	}
 	out := e.toEndpoint(poolTypes)
-	c.decorateEndpoint(&out, e, &EndpointListOptions{IncludeTemplate: includeTemplate, IncludeWorkers: includeWorkers})
+	if err := c.decorateEndpoint(&out, e, opts, workers); err != nil {
+		return nil, err
+	}
 	return &out, nil
 }
 
 type v2EndpointUpdate struct {
-	Workers   map[string]int         `json:"workers,omitempty"`
-	Scaling   map[string]interface{} `json:"scaling,omitempty"`
-	Flashboot string                 `json:"flashboot,omitempty"`
+	Workers map[string]int         `json:"workers,omitempty"`
+	Scaling map[string]interface{} `json:"scaling,omitempty"`
 }
 
-// UpdateEndpoint updates an endpoint over rest v2. v2 nests the worker and
-// scaling settings, so a change to any of them is sent with the endpoint's
-// current values for the rest.
-func (c *Client) UpdateEndpoint(endpointID string, req *EndpointUpdateRequest) (*Endpoint, error) {
-	if req.Name != "" {
-		if err := c.renameEndpointV1(endpointID, req.Name); err != nil {
-			return nil, err
-		}
-	}
+// UpdateEndpoint updates an endpoint. v2 nests the worker and scaling
+// settings, so a change to any of them is sent with the endpoint's current
+// values for the rest. the v2 patch goes first, since it is the write that can
+// fail validation; the rename (over v1) goes last.
+func (c *Client) UpdateEndpoint(endpointID string, req *EndpointUpdateRequest) error {
 	body := &v2EndpointUpdate{}
-	if req.Flashboot != nil {
-		body.Flashboot = "OFF"
-		if *req.Flashboot {
-			body.Flashboot = "FLASHBOOT"
-		}
-	}
 	if req.WorkersMin != nil || req.WorkersMax != nil || req.IdleTimeout != nil || req.ScalerType != "" || req.ScalerValue != nil {
 		current, err := c.getV2Endpoint(endpointID)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if req.WorkersMin != nil || req.WorkersMax != nil || req.IdleTimeout != nil {
 			workers := map[string]int{"min": current.Workers.Min, "max": current.Workers.Max}
@@ -236,21 +219,21 @@ func (c *Client) UpdateEndpoint(endpointID string, req *EndpointUpdateRequest) (
 			}
 		}
 	}
-	if body.Workers == nil && body.Scaling == nil && body.Flashboot == "" {
-		return c.GetEndpoint(endpointID, false, false)
+	patched := body.Workers != nil || body.Scaling != nil
+	if patched {
+		if _, err := c.PatchV2("/serverless/"+url.PathEscape(endpointID), body); err != nil {
+			return err
+		}
 	}
-	data, err := c.PatchV2("/serverless/"+url.PathEscape(endpointID), body)
-	if err != nil {
-		return nil, err
+	if req.Name != "" {
+		if err := c.renameEndpointV1(endpointID, req.Name); err != nil {
+			if patched {
+				return fmt.Errorf("endpoint settings were updated, but the rename failed: %w", err)
+			}
+			return err
+		}
 	}
-	var e v2Endpoint
-	if err := json.Unmarshal(data, &e); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-	// the write has already succeeded, so the gpu expansion is best-effort here
-	poolTypes, _ := c.gpuPoolTypes()
-	out := e.toEndpoint(poolTypes)
-	return &out, nil
+	return nil
 }
 
 // rp-migrate: keep-v1 start
