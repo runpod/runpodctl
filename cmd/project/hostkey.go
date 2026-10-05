@@ -54,7 +54,9 @@ func hostKeyLookup(podID string) string {
 
 // knownHostsPath returns the trust store, creating it if needed.
 // knownhosts.New fails outright on a missing file, so it cannot be left to the
-// first write.
+// first write. it opens read-only: checking an already-trusted pod only reads
+// the store, so a read-only store must not block that. appendKnownHost opens
+// for writing only when there is a new key to record.
 func knownHostsPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -67,7 +69,7 @@ func knownHostsPath() (string, error) {
 	}
 
 	path := filepath.Join(dir, "known_hosts")
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, knownHostsFilePerm)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDONLY, knownHostsFilePerm)
 	if err != nil {
 		return "", fmt.Errorf("creating %s: %w", path, err)
 	}

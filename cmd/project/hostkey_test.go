@@ -515,6 +515,48 @@ func TestKnownHostsPathCreatesPrivateStore(t *testing.T) {
 	}
 }
 
+// TestReadOnlyStoreStillTrustsKnownPod: verifying a pod that is already trusted
+// only reads the store, so a store the user made read-only must not block it.
+// a new pod still cannot be recorded there, and must be refused rather than
+// trusted without a pin.
+func TestReadOnlyStoreStillTrustsKnownPod(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod does not make a file read-only for its owner on windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores file modes")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	addr := startTestSSHD(t, newTestHostKey(t))
+	path, err := knownHostsPath()
+	if err != nil {
+		t.Fatalf("knownHostsPath: %v", err)
+	}
+	if err := dial(t, addr, "pod-abc123", path); err != nil {
+		t.Fatalf("first connection: %v", err)
+	}
+
+	if err := os.Chmod(path, 0o400); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, knownHostsFilePerm) })
+
+	if path, err = knownHostsPath(); err != nil {
+		t.Fatalf("knownHostsPath on a read-only store: %v", err)
+	}
+	if err := dial(t, addr, "pod-abc123", path); err != nil {
+		t.Fatalf("trusted pod with a read-only store: %v", err)
+	}
+
+	other := startTestSSHD(t, newTestHostKey(t))
+	if err := dial(t, other, "pod-new", path); err == nil {
+		t.Fatal("new pod accepted although its key could not be recorded")
+	}
+}
+
 // TestPinnedHostKeyAlgorithms covers the lookup behind HostKeyAlgorithms:
 // only this pod's recorded types lead, rsa expands to its sha-2 names, and the
 // fallback adds plain-key algorithms without repeating or certificates.
