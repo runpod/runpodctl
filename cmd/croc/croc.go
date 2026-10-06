@@ -1,21 +1,27 @@
-package transfer
-
-// This file contains the croc implementation adapted from github.com/schollz/croc/v9.
-// It carries wire-format changes incompatible with upstream croc, so it cannot be
-// swapped back for the upstream module without breaking transfers. Do not delete it
-// or the sibling cmd/croc package (see cmd/croc/croc.go).
-// Most of the core croc functionality is imported directly from the library.
-// This wrapper provides runpod-specific relay selection and configuration.
+// Package croc is runpod's in-tree fork of github.com/schollz/croc/v9.
+//
+// DO NOT DELETE THIS PACKAGE, and do not "clean up" what looks like a
+// duplicate of cmd/transfer. It carries wire-format changes that are
+// functionally incompatible with upstream croc (which has since taken a
+// major security fix); both ends of a transfer must speak the same wire
+// format, so the fork cannot be dropped for the upstream module. The
+// platform also mounts a copy of runpodctl into the container, so the
+// container-side binary and the user's local binary must agree on the wire
+// format. In addition, cmd/croc/relays.json is fetched at runtime via
+// raw.githubusercontent.com/runpod/runpodctl/main/cmd/croc/relays.json.
+// Removing this package has broken `runpodctl send`/`receive` before.
+//
+// Taking the upstream security fix needs a wire-format/version handshake
+// between the two ends first; tracked in E-3968.
+package croc
 
 import (
 	"bytes"
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"math"
 	"net"
 	"os"
@@ -49,7 +55,16 @@ var (
 )
 
 func init() {
-	log.SetLevel("warn")
+	log.SetLevel("debug")
+}
+
+// Debug toggles debug mode
+func Debug(debug bool) {
+	if debug {
+		log.SetLevel("debug")
+	} else {
+		log.SetLevel("warn")
+	}
 }
 
 // Options specifies user specific options
@@ -76,11 +91,6 @@ type Options struct {
 	HashAlgorithm  string
 	ThrottleUpload string
 	ZipFolder      bool
-	// Destination is where a receive may write. Empty means the process
-	// working directory, which is where receive has always written. It exists
-	// so a test can point a receiver somewhere other than its own cwd, which
-	// is process-global; there is no flag for it.
-	Destination string
 }
 
 // Client holds the state of the croc transfer
@@ -90,6 +100,7 @@ type Client struct {
 	Key                             []byte
 	ExternalIP, ExternalIPConnected string
 
+	// steps involved in forming relationship
 	Step1ChannelSecured       bool
 	Step2FileInfoTransferred  bool
 	Step3RecipientRequestFile bool
@@ -97,6 +108,7 @@ type Client struct {
 	Step5CloseChannels        bool
 	SuccessfulTransfer        bool
 
+	// send / receive information of all files
 	FilesToTransfer           []FileInfo
 	EmptyFoldersToTransfer    []FileInfo
 	TotalNumberOfContents     int
@@ -104,29 +116,7 @@ type Client struct {
 	FilesToTransferCurrentNum int
 	FilesHasFinished          map[int]struct{}
 
-	// dest is the only filesystem surface the receiver writes through.
-	dest *confinedDest
-	// filePaths and folderPaths are the validated destinations for
-	// FilesToTransfer and EmptyFoldersToTransfer, positionally. The wire
-	// protocol indexes by position, so these are never renumbered and nothing
-	// downstream re-derives a path from FolderRemote and Name.
-	filePaths   []string
-	folderPaths []string
-	// refused records a rejected manifest. It is checked before the peer's
-	// SuccessfulTransfer flag can clear the error, because that flag is
-	// peer-controlled and a refusal it can launder is not a refusal.
-	refused error
-	// aborted records a receive that a data goroutine had to end. It is
-	// guarded by mutex, and checked alongside refused for the same reason.
-	aborted error
-	// stdinTemp is the file a text receive created for the message, named by
-	// the receiver. It is the only file the text cleanup may remove.
-	stdinTemp string
-	// createdLinks are the symlinks this receive created, re-resolved once it
-	// ends however it ends; linksVerified records that the success path did so.
-	createdLinks  []string
-	linksVerified bool
-
+	// send / receive information of current file
 	CurrentFile            *os.File
 	CurrentFileChunkRanges []int64
 	CurrentFileChunks      []int64
@@ -138,6 +128,7 @@ type Client struct {
 	chunkMap               map[uint64]struct{}
 	limiter                *rate.Limiter
 
+	// tcp connections
 	conn []*comm.Comm
 
 	bar             *progressbar.ProgressBar
@@ -150,6 +141,13 @@ type Client struct {
 	quit                     chan bool
 	finishedNum              int
 	numberOfTransferredFiles int
+}
+
+// Chunk contains information about the
+// needed bytes
+type Chunk struct {
+	Bytes    []byte `json:"b,omitempty"`
+	Location int64  `json:"l,omitempty"`
 }
 
 // FileInfo registers the information about the file
@@ -186,17 +184,15 @@ type SenderInfo struct {
 	HashAlgorithm          string
 }
 
-// New establishes a new connection for transferring files
+// New establishes a new connection for transferring files between two instances.
 func New(ops Options) (c *Client, err error) {
 	c = new(Client)
 	c.FilesHasFinished = make(map[int]struct{})
-	c.Options = ops
 
-	if c.Options.Debug {
-		log.SetLevel("debug")
-	} else {
-		log.SetLevel("warn")
-	}
+	// setup basic info
+	c.Options = ops
+	Debug(c.Options.Debug)
+	log.Debugf("options: %+v", c.Options)
 
 	if len(c.Options.SharedSecret) < 6 {
 		err = fmt.Errorf("code is too short")
@@ -205,11 +201,12 @@ func New(ops Options) (c *Client, err error) {
 
 	c.conn = make([]*comm.Comm, 16)
 
+	// initialize throttler
 	if len(c.Options.ThrottleUpload) > 1 && c.Options.IsSender {
 		upload := c.Options.ThrottleUpload[:len(c.Options.ThrottleUpload)-1]
 		uploadLimit, err := strconv.ParseInt(upload, 10, 64)
 		if err != nil {
-			panic("could not parse given upload limit")
+			panic("Could not parse given Upload Limit")
 		}
 		minBurstSize := models.TCP_BUFFER_SIZE
 		var rt rate.Limit
@@ -223,16 +220,19 @@ func New(ops Options) (c *Client, err error) {
 		default:
 			uploadLimit, err = strconv.ParseInt(c.Options.ThrottleUpload, 10, 64)
 			if err != nil {
-				panic("could not parse given upload limit")
+				panic("Could not parse given Upload Limit")
 			}
 		}
+		// Somehow 4* is necessary
 		rt = rate.Every(time.Second / (4 * time.Duration(uploadLimit)))
 		if int(uploadLimit) > minBurstSize {
 			minBurstSize = int(uploadLimit)
 		}
 		c.limiter = rate.NewLimiter(rt, minBurstSize)
+		log.Debugf("Throttling Upload to %#v", c.limiter.Limit())
 	}
 
+	// initialize pake for recipient
 	if !c.Options.IsSender {
 		c.Pake, err = pake.InitCurve([]byte(c.Options.SharedSecret[5:]), 0, c.Options.Curve)
 	}
@@ -242,6 +242,12 @@ func New(ops Options) (c *Client, err error) {
 
 	c.mutex = &sync.Mutex{}
 	return
+}
+
+// TransferOptions for sending
+type TransferOptions struct {
+	PathToFiles      []string
+	KeepPathInRemote bool
 }
 
 func isEmptyFolder(folderPath string) (bool, error) {
@@ -258,11 +264,14 @@ func isEmptyFolder(folderPath string) (bool, error) {
 	return false, nil
 }
 
-// GetFilesInfo retrieves file information for transfer
+// This function retrives the important file informations
+// for every file that will be transferred
 func GetFilesInfo(fnames []string, zipfolder bool) (filesInfo []FileInfo, emptyFolders []FileInfo, totalNumberFolders int, err error) {
+	// fnames: the relativ/absolute paths of files/folders that will be transferred
 	totalNumberFolders = 0
 	var paths []string
 	for _, fname := range fnames {
+		// Support wildcard
 		if strings.Contains(fname, "*") {
 			matches, errGlob := filepath.Glob(fname)
 			if errGlob != nil {
@@ -276,26 +285,28 @@ func GetFilesInfo(fnames []string, zipfolder bool) (filesInfo []FileInfo, emptyF
 		}
 	}
 
-	for _, pathName := range paths {
-		stat, errStat := os.Lstat(pathName)
+	for _, path := range paths {
+		stat, errStat := os.Lstat(path)
+
 		if errStat != nil {
 			err = errStat
 			return
 		}
 
-		absPath, errAbs := filepath.Abs(pathName)
+		absPath, errAbs := filepath.Abs(path)
+
 		if errAbs != nil {
 			err = errAbs
 			return
 		}
 
 		if stat.IsDir() && zipfolder {
-			if pathName[len(pathName)-1:] != "/" {
-				pathName += "/"
+			if path[len(path)-1:] != "/" {
+				path += "/"
 			}
-			pathName := filepath.Dir(pathName)
-			dest := filepath.Base(pathName) + ".zip"
-			utils.ZipDirectory(dest, pathName) //nolint
+			path := filepath.Dir(path)
+			dest := filepath.Base(path) + ".zip"
+			utils.ZipDirectory(dest, path) //nolint
 			stat, errStat = os.Lstat(dest)
 			if errStat != nil {
 				err = errStat
@@ -320,17 +331,17 @@ func GetFilesInfo(fnames []string, zipfolder bool) (filesInfo []FileInfo, emptyF
 
 		if stat.IsDir() {
 			err = filepath.Walk(absPath,
-				func(walkPath string, info os.FileInfo, err error) error {
+				func(pathName string, info os.FileInfo, err error) error {
 					if err != nil {
 						return err
 					}
-					remoteFolder := strings.TrimPrefix(filepath.Dir(walkPath),
+					remoteFolder := strings.TrimPrefix(filepath.Dir(pathName),
 						filepath.Dir(absPath)+string(os.PathSeparator))
 					if !info.IsDir() {
 						filesInfo = append(filesInfo, FileInfo{
 							Name:         info.Name(),
 							FolderRemote: strings.Replace(remoteFolder, string(os.PathSeparator), "/", -1) + "/",
-							FolderSource: filepath.Dir(walkPath),
+							FolderSource: filepath.Dir(pathName),
 							Size:         info.Size(),
 							ModTime:      info.ModTime(),
 							Mode:         info.Mode(),
@@ -338,10 +349,11 @@ func GetFilesInfo(fnames []string, zipfolder bool) (filesInfo []FileInfo, emptyF
 						})
 					} else {
 						totalNumberFolders++
-						isEmpty, _ := isEmptyFolder(walkPath)
-						if isEmpty {
+						isEmptyFolder, _ := isEmptyFolder(pathName)
+						if isEmptyFolder {
 							emptyFolders = append(emptyFolders, FileInfo{
-								FolderRemote: strings.Replace(strings.TrimPrefix(walkPath,
+								// Name: info.Name(),
+								FolderRemote: strings.Replace(strings.TrimPrefix(pathName,
 									filepath.Dir(absPath)+string(os.PathSeparator)), string(os.PathSeparator), "/", -1) + "/",
 							})
 						}
@@ -351,6 +363,7 @@ func GetFilesInfo(fnames []string, zipfolder bool) (filesInfo []FileInfo, emptyF
 			if err != nil {
 				return
 			}
+
 		} else {
 			filesInfo = append(filesInfo, FileInfo{
 				Name:         stat.Name(),
@@ -362,6 +375,7 @@ func GetFilesInfo(fnames []string, zipfolder bool) (filesInfo []FileInfo, emptyF
 				TempFile:     false,
 			})
 		}
+
 	}
 	return
 }
@@ -380,10 +394,12 @@ func (c *Client) sendCollectFiles(filesInfo []FileInfo) (err error) {
 		}
 
 		if fileInfo.Mode&os.ModeSymlink != 0 {
+			log.Debugf("%s is symlink", fileInfo.Name)
 			c.FilesToTransfer[i].Symlink, err = os.Readlink(fullPath)
 			if err != nil {
 				log.Debugf("error getting symlink: %s", err.Error())
 			}
+			log.Debugf("%+v", c.FilesToTransfer[i])
 		}
 
 		if c.Options.HashAlgorithm == "" {
@@ -391,13 +407,16 @@ func (c *Client) sendCollectFiles(filesInfo []FileInfo) (err error) {
 		}
 
 		c.FilesToTransfer[i].Hash, err = utils.HashFile(fullPath, c.Options.HashAlgorithm)
+		log.Debugf("hashed %s to %x using %s", fullPath, c.FilesToTransfer[i].Hash, c.Options.HashAlgorithm)
 		totalFilesSize += fileInfo.Size
 		if err != nil {
 			return
 		}
+		log.Debugf("file %d info: %+v", i, c.FilesToTransfer[i])
 		fmt.Fprintf(os.Stderr, "\r                                 ")
-		fmt.Fprintf(os.Stderr, "\rsending %d files (%s)", i, utils.ByteCountDecimal(totalFilesSize))
+		fmt.Fprintf(os.Stderr, "\rSending %d files (%s)", i, utils.ByteCountDecimal(totalFilesSize))
 	}
+	log.Debugf("longestFilename: %+v", c.longestFilename)
 	fname := fmt.Sprintf("%d files", len(c.FilesToTransfer))
 	folderName := fmt.Sprintf("%d folders", c.TotalNumberFolders)
 	if len(c.FilesToTransfer) == 1 {
@@ -412,14 +431,15 @@ func (c *Client) sendCollectFiles(filesInfo []FileInfo) (err error) {
 
 	fmt.Fprintf(os.Stderr, "\r                                 ")
 	if c.TotalNumberFolders > 0 {
-		fmt.Fprintf(os.Stderr, "\rsending %s and %s (%s)\n", fname, folderName, utils.ByteCountDecimal(totalFilesSize))
+		fmt.Fprintf(os.Stderr, "\rSending %s and %s (%s)\n", fname, folderName, utils.ByteCountDecimal(totalFilesSize))
 	} else {
-		fmt.Fprintf(os.Stderr, "\rsending %s (%s)\n", fname, utils.ByteCountDecimal(totalFilesSize))
+		fmt.Fprintf(os.Stderr, "\rSending %s (%s)\n", fname, utils.ByteCountDecimal(totalFilesSize))
 	}
 	return
 }
 
 func (c *Client) setupLocalRelay() {
+	// setup the relay locally
 	firstPort, _ := strconv.Atoi(c.Options.RelayPorts[0])
 	openPorts := utils.FindOpenPorts("localhost", firstPort, len(c.Options.RelayPorts))
 	if len(openPorts) < len(c.Options.RelayPorts) {
@@ -444,11 +464,13 @@ func (c *Client) setupLocalRelay() {
 
 func (c *Client) broadcastOnLocalNetwork(useipv6 bool) {
 	var timeLimit time.Duration
+	// if we don't use an external relay, the broadcast messages need to be sent continuously
 	if c.Options.OnlyLocal {
 		timeLimit = -1 * time.Second
 	} else {
 		timeLimit = 30 * time.Second
 	}
+	// look for peers first
 	settings := peerdiscovery.Settings{
 		Limit:     -1,
 		Payload:   []byte("croc" + c.Options.RelayPorts[0]),
@@ -459,7 +481,9 @@ func (c *Client) broadcastOnLocalNetwork(useipv6 bool) {
 		settings.IPVersion = peerdiscovery.IPv6
 	}
 
-	_, err := peerdiscovery.Discover(settings)
+	discoveries, err := peerdiscovery.Discover(settings)
+	log.Debugf("discoveries: %+v", discoveries)
+
 	if err != nil {
 		log.Debug(err)
 	}
@@ -467,22 +491,33 @@ func (c *Client) broadcastOnLocalNetwork(useipv6 bool) {
 
 func (c *Client) transferOverLocalRelay(errchan chan<- error) {
 	time.Sleep(500 * time.Millisecond)
+	log.Debug("establishing connection")
+	var banner string
 	conn, banner, ipaddr, err := tcp.ConnectToTCPServer("localhost:"+c.Options.RelayPorts[0], c.Options.RelayPassword, c.Options.SharedSecret[:3])
+	log.Debugf("banner: %s", banner)
 	if err != nil {
+		err = fmt.Errorf("could not connect to localhost:%s: %w", c.Options.RelayPorts[0], err)
+		log.Debug(err)
+		// not really an error because it will try to connect over the actual relay
 		return
 	}
+	log.Debugf("local connection established: %+v", conn)
 	for {
 		data, _ := conn.Receive()
 		if bytes.Equal(data, handshakeRequest) {
 			break
 		} else if bytes.Equal(data, []byte{1}) {
 			log.Debug("got ping")
+		} else {
+			log.Debugf("instead of handshake got: %s", data)
 		}
 	}
 	c.conn[0] = conn
+	log.Debug("exchanged header message")
 	c.Options.RelayAddress = "localhost"
 	c.Options.RelayPorts = strings.Split(banner, ",")
 	if c.Options.NoMultiplexing {
+		log.Debug("no multiplexing")
 		c.Options.RelayPorts = []string{c.Options.RelayPorts[0]}
 	}
 	c.ExternalIP = ipaddr
@@ -502,15 +537,21 @@ func (c *Client) Send(filesInfo []FileInfo, emptyFoldersToTransfer []FileInfo, t
 	fmt.Fprintf(os.Stderr, "code is: %[1]s\non the other computer run\n\nrunpodctl receive %[2]s%[1]s\n", c.Options.SharedSecret, flags.String())
 	if c.Options.Ask {
 		machid, _ := machineid.ID()
-		fmt.Fprintf(os.Stderr, "\ryour machine id is '%s'\n", machid)
+		fmt.Fprintf(os.Stderr, "\rYour machine ID is '%s'\n", machid)
 	}
-
+	// // c.spinner.Suffix = " waiting for recipient..."
+	// c.spinner.Start()
+	// create channel for quitting
+	// connect to the relay for messaging
 	errchan := make(chan error, 1)
 
 	if !c.Options.DisableLocal {
+		// add two things to the error channel
 		errchan = make(chan error, 2)
 		c.setupLocalRelay()
+		// broadcast on ipv4
 		go c.broadcastOnLocalNetwork(false)
+		// broadcast on ipv6
 		go c.broadcastOnLocalNetwork(true)
 		go c.transferOverLocalRelay(errchan)
 	}
@@ -525,37 +566,50 @@ func (c *Client) Send(filesInfo []FileInfo, emptyFoldersToTransfer []FileInfo, t
 					continue
 				}
 				host, port, _ := net.SplitHostPort(address)
+				log.Debugf("host: '%s', port: '%s'", host, port)
+				// Default port to :9009
 				if port == "" {
 					host = address
 					port = models.DEFAULT_PORT
 				}
+				log.Debugf("got host '%v' and port '%v'", host, port)
 				address = net.JoinHostPort(host, port)
+				log.Debugf("trying connection to %s", address)
 				conn, banner, ipaddr, err = tcp.ConnectToTCPServer(address, c.Options.RelayPassword, c.Options.SharedSecret[:3], durations[i])
 				if err == nil {
 					c.Options.RelayAddress = address
 					break
 				}
+				log.Debugf("could not establish '%s'", address)
 			}
 			if conn == nil && err == nil {
 				err = fmt.Errorf("could not connect")
 			}
 			if err != nil {
 				err = fmt.Errorf("could not connect to %s: %w", c.Options.RelayAddress, err)
+				log.Debug(err)
 				errchan <- err
 				return
 			}
+			log.Debugf("banner: %s", banner)
+			log.Debugf("connection established: %+v", conn)
 			for {
+				log.Debug("waiting for bytes")
 				data, errConn := conn.Receive()
 				if errConn != nil {
 					log.Debugf("[%+v] had error: %s", conn, errConn.Error())
 				}
 				if bytes.Equal(data, ipRequest) {
+					// recipient wants to try to connect to local ips
 					var ips []string
+					// only get local ips if the local is enabled
 					if !c.Options.DisableLocal {
+						// get list of local ips
 						ips, err = utils.GetLocalIPs()
 						if err != nil {
 							log.Debugf("error getting local ips: %v", err)
 						}
+						// prepend the port that is being listened to
 						ips = append([]string{c.Options.RelayPorts[0]}, ips...)
 					}
 					bips, _ := json.Marshal(ips)
@@ -565,8 +619,11 @@ func (c *Client) Send(filesInfo []FileInfo, emptyFoldersToTransfer []FileInfo, t
 				} else if bytes.Equal(data, handshakeRequest) {
 					break
 				} else if bytes.Equal(data, []byte{1}) {
+					log.Debug("got ping")
 					continue
 				} else {
+					log.Debugf("[%+v] got weird bytes: %+v", conn, data)
+					// throttle the reading
 					errchan <- fmt.Errorf("gracefully refusing using the public relay")
 					return
 				}
@@ -575,17 +632,21 @@ func (c *Client) Send(filesInfo []FileInfo, emptyFoldersToTransfer []FileInfo, t
 			c.conn[0] = conn
 			c.Options.RelayPorts = strings.Split(banner, ",")
 			if c.Options.NoMultiplexing {
+				log.Debug("no multiplexing")
 				c.Options.RelayPorts = []string{c.Options.RelayPorts[0]}
 			}
 			c.ExternalIP = ipaddr
+			log.Debug("exchanged header message")
 			errchan <- c.transfer()
 		}()
 	}
 
 	err = <-errchan
 	if err == nil {
+		// return if no error
 		return
 	} else {
+		log.Debugf("error from errchan: %v", err)
 		if strings.Contains(err.Error(), "could not secure channel") {
 			return err
 		}
@@ -601,15 +662,9 @@ func (c *Client) Send(filesInfo []FileInfo, emptyFoldersToTransfer []FileInfo, t
 
 // Receive will receive a file
 func (c *Client) Receive() (err error) {
-	// opened before connecting: an unusable destination should fail now, not
-	// after a relay handshake and a pake exchange.
-	c.dest, err = openDest(c.Options.Destination)
-	if err != nil {
-		return fmt.Errorf("cannot open destination: %w", err)
-	}
-	defer c.dest.Close()
-
 	fmt.Fprintf(os.Stderr, "connecting...")
+	// recipient will look for peers first
+	// and continue if it doesn't find any within 100 ms
 	usingLocal := false
 	isIPset := false
 
@@ -619,16 +674,20 @@ func (c *Client) Receive() (err error) {
 	}
 
 	if c.Options.IP != "" {
+		// check ip version
 		if strings.Count(c.Options.IP, ":") >= 2 {
+			log.Debug("assume ipv6")
 			c.Options.RelayAddress6 = c.Options.IP
 		}
 		if strings.Contains(c.Options.IP, ".") {
+			log.Debug("assume ipv4")
 			c.Options.RelayAddress = c.Options.IP
 		}
 		isIPset = true
 	}
 
 	if !c.Options.DisableLocal && !isIPset {
+		log.Debug("attempt to discover peers")
 		var discoveries []peerdiscovery.Discovered
 		var wgDiscovery sync.WaitGroup
 		var dmux sync.Mutex
@@ -667,10 +726,14 @@ func (c *Client) Receive() (err error) {
 		wgDiscovery.Wait()
 
 		if err == nil && len(discoveries) > 0 {
+			log.Debugf("all discoveries: %+v", discoveries)
 			for i := 0; i < len(discoveries); i++ {
+				log.Debugf("discovery %d has payload: %+v", i, discoveries[i])
 				if !bytes.HasPrefix(discoveries[i].Payload, []byte("croc")) {
+					log.Debug("skipping discovery")
 					continue
 				}
+				log.Debug("switching to local")
 				portToUse := string(bytes.TrimPrefix(discoveries[i].Payload, []byte("croc")))
 				if portToUse == "" {
 					portToUse = models.DEFAULT_PORT
@@ -678,14 +741,19 @@ func (c *Client) Receive() (err error) {
 				address := net.JoinHostPort(discoveries[i].Address, portToUse)
 				errPing := tcp.PingServer(address)
 				if errPing == nil {
+					log.Debugf("successfully pinged '%s'", address)
 					c.Options.RelayAddress = address
 					c.ExternalIPConnected = c.Options.RelayAddress
 					c.Options.RelayAddress6 = ""
 					usingLocal = true
 					break
+				} else {
+					log.Debugf("could not ping: %+v", errPing)
 				}
 			}
 		}
+		log.Debugf("discoveries: %+v", discoveries)
+		log.Debug("establishing connection")
 	}
 	var banner string
 	durations := []time.Duration{200 * time.Millisecond, 5 * time.Second}
@@ -696,30 +764,42 @@ func (c *Client) Receive() (err error) {
 		}
 		var host, port string
 		host, port, _ = net.SplitHostPort(address)
+		// Default port to :9009
 		if port == "" {
 			host = address
 			port = models.DEFAULT_PORT
 		}
+		log.Debugf("got host '%v' and port '%v'", host, port)
 		address = net.JoinHostPort(host, port)
+		log.Debugf("trying connection to %s", address)
 		c.conn[0], banner, c.ExternalIP, err = tcp.ConnectToTCPServer(address, c.Options.RelayPassword, c.Options.SharedSecret[:3], durations[i])
 		if err == nil {
 			c.Options.RelayAddress = address
 			break
 		}
+		log.Debugf("could not establish '%s'", address)
 	}
 	if err != nil {
 		err = fmt.Errorf("could not connect to %s: %w", c.Options.RelayAddress, err)
+		log.Debug(err)
 		return
 	}
+	log.Debugf("receiver connection established: %+v", c.conn[0])
+	log.Debugf("banner: %s", banner)
 
 	if !usingLocal && !c.Options.DisableLocal && !isIPset {
+		// ask the sender for their local ips and port
+		// and try to connect to them
+		log.Debug("sending ips?")
+		var data []byte
 		if err := c.conn[0].Send(ipRequest); err != nil {
 			log.Errorf("ips send error: %v", err)
 		}
-		data, errRecv := c.conn[0].Receive()
-		if errRecv != nil {
-			return errRecv
+		data, err = c.conn[0].Receive()
+		if err != nil {
+			return
 		}
+		log.Debugf("ips data: %s", data)
 		var ips []string
 		if err := json.Unmarshal(data, &ips); err != nil {
 			log.Debugf("ips unmarshal error: %v", err)
@@ -740,14 +820,20 @@ func (c *Client) Receive() (err error) {
 					}
 				}
 				if !haveLocalIP {
+					log.Debugf("%s is not a local IP, skipping", ip)
 					continue
 				}
 
 				serverTry := net.JoinHostPort(ip, port)
 				conn, banner2, externalIP, errConn := tcp.ConnectToTCPServer(serverTry, c.Options.RelayPassword, c.Options.SharedSecret[:3], 500*time.Millisecond)
 				if errConn != nil {
+					log.Debug(errConn)
+					log.Debugf("could not connect to %s", serverTry)
 					continue
 				}
+				log.Debugf("local connection established to %s", serverTry)
+				log.Debugf("banner: %s", banner2)
+				// reset to the local port
 				banner = banner2
 				c.Options.RelayAddress = serverTry
 				c.ExternalIP = externalIP
@@ -764,46 +850,28 @@ func (c *Client) Receive() (err error) {
 	}
 	c.Options.RelayPorts = strings.Split(banner, ",")
 	if c.Options.NoMultiplexing {
+		log.Debug("no multiplexing")
 		c.Options.RelayPorts = []string{c.Options.RelayPorts[0]}
 	}
+	log.Debug("exchanged header message")
 	fmt.Fprintf(os.Stderr, "\rsecuring channel...")
 	err = c.transfer()
 	if err == nil {
 		if c.numberOfTransferredFiles+len(c.EmptyFoldersToTransfer) == 0 {
-			fmt.Fprintf(os.Stderr, "\rno files transferred.")
+			fmt.Fprintf(os.Stderr, "\rNo files transferred.")
 		}
 	}
 	return
 }
 
 func (c *Client) transfer() (err error) {
+	// connect to the server
+
+	// quit with c.quit <- true
 	c.quit = make(chan bool)
 
-	// deferred because a refusal or an abort returns early below, and the
-	// croc-stdin- file the receiver created in the destination has to go
-	// either way, with its handle closed first. only that file: the name is
-	// the receiver's, so a sender cannot point the cleanup at a file the user
-	// already had.
-	defer func() {
-		if c.Options.IsSender || c.stdinTemp == "" {
-			return
-		}
-		c.mutex.Lock()
-		defer c.mutex.Unlock()
-		if !c.CurrentFileIsClosed && c.CurrentFile != nil {
-			c.CurrentFile.Close()
-			c.CurrentFileIsClosed = true
-		}
-		if err := c.dest.remove(c.stdinTemp); err != nil {
-			log.Warnf("error removing %s: %v", c.stdinTemp, err)
-		}
-		fmt.Print("\n")
-	}()
-
-	// a refusal or an abort can come after some links were created, and the
-	// success path below is the only other place they are re-resolved.
-	defer func() { err = c.verifyLinksOnExit(err) }()
-
+	// if recipient, initialize with sending pake information
+	log.Debug("ready")
 	if !c.Options.IsSender && !c.Step1ChannelSecured {
 		err = message.Send(c.conn[0], c.Key, message.Message{
 			Type:   message.TypePAKE,
@@ -815,11 +883,13 @@ func (c *Client) transfer() (err error) {
 		}
 	}
 
+	// listen for incoming messages and process them
 	for {
 		var data []byte
 		var done bool
 		data, err = c.conn[0].Receive()
 		if err != nil {
+			log.Debugf("got error receiving: %v", err)
 			if !c.Step1ChannelSecured {
 				err = fmt.Errorf("could not secure channel")
 			}
@@ -827,24 +897,14 @@ func (c *Client) transfer() (err error) {
 		}
 		done, err = c.processMessage(data)
 		if err != nil {
+			log.Debugf("got error processing: %v", err)
 			break
 		}
 		if done {
 			break
 		}
 	}
-	// a refused manifest is final, and is checked ahead of the purge below:
-	// SuccessfulTransfer is set from the peer's TypeFinished, so a refusal the
-	// peer can clear is not a refusal.
-	if c.refused != nil {
-		return c.refused
-	}
-	c.mutex.Lock()
-	aborted := c.aborted
-	c.mutex.Unlock()
-	if aborted != nil {
-		return aborted
-	}
+	// purge errors that come from successful transfer
 	if c.SuccessfulTransfer {
 		if err != nil {
 			log.Debugf("purging error: %s", err)
@@ -854,173 +914,51 @@ func (c *Client) transfer() (err error) {
 	if c.Options.IsSender && c.SuccessfulTransfer {
 		for _, file := range c.FilesToTransfer {
 			if file.TempFile {
-				fmt.Println("removing " + file.Name)
+				fmt.Println("Removing " + file.Name)
 				os.Remove(file.Name)
 			}
 		}
 	}
 
 	if c.SuccessfulTransfer && !c.Options.IsSender {
-		// every declared link exists now, so each is re-resolved through the
-		// root. the validator's lexical check approximated how the filesystem
-		// aliases names; this is the filesystem's own answer.
-		c.linksVerified = true
-		if verifyErr := c.dest.verifySymlinks(c.createdLinks); verifyErr != nil {
-			return verifyErr
-		}
-
-		// `send <folder>` arrives as a zip the receiver unpacks in place.
-		// extractZip validates every entry before writing any of them and
-		// returns errors instead of calling log.Fatalln, which is what
-		// utils.UnzipDirectory does.
-		for i, file := range c.FilesToTransfer {
-			if !file.TempFile {
-				continue
-			}
-			if extractErr := c.dest.extractZip(c.filePaths[i]); extractErr != nil {
-				// kept, not removed, so nothing that arrived is lost. a user who
-				// did not expect a zip finds one, so the error says where.
-				return fmt.Errorf("extracting %s: %w; the archive was kept at %s", file.Name, extractErr, c.dest.displayPath(c.filePaths[i]))
-			}
-			if removeErr := c.dest.remove(c.filePaths[i]); removeErr != nil {
-				log.Warnf("error removing %s: %v", file.Name, removeErr)
+		for _, file := range c.FilesToTransfer {
+			if file.TempFile {
+				utils.UnzipDirectory(".", file.Name) //nolint
+				os.Remove(file.Name)
+				log.Debugf("Removing %s\n", file.Name)
 			}
 		}
 	}
 
+	if c.Options.Stdout && !c.Options.IsSender {
+		pathToFile := path.Join(
+			c.FilesToTransfer[c.FilesToTransferCurrentNum].FolderRemote,
+			c.FilesToTransfer[c.FilesToTransferCurrentNum].Name,
+		)
+		log.Debugf("pathToFile: %s", pathToFile)
+		// close if not closed already
+		if !c.CurrentFileIsClosed {
+			c.CurrentFile.Close()
+			c.CurrentFileIsClosed = true
+		}
+		if err := os.Remove(pathToFile); err != nil {
+			log.Warnf("error removing %s: %v", pathToFile, err)
+		}
+		fmt.Print("\n")
+	}
 	if err != nil && strings.Contains(err.Error(), "pake not successful") {
+		log.Debugf("pake error: %s", err.Error())
 		err = fmt.Errorf("password mismatch")
 	}
 	if err != nil && strings.Contains(err.Error(), "unexpected end of JSON input") {
+		log.Debugf("error: %s", err.Error())
 		err = fmt.Errorf("room not ready")
 	}
 	return
 }
 
-// applyFileRequest handles a peer asking for a file. It reports whether the
-// request was applied, so the caller knows to skip the rest of the case.
-//
-// The request is only meaningful to a sender. A receiver acting on one adopts
-// a peer-chosen index that the loops after the transfer use to index the
-// manifest, which is a panic reachable without any consent from the user. It
-// is a separate method so that guard is testable without standing up a key
-// exchange.
-func (c *Client) applyFileRequest(remoteFile RemoteFileRequest) (applied, done bool, err error) {
-	if !c.Options.IsSender {
-		log.Debugf("ignoring a file request sent to the receiving side")
-		return false, false, nil
-	}
-	if n := remoteFile.FilesToTransferCurrentNum; n < 0 || n >= len(c.FilesToTransfer) {
-		return false, true, fmt.Errorf("peer asked for file %d of %d", n, len(c.FilesToTransfer))
-	}
-	size := c.FilesToTransfer[remoteFile.FilesToTransferCurrentNum].Size
-	if err := validateChunkRanges(remoteFile.CurrentFileChunkRanges, size); err != nil {
-		return false, true, err
-	}
-
-	c.FilesToTransferCurrentNum = remoteFile.FilesToTransferCurrentNum
-	c.CurrentFileChunkRanges = remoteFile.CurrentFileChunkRanges
-	c.CurrentFileChunks = utils.ChunkRangesToChunks(c.CurrentFileChunkRanges)
-	c.mutex.Lock()
-	c.chunkMap = make(map[uint64]struct{})
-	for _, chunk := range c.CurrentFileChunks {
-		c.chunkMap[uint64(chunk)] = struct{}{}
-	}
-	c.mutex.Unlock()
-	c.Step3RecipientRequestFile = true
-	return true, false, nil
-}
-
-// validateChunkRanges bounds a peer-supplied resume request before
-// utils.ChunkRangesToChunks expands it. That function reads chunkRanges[i+1]
-// for each count and multiplies out the totals, so a malformed or huge range
-// list is either an out-of-range read or an allocation the peer chose.
-func validateChunkRanges(ranges []int64, size int64) error {
-	if len(ranges) == 0 {
-		return nil
-	}
-	// the shape is [chunkSize, start, count, start, count, ...].
-	if len(ranges)%2 != 1 {
-		return fmt.Errorf("peer sent a malformed resume request (%d values)", len(ranges))
-	}
-	if ranges[0] <= 0 {
-		return fmt.Errorf("peer sent a resume request with chunk size %d", ranges[0])
-	}
-	limit := min(fileChunks(size), maxResumeChunks)
-	var total int64
-	for i := 1; i < len(ranges); i += 2 {
-		if ranges[i] < 0 {
-			return fmt.Errorf("peer sent a negative resume offset (%d)", ranges[i])
-		}
-		count := ranges[i+1]
-		if count < 0 {
-			return fmt.Errorf("peer sent a negative resume length (%d)", count)
-		}
-		total += count
-		if total > limit {
-			return fmt.Errorf("peer sent a resume request covering %d chunks of a file with %d", total, limit)
-		}
-	}
-	return nil
-}
-
-// fileChunks is how many chunks sendData reads for a file of size bytes, and
-// so the most a resume request can usefully name. It uses the chunk size the
-// sender reads with rather than ranges[0]: that one is peer-chosen, and a chunk
-// size of 1 would make the bound the file's size in bytes.
-func fileChunks(size int64) int64 {
-	const chunk = models.TCP_BUFFER_SIZE / 2
-	if size <= 0 {
-		return 0
-	}
-	return (size-1)/chunk + 1
-}
-
-// maxResumeChunks is a ceiling on fileChunks for very large files, so the
-// allocation ChunkRangesToChunks makes stays bounded whatever the file.
-const maxResumeChunks = 1 << 24
-
-// verifyLinksOnExit re-resolves the links a receive created when it ended
-// before the success path could, and adds any escape to err.
-func (c *Client) verifyLinksOnExit(err error) error {
-	if c.Options.IsSender || c.linksVerified || len(c.createdLinks) == 0 {
-		return err
-	}
-	c.linksVerified = true
-	if verifyErr := c.dest.verifySymlinks(c.createdLinks); verifyErr != nil {
-		return errors.Join(err, verifyErr)
-	}
-	return err
-}
-
-// refuse records a rejected manifest, tells the peer, and stops the transfer.
-// The wire message keeps upstream's "refusing files" prefix, which a stock croc
-// sender matches on to exit cleanly rather than reporting a transport fault.
-func (c *Client) refuse(reason string) (done bool, err error) {
-	c.refused = &refusalError{reason: "refusing files: " + reason}
-	if len(c.conn) > 0 && c.conn[0] != nil {
-		if sendErr := message.Send(c.conn[0], c.Key, message.Message{
-			Type:    message.TypeError,
-			Message: c.refused.Error(),
-		}); sendErr != nil {
-			log.Debugf("could not tell the peer why: %v", sendErr)
-		}
-	}
-	return true, c.refused
-}
-
-// currentFileInRange reports whether FilesToTransferCurrentNum can be used as
-// an index. The peer supplies it over the wire, and several of the loops below
-// index the manifest with it, so an out-of-range value is a panic reachable
-// without any consent from the user.
-func (c *Client) currentFileInRange() bool {
-	return c.FilesToTransferCurrentNum >= 0 &&
-		c.FilesToTransferCurrentNum < len(c.FilesToTransfer) &&
-		c.FilesToTransferCurrentNum < len(c.filePaths)
-}
-
 func (c *Client) createEmptyFolder(i int) (err error) {
-	err = c.dest.mkdirAll(c.folderPaths[i])
+	err = os.MkdirAll(c.EmptyFoldersToTransfer[i].FolderRemote, os.ModePerm)
 	if err != nil {
 		return
 	}
@@ -1045,45 +983,15 @@ func (c *Client) processMessageFileInfo(m message.Message) (done bool, err error
 	var senderInfo SenderInfo
 	err = json.Unmarshal(m.Bytes, &senderInfo)
 	if err != nil {
+		log.Debug(err)
 		return
 	}
-	if c.Options.IsSender || c.dest == nil {
-		// only a sender announces a file list. one arriving here means the peer
-		// has the roles backwards, and there is no destination to validate it
-		// against.
-		return c.refuse("a file list arrived from the receiving side")
-	}
-	if c.Step2FileInfoTransferred {
-		// a second list would retarget writes already under way against paths
-		// nothing has checked in this state.
-		return c.refuse("a second file list arrived mid-transfer")
-	}
-
-	// the gate. validated against the destination *before* any of it is staged
-	// into the client, because every loop after the transfer indexes this state
-	// and a refusal that leaves it populated is not a refusal.
-	filePaths, folderPaths, verr := validateManifest(c.dest.root, senderInfo)
-	if verr != nil {
-		return c.refuse(verr.Error())
-	}
-	// `send` of text is one regular file the receiver names and removes. any
-	// other shape would have the cleanup or the temp name apply to entries it
-	// was never meant for.
-	if senderInfo.SendingText {
-		if len(senderInfo.FilesToTransfer) != 1 || len(senderInfo.EmptyFoldersToTransfer) != 0 ||
-			senderInfo.FilesToTransfer[0].Symlink != "" || senderInfo.FilesToTransfer[0].TempFile {
-			return c.refuse("a text transfer must be a single message")
-		}
-	}
-
 	c.Options.SendingText = senderInfo.SendingText
 	c.Options.NoCompress = senderInfo.NoCompress
 	c.Options.HashAlgorithm = senderInfo.HashAlgorithm
 	c.EmptyFoldersToTransfer = senderInfo.EmptyFoldersToTransfer
 	c.TotalNumberFolders = senderInfo.TotalNumberFolders
 	c.FilesToTransfer = senderInfo.FilesToTransfer
-	c.filePaths = filePaths
-	c.folderPaths = folderPaths
 	c.TotalNumberOfContents = 0
 	if c.FilesToTransfer != nil {
 		c.TotalNumberOfContents += len(c.FilesToTransfer)
@@ -1094,6 +1002,10 @@ func (c *Client) processMessageFileInfo(m message.Message) (done bool, err error
 
 	if c.Options.HashAlgorithm == "" {
 		c.Options.HashAlgorithm = "xxhash"
+	}
+	log.Debugf("using hash algorithm: %s", c.Options.HashAlgorithm)
+	if c.Options.NoCompress {
+		log.Debug("disabling compression")
 	}
 	if c.Options.SendingText {
 		c.Options.Stdout = true
@@ -1110,32 +1022,23 @@ func (c *Client) processMessageFileInfo(m message.Message) (done bool, err error
 		if len(fi.Name) > c.longestFilename {
 			c.longestFilename = len(fi.Name)
 		}
-		if c.Options.SendingText {
-			// the message is written to a file the receiver names, whatever
-			// name the peer declared: the cleanup removes it afterwards, so a
-			// peer-chosen name would let it delete a file the user already had.
-			// utils.RandomFileName would also create it relative to the process
-			// working directory rather than the destination.
-			var name string
-			name, err = c.dest.createTemp("croc-stdin-")
+		if strings.HasPrefix(fi.Name, "croc-stdin-") && c.Options.SendingText {
+			c.FilesToTransfer[i].Name, err = utils.RandomFileName()
 			if err != nil {
 				return
 			}
-			c.stdinTemp = name
-			c.FilesToTransfer[i].Name = name
-			c.FilesToTransfer[i].FolderRemote = "./"
-			c.filePaths[i] = name
 		}
 	}
-	action := "accept"
+	// c.spinner.Stop()
+	action := "Accept"
 	if c.Options.SendingText {
-		action = "display"
+		action = "Display"
 		fname = "text message"
 	}
 	if !c.Options.NoPrompt || c.Options.Ask || senderInfo.Ask {
 		if c.Options.Ask || senderInfo.Ask {
 			machID, _ := machineid.ID()
-			fmt.Fprintf(os.Stderr, "\ryour machine id is '%s'.\n%s %s (%s) from '%s'? (Y/n) ", machID, action, fname, utils.ByteCountDecimal(totalSize), senderInfo.MachineID)
+			fmt.Fprintf(os.Stderr, "\rYour machine id is '%s'.\n%s %s (%s) from '%s'? (Y/n) ", machID, action, fname, utils.ByteCountDecimal(totalSize), senderInfo.MachineID)
 		} else {
 			if c.TotalNumberFolders > 0 {
 				fmt.Fprintf(os.Stderr, "\r%s %s and %s (%s)? (Y/n) ", action, fname, folderName, utils.ByteCountDecimal(totalSize))
@@ -1155,49 +1058,35 @@ func (c *Client) processMessageFileInfo(m message.Message) (done bool, err error
 			return true, fmt.Errorf("refused files")
 		}
 	} else {
-		fmt.Fprintf(os.Stderr, "\rreceiving %s (%s) \n", fname, utils.ByteCountDecimal(totalSize))
+		fmt.Fprintf(os.Stderr, "\rReceiving %s (%s) \n", fname, utils.ByteCountDecimal(totalSize))
 	}
-	fmt.Fprintf(os.Stderr, "\nreceiving (<-%s)\n", c.ExternalIPConnected)
+	fmt.Fprintf(os.Stderr, "\nReceiving (<-%s)\n", c.ExternalIPConnected)
 
-	for i := range c.EmptyFoldersToTransfer {
-		declared := c.EmptyFoldersToTransfer[i].FolderRemote
-		// three ways, not two: os.Root reports a pre-existing symlink out of
-		// the destination as an error rather than as absent, and validation
-		// already refused those, so one here is worth reporting not ignoring.
-		_, ex, lerr := c.dest.lstat(c.folderPaths[i])
-		if lerr != nil {
-			return c.refuse(fmt.Sprintf("cannot inspect %q in the destination: %v", declared, lerr))
-		}
-		if ex == absent {
-			if err = c.createEmptyFolder(i); err != nil {
+	for i := 0; i < len(c.EmptyFoldersToTransfer); i += 1 {
+		_, errExists := os.Stat(c.EmptyFoldersToTransfer[i].FolderRemote)
+		if os.IsNotExist(errExists) {
+			err = c.createEmptyFolder(i)
+			if err != nil {
 				return
 			}
-			continue
-		}
-
-		isEmpty, emptyErr := c.dest.isEmptyDir(c.folderPaths[i])
-		if emptyErr != nil || isEmpty {
-			// already an empty directory, or unreadable; MkdirAll would be a
-			// no-op either way.
-			continue
-		}
-		if c.Options.NoPrompt {
-			// receive hardcodes NoPrompt, and this prompt read stdin
-			// regardless, which is the only way a receive could hang. the
-			// directory keeps its contents; nothing is emptied behind the
-			// user's back.
-			fmt.Fprintf(os.Stderr, "keeping the existing contents of %s\n", declared)
-			continue
-		}
-		prompt := fmt.Sprintf("\n%s already has some content in it. \ndo you want"+
-			" to overwrite it with an empty folder? (y/N) ", declared)
-		if choice := strings.ToLower(utils.GetInput(prompt)); choice == "y" || choice == "yes" {
-			if err = c.createEmptyFolder(i); err != nil {
-				return
+		} else {
+			isEmpty, _ := isEmptyFolder(c.EmptyFoldersToTransfer[i].FolderRemote)
+			if !isEmpty {
+				log.Debug("asking to overwrite")
+				prompt := fmt.Sprintf("\n%s already has some content in it. \nDo you want"+
+					" to overwrite it with an empty folder? (y/N) ", c.EmptyFoldersToTransfer[i].FolderRemote)
+				choice := strings.ToLower(utils.GetInput(prompt))
+				if choice == "y" || choice == "yes" {
+					err = c.createEmptyFolder(i)
+					if err != nil {
+						return
+					}
+				}
 			}
 		}
 	}
 
+	// if no files are to be transferred, then we can end the file transfer process
 	if c.FilesToTransfer == nil {
 		c.SuccessfulTransfer = true
 		c.Step3RecipientRequestFile = true
@@ -1209,32 +1098,43 @@ func (c *Client) processMessageFileInfo(m message.Message) (done bool, err error
 			err = errStopTransfer
 		}
 	}
+	log.Debug(c.FilesToTransfer)
 	c.Step2FileInfoTransferred = true
 	return
 }
 
 func (c *Client) processMessagePake(m message.Message) (err error) {
+	log.Debug("received pake payload")
+
 	var salt []byte
 	if c.Options.IsSender {
+		// initialize curve based on the recipient's choice
+		log.Debugf("using curve %s", string(m.Bytes2))
 		c.Pake, err = pake.InitCurve([]byte(c.Options.SharedSecret[5:]), 1, string(m.Bytes2))
 		if err != nil {
+			log.Error(err)
 			return
 		}
 
+		// update the pake
 		err = c.Pake.Update(m.Bytes)
 		if err != nil {
 			return
 		}
 
+		// generate salt and send it back to recipient
+		log.Debug("generating salt")
 		salt = make([]byte, 8)
-		if _, rerr := rand.Read(salt); rerr != nil {
-			return rerr
+		if _, rerr := rand.Read(salt); err != nil {
+			log.Errorf("can't generate random numbers: %v", rerr)
+			return
 		}
+		log.Debug("sender sending pake+salt")
 		err = message.Send(c.conn[0], c.Key, message.Message{
 			Type:   message.TypePAKE,
 			Bytes:  c.Pake.Bytes(),
 			Bytes2: salt,
-		})
+		}) // TODO: check me
 	} else {
 		err = c.Pake.Update(m.Bytes)
 		if err != nil {
@@ -1242,6 +1142,7 @@ func (c *Client) processMessagePake(m message.Message) (err error) {
 		}
 		salt = m.Bytes2
 	}
+	// generate key
 	key, err := c.Pake.SessionKey()
 	if err != nil {
 		return err
@@ -1250,10 +1151,13 @@ func (c *Client) processMessagePake(m message.Message) (err error) {
 	if err != nil {
 		return err
 	}
+	log.Debugf("generated key = %+x with salt %x", c.Key, salt)
 
+	// connects to the other ports of the server for transfer
 	var wg sync.WaitGroup
 	wg.Add(len(c.Options.RelayPorts))
 	for i := 0; i < len(c.Options.RelayPorts); i++ {
+		log.Debugf("port: [%s]", c.Options.RelayPorts[i])
 		go func(j int) {
 			defer wg.Done()
 			var host string
@@ -1262,10 +1166,12 @@ func (c *Client) processMessagePake(m message.Message) (err error) {
 			} else {
 				host, _, err = net.SplitHostPort(c.Options.RelayAddress)
 				if err != nil {
+					log.Errorf("bad relay address %s", c.Options.RelayAddress)
 					return
 				}
 			}
 			server := net.JoinHostPort(host, c.Options.RelayPorts[j])
+			log.Debugf("connecting to %s", server)
 			c.conn[j+1], _, _, err = tcp.ConnectToTCPServer(
 				server,
 				c.Options.RelayPassword,
@@ -1274,6 +1180,7 @@ func (c *Client) processMessagePake(m message.Message) (err error) {
 			if err != nil {
 				panic(err)
 			}
+			log.Debugf("connected to %s", server)
 			if !c.Options.IsSender {
 				go c.receiveData(j)
 			}
@@ -1282,6 +1189,7 @@ func (c *Client) processMessagePake(m message.Message) (err error) {
 	wg.Wait()
 
 	if !c.Options.IsSender {
+		log.Debug("sending external IP")
 		err = message.Send(c.conn[0], c.Key, message.Message{
 			Type:    message.TypeExternalIP,
 			Message: c.ExternalIP,
@@ -1292,6 +1200,7 @@ func (c *Client) processMessagePake(m message.Message) (err error) {
 }
 
 func (c *Client) processExternalIP(m message.Message) (done bool, err error) {
+	log.Debugf("received external IP: %+v", m)
 	if c.Options.IsSender {
 		err = message.Send(c.conn[0], c.Key, message.Message{
 			Type:    message.TypeExternalIP,
@@ -1302,8 +1211,10 @@ func (c *Client) processExternalIP(m message.Message) (done bool, err error) {
 		}
 	}
 	if c.ExternalIPConnected == "" {
+		// it can be preset by the local relay
 		c.ExternalIPConnected = m.Message
 	}
+	log.Debugf("connected as %s -> %s", c.ExternalIP, c.ExternalIPConnected)
 	c.Step1ChannelSecured = true
 	return
 }
@@ -1311,20 +1222,18 @@ func (c *Client) processExternalIP(m message.Message) (done bool, err error) {
 func (c *Client) processMessage(payload []byte) (done bool, err error) {
 	m, err := message.Decode(c.Key, payload)
 	if err != nil {
+		err = fmt.Errorf("problem with decoding: %w", err)
+		log.Debug(err)
 		return
 	}
 
+	// only "pake" messages should be unencrypted
+	// if a non-"pake" message is received unencrypted something
+	// is weird
 	if m.Type != message.TypePAKE && c.Key == nil {
 		err = fmt.Errorf("unencrypted communication rejected")
 		done = true
 		return
-	}
-
-	// a refusal ends the conversation. without this a peer could follow a
-	// rejected manifest with TypeFinished, which sets SuccessfulTransfer and
-	// would otherwise clear the error further down.
-	if c.refused != nil {
-		return true, c.refused
 	}
 
 	switch m.Type {
@@ -1339,10 +1248,12 @@ func (c *Client) processMessage(payload []byte) (done bool, err error) {
 		err = c.processMessagePake(m)
 		if err != nil {
 			err = fmt.Errorf("pake not successful: %w", err)
+			log.Debug(err)
 		}
 	case message.TypeExternalIP:
 		done, err = c.processExternalIP(m)
 	case message.TypeError:
+		// c.spinner.Stop()
 		fmt.Print("\r")
 		err = fmt.Errorf("peer error: %s", m.Message)
 		return true, err
@@ -1354,14 +1265,20 @@ func (c *Client) processMessage(payload []byte) (done bool, err error) {
 		if err != nil {
 			return
 		}
-		var applied bool
-		applied, done, err = c.applyFileRequest(remoteFile)
-		if err != nil || !applied {
-			return
+		c.FilesToTransferCurrentNum = remoteFile.FilesToTransferCurrentNum
+		c.CurrentFileChunkRanges = remoteFile.CurrentFileChunkRanges
+		c.CurrentFileChunks = utils.ChunkRangesToChunks(c.CurrentFileChunkRanges)
+		log.Debugf("current file chunks: %+v", c.CurrentFileChunks)
+		c.mutex.Lock()
+		c.chunkMap = make(map[uint64]struct{})
+		for _, chunk := range c.CurrentFileChunks {
+			c.chunkMap[uint64(chunk)] = struct{}{}
 		}
+		c.mutex.Unlock()
+		c.Step3RecipientRequestFile = true
 
 		if c.Options.Ask {
-			fmt.Fprintf(os.Stderr, "send to machine '%s'? (Y/n) ", remoteFile.MachineID)
+			fmt.Fprintf(os.Stderr, "Send to machine '%s'? (Y/n) ", remoteFile.MachineID)
 			choice := strings.ToLower(utils.GetInput(""))
 			if choice != "" && choice != "y" && choice != "yes" {
 				err = message.Send(c.conn[0], c.Key, message.Message{
@@ -1374,8 +1291,10 @@ func (c *Client) processMessage(payload []byte) (done bool, err error) {
 		}
 	case message.TypeCloseSender:
 		c.bar.Finish() //nolint
+		log.Debug("close-sender received...")
 		c.Step4FileTransferred = false
 		c.Step3RecipientRequestFile = false
+		log.Debug("sending close-recipient")
 		err = message.Send(c.conn[0], c.Key, message.Message{
 			Type: message.TypeCloseRecipient,
 		})
@@ -1384,9 +1303,14 @@ func (c *Client) processMessage(payload []byte) (done bool, err error) {
 		c.Step3RecipientRequestFile = false
 	}
 	if err != nil {
+		log.Debugf("got error from processing message: %v", err)
 		return
 	}
 	err = c.updateState()
+	if err != nil {
+		log.Debugf("got error from updating state: %v", err)
+		return
+	}
 	return
 }
 
@@ -1405,6 +1329,7 @@ func (c *Client) updateIfSenderChannelSecured() (err error) {
 			HashAlgorithm:          c.Options.HashAlgorithm,
 		})
 		if err != nil {
+			log.Error(err)
 			return
 		}
 		err = message.Send(c.conn[0], c.Key, message.Message{
@@ -1421,39 +1346,55 @@ func (c *Client) updateIfSenderChannelSecured() (err error) {
 }
 
 func (c *Client) recipientInitializeFile() (err error) {
-	if !c.currentFileInRange() {
-		return fmt.Errorf("peer asked for file %d of %d", c.FilesToTransferCurrentNum, len(c.FilesToTransfer))
-	}
-	rel := c.filePaths[c.FilesToTransferCurrentNum]
-	size := c.FilesToTransfer[c.FilesToTransferCurrentNum].Size
+	// start initiating the process to receive a new file
+	log.Debugf("working on file %d", c.FilesToTransferCurrentNum)
 
-	if dir := path.Dir(rel); dir != "." {
-		if err := c.dest.mkdirAll(dir); err != nil {
-			log.Errorf("can't create %s: %v", dir, err)
+	// recipient sets the file
+	pathToFile := path.Join(
+		c.FilesToTransfer[c.FilesToTransferCurrentNum].FolderRemote,
+		c.FilesToTransfer[c.FilesToTransferCurrentNum].Name,
+	)
+	folderForFile, _ := filepath.Split(pathToFile)
+	folderForFileBase := filepath.Base(folderForFile)
+	if folderForFileBase != "." && folderForFileBase != "" {
+		if err := os.MkdirAll(folderForFile, os.ModePerm); err != nil {
+			log.Errorf("can't create %s: %v", folderForFile, err)
 		}
 	}
-
-	var existed bool
-	c.CurrentFile, existed, err = c.dest.openForWrite(rel)
-	if err != nil {
-		return fmt.Errorf("could not open %s: %w", rel, err)
-	}
-
+	var errOpen error
+	c.CurrentFile, errOpen = os.OpenFile(
+		pathToFile,
+		os.O_WRONLY, 0o666)
+	var truncate bool // default false
 	c.CurrentFileChunks = []int64{}
 	c.CurrentFileChunkRanges = []int64{}
-	truncate := true
-	if existed {
+	if errOpen == nil {
 		stat, _ := c.CurrentFile.Stat()
-		truncate = stat.Size() != size
+		truncate = stat.Size() != c.FilesToTransfer[c.FilesToTransferCurrentNum].Size
 		if !truncate {
-			c.CurrentFileChunkRanges = c.dest.missingChunks(rel, size, models.TCP_BUFFER_SIZE/2)
+			// recipient requests the file and chunks (if empty, then should receive all chunks)
+			// TODO: determine the missing chunks
+			c.CurrentFileChunkRanges = utils.MissingChunks(
+				pathToFile,
+				c.FilesToTransfer[c.FilesToTransferCurrentNum].Size,
+				models.TCP_BUFFER_SIZE/2,
+			)
 		}
+	} else {
+		c.CurrentFile, errOpen = os.Create(pathToFile)
+		if errOpen != nil {
+			errOpen = fmt.Errorf("could not create %s: %w", pathToFile, errOpen)
+			log.Error(errOpen)
+			return errOpen
+		}
+		truncate = true
 	}
 	if truncate {
-		// size was checked non-negative by validateManifest; Truncate(-1)
-		// would otherwise fail only after the file existed.
-		if err := c.CurrentFile.Truncate(size); err != nil {
-			return fmt.Errorf("could not truncate %s: %w", rel, err)
+		err := c.CurrentFile.Truncate(c.FilesToTransfer[c.FilesToTransferCurrentNum].Size)
+		if err != nil {
+			err = fmt.Errorf("could not truncate %s: %w", pathToFile, err)
+			log.Error(err)
+			return err
 		}
 	}
 	return
@@ -1461,24 +1402,16 @@ func (c *Client) recipientInitializeFile() (err error) {
 
 func (c *Client) recipientGetFileReady(finished bool) (err error) {
 	if finished {
+		// TODO: do the last finishing stuff
+		log.Debug("finished")
 		err = message.Send(c.conn[0], c.Key, message.Message{
 			Type: message.TypeFinished,
 		})
 		if err != nil {
-			// a data goroutine that aborted the receive closes conn[0], so this
-			// can fail without the process being at fault.
-			return err
+			panic(err)
 		}
 		c.SuccessfulTransfer = true
 		c.FilesHasFinished[c.FilesToTransferCurrentNum] = struct{}{}
-		// nothing is left to request, and the sender exits on TypeFinished
-		// without reading a trailing TypeRecipientReady. opening the current
-		// file here is not harmless: the index can point at a declared symlink
-		// that was just created, which os.Root follows to its in-tree target and
-		// then truncates to the size declared for the link (the length of its
-		// target, as lstat reports it on the sender).
-		c.Step3RecipientRequestFile = true
-		return nil
 	}
 
 	err = c.recipientInitializeFile()
@@ -1494,12 +1427,15 @@ func (c *Client) recipientGetFileReady(finished bool) (err error) {
 		FilesToTransferCurrentNum: c.FilesToTransferCurrentNum,
 		MachineID:                 machID,
 	})
+	log.Debug("converting to chunk range")
 	c.CurrentFileChunks = utils.ChunkRangesToChunks(c.CurrentFileChunkRanges)
 
 	if !finished {
+		// setup the progressbar
 		c.setBar()
 	}
 
+	log.Debugf("sending recipient ready with %d chunks", len(c.CurrentFileChunks))
 	err = message.Send(c.conn[0], c.Key, message.Message{
 		Type:  message.TypeRecipientReady,
 		Bytes: bRequest,
@@ -1512,29 +1448,39 @@ func (c *Client) recipientGetFileReady(finished bool) (err error) {
 }
 
 func (c *Client) createEmptyFileAndFinish(fileInfo FileInfo, i int) (err error) {
-	if i < 0 || i >= len(c.filePaths) {
-		return fmt.Errorf("peer asked for file %d of %d", i, len(c.filePaths))
-	}
-	rel := c.filePaths[i]
-	if dir := path.Dir(rel); dir != "." {
-		if err = c.dest.mkdirAll(dir); err != nil {
+	log.Debugf("touching file with folder / name")
+	if !utils.Exists(fileInfo.FolderRemote) {
+		err = os.MkdirAll(fileInfo.FolderRemote, os.ModePerm)
+		if err != nil {
+			log.Error(err)
 			return
 		}
 	}
+	pathToFile := path.Join(fileInfo.FolderRemote, fileInfo.Name)
 	if fileInfo.Symlink != "" {
-		// the target was checked by validateManifest. os.Root would create a
-		// link out of the destination without complaint, and it would outlive
-		// the transfer for whatever walks the tree next.
-		if err = c.dest.symlink(fileInfo.Symlink, rel); err != nil {
+		log.Debug("creating symlink")
+		// remove symlink if it exists
+		if _, errExists := os.Lstat(pathToFile); errExists == nil {
+			os.Remove(pathToFile)
+		}
+		err = os.Symlink(fileInfo.Symlink, pathToFile)
+		if err != nil {
 			return
 		}
-		c.createdLinks = append(c.createdLinks, rel)
-	} else if err = c.dest.createEmpty(rel); err != nil {
-		return
+	} else {
+		emptyFile, errCreate := os.Create(pathToFile)
+		if errCreate != nil {
+			log.Error(errCreate)
+			err = errCreate
+			return
+		}
+		emptyFile.Close()
 	}
+	// setup the progressbar
 	description := fmt.Sprintf("%-*s", c.longestFilename, c.FilesToTransfer[i].Name)
 	if len(c.FilesToTransfer) == 1 {
 		description = c.FilesToTransfer[i].Name
+		// description = ""
 	} else {
 		description = " " + description
 	}
@@ -1554,23 +1500,12 @@ func (c *Client) createEmptyFileAndFinish(fileInfo FileInfo, i int) (err error) 
 	return
 }
 
-// updateIfRecipientHasFileInfo picks the next file to ask for and tells the
-// sender. A failure in there is local (a file that cannot be opened, a link
-// that cannot be made) and the sender is waiting on TypeRecipientReady, so it
-// is told the reason before this side returns; otherwise it learns of the
-// failure only as a dropped connection.
-func (c *Client) updateIfRecipientHasFileInfo() error {
-	if c.Options.IsSender || !c.Step2FileInfoTransferred || c.Step3RecipientRequestFile {
-		return nil
+func (c *Client) updateIfRecipientHasFileInfo() (err error) {
+	if !(!c.Options.IsSender && c.Step2FileInfoTransferred && !c.Step3RecipientRequestFile) {
+		return
 	}
-	err := c.readyNextFile()
-	if err != nil {
-		c.abortReceive(err)
-	}
-	return err
-}
-
-func (c *Client) readyNextFile() (err error) {
+	// find the next file to transfer and send that number
+	// if the files are the same size, then look for missing chunks
 	finished := true
 	for i, fileInfo := range c.FilesToTransfer {
 		if _, ok := c.FilesHasFinished[i]; ok {
@@ -1579,27 +1514,13 @@ func (c *Client) readyNextFile() (err error) {
 		if i < c.FilesToTransferCurrentNum {
 			continue
 		}
-		if i >= len(c.filePaths) {
-			return fmt.Errorf("file %d has no validated destination", i)
-		}
-		rel := c.filePaths[i]
-
-		// three ways: a pre-existing symlink out of the destination is an error
-		// from os.Root rather than an absence. treating it as absent and
-		// falling back to a plain os.Stat on the raw path is exactly the hole
-		// the root was opened to close.
-		recipientFileInfo, ex, lerr := c.dest.lstat(rel)
-		if lerr != nil {
-			return fmt.Errorf("cannot inspect %s in the destination: %w", rel, lerr)
-		}
-		errRecipientFile := fs.ErrNotExist
-		if ex == present {
-			errRecipientFile = nil
-		}
+		log.Debugf("checking %+v", fileInfo)
+		recipientFileInfo, errRecipientFile := os.Lstat(path.Join(fileInfo.FolderRemote, fileInfo.Name))
 		var errHash error
 		var fileHash []byte
 		if errRecipientFile == nil && recipientFileInfo.Size() == fileInfo.Size {
-			fileHash, errHash = c.dest.hashFile(rel, c.Options.HashAlgorithm)
+			// the file exists, but is same size, so hash it
+			fileHash, errHash = utils.HashFile(path.Join(fileInfo.FolderRemote, fileInfo.Name), c.Options.HashAlgorithm)
 		}
 		if fileInfo.Size == 0 || fileInfo.Symlink != "" {
 			err = c.createEmptyFileAndFinish(fileInfo, i)
@@ -1610,25 +1531,36 @@ func (c *Client) readyNextFile() (err error) {
 			}
 			continue
 		}
+		log.Debugf("%s %+x %+x %+v", fileInfo.Name, fileHash, fileInfo.Hash, errHash)
 		if !bytes.Equal(fileHash, fileInfo.Hash) {
+			log.Debugf("hashed %s to %x using %s", fileInfo.Name, fileHash, c.Options.HashAlgorithm)
+			log.Debugf("hashes are not equal %x != %x", fileHash, fileInfo.Hash)
 			if errHash == nil && !c.Options.Overwrite && errRecipientFile == nil && !strings.HasPrefix(fileInfo.Name, "croc-stdin-") && !c.Options.SendingText {
-				missingChunks := utils.ChunkRangesToChunks(c.dest.missingChunks(
-					rel,
+
+				missingChunks := utils.ChunkRangesToChunks(utils.MissingChunks(
+					path.Join(fileInfo.FolderRemote, fileInfo.Name),
 					fileInfo.Size,
 					models.TCP_BUFFER_SIZE/2,
 				))
 				percentDone := 100 - float64(len(missingChunks)*models.TCP_BUFFER_SIZE/2)/float64(fileInfo.Size)*100
 
-				prompt := fmt.Sprintf("\noverwrite '%s'? (y/N) ", rel)
+				log.Debug("asking to overwrite")
+				prompt := fmt.Sprintf("\nOverwrite '%s'? (y/N) ", path.Join(fileInfo.FolderRemote, fileInfo.Name))
 				if percentDone < 99 {
-					prompt = fmt.Sprintf("\nresume '%s' (%2.1f%%)? (y/N) ", rel, percentDone)
+					prompt = fmt.Sprintf("\nResume '%s' (%2.1f%%)? (y/N) ", path.Join(fileInfo.FolderRemote, fileInfo.Name), percentDone)
 				}
 				choice := strings.ToLower(utils.GetInput(prompt))
 				if choice != "y" && choice != "yes" {
-					fmt.Fprintf(os.Stderr, "skipping '%s'", rel)
+					fmt.Fprintf(os.Stderr, "skipping '%s'", path.Join(fileInfo.FolderRemote, fileInfo.Name))
 					continue
 				}
 			}
+		} else {
+			log.Debugf("hashes are equal %x == %x", fileHash, fileInfo.Hash)
+		}
+		if errHash != nil {
+			// probably can't find, its okay
+			log.Debug(errHash)
 		}
 		if errHash != nil || !bytes.Equal(fileHash, fileInfo.Hash) {
 			finished = false
@@ -1642,9 +1574,8 @@ func (c *Client) readyNextFile() (err error) {
 			break
 		}
 	}
-	// the error matters: when this fails no TypeRecipientReady goes out, and
-	// without returning it both peers wait on each other.
-	return c.recipientGetFileReady(finished)
+	c.recipientGetFileReady(finished) //nolint
+	return
 }
 
 func (c *Client) fmtPrintUpdate() {
@@ -1668,14 +1599,19 @@ func (c *Client) updateState() (err error) {
 	}
 
 	if c.Options.IsSender && c.Step3RecipientRequestFile && !c.Step4FileTransferred {
+		log.Debug("start sending data!")
+
 		if !c.firstSend {
-			fmt.Fprintf(os.Stderr, "\nsending (->%s)\n", c.ExternalIPConnected)
+			fmt.Fprintf(os.Stderr, "\nSending (->%s)\n", c.ExternalIPConnected)
 			c.firstSend = true
+			// if there are empty files, show them as already have been transferred now
 			for i := range c.FilesToTransfer {
 				if c.FilesToTransfer[i].Size == 0 {
+					// setup the progressbar and takedown the progress bar for empty files
 					description := fmt.Sprintf("%-*s", c.longestFilename, c.FilesToTransfer[i].Name)
 					if len(c.FilesToTransfer) == 1 {
 						description = c.FilesToTransfer[i].Name
+						// description = ""
 					}
 					c.bar = progressbar.NewOptions64(1,
 						progressbar.OptionOnCompletion(func() {
@@ -1694,9 +1630,11 @@ func (c *Client) updateState() (err error) {
 			}
 		}
 		c.Step4FileTransferred = true
+		// setup the progressbar
 		c.setBar()
 		c.TotalSent = 0
 		c.CurrentFileIsClosed = false
+		log.Debug("beginning sending comms")
 		pathToFile := path.Join(
 			c.FilesToTransfer[c.FilesToTransferCurrentNum].FolderSource,
 			c.FilesToTransfer[c.FilesToTransferCurrentNum].Name,
@@ -1707,6 +1645,7 @@ func (c *Client) updateState() (err error) {
 			return
 		}
 		for i := 0; i < len(c.Options.RelayPorts); i++ {
+			log.Debugf("starting sending over comm %d", i)
 			go c.sendData(i)
 		}
 	}
@@ -1738,6 +1677,9 @@ func (c *Client) setBar() {
 	byteToDo := int64(len(c.CurrentFileChunks) * models.TCP_BUFFER_SIZE / 2)
 	if byteToDo > 0 {
 		bytesDone := c.FilesToTransfer[c.FilesToTransferCurrentNum].Size - byteToDo
+		log.Debug(byteToDo)
+		log.Debug(c.FilesToTransfer[c.FilesToTransferCurrentNum].Size)
+		log.Debug(bytesDone)
 		if bytesDone > 0 {
 			c.bar.Add64(bytesDone) //nolint
 		}
@@ -1745,83 +1687,61 @@ func (c *Client) setBar() {
 }
 
 func (c *Client) receiveData(i int) {
+	log.Debugf("%d receiving data", i)
 	for {
 		data, err := c.conn[i+1].Receive()
 		if err != nil {
 			break
 		}
 		if bytes.Equal(data, []byte{1}) {
+			log.Debug("got ping")
 			continue
 		}
 
 		data, err = crypt.Decrypt(data, c.Key)
 		if err != nil {
-			c.abortReceive(fmt.Errorf("could not decrypt a chunk: %w", err))
-			return
+			panic(err)
 		}
 		if !c.Options.NoCompress {
 			data = compress.Decompress(data)
 		}
 
-		// the frame is an 8 byte offset followed by the payload. a shorter one
-		// used to be a slice bounds panic on this goroutine, which takes the
-		// whole process with it.
-		if len(data) < 8 {
-			c.abortReceive(fmt.Errorf("peer sent a %d byte chunk, too short to carry an offset", len(data)))
-			return
-		}
+		// get position
 		var position uint64
 		rbuf := bytes.NewReader(data[:8])
 		err = binary.Read(rbuf, binary.LittleEndian, &position)
 		if err != nil {
-			c.abortReceive(fmt.Errorf("could not read a chunk offset: %w", err))
-			return
+			panic(err)
 		}
 		positionInt64 := int64(position)
-		payload := data[8:]
-
-		// the offset is peer-supplied and goes straight into WriteAt, so
-		// without a bound the peer can write anywhere in the file, or grow it
-		// well past the size it declared and the receiver accepted.
-		if !c.currentFileInRange() {
-			c.abortReceive(fmt.Errorf("peer sent a chunk for file %d of %d", c.FilesToTransferCurrentNum, len(c.FilesToTransfer)))
-			return
-		}
-		declaredSize := c.FilesToTransfer[c.FilesToTransferCurrentNum].Size
-		if !chunkFits(positionInt64, len(payload), declaredSize) {
-			c.abortReceive(fmt.Errorf("peer sent %d bytes at offset %d, past the declared size %d", len(payload), positionInt64, declaredSize))
-			return
-		}
 
 		c.mutex.Lock()
-		if c.aborted != nil {
-			// another data goroutine ended the receive and closed conn[0], so
-			// the TypeCloseSender below would fail, and that failure panics.
-			c.mutex.Unlock()
-			return
-		}
-		_, err = c.CurrentFile.WriteAt(payload, positionInt64)
+		_, err = c.CurrentFile.WriteAt(data[8:], positionInt64)
 		if err != nil {
-			c.mutex.Unlock()
-			c.abortReceive(fmt.Errorf("could not write a chunk: %w", err))
-			return
+			panic(err)
 		}
-		c.bar.Add(len(payload)) //nolint
-		c.TotalSent += int64(len(payload))
+		c.bar.Add(len(data[8:])) //nolint
+		c.TotalSent += int64(len(data[8:]))
 		c.TotalChunksTransferred++
+		// log.Debug(len(c.CurrentFileChunks), c.TotalChunksTransferred, c.TotalSent, c.FilesToTransfer[c.FilesToTransferCurrentNum].Size)
 
 		if !c.CurrentFileIsClosed && (c.TotalChunksTransferred == len(c.CurrentFileChunks) || c.TotalSent == c.FilesToTransfer[c.FilesToTransferCurrentNum].Size) {
 			c.CurrentFileIsClosed = true
+			log.Debug("finished receiving!")
 			if err := c.CurrentFile.Close(); err != nil {
 				log.Debugf("error closing %s: %v", c.CurrentFile.Name(), err)
+			} else {
+				log.Debugf("Successful closing %s", c.CurrentFile.Name())
 			}
 			if c.Options.Stdout || c.Options.SendingText {
-				b, readErr := c.dest.readFile(c.filePaths[c.FilesToTransferCurrentNum])
-				if readErr != nil {
-					log.Debugf("error reading back the received file: %v", readErr)
-				}
+				pathToFile := path.Join(
+					c.FilesToTransfer[c.FilesToTransferCurrentNum].FolderRemote,
+					c.FilesToTransfer[c.FilesToTransferCurrentNum].Name,
+				)
+				b, _ := os.ReadFile(pathToFile)
 				fmt.Print(string(b))
 			}
+			log.Debug("sending close-sender")
 			err = message.Send(c.conn[0], c.Key, message.Message{
 				Type: message.TypeCloseSender,
 			})
@@ -1833,41 +1753,12 @@ func (c *Client) receiveData(i int) {
 	}
 }
 
-// abortReceive ends a receive that this side cannot continue. From a data
-// goroutine, returning alone leaves transfer() blocked reading conn[0] until
-// comm's three hour read deadline, with the peer waiting on it; from the
-// control loop, returning alone ends this side while the peer waits for a
-// TypeRecipientReady that never comes. So the peer is told why, and conn[0] is
-// closed, which unblocks that read and lets transfer() return the reason. Only
-// the first failure is kept. The caller must not hold c.mutex.
-func (c *Client) abortReceive(err error) {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-	if c.aborted != nil {
-		return
-	}
-	c.aborted = fmt.Errorf("receive failed: %w", err)
-	if sendErr := message.Send(c.conn[0], c.Key, message.Message{
-		Type:    message.TypeError,
-		Message: c.aborted.Error(),
-	}); sendErr != nil {
-		log.Debugf("could not tell the peer why: %v", sendErr)
-	}
-	c.conn[0].Close()
-}
-
-// chunkFits reports whether n bytes written at offset stay within size. The
-// offset is peer-supplied, so this is written to not overflow: offset+n wraps
-// negative for an offset near MaxInt64 and would pass a plain sum.
-func chunkFits(offset int64, n int, size int64) bool {
-	length := int64(n)
-	return offset >= 0 && length <= size && offset <= size-length
-}
-
 func (c *Client) sendData(i int) {
 	defer func() {
+		log.Debugf("finished with %d", i)
 		c.numfinished++
 		if c.numfinished == len(c.Options.RelayPorts) {
+			log.Debug("closing file")
 			if err := c.fread.Close(); err != nil {
 				log.Errorf("error closing file: %v", err)
 			}
@@ -1878,15 +1769,20 @@ func (c *Client) sendData(i int) {
 	pos := uint64(0)
 	curi := float64(0)
 	for {
+		// Read file
 		data := make([]byte, models.TCP_BUFFER_SIZE/2)
+		// log.Debugf("%d trying to read", i)
 		n, errRead := c.fread.ReadAt(data, readingPos)
+		// log.Debugf("%d read %d bytes", i, n)
 		readingPos += int64(n)
 		if c.limiter != nil {
 			r := c.limiter.ReserveN(time.Now(), n)
+			log.Debugf("Limiting Upload for %d", r.Delay())
 			time.Sleep(r.Delay())
 		}
 
 		if math.Mod(curi, float64(len(c.Options.RelayPorts))) == float64(i) {
+			// check to see if this is a chunk that the recipient wants
 			usableChunk := true
 			c.mutex.Lock()
 			if len(c.chunkMap) != 0 {
@@ -1898,6 +1794,7 @@ func (c *Client) sendData(i int) {
 			}
 			c.mutex.Unlock()
 			if usableChunk {
+				// log.Debugf("sending chunk %d", pos)
 				posByte := make([]byte, 8)
 				binary.LittleEndian.PutUint64(posByte, pos)
 				var err error
@@ -1925,6 +1822,7 @@ func (c *Client) sendData(i int) {
 				}
 				c.bar.Add(n) //nolint
 				c.TotalSent += int64(n)
+				// time.Sleep(100 * time.Millisecond)
 			}
 		}
 
