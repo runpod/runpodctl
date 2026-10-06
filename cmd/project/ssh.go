@@ -213,9 +213,12 @@ func (sshConn *SSHConnection) explainRsyncFailure(err error, output string) erro
 	return err
 }
 
-// rsyncConnectionLost reports whether openssh's or rsync's output shows the
-// connection to the pod being refused or dropped. ssh exits 255 for that and
-// for a refused host key alike, so the status alone cannot tell them apart.
+// rsyncConnectionLost reports whether openssh's output shows the connection to
+// the pod being refused or dropped. ssh exits 255 for that and for a refused
+// host key alike, so the status alone cannot tell them apart. only openssh's
+// own lines count: gnu rsync adds "connection unexpectedly closed" to nearly
+// every failure, including a missing remote rsync, a denied key and a full
+// disk, none of which a retry fixes.
 func rsyncConnectionLost(output string) bool {
 	if strings.Contains(output, "Host key verification failed") {
 		return false
@@ -225,8 +228,8 @@ func rsyncConnectionLost(output string) bool {
 		"actively refused",
 		"Connection reset",
 		"Connection closed by",
-		"connection unexpectedly closed",
-		"Broken pipe",
+		"closed by remote host",
+		"client_loop: send disconnect: Broken pipe",
 		"kex_exchange_identification",
 	} {
 		if strings.Contains(output, marker) {
@@ -380,9 +383,12 @@ func scanAndPrint(pipe io.Reader, color *color.Color, podID string, showPodIdPre
 	}
 }
 
-// stdinIsTerminal reports whether stdin is a terminal we can prompt on, as
-// opposed to a pipe or a redirected file.
-var stdinIsTerminal = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
+// promptIsInteractive reports whether the host key prompt can be both seen and
+// answered: stdin and stderr are terminals, not a pipe or a redirected file.
+// a redirected stderr would hide the prompt while the run waits on it.
+var promptIsInteractive = func() bool {
+	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stderr.Fd()))
+}
 
 // promptInput and promptOutput are the host key prompt's ends. the prompt goes
 // to stderr so legacy exec stdout stays exactly as it was.
@@ -439,7 +445,7 @@ func dialPodOnce(podID, addr string, auth []ssh.AuthMethod, hostKeys string) (*s
 // remedy is `runpodctl ssh forget`, rather than a prompt nobody will answer,
 // and stdin is left unread so queued input is not taken as consent.
 func confirmHostKeyChange(mismatch *hostKeyMismatchError) bool {
-	if !stdinIsTerminal() {
+	if !promptIsInteractive() {
 		return false
 	}
 	fmt.Fprintf(promptOutput, "host key mismatch for pod %s\n", mismatch.podID)

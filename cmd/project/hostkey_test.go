@@ -931,10 +931,10 @@ func TestRsyncRemoteShellQuotesArguments(t *testing.T) {
 // and non-terminal paths can both be driven without a tty.
 func withHostKeyPrompt(t *testing.T, terminal bool, answer string) *strings.Builder {
 	t.Helper()
-	prevTerminal, prevIn, prevOut := stdinIsTerminal, promptInput, promptOutput
-	t.Cleanup(func() { stdinIsTerminal, promptInput, promptOutput = prevTerminal, prevIn, prevOut })
+	prevTerminal, prevIn, prevOut := promptIsInteractive, promptInput, promptOutput
+	t.Cleanup(func() { promptIsInteractive, promptInput, promptOutput = prevTerminal, prevIn, prevOut })
 	out := &strings.Builder{}
-	stdinIsTerminal = func() bool { return terminal }
+	promptIsInteractive = func() bool { return terminal }
 	promptInput = strings.NewReader(answer)
 	promptOutput = out
 	return out
@@ -1241,6 +1241,15 @@ func TestRsyncConnectionLost(t *testing.T) {
 		"client_loop: send disconnect: Broken pipe":                                                                                             true,
 		"Host key verification failed.\nrsync: connection unexpectedly closed (0 bytes received so far) [sender]":                               false,
 		"root@1.2.3.4: Permission denied (publickey).":                                                                                          false,
+		// a pod dropping the connection mid-transfer, as the old container does
+		// in the first seconds after `pod start`.
+		"Connection to 1.2.3.4 closed by remote host.\nrsync: connection unexpectedly closed (1234 bytes received so far) [sender]": true,
+		"Connection to 1.2.3.4 closed by remote host.\nrsync: unexpected end of file":                                               true,
+		// gnu rsync appends "connection unexpectedly closed" to failures a retry
+		// does not fix; none of them may read as a restarting pod.
+		"root@1.2.3.4: Permission denied (publickey).\nrsync: connection unexpectedly closed (0 bytes received so far) [sender]":                                                                          false,
+		"bash: line 1: rsync: command not found\nrsync: connection unexpectedly closed (0 bytes received so far) [sender]":                                                                                false,
+		"rsync: [receiver] write failed on \"/x\": No space left on device (28)\nrsync: connection unexpectedly closed (5 bytes received so far) [sender]\nrsync: [sender] write error: Broken pipe (32)": false,
 		"": false,
 	} {
 		if got := rsyncConnectionLost(output); got != want {
@@ -1281,5 +1290,119 @@ func TestRsyncExplainsRestartingPod(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %q", err, want)
 		}
+	}
+}
+
+// TestForgetKnownHostKeepsOtherHostsOnASharedLine: a hand-edited line naming
+// the pod alongside another host loses only the pod.
+func TestForgetKnownHostKeepsOtherHostsOnASharedLine(t *testing.T) {
+	path := emptyKnownHosts(t)
+	key := newTestHostKey(t).PublicKey()
+	if err := os.WriteFile(path, []byte(knownhosts.Line([]string{"other", "runpod-pod-one"}, key)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := forgetKnownHost(path, "runpod-pod-one")
+	if err != nil || len(removed) != 1 {
+		t.Fatalf("forget removed %v (%v)", removed, err)
+	}
+	if got, want := readLines(t, path), []string{knownhosts.Line([]string{"other"}, key)}; !slices.Equal(got, want) {
+		t.Errorf("known_hosts = %q, want %q", got, want)
+	}
+}
+
+// TestForgetHostKeyNothingRecordedOnReadOnlyStore: forgetting a pod with no
+// entry is a no-op even when the store is read-only, so a retry loop can call
+// it unconditionally.
+func TestForgetHostKeyNothingRecordedOnReadOnlyStore(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix file modes")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	path, err := knownHostsPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := appendKnownHost(path, "runpod-pod-one", newTestHostKey(t).PublicKey()); err != nil {
+		t.Fatal(err)
+	}
+	expected := changeTestTrustStore(t, path, "read-only")
+
+	_, fingerprints, err := ForgetHostKey("pod-two")
+	if err != nil || fingerprints == nil || len(fingerprints) != 0 {
+		t.Fatalf("ForgetHostKey on an unrecorded pod: %#v, %v", fingerprints, err)
+	}
+	assertTestTrustStore(t, path, "read-only", expected)
+}
+
+func TestForgetHostKeyRejectsEmptyPodID(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	for _, id := range []string{"", "  "} {
+		if _, _, err := ForgetHostKey(id); err == nil {
+			t.Errorf("ForgetHostKey(%q) accepted an empty pod id", id)
+		}
+	}
+}
+
+// TestRsyncExplainsPodDroppingMidTransfer runs the real rsync and openssh
+// against a pod that accepts the session and then drops the connection, as the
+// previous container does in the first seconds after `pod start`.
+func TestRsyncExplainsPodDroppingMidTransfer(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a posix rsync and openssh")
+	}
+	for _, bin := range []string{"rsync", "ssh"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("no %s binary available", bin)
+		}
+	}
+	signer := newTestHostKey(t)
+	cfg := &ssh.ServerConfig{NoClientAuth: true}
+	cfg.AddHostKey(signer)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				_, chans, reqs, err := ssh.NewServerConn(conn, cfg)
+				if err != nil {
+					return
+				}
+				go ssh.DiscardRequests(reqs)
+				<-chans // the session opens, then the container goes away
+			}()
+		}
+	}()
+
+	knownHosts := emptyKnownHosts(t)
+	if err := appendKnownHost(knownHosts, "runpod-pod-abc123", signer.PublicKey()); err != nil {
+		t.Fatal(err)
+	}
+	conn := &SSHConnection{
+		podId:          "pod-abc123",
+		sshKeyPath:     writeClientKey(t, t.TempDir()),
+		knownHostsPath: knownHosts,
+	}
+	setTestSSHAddress(t, conn, ln.Addr().String())
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "main.py"), []byte("print(1)\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err = conn.Rsync(src, "/tmp/dst", true)
+	var unreachable *podUnreachableError
+	if !errors.As(err, &unreachable) {
+		t.Fatalf("wanted the restarting explanation, got %v", err)
 	}
 }

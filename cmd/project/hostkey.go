@@ -323,13 +323,16 @@ func lacksTrailingNewline(f *os.File) (bool, error) {
 // enrolls the key the pod then offers. a pod with nothing recorded is not an
 // error: a script can forget and retry without checking first.
 func ForgetHostKey(podID string) (string, []string, error) {
+	if strings.TrimSpace(podID) == "" {
+		return "", nil, errors.New("a pod id is required")
+	}
 	path, err := knownHostsFile()
 	if err != nil {
 		return "", nil, err
 	}
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return path, nil, nil
+			return path, []string{}, nil
 		}
 		return path, nil, err
 	}
@@ -388,17 +391,9 @@ func rewriteKnownHosts(path, alias string, key ssh.PublicKey) ([]ssh.PublicKey, 
 	if err != nil {
 		return nil, err
 	}
-	// a store the user made read-only refuses enrollment, so it must refuse
-	// this too; the rename below would otherwise bypass its mode.
-	probe, err := os.OpenFile(path, os.O_WRONLY, 0)
-	if err != nil {
-		return nil, err
-	}
-	if err := probe.Close(); err != nil {
-		return nil, err
-	}
 
 	var removed []ssh.PublicKey
+	changed := false
 	lines := strings.Split(string(raw), "\n")
 	kept := make([]string, 0, len(lines))
 	for _, line := range lines {
@@ -406,12 +401,30 @@ func rewriteKnownHosts(path, alias string, key ssh.PublicKey) ([]ssh.PublicKey, 
 			kept = append(kept, line)
 			continue
 		}
+		changed = true
 		if key, ok := parseKnownHostsKey(line); ok {
 			removed = append(removed, key)
 		}
+		// a line that also names other hosts keeps them: forgetting this pod
+		// must not drop trust for anything else.
+		if rest, ok := knownHostsLineWithout(line, alias); ok {
+			kept = append(kept, rest)
+		}
 	}
-	if len(kept) == len(lines) && key == nil {
+	if !changed && key == nil {
 		return nil, nil
+	}
+
+	// a store the user made read-only refuses enrollment, so it must refuse
+	// this too; the rename below would otherwise bypass its mode. checked only
+	// once there is something to write, so forgetting an unrecorded pod stays a
+	// no-op on a read-only store.
+	probe, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	if err := probe.Close(); err != nil {
+		return nil, err
 	}
 
 	content := strings.Join(kept, "\n")
@@ -437,6 +450,22 @@ func knownHostsLineNames(line, alias string) bool {
 		return false
 	}
 	return slices.Contains(strings.Split(fields[0], ","), alias)
+}
+
+// knownHostsLineWithout returns line with alias dropped from its host field,
+// and false when alias was the only host it named.
+func knownHostsLineWithout(line, alias string) (string, bool) {
+	fields := strings.Fields(line)
+	hostsAt := 0
+	if len(fields) > 0 && strings.HasPrefix(fields[0], "@") {
+		hostsAt = 1
+	}
+	hosts := slices.DeleteFunc(strings.Split(fields[hostsAt], ","), func(h string) bool { return h == alias })
+	if len(hosts) == 0 {
+		return "", false
+	}
+	fields[hostsAt] = strings.Join(hosts, ",")
+	return strings.Join(fields, " "), true
 }
 
 // knownHostsFields splits a line into hosts, key type, key and comment,
