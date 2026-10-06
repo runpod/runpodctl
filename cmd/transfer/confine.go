@@ -15,7 +15,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 )
 
 // Everything in this file runs on the receiver before a single byte is written.
@@ -256,7 +258,10 @@ func zipEntries(files []*zip.File) ([]entry, error) {
 
 		// the uncompressed size is a header field the archive controls; it is
 		// used only for the duplicate-content comparison below, never to size
-		// an allocation.
+		// an allocation. archive/zip refuses to read an entry past it, so the
+		// headers bound what an archive can expand to. there is no total cap on
+		// top of that: a folder send has no natural ceiling, and any number
+		// would refuse a legitimate one.
 		var hash [4]byte
 		binary.BigEndian.PutUint32(hash[:], f.CRC32)
 		entries = append(entries, entry{
@@ -314,12 +319,16 @@ func statThreeWay(root *os.Root, rel string) (fs.FileInfo, existence, error) {
 // The answer is per directory because ext4 carries the casefold attribute that
 // way, and it is cached because a manifest can collide many times over.
 //
-// It measures case only. Filesystems alias names in other ways it does not
-// see: APFS treats NFC and NFD spellings of one name as the same file, and
-// windows ignores trailing dots and spaces and resolves 8.3 short names. Two
-// such declarations with different contents are not refused, and the last
-// write wins. Both land inside the destination, so this costs the
-// "same destination, different contents" check, not confinement.
+// The probe swaps ascii letters only. Every case-insensitive filesystem folds
+// those the same way, while the rest of the case tables differ, and a probe
+// built from a name they disagree on misreports the directory: unicode maps ı
+// to I and I to i, so a swapped "ı.txt" never resolved back and a folding
+// directory read as distinct, which switched every alias check off for it;
+// and ß is lowercase with no single-rune uppercase, so the probe compared a
+// file with itself and a distinct directory read as folding.
+//
+// The probe answers for case. What else a filesystem may treat as one name is
+// foldKey's concern, and its gaps are listed there.
 type foldProbe struct {
 	root  *os.Root
 	cache map[string]bool
@@ -379,7 +388,7 @@ func (p *foldProbe) measure(dirRel string) (bool, error) {
 	}
 
 	for _, name := range names {
-		swapped, ok := swapCase(name)
+		swapped, ok := swapASCIICase(name)
 		if !ok {
 			continue
 		}
@@ -413,7 +422,7 @@ func (p *foldProbe) measureByProbe(dirRel string) (bool, error) {
 	f.Close()
 	defer p.root.Remove(rel) //nolint:errcheck // best effort cleanup of our own probe
 
-	swapped, ok := swapCase(name)
+	swapped, ok := swapASCIICase(name)
 	if !ok {
 		return false, nil
 	}
@@ -428,25 +437,48 @@ func (p *foldProbe) measureByProbe(dirRel string) (bool, error) {
 	return os.SameFile(original, other), nil
 }
 
-// swapCase inverts the case of every cased letter, reporting false when there
-// was nothing to invert and the name is therefore useless as a probe.
-func swapCase(name string) (string, bool) {
-	var b strings.Builder
-	b.Grow(len(name))
+// swapASCIICase inverts the case of every ascii letter and leaves every other
+// byte alone, reporting false when there was no ascii letter to invert and the
+// name is therefore useless as a probe. Why only ascii is on foldProbe.
+func swapASCIICase(name string) (string, bool) {
+	b := []byte(name)
 	changed := false
-	for _, r := range name {
+	for i, c := range b {
 		switch {
-		case unicode.IsLower(r):
-			b.WriteRune(unicode.ToUpper(r))
+		case 'a' <= c && c <= 'z':
+			b[i] = c - 'a' + 'A'
 			changed = true
-		case unicode.IsUpper(r):
-			b.WriteRune(unicode.ToLower(r))
+		case 'A' <= c && c <= 'Z':
+			b[i] = c - 'A' + 'a'
 			changed = true
-		default:
-			b.WriteRune(r)
 		}
 	}
-	return b.String(), changed
+	return string(b), changed
+}
+
+// folder is unicode case folding. strings.ToLower is not: it leaves ſ (U+017F)
+// and ς (U+03C2) as they are, while a case-insensitive filesystem reads them
+// as s and σ, so a declared "d/ſ" and a target walking through "d/s" compared
+// as different names and were one on disk.
+var folder = cases.Fold()
+
+// foldKey is the index key under which two spellings that a filesystem may
+// treat as one name collide. NFC comes first because folding does not
+// normalize, and APFS compares names normalization-insensitively, so "é" and
+// "e\u0301" are one file there.
+//
+// The key over-approximates on purpose, and the probe's answer for case gates
+// it. Full folding maps ß to ss, and a case-insensitive filesystem that keeps
+// normalization forms apart (NTFS) still sees NFC and NFD declared with
+// different contents refused as one destination. Both only ever refuse. What
+// neither the key nor the probe sees: windows resolving 8.3 short names and
+// ignoring trailing dots and spaces, and normalization on a case-sensitive
+// APFS. Those cannot leave an escaping link behind, because every declared
+// symlink is re-resolved through the root once the transfer is done
+// (confinedDest.verifySymlinks); what they can still cost is all-or-nothing
+// and the "same destination, different contents" check.
+func foldKey(rel string) string {
+	return folder.String(norm.NFC.String(rel))
 }
 
 func parentRel(rel string) string {
@@ -480,9 +512,10 @@ func randomSuffix() string {
 //
 // Keys are compared exactly first. A case-folding filesystem makes distinct
 // declared names the same destination, so every lookup that misses exactly
-// also consults a lowercase index, and only then asks the filesystem whether
-// that directory really folds. Probing lazily matters: receiving into an empty
-// directory is the common case, and the probe of last resort has to write.
+// also consults an index under foldKey, and only then asks the filesystem
+// whether that directory really folds. Probing lazily matters: receiving into
+// an empty directory is the common case, and the probe of last resort has to
+// write.
 type validator struct {
 	root  *os.Root
 	probe *foldProbe
@@ -490,7 +523,7 @@ type validator struct {
 	files    map[string]entry    // exact rel -> file or symlink entry
 	symlinks map[string]bool     // exact rel declared as a symlink
 	dirs     map[string]bool     // exact rel that must end up a directory
-	lowered  map[string][]string // lowercased rel -> exact rels seen
+	folded   map[string][]string // foldKey(rel) -> exact rels seen
 }
 
 func newValidator(root *os.Root) *validator {
@@ -500,7 +533,7 @@ func newValidator(root *os.Root) *validator {
 		files:    map[string]entry{},
 		symlinks: map[string]bool{},
 		dirs:     map[string]bool{},
-		lowered:  map[string][]string{},
+		folded:   map[string][]string{},
 	}
 }
 
@@ -513,7 +546,7 @@ func (v *validator) aliases(rel string) ([]string, error) {
 		out = append(out, rel)
 	}
 
-	for _, candidate := range v.lowered[strings.ToLower(rel)] {
+	for _, candidate := range v.folded[foldKey(rel)] {
 		if candidate == rel {
 			continue
 		}
@@ -537,13 +570,13 @@ func (v *validator) claimed(rel string) bool {
 }
 
 func (v *validator) note(rel string) {
-	lower := strings.ToLower(rel)
-	for _, seen := range v.lowered[lower] {
+	key := foldKey(rel)
+	for _, seen := range v.folded[key] {
 		if seen == rel {
 			return
 		}
 	}
-	v.lowered[lower] = append(v.lowered[lower], rel)
+	v.folded[key] = append(v.folded[key], rel)
 }
 
 // sameContent reports whether two declarations of one destination agree well
@@ -726,7 +759,7 @@ func (v *validator) checkExistingDir(rel string) error {
 	// parent" rather than ENOENT. resolving is the only way to tell.
 	target, ex, err := statThreeWay(v.root, rel)
 	if err != nil {
-		return refusef("%q in the destination is a symlink pointing outside it (%v)", rel, err)
+		return refusef("%q in the destination is a symlink pointing outside it (%v); run receive inside the directory it points to, or replace the link with a real directory", rel, err)
 	}
 	if ex == absent {
 		return refusef("%q in the destination is a symlink with no target", rel)
@@ -747,6 +780,16 @@ func (v *validator) checkExistingDir(rel string) error {
 // symlink this transfer declares, so those are refused rather than guessed
 // at. Symlinks already on disk are either refused before a ".." or, for the
 // forward steps, followed by checkResolvedTarget.
+//
+// A ".." after a forward step is refused whatever the names are. It pops a
+// component the target itself named, and whether that component is the
+// directory it looks like or another spelling of a declared symlink is for
+// the filesystem to decide: foldKey approximates case and normalization, but
+// not every way a name can alias, and "s/../secret" beside a declared
+// "ſ -> .." resolved outside the destination on APFS. A leading ".." pops the
+// link's own parent, which pass three has checked against the declared
+// symlinks. path.Clean would collapse such a target and no tool writes one by
+// default, so refusing it costs nothing legitimate.
 func (v *validator) checkSymlinkTarget(e entry) error {
 	target := e.target
 	if strings.ContainsRune(target, 0) {
@@ -764,6 +807,7 @@ func (v *validator) checkSymlinkTarget(e entry) error {
 		stack = strings.Split(parent, "/")
 	}
 
+	descended := false
 	for _, part := range strings.Split(target, "/") {
 		switch part {
 		case "", ".":
@@ -777,6 +821,9 @@ func (v *validator) checkSymlinkTarget(e entry) error {
 			if err := v.requireRealDir(strings.Join(stack, "/")); err != nil {
 				return fmt.Errorf("symlink %q target %q: %w", e.declared, target, err)
 			}
+			if descended {
+				return refusef("symlink %q target %q steps back through a directory the target itself entered", e.declared, target)
+			}
 			stack = stack[:len(stack)-1]
 		default:
 			// a declared symlink does not exist yet, so nothing under it can be
@@ -786,6 +833,7 @@ func (v *validator) checkSymlinkTarget(e entry) error {
 				return fmt.Errorf("symlink %q target %q: %w", e.declared, target, err)
 			}
 			stack = append(stack, part)
+			descended = true
 		}
 	}
 	return v.checkResolvedTarget(e, strings.Join(stack, "/"))
@@ -889,10 +937,22 @@ func validateManifest(root *os.Root, info SenderInfo) (filePaths, folderPaths []
 }
 
 // validateArchive is the same gate for a zip the peer sent as a TempFile.
-func validateArchive(root *os.Root, files []*zip.File) ([]string, error) {
+// zipRel is where that zip sits in the destination.
+func validateArchive(root *os.Root, files []*zip.File, zipRel string) ([]string, error) {
 	entries, err := zipEntries(files)
 	if err != nil {
 		return nil, err
+	}
+	// the archive is open for reading while its entries are written, so an
+	// entry at its own path truncates the source mid-extraction: the entries
+	// before it land, the ones after it never do. compared under foldKey
+	// without asking the filesystem, since no archive runpodctl builds names
+	// itself and refusing a case variant too costs nothing.
+	archiveKey := foldKey(zipRel)
+	for _, e := range entries {
+		if foldKey(e.rel) == archiveKey {
+			return nil, refusef("archive entry %q has the archive's own name", e.declared)
+		}
 	}
 	if err := checkEntries(root, entries); err != nil {
 		return nil, err

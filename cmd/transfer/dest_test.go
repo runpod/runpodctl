@@ -266,6 +266,98 @@ func TestExtractZipIgnoresEntryModes(t *testing.T) {
 	}
 }
 
+// TestExtractZipRefusesAnEntryNamedAfterTheArchive: the archive is open for
+// reading while its entries are written, so an entry at its own path used to
+// truncate the source halfway through. With a.txt, foo.zip and z/b.txt inside
+// foo.zip, a.txt landed, foo.zip was emptied and z/b.txt never arrived,
+// reported as "unexpected EOF". That broke both "refused outright rather than
+// partly applied" and "a refused archive is left in place". `send` never
+// builds such an archive, so refusing it costs nothing.
+func TestExtractZipRefusesAnEntryNamedAfterTheArchive(t *testing.T) {
+	dest, _ := destPair(t)
+	buildZip(t, dest, "foo.zip", map[string]string{
+		"a.txt":   "alpha",
+		"foo.zip": "not an archive",
+		"z/b.txt": "beta",
+	})
+	before, err := os.ReadFile(filepath.Join(dest, "foo.zip"))
+	if err != nil {
+		t.Fatalf("reading the archive: %v", err)
+	}
+	d := openTestDest(t, dest)
+
+	err = d.extractZip("foo.zip")
+	if err == nil {
+		t.Fatal("extractZip accepted an archive containing itself")
+	}
+	if !strings.Contains(err.Error(), "archive's own name") {
+		t.Errorf("error = %v, want the entry named", err)
+	}
+	for _, rel := range []string{"a.txt", "z/b.txt"} {
+		if _, err := os.Lstat(filepath.Join(dest, filepath.FromSlash(rel))); err == nil {
+			t.Errorf("%s was written; validation must precede the first write", rel)
+		}
+	}
+	after, err := os.ReadFile(filepath.Join(dest, "foo.zip"))
+	if err != nil {
+		t.Fatalf("reading the archive back: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Errorf("the archive was changed: %d bytes before, %d after", len(before), len(after))
+	}
+}
+
+// TestVerifySymlinksRemovesOnlyAnEscapingLink pins the backstop behind the
+// validator. The escaping link is planted directly, standing in for one that
+// passed the lexical check through an alias the fold key does not model.
+// Everything else a sender's tree can legitimately hold stays: a dangling
+// target, a target through a file, a cycle, and an in-tree "..".
+func TestVerifySymlinksRemovesOnlyAnEscapingLink(t *testing.T) {
+	dest, _ := destPair(t)
+	if err := os.WriteFile(filepath.Join(dest, "a.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("seeding file: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dest, "d"), 0o755); err != nil {
+		t.Fatalf("seeding dir: %v", err)
+	}
+	kept := map[string]string{
+		"ok":     "a.txt",
+		"dangle": "nowhere",
+		"notdir": "a.txt/x",
+		"loop1":  "loop2",
+		"loop2":  "loop1",
+		"d/up":   "..",
+	}
+	for rel, target := range kept {
+		if err := os.Symlink(target, filepath.Join(dest, filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("seeding %s: %v", rel, err)
+		}
+	}
+	if err := os.Symlink(filepath.Join("..", "outside", "secret"), filepath.Join(dest, "esc")); err != nil {
+		t.Fatalf("seeding esc: %v", err)
+	}
+	d := openTestDest(t, dest)
+
+	rels := []string{"ok", "dangle", "notdir", "loop1", "d/up", "esc"}
+	err := d.verifySymlinks(rels)
+	if err == nil || !strings.Contains(err.Error(), "esc") {
+		t.Fatalf("verifySymlinks = %v, want the escaping link named", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dest, "esc")); err == nil {
+		// if os.Root's escape error ever changes its text, escapesRoot stops
+		// matching and this is the assertion that says so.
+		t.Error("the escaping link survived")
+	}
+	for rel := range kept {
+		if _, err := os.Lstat(filepath.Join(dest, filepath.FromSlash(rel))); err != nil {
+			t.Errorf("%s was removed: %v", rel, err)
+		}
+	}
+	if err := d.verifySymlinks(rels[:len(rels)-1]); err != nil {
+		t.Errorf("verifySymlinks over the kept links = %v, want nil", err)
+	}
+}
+
 // TestHashFileMatchesUpstream is the compatibility check that keeps resume and
 // skip working: the sender hashes with utils.HashFile, so a receiver computing
 // different bytes for identical content would re-download every time.

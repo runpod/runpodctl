@@ -357,10 +357,51 @@ func TestValidateManifest(t *testing.T) {
 			info: SenderInfo{FilesToTransfer: []FileInfo{file("./", "A.txt"), file("./", "a.txt")}}},
 		{name: "case variant file against a directory prefix", wantErr: folds,
 			info: SenderInfo{FilesToTransfer: []FileInfo{file("./", "A"), file("a/", "b")}}},
-		{name: "traverse out through a case variant of a declared symlink", wantErr: folds,
+		// a ".." after a forward step is refused whatever the names are, so the
+		// case variant no longer decides this one; the fold cases further down
+		// are the shapes where only the key can catch the alias. the reason
+		// varies: a folding filesystem reports the alias, any other the shape.
+		{name: "traverse out through a case variant of a declared symlink", wantErr: true,
 			info: SenderInfo{FilesToTransfer: []FileInfo{
 				{FolderRemote: "./", Name: "sub", Symlink: "target"},
 				{FolderRemote: "./", Name: "pwn", Symlink: "SUB/x/../../outside"},
+			}}},
+		// the escape strings.ToLower let through: ſ (U+017F) folds to s under
+		// unicode case folding, so "d/s" is "d/ſ" on APFS, and "s/../secret"
+		// resolved to the parent of the destination.
+		{name: "step back through a long-s alias of a declared symlink", wantErr: true,
+			info: SenderInfo{FilesToTransfer: []FileInfo{
+				{FolderRemote: "d/", Name: "ſ", Symlink: ".."},
+				{FolderRemote: "d/", Name: "pwn", Symlink: "s/../secret"},
+			}}},
+		{name: "step back through a directory the target entered", wantErr: true, wantErrContains: "steps back",
+			info: SenderInfo{FilesToTransfer: []FileInfo{{FolderRemote: "./", Name: "link", Symlink: "sub/../x"}}}},
+		// a leading ".." is the shape every relative link has, and stays allowed.
+		{name: "symlink stepping back then forward", info: SenderInfo{FilesToTransfer: []FileInfo{
+			{FolderRemote: "bin/", Name: "tool", Symlink: "../lib/tool"},
+			file("lib/", "tool"),
+		}}},
+		{name: "symlink with a dot-slash target", info: SenderInfo{FilesToTransfer: []FileInfo{
+			{FolderRemote: "./", Name: "link", Symlink: "./target.txt"},
+			file("./", "target.txt"),
+		}}},
+		// the same aliases where the link's own parent, not its target, is the
+		// other spelling of a declared symlink. only the key sees these, so the
+		// expectation follows the filesystem, as the case variants above do.
+		{name: "write under a long-s alias of a declared symlink", wantErr: folds, wantErrContains: "also as a directory",
+			info: SenderInfo{FilesToTransfer: []FileInfo{
+				{FolderRemote: "d/", Name: "ſ", Symlink: ".."},
+				file("d/s/", "x"),
+			}}},
+		{name: "symlink under a final-sigma alias of a declared symlink", wantErr: folds, wantErrContains: "also as a directory",
+			info: SenderInfo{FilesToTransfer: []FileInfo{
+				{FolderRemote: "d/", Name: "ς", Symlink: ".."},
+				{FolderRemote: "d/σ/", Name: "link", Symlink: "../x"},
+			}}},
+		{name: "write under an nfd alias of a declared symlink", wantErr: folds, wantErrContains: "also as a directory",
+			info: SenderInfo{FilesToTransfer: []FileInfo{
+				{FolderRemote: "d/", Name: "\u00e9", Symlink: ".."},
+				file("d/e\u0301/", "x"),
 			}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -491,6 +532,10 @@ func TestValidateArchive(t *testing.T) {
 		{name: "absolute", entries: []string{"/etc/passwd"}, wantErr: true},
 		{name: "backslash", entries: []string{`..\escape`}, wantErr: true},
 		{name: "file that is also a directory prefix", entries: []string{"a", "a/b"}, wantErr: true},
+		// the archive is read while its entries are written, so an entry at
+		// its own path truncated the source halfway through.
+		{name: "entry named after the archive", entries: []string{"payload.zip"}, wantErr: true},
+		{name: "entry that is a case variant of the archive's name", entries: []string{"PAYLOAD.ZIP"}, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
@@ -523,7 +568,7 @@ func TestValidateArchive(t *testing.T) {
 			}
 			defer root.Close()
 
-			paths, err := validateArchive(root, r.File)
+			paths, err := validateArchive(root, r.File, "payload.zip")
 			switch {
 			case tc.wantErr && err == nil:
 				t.Fatalf("archive accepted, want a refusal (paths %v)", paths)
@@ -551,6 +596,23 @@ func TestFoldProbeMatchesFilesystem(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dest, "empty"), 0o755); err != nil {
 		t.Fatalf("creating dir: %v", err)
 	}
+	// names with no ascii letter, or with a letter whose case does not round
+	// trip, used to decide the answer for the whole directory: "odd" has
+	// nothing to swap and must fall back to the write probe, and the dotless
+	// i in "turkic" must be left alone so ".txt" carries the probe.
+	for dir, names := range map[string][]string{
+		"odd":    {"ß", "ı"},
+		"turkic": {"ı.txt"},
+	} {
+		if err := os.MkdirAll(filepath.Join(dest, dir), 0o755); err != nil {
+			t.Fatalf("creating dir: %v", err)
+		}
+		for _, name := range names {
+			if err := os.WriteFile(filepath.Join(dest, dir, name), nil, 0o600); err != nil {
+				t.Fatalf("seeding %s: %v", name, err)
+			}
+		}
+	}
 
 	root, err := os.OpenRoot(dest)
 	if err != nil {
@@ -558,7 +620,7 @@ func TestFoldProbeMatchesFilesystem(t *testing.T) {
 	}
 	defer root.Close()
 
-	for _, dir := range []string{"populated", "empty", ""} {
+	for _, dir := range []string{"populated", "empty", "odd", "turkic", ""} {
 		probe := newFoldProbe(root)
 		got, err := probe.insensitive(dir)
 		if err != nil {
@@ -570,11 +632,59 @@ func TestFoldProbeMatchesFilesystem(t *testing.T) {
 	}
 
 	// the probe of last resort must clean up after itself.
-	entries, err := os.ReadDir(filepath.Join(dest, "empty"))
-	if err != nil {
-		t.Fatalf("reading empty dir: %v", err)
+	for dir, want := range map[string]int{"empty": 0, "odd": 2} {
+		entries, err := os.ReadDir(filepath.Join(dest, dir))
+		if err != nil {
+			t.Fatalf("reading %s: %v", dir, err)
+		}
+		if len(entries) != want {
+			t.Errorf("probe left residue in %s: %d entries, want %d", dir, len(entries), want)
+		}
 	}
-	if len(entries) != 0 {
-		t.Errorf("probe left residue: %d entries", len(entries))
+}
+
+// TestFoldKey pins the aliases strings.ToLower missed. Each pair is one name
+// on a default APFS volume, and the first three carried a working escape.
+func TestFoldKey(t *testing.T) {
+	for _, pair := range [][2]string{
+		{"ſ", "s"},            // long s, U+017F
+		{"ς", "σ"},            // final sigma, U+03C2
+		{"\u00e9", "e\u0301"}, // é precomposed and decomposed
+		{"\u212a", "k"},       // kelvin sign
+		{"A.txt", "a.txt"},
+		{"d/ſ", "d/s"},
+	} {
+		if foldKey(pair[0]) != foldKey(pair[1]) {
+			t.Errorf("foldKey(%q) = %q and foldKey(%q) = %q, want equal", pair[0], foldKey(pair[0]), pair[1], foldKey(pair[1]))
+		}
+	}
+	for _, pair := range [][2]string{
+		{"a", "b"},
+		{"ı", "i"}, // the dotless i is its own letter outside turkic locales
+		{"d/s", "ds"},
+	} {
+		if foldKey(pair[0]) == foldKey(pair[1]) {
+			t.Errorf("foldKey(%q) = foldKey(%q) = %q, want distinct", pair[0], pair[1], foldKey(pair[0]))
+		}
+	}
+}
+
+func TestSwapASCIICase(t *testing.T) {
+	for _, tc := range []struct {
+		name, want string
+		ok         bool
+	}{
+		{"abc", "ABC", true},
+		{"Readable", "rEADABLE", true},
+		{"ı.txt", "ı.TXT", true}, // the dotless i is left alone
+		{"Ünï", "ÜNï", true},     // only the ascii letter moves
+		{"ß", "ß", false},        // nothing ascii to swap
+		{"123", "123", false},
+		{"", "", false},
+	} {
+		got, ok := swapASCIICase(tc.name)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("swapASCIICase(%q) = %q, %v, want %q, %v", tc.name, got, ok, tc.want, tc.ok)
+		}
 	}
 }

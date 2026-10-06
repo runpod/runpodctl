@@ -120,6 +120,13 @@ func quietStderr(t *testing.T) {
 // runPair drives one sender and one receiver to completion.
 func runPair(t *testing.T, files, folders []FileInfo, dest string) (sendErr, recvErr error) {
 	t.Helper()
+	return runPairWith(t, files, folders, dest, nil)
+}
+
+// runPairWith is runPair with a hook over the sender's options, for the modes
+// a sender can be in that the manifest alone does not express.
+func runPairWith(t *testing.T, files, folders []FileInfo, dest string, tweak func(*Options)) (sendErr, recvErr error) {
+	t.Helper()
 	// croc derives the relay room from SharedSecret[:3], so each pair needs a
 	// distinct three-character prefix or they share a room and every transfer
 	// after the first reports "room not ready".
@@ -129,7 +136,11 @@ func runPair(t *testing.T, files, folders []FileInfo, dest string) (sendErr, rec
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		sender, err := New(testOptions(t, true, secret, ""))
+		opts := testOptions(t, true, secret, "")
+		if tweak != nil {
+			tweak(&opts)
+		}
+		sender, err := New(opts)
 		if err != nil {
 			sendErr = err
 			return
@@ -361,8 +372,13 @@ func TestHostileArchiveCannotEscape(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(dest, "innocent.txt")); err == nil {
 		t.Error("the archive was partly extracted")
 	}
-	if recvErr == nil {
-		t.Error("receiver reported success for a traversing archive")
+	// the archive stays, and the error says where, so a user who did not
+	// expect a zip is not left to wonder about one.
+	if _, err := os.Lstat(filepath.Join(dest, "evil.zip")); err != nil {
+		t.Errorf("the refused archive was removed: %v", err)
+	}
+	if recvErr == nil || !strings.Contains(recvErr.Error(), "kept at") {
+		t.Errorf("receiver error = %v, want the kept archive named", recvErr)
 	}
 }
 
@@ -509,6 +525,65 @@ func TestChunkPastTheDeclaredSizeEndsBothSides(t *testing.T) {
 	}
 	if len(got) > 4 {
 		t.Errorf("received file grew to %d bytes past its declared size of 4", len(got))
+	}
+}
+
+// TestOpenFailureIsReportedToTheSender covers a failure after validation has
+// accepted the manifest: the path is there and is a file, but cannot be opened
+// for writing. The receiver returned the error but sent nothing, so the sender
+// saw only EOF once the connection closed.
+func TestOpenFailureIsReportedToTheSender(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root opens a read-only file for writing regardless")
+	}
+	quietStderr(t)
+	_, src, dest := hostileDirs(t)
+	if err := os.WriteFile(filepath.Join(dest, "ro.txt"), []byte("mine"), 0o444); err != nil {
+		t.Fatalf("seeding read-only file: %v", err)
+	}
+
+	// a different size, so the receiver does not skip it as already present.
+	entry := sendable(t, src, "ro.txt", "replaced!")
+	sendErr, recvErr := runPair(t, []FileInfo{entry}, nil, dest)
+
+	if recvErr == nil || !strings.Contains(recvErr.Error(), "could not open") {
+		t.Errorf("receiver error = %v, want the open failure", recvErr)
+	}
+	if sendErr == nil || !strings.Contains(sendErr.Error(), "could not open") {
+		t.Errorf("sender error = %v, want the receiver's reason reported back", sendErr)
+	}
+	got, err := os.ReadFile(filepath.Join(dest, "ro.txt"))
+	if err != nil {
+		t.Fatalf("reading the read-only file: %v", err)
+	}
+	if string(got) != "mine" {
+		t.Errorf("read-only file = %q, want it untouched", got)
+	}
+}
+
+// TestAbortedTextReceiveRemovesItsFile covers the stdin path's cleanup. A text
+// send arrives as a file named croc-stdin-*, which the receiver creates in the
+// destination, prints, and removes at the end of transfer(). An abort used to
+// return before that cleanup, leaving the file behind with its handle open.
+func TestAbortedTextReceiveRemovesItsFile(t *testing.T) {
+	quietStderr(t)
+	_, src, dest := hostileDirs(t)
+
+	entry := sendable(t, src, "croc-stdin-test", "0123456789")
+	entry.Size = 4 // the first chunk is out of bounds, so the receive aborts
+	_, recvErr := runPairWith(t, []FileInfo{entry}, nil, dest, func(o *Options) { o.SendingText = true })
+
+	if recvErr == nil || !strings.Contains(recvErr.Error(), "past the declared size") {
+		t.Errorf("receiver error = %v, want the abort", recvErr)
+	}
+	entries, err := os.ReadDir(dest)
+	if err != nil {
+		t.Fatalf("reading destination: %v", err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "croc-stdin-") {
+			t.Errorf("aborted text receive left %s in the destination", e.Name())
+		}
 	}
 }
 

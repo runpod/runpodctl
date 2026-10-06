@@ -11,6 +11,8 @@ import (
 	"math"
 	"os"
 	"path"
+	"path/filepath"
+	"strings"
 
 	"github.com/cespare/xxhash"
 	"github.com/schollz/croc/v9/src/utils"
@@ -125,6 +127,48 @@ func (d *confinedDest) symlink(target, rel string) error {
 func (d *confinedDest) remove(rel string) error { return d.root.Remove(rel) }
 
 func (d *confinedDest) readFile(rel string) ([]byte, error) { return d.root.ReadFile(rel) }
+
+// displayPath is rel as the user would type it, for a message that points at
+// something left in the destination.
+func (d *confinedDest) displayPath(rel string) string {
+	return filepath.Join(d.root.Name(), filepath.FromSlash(rel))
+}
+
+// verifySymlinks re-resolves every symlink this transfer created, through the
+// root, once all of them exist. validateManifest compared declared names under
+// foldKey, which approximates how the filesystem aliases them; where the
+// filesystem does more (8.3 short names, trailing dots and spaces), a target
+// that stayed inside by its letters can resolve through a declared link and
+// leave. os.Root follows every link on the way and reports an escape as an
+// error, so asking it is exact where the lexical check was approximate. An
+// escaping link is removed before the error returns, so none survives the
+// receive. What this cannot give back is all-or-nothing, which is why the
+// validator still runs first and this only backs it.
+//
+// Only an escape counts. A dangling target, a target through a file and a
+// cycle are what the sender's tree held, and are kept.
+func (d *confinedDest) verifySymlinks(rels []string) error {
+	for _, rel := range rels {
+		_, err := d.root.Stat(rel)
+		if !escapesRoot(err) {
+			continue
+		}
+		if removeErr := d.root.Remove(rel); removeErr != nil {
+			return fmt.Errorf("symlink %s resolves outside the destination and could not be removed: %w", rel, removeErr)
+		}
+		return fmt.Errorf("symlink %s resolved outside the destination and was removed", rel)
+	}
+	return nil
+}
+
+// escapesRoot reports whether err is os.Root refusing to leave the
+// destination. The sentinel is unexported, so this matches its text. If that
+// text ever changes, verifySymlinks stops removing links rather than starting
+// to remove the wrong ones, and TestVerifySymlinksRemovesOnlyAnEscapingLink
+// says so.
+func escapesRoot(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "escapes from parent")
+}
 
 // createTemp makes a uniquely named file in the destination and returns its
 // name. It replaces utils.RandomFileName for the stdin case, where the peer
@@ -272,7 +316,7 @@ func (d *confinedDest) extractZip(zipRel string) error {
 		return err
 	}
 
-	paths, err := validateArchive(d.root, archive.File)
+	paths, err := validateArchive(d.root, archive.File, zipRel)
 	if err != nil {
 		return err
 	}

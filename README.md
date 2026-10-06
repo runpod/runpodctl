@@ -345,14 +345,19 @@ two consequences worth knowing:
   followed it silently, which let whoever held the codephrase pick which of
   your symlinks to write through. the same goes for a symlink at the path of
   an incoming file: it is refused wherever it points, since writing through
-  it would change some other file than the one sent.
+  it would change some other file than the one sent. the refusal says what to
+  do: run `receive` inside the directory the link points to, or replace the
+  link with a real directory.
 - sending a tree that contains a symlink pointing outside it (`link ->
   ../elsewhere`) is refused on the receiving side, because the link would
   resolve outside the receive directory. symlinks pointing within the tree
-  transfer normally.
+  transfer normally. a symlink whose target steps into a directory and back
+  out (`sub/../x`) is refused whatever it resolves to: on a filesystem that
+  reads two spellings as one name, the directory it steps out of may be
+  another link. no tool writes such a target unless given one.
 
 a refused archive is left in place rather than deleted, so nothing that
-arrived is lost.
+arrived is lost, and the error names where it is.
 
 ## output format
 

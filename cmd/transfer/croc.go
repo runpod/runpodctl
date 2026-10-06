@@ -768,6 +768,28 @@ func (c *Client) Receive() (err error) {
 func (c *Client) transfer() (err error) {
 	c.quit = make(chan bool)
 
+	// Stdout is set from the peer's SendingText, and FilesToTransferCurrentNum
+	// is a peer-supplied index, so this needs bounds before it indexes. It is
+	// deferred because a refusal or an abort returns early below, and the
+	// croc-stdin- file the receiver created in the destination has to go
+	// either way, with its handle closed first.
+	defer func() {
+		if !c.Options.Stdout || c.Options.IsSender || !c.currentFileInRange() {
+			return
+		}
+		rel := c.filePaths[c.FilesToTransferCurrentNum]
+		c.mutex.Lock()
+		defer c.mutex.Unlock()
+		if !c.CurrentFileIsClosed {
+			c.CurrentFile.Close()
+			c.CurrentFileIsClosed = true
+		}
+		if err := c.dest.remove(rel); err != nil {
+			log.Warnf("error removing %s: %v", rel, err)
+		}
+		fmt.Print("\n")
+	}()
+
 	if !c.Options.IsSender && !c.Step1ChannelSecured {
 		err = message.Send(c.conn[0], c.Key, message.Message{
 			Type:   message.TypePAKE,
@@ -825,6 +847,19 @@ func (c *Client) transfer() (err error) {
 	}
 
 	if c.SuccessfulTransfer && !c.Options.IsSender {
+		// every declared link exists now, so each is re-resolved through the
+		// root. the validator's lexical check approximated how the filesystem
+		// aliases names; this is the filesystem's own answer.
+		var links []string
+		for i, file := range c.FilesToTransfer {
+			if file.Symlink != "" && i < len(c.filePaths) {
+				links = append(links, c.filePaths[i])
+			}
+		}
+		if verifyErr := c.dest.verifySymlinks(links); verifyErr != nil {
+			return verifyErr
+		}
+
 		// `send <folder>` arrives as a zip the receiver unpacks in place.
 		// extractZip validates every entry before writing any of them and
 		// returns errors instead of calling log.Fatalln, which is what
@@ -834,7 +869,9 @@ func (c *Client) transfer() (err error) {
 				continue
 			}
 			if extractErr := c.dest.extractZip(c.filePaths[i]); extractErr != nil {
-				return fmt.Errorf("extracting %s: %w", file.Name, extractErr)
+				// kept, not removed, so nothing that arrived is lost. a user who
+				// did not expect a zip finds one, so the error says where.
+				return fmt.Errorf("extracting %s: %w; the archive was kept at %s", file.Name, extractErr, c.dest.displayPath(c.filePaths[i]))
 			}
 			if removeErr := c.dest.remove(c.filePaths[i]); removeErr != nil {
 				log.Warnf("error removing %s: %v", file.Name, removeErr)
@@ -842,19 +879,6 @@ func (c *Client) transfer() (err error) {
 		}
 	}
 
-	// Stdout is set from the peer's SendingText, and FilesToTransferCurrentNum
-	// is a peer-supplied index, so this needs bounds before it indexes.
-	if c.Options.Stdout && !c.Options.IsSender && c.currentFileInRange() {
-		rel := c.filePaths[c.FilesToTransferCurrentNum]
-		if !c.CurrentFileIsClosed {
-			c.CurrentFile.Close()
-			c.CurrentFileIsClosed = true
-		}
-		if err := c.dest.remove(rel); err != nil {
-			log.Warnf("error removing %s: %v", rel, err)
-		}
-		fmt.Print("\n")
-	}
 	if err != nil && strings.Contains(err.Error(), "pake not successful") {
 		err = fmt.Errorf("password mismatch")
 	}
@@ -1495,10 +1519,23 @@ func (c *Client) createEmptyFileAndFinish(fileInfo FileInfo, i int) (err error) 
 	return
 }
 
-func (c *Client) updateIfRecipientHasFileInfo() (err error) {
-	if !(!c.Options.IsSender && c.Step2FileInfoTransferred && !c.Step3RecipientRequestFile) {
-		return
+// updateIfRecipientHasFileInfo picks the next file to ask for and tells the
+// sender. A failure in there is local (a file that cannot be opened, a link
+// that cannot be made) and the sender is waiting on TypeRecipientReady, so it
+// is told the reason before this side returns; otherwise it learns of the
+// failure only as a dropped connection.
+func (c *Client) updateIfRecipientHasFileInfo() error {
+	if c.Options.IsSender || !c.Step2FileInfoTransferred || c.Step3RecipientRequestFile {
+		return nil
 	}
+	err := c.readyNextFile()
+	if err != nil {
+		c.abortReceive(err)
+	}
+	return err
+}
+
+func (c *Client) readyNextFile() (err error) {
 	finished := true
 	for i, fileInfo := range c.FilesToTransfer {
 		if _, ok := c.FilesHasFinished[i]; ok {
@@ -1761,12 +1798,13 @@ func (c *Client) receiveData(i int) {
 	}
 }
 
-// abortReceive ends a receive from a data goroutine. Returning from
-// receiveData alone leaves transfer() blocked reading conn[0] until comm's
-// three hour read deadline, with the peer waiting on it. So the peer is told
-// why, and conn[0] is closed, which unblocks that read and lets transfer()
-// return the reason. Only the first failure is kept. The caller must not hold
-// c.mutex.
+// abortReceive ends a receive that this side cannot continue. From a data
+// goroutine, returning alone leaves transfer() blocked reading conn[0] until
+// comm's three hour read deadline, with the peer waiting on it; from the
+// control loop, returning alone ends this side while the peer waits for a
+// TypeRecipientReady that never comes. So the peer is told why, and conn[0] is
+// closed, which unblocks that read and lets transfer() return the reason. Only
+// the first failure is kept. The caller must not hold c.mutex.
 func (c *Client) abortReceive(err error) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
