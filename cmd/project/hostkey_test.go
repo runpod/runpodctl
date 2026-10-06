@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -218,11 +219,19 @@ func TestPodHostKeyCallbackRefusesChangedKey(t *testing.T) {
 	if err == nil {
 		t.Fatal("a changed host key was accepted")
 	}
-	// stop/start is the benign cause users hit, so the error has to name it.
-	for _, want := range []string{"pod-abc123", knownHosts, ssh.FingerprintSHA256(impostor.PublicKey()), "stopping and starting a pod"} {
+	// stop/start is the benign cause users hit, so the error has to name it,
+	// and the remedy has to be a command, not a line to delete by hand.
+	for _, want := range []string{"pod-abc123", knownHosts, ssh.FingerprintSHA256(impostor.PublicKey()), "stopping and starting a pod", "runpodctl ssh forget pod-abc123"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %q", err, want)
 		}
+	}
+	if strings.Contains(err.Error(), "delete") {
+		t.Errorf("error %q still tells the user to edit the store by hand", err)
+	}
+	var mismatch *hostKeyMismatchError
+	if !errors.As(err, &mismatch) || mismatch.offered.Type() != impostor.PublicKey().Type() || len(mismatch.recorded) != 1 {
+		t.Errorf("error is not a typed mismatch carrying both keys: %#v", err)
 	}
 	if after := readLines(t, knownHosts); len(after) != len(before) || after[0] != before[0] {
 		t.Errorf("known_hosts was rewritten to %v, want %v left intact", after, before)
@@ -893,6 +902,11 @@ func TestRsyncHandlesSpacedPathsAndReportsRefusal(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "Host key verification failed") {
 		t.Fatalf("wanted openssh's refusal in the error, got %v", err)
 	}
+	// ssh exits 255 for a refused key and a dropped connection alike; only the
+	// latter may be explained as a restart.
+	if strings.Contains(err.Error(), "restarting") {
+		t.Fatalf("a refused host key was explained as a restarting pod: %v", err)
+	}
 
 	// once go has enrolled the pod, openssh passes verification. the test
 	// sshd runs no rsync, so the transfer itself still fails, but not on the key.
@@ -910,5 +924,362 @@ func TestRsyncRemoteShellQuotesArguments(t *testing.T) {
 	want := `ssh -i '/home/o''brien/my key' -o 'UserKnownHostsFile="/a b/kh"' -p 22`
 	if got != want {
 		t.Errorf("rsyncRemoteShell =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// withHostKeyPrompt routes the re-trust prompt through buffers so the terminal
+// and non-terminal paths can both be driven without a tty.
+func withHostKeyPrompt(t *testing.T, terminal bool, answer string) *strings.Builder {
+	t.Helper()
+	prevTerminal, prevIn, prevOut := stdinIsTerminal, promptInput, promptOutput
+	t.Cleanup(func() { stdinIsTerminal, promptInput, promptOutput = prevTerminal, prevIn, prevOut })
+	out := &strings.Builder{}
+	stdinIsTerminal = func() bool { return terminal }
+	promptInput = strings.NewReader(answer)
+	promptOutput = out
+	return out
+}
+
+// enrollThenChangeKey trusts one key for pod-abc123, then stands up a pod
+// offering another under the same id: the shape of a stop/start.
+func enrollThenChangeKey(t *testing.T) (knownHosts, addr string, trusted, changed ssh.Signer) {
+	t.Helper()
+	trusted = newTestHostKey(t)
+	knownHosts = emptyKnownHosts(t)
+	if err := dial(t, startTestSSHD(t, trusted), "pod-abc123", knownHosts); err != nil {
+		t.Fatalf("first connection: %v", err)
+	}
+	changed = newTestHostKey(t)
+	return knownHosts, startTestSSHD(t, changed), trusted, changed
+}
+
+func dialPodForTest(addr, podID, knownHosts string) error {
+	client, err := dialPod(podID, addr, nil, knownHosts)
+	if err == nil {
+		client.Close()
+	}
+	return err
+}
+
+func assertSoleEntry(t *testing.T, knownHosts, alias string, key ssh.PublicKey) {
+	t.Helper()
+	lines := readLines(t, knownHosts)
+	if want := knownhosts.Line([]string{alias}, key); len(lines) != 1 || lines[0] != want {
+		t.Fatalf("known_hosts = %v, want only %q", lines, want)
+	}
+}
+
+// TestDialPodRetrustsAfterConfirmation is the terminal flow after a stop/start:
+// both fingerprints are shown, a yes replaces only that pod's entry with the
+// key that was shown, and the same run goes on to connect.
+func TestDialPodRetrustsAfterConfirmation(t *testing.T) {
+	knownHosts, addr, trusted, changed := enrollThenChangeKey(t)
+	prompt := withHostKeyPrompt(t, true, "y\n")
+
+	if err := dialPodForTest(addr, "pod-abc123", knownHosts); err != nil {
+		t.Fatalf("confirmed new key was refused: %v", err)
+	}
+	for _, want := range []string{
+		"pod-abc123",
+		ssh.FingerprintSHA256(trusted.PublicKey()),
+		ssh.FingerprintSHA256(changed.PublicKey()),
+		"stopping and starting",
+		"[y/N]",
+	} {
+		if !strings.Contains(prompt.String(), want) {
+			t.Errorf("prompt %q does not show %q", prompt.String(), want)
+		}
+	}
+	assertSoleEntry(t, knownHosts, "runpod-pod-abc123", changed.PublicKey())
+
+	// the replaced pin holds: the next connection verifies without asking.
+	prompt = withHostKeyPrompt(t, true, "")
+	if err := dialPodForTest(addr, "pod-abc123", knownHosts); err != nil {
+		t.Fatalf("connection after re-trust: %v", err)
+	}
+	if prompt.Len() != 0 {
+		t.Errorf("a verified connection prompted: %q", prompt.String())
+	}
+}
+
+func TestDialPodKeepsRefusalWithoutConsent(t *testing.T) {
+	for _, answer := range []string{"n\n", "\n", "", "yes please\n", "Y es\n"} {
+		t.Run(fmt.Sprintf("answer=%q", answer), func(t *testing.T) {
+			knownHosts, addr, trusted, _ := enrollThenChangeKey(t)
+			withHostKeyPrompt(t, true, answer)
+
+			err := dialPodForTest(addr, "pod-abc123", knownHosts)
+			var mismatch *hostKeyMismatchError
+			if !errors.As(err, &mismatch) {
+				t.Fatalf("wanted the mismatch error, got %v", err)
+			}
+			if strings.Contains(err.Error(), "restarting") {
+				t.Errorf("a refused key was explained as a restart: %v", err)
+			}
+			assertSoleEntry(t, knownHosts, "runpod-pod-abc123", trusted.PublicKey())
+		})
+	}
+}
+
+// TestDialPodDoesNotPromptWithoutTerminal: a script, ci job or agent cannot
+// answer, so it must get the error and its `ssh forget` remedy, and a yes
+// waiting on a piped stdin must not be read as consent.
+func TestDialPodDoesNotPromptWithoutTerminal(t *testing.T) {
+	knownHosts, addr, trusted, _ := enrollThenChangeKey(t)
+	prompt := withHostKeyPrompt(t, false, "y\n")
+
+	err := dialPodForTest(addr, "pod-abc123", knownHosts)
+	if err == nil || !strings.Contains(err.Error(), "runpodctl ssh forget pod-abc123") {
+		t.Fatalf("wanted the mismatch error naming the forget command, got %v", err)
+	}
+	if prompt.Len() != 0 {
+		t.Errorf("prompted without a terminal: %q", prompt.String())
+	}
+	assertSoleEntry(t, knownHosts, "runpod-pod-abc123", trusted.PublicKey())
+}
+
+// TestForgetKnownHostRemovesOnlyThatPod: every line for the pod goes,
+// including a second key for it, and nothing else moves: not another pod,
+// not a pod whose id merely starts the same way, not a comment or blank line.
+func TestForgetKnownHostRemovesOnlyThatPod(t *testing.T) {
+	path := emptyKnownHosts(t)
+	first := newTestHostKey(t).PublicKey()
+	second := newTestHostKey(t).PublicKey()
+	other := newTestHostKey(t).PublicKey()
+	similar := newTestHostKey(t).PublicKey()
+	content := "# hand-written comment\n" +
+		knownhosts.Line([]string{"runpod-pod-one"}, first) + "\n" +
+		knownhosts.Line([]string{"runpod-pod-two"}, other) + "\n" +
+		"\n" +
+		knownhosts.Line([]string{"runpod-pod-one-dev"}, similar) + "\n" +
+		knownhosts.Line([]string{"runpod-pod-one"}, second) + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := forgetKnownHost(path, "runpod-pod-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, key := range removed {
+		got = append(got, ssh.FingerprintSHA256(key))
+	}
+	if want := []string{ssh.FingerprintSHA256(first), ssh.FingerprintSHA256(second)}; !slices.Equal(got, want) {
+		t.Errorf("removed %v, want %v", got, want)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "# hand-written comment\n" +
+		knownhosts.Line([]string{"runpod-pod-two"}, other) + "\n" +
+		"\n" +
+		knownhosts.Line([]string{"runpod-pod-one-dev"}, similar) + "\n"
+	if string(raw) != want {
+		t.Errorf("known_hosts =\n%q\nwant\n%q", raw, want)
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != knownHostsFilePerm {
+			t.Errorf("rewritten store mode = %#o, want %#o", got, knownHostsFilePerm)
+		}
+	}
+
+	// forgetting again finds nothing and leaves the file alone.
+	removed, err = forgetKnownHost(path, "runpod-pod-one")
+	if err != nil || len(removed) != 0 {
+		t.Fatalf("second forget removed %v (%v)", removed, err)
+	}
+	if again, err := os.ReadFile(path); err != nil || string(again) != want {
+		t.Errorf("a no-op forget rewrote the store: %q (%v)", again, err)
+	}
+}
+
+func TestForgetHostKeyWithoutStore(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	path, fingerprints, err := ForgetHostKey("pod-one")
+	if err != nil || len(fingerprints) != 0 {
+		t.Fatalf("ForgetHostKey on a missing store: %v, %v", fingerprints, err)
+	}
+	if want := filepath.Join(home, ".runpod", "ssh", "known_hosts"); path != want {
+		t.Errorf("path = %q, want %q", path, want)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("forget created the store: %v", err)
+	}
+}
+
+// TestForgetHostKeyThenReenroll is the scripted recovery end to end: forget
+// reports the removed fingerprint, and the next connection trusts the pod's
+// current key on first use again.
+func TestForgetHostKeyThenReenroll(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	signer := newTestHostKey(t)
+	addr := startTestSSHD(t, signer)
+	path, err := knownHostsPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dial(t, addr, "pod-one", path); err != nil {
+		t.Fatalf("enrollment: %v", err)
+	}
+
+	_, fingerprints, err := ForgetHostKey("pod-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{ssh.FingerprintSHA256(signer.PublicKey())}; !slices.Equal(fingerprints, want) {
+		t.Errorf("fingerprints = %v, want %v", fingerprints, want)
+	}
+	if lines := readLines(t, path); len(lines) != 0 {
+		t.Fatalf("known_hosts still has %v", lines)
+	}
+
+	changed := newTestHostKey(t)
+	if err := dial(t, startTestSSHD(t, changed), "pod-one", path); err != nil {
+		t.Fatalf("re-enrollment after forget: %v", err)
+	}
+	assertSoleEntry(t, path, "runpod-pod-one", changed.PublicKey())
+}
+
+// TestForgetKnownHostRefusesReadOnlyStore: a store the user made read-only
+// refuses enrollment, so it must refuse forgetting too, and the rename that
+// rewrites the file must not get around its mode.
+func TestForgetKnownHostRefusesReadOnlyStore(t *testing.T) {
+	path := emptyKnownHosts(t)
+	if err := appendKnownHost(path, "runpod-pod-one", newTestHostKey(t).PublicKey()); err != nil {
+		t.Fatal(err)
+	}
+	expected := changeTestTrustStore(t, path, "read-only")
+
+	if _, err := forgetKnownHost(path, "runpod-pod-one"); err == nil {
+		t.Fatal("a read-only store was rewritten")
+	}
+	assertTestTrustStore(t, path, "read-only", expected)
+}
+
+// closedPort returns an address nothing listens on.
+func closedPort(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return addr
+}
+
+// hangupListener accepts connections and closes them at once, as a
+// container's sshd does while it shuts down.
+func hangupListener(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// TestDialPodExplainsRestartingPod covers the window after `pod start` in
+// which the api still reports the previous container's address: the
+// connection is refused, or accepted and dropped before the handshake. both
+// must say the pod may be restarting, keep the original error, and enroll
+// nothing.
+func TestDialPodExplainsRestartingPod(t *testing.T) {
+	for name, addr := range map[string]string{
+		"connection refused": closedPort(t),
+		"handshake hangup":   hangupListener(t),
+	} {
+		t.Run(name, func(t *testing.T) {
+			knownHosts := emptyKnownHosts(t)
+			err := dialPodForTest(addr, "pod-abc123", knownHosts)
+			var unreachable *podUnreachableError
+			if !errors.As(err, &unreachable) {
+				t.Fatalf("wanted the restarting explanation, got %v", err)
+			}
+			for _, want := range []string{"pod-abc123", "may still be restarting", "~30 seconds", addr} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not mention %q", err, want)
+				}
+			}
+			if lines := readLines(t, knownHosts); len(lines) != 0 {
+				t.Errorf("enrolled a key from a dead connection: %v", lines)
+			}
+		})
+	}
+}
+
+func TestRsyncConnectionLost(t *testing.T) {
+	for output, want := range map[string]bool{
+		"ssh: connect to host 1.2.3.4 port 40022: Connection refused\nrsync: connection unexpectedly closed (0 bytes received so far) [sender]": true,
+		"kex_exchange_identification: read: Connection reset by peer":                                                                           true,
+		"Connection closed by 1.2.3.4 port 40022":                                                                                               true,
+		"client_loop: send disconnect: Broken pipe":                                                                                             true,
+		"Host key verification failed.\nrsync: connection unexpectedly closed (0 bytes received so far) [sender]":                               false,
+		"root@1.2.3.4: Permission denied (publickey).":                                                                                          false,
+		"": false,
+	} {
+		if got := rsyncConnectionLost(output); got != want {
+			t.Errorf("rsyncConnectionLost(%q) = %t, want %t", output, got, want)
+		}
+	}
+}
+
+// TestRsyncExplainsRestartingPod runs the real rsync and openssh against a
+// closed port, which is what the api's stale address becomes once the old
+// container is gone, and expects the restart explanation around rsync's 255.
+func TestRsyncExplainsRestartingPod(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a posix rsync and openssh")
+	}
+	for _, bin := range []string{"rsync", "ssh"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("no %s binary available", bin)
+		}
+	}
+	conn := &SSHConnection{
+		podId:          "pod-abc123",
+		sshKeyPath:     writeClientKey(t, t.TempDir()),
+		knownHostsPath: emptyKnownHosts(t),
+	}
+	setTestSSHAddress(t, conn, closedPort(t))
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "main.py"), []byte("print(1)\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := conn.Rsync(src, "/tmp/dst", true)
+	var unreachable *podUnreachableError
+	if !errors.As(err, &unreachable) {
+		t.Fatalf("wanted the restarting explanation, got %v", err)
+	}
+	for _, want := range []string{"pod-abc123", "may still be restarting", "Connection refused"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
 	}
 }

@@ -19,6 +19,7 @@ import (
 
 	"github.com/fatih/color"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/term"
 )
 
 const (
@@ -148,12 +149,14 @@ func (sshConn *SSHConnection) Rsync(localDir string, remoteDir string, quiet boo
 	dryRunCmd.Stdout = &dryRunBuf
 	dryRunCmd.Stderr = &dryRunBuf
 	if err := dryRunCmd.Run(); err != nil {
+		err = fmt.Errorf("running rsync dry run: %w", err)
 		// the output holds openssh's own diagnostic, such as a refused or
 		// changed host key, which is the part of this failure a user can act on.
-		if output := strings.TrimSpace(dryRunBuf.String()); output != "" {
-			return fmt.Errorf("running rsync dry run: %w: %s", err, output)
+		output := strings.TrimSpace(dryRunBuf.String())
+		if output != "" {
+			err = fmt.Errorf("%w: %s", err, output)
 		}
-		return fmt.Errorf("running rsync dry run: %w", err)
+		return sshConn.explainRsyncFailure(err, output)
 	}
 	dryRunOutput := dryRunBuf.String()
 
@@ -189,13 +192,80 @@ func (sshConn *SSHConnection) Rsync(localDir string, remoteDir string, quiet boo
 
 		cmd := exec.Command("rsync", rsyncCmdArgs...)
 		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+		// stderr still streams to the user; the copy is read only on failure,
+		// to tell a dropped connection from any other exit 255.
+		var stderrBuf bytes.Buffer
+		cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
 		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("executing rsync command: %w", err)
+			return sshConn.explainRsyncFailure(fmt.Errorf("executing rsync command: %w", err), stderrBuf.String())
 		}
 	}
 
 	return nil
+}
+
+// explainRsyncFailure wraps err as a restarting pod when output shows the
+// connection was refused or dropped, and returns it unchanged otherwise.
+func (sshConn *SSHConnection) explainRsyncFailure(err error, output string) error {
+	if rsyncConnectionLost(output) {
+		return &podUnreachableError{podID: sshConn.podId, cause: err}
+	}
+	return err
+}
+
+// rsyncConnectionLost reports whether openssh's or rsync's output shows the
+// connection to the pod being refused or dropped. ssh exits 255 for that and
+// for a refused host key alike, so the status alone cannot tell them apart.
+func rsyncConnectionLost(output string) bool {
+	if strings.Contains(output, "Host key verification failed") {
+		return false
+	}
+	for _, marker := range []string{
+		"Connection refused",
+		"actively refused",
+		"Connection reset",
+		"Connection closed by",
+		"connection unexpectedly closed",
+		"Broken pipe",
+		"kex_exchange_identification",
+	} {
+		if strings.Contains(output, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// podUnreachableError explains a connection failure that is the normal result
+// of connecting right after `pod start`. for up to about 30 seconds the api
+// still reports the previous container's address (measured live), so the
+// connection reaches a container that is shutting down, or nothing at all.
+type podUnreachableError struct {
+	podID string
+	cause error
+}
+
+func (e *podUnreachableError) Error() string {
+	return fmt.Sprintf("could not reach pod %s: it may still be restarting.\n"+
+		"this is expected for up to ~30 seconds after a pod starts. try again shortly.\n"+
+		"(%v)", e.podID, e.cause)
+}
+
+func (e *podUnreachableError) Unwrap() error { return e.cause }
+
+// looksLikeUnreachablePod reports whether err is one of the failures a dial
+// right after `pod start` produces: the previous container refusing or
+// resetting the connection, or closing it during the handshake.
+func looksLikeUnreachablePod(err error) bool {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	for _, dropped := range droppedConnectionErrors {
+		if errors.Is(err, dropped) {
+			return true
+		}
+	}
+	return false
 }
 
 // hasChanges checks if there are any modified files in localDir since lastSyncTime.
@@ -310,6 +380,85 @@ func scanAndPrint(pipe io.Reader, color *color.Color, podID string, showPodIdPre
 	}
 }
 
+// stdinIsTerminal reports whether stdin is a terminal we can prompt on, as
+// opposed to a pipe or a redirected file.
+var stdinIsTerminal = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
+
+// promptInput and promptOutput are the host key prompt's ends. the prompt goes
+// to stderr so legacy exec stdout stays exactly as it was.
+var (
+	promptInput  io.Reader = os.Stdin
+	promptOutput io.Writer = os.Stderr
+)
+
+// dialPod connects to a pod, verifying its host key against the trust store.
+// a changed key on a terminal is put to the user with both fingerprints; on
+// yes the pod's recorded key is replaced with the offered one and the dial is
+// made once more. a dropped connection is explained as a pod still restarting.
+func dialPod(podID, addr string, auth []ssh.AuthMethod, hostKeys string) (*ssh.Client, error) {
+	client, err := dialPodOnce(podID, addr, auth, hostKeys)
+	var mismatch *hostKeyMismatchError
+	if errors.As(err, &mismatch) && confirmHostKeyChange(mismatch) {
+		if err := replaceKnownHost(hostKeys, hostKeyAlias(podID), mismatch.offered); err != nil {
+			return nil, fmt.Errorf("recording the new host key for pod %s: %w", podID, err)
+		}
+		client, err = dialPodOnce(podID, addr, auth, hostKeys)
+	}
+	if err != nil && looksLikeUnreachablePod(err) {
+		return nil, &podUnreachableError{podID: podID, cause: err}
+	}
+	return client, err
+}
+
+// dialPodOnce makes one verified connection attempt. the callback enrolls an
+// unknown pod and refuses a changed key; the pinned algorithms keep the
+// negotiated key type the recorded one.
+func dialPodOnce(podID, addr string, auth []ssh.AuthMethod, hostKeys string) (*ssh.Client, error) {
+	hostKeyCallback, err := podHostKeyCallback(podID, hostKeys)
+	if err != nil {
+		return nil, fmt.Errorf("preparing host key verification: %w", err)
+	}
+	hostKeyAlgorithms, err := pinnedHostKeyAlgorithms(podID, hostKeys)
+	if err != nil {
+		return nil, fmt.Errorf("preparing host key verification: %w", err)
+	}
+	client, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
+		User:              "root",
+		Auth:              auth,
+		HostKeyCallback:   hostKeyCallback,
+		HostKeyAlgorithms: hostKeyAlgorithms,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("establishing SSH connection to %s: %w", addr, err)
+	}
+	return client, nil
+}
+
+// confirmHostKeyChange asks whether to trust the key a pod now offers. it asks
+// only on a terminal: a script, ci job or agent gets the mismatch error, whose
+// remedy is `runpodctl ssh forget`, rather than a prompt nobody will answer,
+// and stdin is left unread so queued input is not taken as consent.
+func confirmHostKeyChange(mismatch *hostKeyMismatchError) bool {
+	if !stdinIsTerminal() {
+		return false
+	}
+	fmt.Fprintf(promptOutput, "host key mismatch for pod %s\n", mismatch.podID)
+	for _, known := range mismatch.recorded {
+		fmt.Fprintf(promptOutput, "  recorded: %s (%s)\n", ssh.FingerprintSHA256(known.Key), known.Key.Type())
+	}
+	fmt.Fprintf(promptOutput, "  offered:  %s (%s)\n", ssh.FingerprintSHA256(mismatch.offered), mismatch.offered.Type())
+	fmt.Fprintln(promptOutput, "stopping and starting a pod, or updating it, usually gives it a new host key. if that did not happen, the connection may be intercepted.")
+	fmt.Fprint(promptOutput, "trust the new key and continue? [y/N] ")
+
+	scanner := bufio.NewScanner(promptInput)
+	if !scanner.Scan() {
+		fmt.Fprintln(promptOutput)
+		return false
+	}
+	answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
+	return answer == "y" || answer == "yes"
+}
+
 func PodSSHConnection(podId string) (*SSHConnection, error) {
 	sshKeyPath, err := sshpkg.ResolvePrivateKeyPath()
 	if err != nil {
@@ -363,33 +512,14 @@ func PodSSHConnection(podId string) (*SSHConnection, error) {
 		return nil, fmt.Errorf("timeout waiting for pod %s to come online", podId)
 	}
 
-	// Configure the SSH client
 	hostKeys, err := knownHostsPath()
 	if err != nil {
 		return nil, fmt.Errorf("resolving known hosts file: %w", err)
 	}
-	hostKeyCallback, err := podHostKeyCallback(podId, hostKeys)
-	if err != nil {
-		return nil, fmt.Errorf("preparing host key verification: %w", err)
-	}
-	hostKeyAlgorithms, err := pinnedHostKeyAlgorithms(podId, hostKeys)
-	if err != nil {
-		return nil, fmt.Errorf("preparing host key verification: %w", err)
-	}
-	config := &ssh.ClientConfig{
-		User: "root",
-		Auth: []ssh.AuthMethod{
-			ssh.PublicKeys(privateKey),
-		},
-		HostKeyCallback:   hostKeyCallback,
-		HostKeyAlgorithms: hostKeyAlgorithms,
-	}
-
-	// Connect to the SSH server
 	host := fmt.Sprintf("%s:%d", podIp, podPort)
-	client, err := ssh.Dial("tcp", host, config)
+	client, err := dialPod(podId, host, []ssh.AuthMethod{ssh.PublicKeys(privateKey)}, hostKeys)
 	if err != nil {
-		return nil, fmt.Errorf("establishing SSH connection to %s: %w", host, err)
+		return nil, err
 	}
 
 	// read after the dial, which recorded the key on first contact.

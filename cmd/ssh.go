@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/runpod/runpodctl/cmd/project"
 	"github.com/runpod/runpodctl/cmd/ssh"
 	"github.com/runpod/runpodctl/internal/api"
 	"github.com/runpod/runpodctl/internal/output"
@@ -65,6 +66,17 @@ var sshConnectCmd = &cobra.Command{
 	RunE:       runSSHConnectLegacy,
 }
 
+var sshForgetCmd = &cobra.Command{
+	Use:   "forget <pod-id>",
+	Short: "forget the host key recorded for a pod",
+	Long: "forget the host key that 'exec' and 'project' recorded for a pod in ~/.runpod/ssh/known_hosts, " +
+		"so the next connection trusts the key the pod then offers. use it after a stop/start or update changed " +
+		"the pod's host key; if the pod did not restart, a mismatch may be an intercepted connection. " +
+		"'ssh info' is unaffected: the ssh command it prints uses your own ~/.ssh/known_hosts.",
+	Args: cobra.ExactArgs(1),
+	RunE: runSSHForget,
+}
+
 var (
 	sshKeyFile        string
 	sshKey            string
@@ -79,6 +91,7 @@ func init() {
 	sshCmd.AddCommand(sshRemoveKeyCmd)
 	sshCmd.AddCommand(sshInfoCmd)
 	sshCmd.AddCommand(sshConnectCmd)
+	sshCmd.AddCommand(sshForgetCmd)
 
 	sshAddKeyCmd.Flags().StringVar(&sshKey, "key", "", "the public key to add")
 	sshAddKeyCmd.Flags().StringVar(&sshKeyFile, "key-file", "", "file containing the public key")
@@ -215,6 +228,22 @@ func runSSHInfoWithArgs(cmd *cobra.Command, args []string, allowAll bool) error 
 
 	// return only; Execute is the single error sink and tags the code.
 	return api.NewNotFoundError("pod '%s' not found", nameOrID)
+}
+
+func runSSHForget(cmd *cobra.Command, args []string) error {
+	podID := args[0]
+	path, fingerprints, err := project.ForgetHostKey(podID)
+	if err != nil {
+		return fmt.Errorf("failed to forget host key for pod %s: %w", podID, err)
+	}
+
+	format := output.ParseFormat(cmd.Flag("output").Value.String())
+	return output.Print(map[string]interface{}{
+		"podId":        podID,
+		"forgotten":    len(fingerprints) > 0,
+		"fingerprints": fingerprints,
+		"knownHosts":   path,
+	}, &output.Config{Format: format})
 }
 
 func confirmAddKey() bool {

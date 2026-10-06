@@ -7,6 +7,11 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// droppedConnectionErrors are the dial failures a pod's dying container
+// produces: refusing the connection, or resetting one it had accepted. the
+// net package surfaces winsock's codes, not the posix-named syscall ones.
+var droppedConnectionErrors = []error{windows.WSAECONNREFUSED, windows.WSAECONNRESET}
+
 // tryLockHostKeyFile takes an exclusive lock without blocking, reporting false
 // while another process holds it.
 func tryLockHostKeyFile(file *os.File) (bool, error) {

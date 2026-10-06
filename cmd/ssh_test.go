@@ -1,15 +1,20 @@
 package cmd
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
+	gossh "golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 func TestSSHInfo_NotDeprecated(t *testing.T) {
@@ -246,5 +251,103 @@ func TestSSHConnect_ListSkipsDeadPods(t *testing.T) {
 	}
 	if first, _ := conns[0].(map[string]interface{}); first["id"] != "up" {
 		t.Errorf("listed the wrong pod: %v", conns[0])
+	}
+}
+
+func TestSSHCmd_HasForgetCommand(t *testing.T) {
+	for _, cmd := range sshCmd.Commands() {
+		if cmd.Use == "forget <pod-id>" {
+			return
+		}
+	}
+	t.Error("expected ssh forget command to exist")
+}
+
+func TestSSHForget_RequiresPodID(t *testing.T) {
+	if err := sshForgetCmd.Args(sshForgetCmd, []string{}); err == nil {
+		t.Error("expected ssh forget to require a pod id")
+	}
+	if err := sshForgetCmd.Args(sshForgetCmd, []string{"pod123"}); err != nil {
+		t.Errorf("unexpected error for pod id: %v", err)
+	}
+	if err := sshForgetCmd.Args(sshForgetCmd, []string{"a", "b"}); err == nil {
+		t.Error("expected error for too many args")
+	}
+}
+
+func sshForgetJSON(t *testing.T, podID string) map[string]interface{} {
+	t.Helper()
+
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	saved := os.Stdout
+	os.Stdout = write
+
+	cmd := &cobra.Command{Use: "test"}
+	cmd.Flags().String("output", "json", "")
+	runErr := runSSHForget(cmd, []string{podID})
+
+	os.Stdout = saved
+	_ = write.Close()
+	out, _ := io.ReadAll(read)
+	_ = read.Close()
+
+	if runErr != nil {
+		t.Fatalf("ssh forget failed: %v (output: %s)", runErr, out)
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatalf("ssh forget output is not json: %v (%s)", err, out)
+	}
+	return result
+}
+
+// TestSSHForget_RemovesOnlyThatPod is the scripted recovery after a stop/start
+// changed a pod's host key: the named pod's entry goes and is reported by
+// fingerprint, another pod's stays, and a second call is a quiet no-op.
+func TestSSHForget_RemovesOnlyThatPod(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	dir := filepath.Join(home, ".runpod", "ssh")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := gossh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forgotten := knownhosts.Line([]string{"runpod-pod123"}, signer.PublicKey())
+	kept := knownhosts.Line([]string{"runpod-other"}, signer.PublicKey())
+	store := filepath.Join(dir, "known_hosts")
+	if err := os.WriteFile(store, []byte(forgotten+"\n"+kept+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := sshForgetJSON(t, "pod123")
+	if result["podId"] != "pod123" || result["forgotten"] != true || result["knownHosts"] != store {
+		t.Errorf("unexpected result: %v", result)
+	}
+	fingerprints, _ := result["fingerprints"].([]interface{})
+	if len(fingerprints) != 1 || fingerprints[0] != gossh.FingerprintSHA256(signer.PublicKey()) {
+		t.Errorf("fingerprints = %v, want the removed key's", result["fingerprints"])
+	}
+	raw, err := os.ReadFile(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != kept+"\n" {
+		t.Errorf("known_hosts = %q, want only the other pod's line", raw)
+	}
+
+	again := sshForgetJSON(t, "pod123")
+	if again["forgotten"] != false {
+		t.Errorf("second forget reported a removal: %v", again)
 	}
 }

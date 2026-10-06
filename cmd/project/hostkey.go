@@ -52,23 +52,31 @@ func hostKeyLookup(podID string) string {
 	return net.JoinHostPort(hostKeyAlias(podID), "22")
 }
 
+// knownHostsFile is the trust store's path, whether or not it exists yet.
+func knownHostsFile() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolving home directory: %w", err)
+	}
+	return filepath.Join(home, ".runpod", "ssh", "known_hosts"), nil
+}
+
 // knownHostsPath returns the trust store, creating it if needed.
 // knownhosts.New fails outright on a missing file, so it cannot be left to the
 // first write. it opens read-only: checking an already-trusted pod only reads
 // the store, so a read-only store must not block that. appendKnownHost opens
 // for writing only when there is a new key to record.
 func knownHostsPath() (string, error) {
-	home, err := os.UserHomeDir()
+	path, err := knownHostsFile()
 	if err != nil {
-		return "", fmt.Errorf("resolving home directory: %w", err)
+		return "", err
 	}
 
-	dir := filepath.Join(home, ".runpod", "ssh")
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, knownHostsDirPerm); err != nil {
 		return "", fmt.Errorf("creating %s: %w", dir, err)
 	}
 
-	path := filepath.Join(dir, "known_hosts")
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDONLY, knownHostsFilePerm)
 	if err != nil {
 		return "", fmt.Errorf("creating %s: %w", path, err)
@@ -78,6 +86,27 @@ func knownHostsPath() (string, error) {
 	}
 	return path, nil
 }
+
+// hostKeyMismatchError is the callback refusing a key other than the pod's
+// recorded one. it carries both keys so dialPod can show them to the user,
+// and its message carries the scripted remedy for a run that cannot ask.
+type hostKeyMismatchError struct {
+	podID    string
+	path     string
+	offered  ssh.PublicKey
+	recorded []knownhosts.KnownKey
+	cause    error
+}
+
+func (e *hostKeyMismatchError) Error() string {
+	return fmt.Sprintf("host key mismatch for pod %s: it offered %s, which is not the key recorded in %s. "+
+		"stopping and starting a pod, or updating it, clears its container disk, and most images then generate a new host key. "+
+		"if that happened since your last connection, run `runpodctl ssh forget %s` and retry. "+
+		"otherwise the connection may be intercepted: %v",
+		e.podID, ssh.FingerprintSHA256(e.offered), e.path, e.podID, e.cause)
+}
+
+func (e *hostKeyMismatchError) Unwrap() error { return e.cause }
 
 // podHostKeyCallback verifies a pod's host key against path, recording the key
 // on first contact and refusing a changed one. openssh requires this pin
@@ -125,17 +154,40 @@ func podHostKeyCallback(podID, path string) (ssh.HostKeyCallback, error) {
 			return nil
 		}
 
-		// never auto-heal. a mismatch is either a new container or an
+		// never heal silently. a mismatch is either a new container or an
 		// interception, and only the user can tell which. the pod id survives a
 		// stop/start but the host key usually does not: the container disk is
 		// cleared on stop, and runpod's images run ssh-keygen at boot for any
 		// missing /etc/ssh/ssh_host_* key (runpod/containers start.sh).
-		return fmt.Errorf("host key mismatch for pod %s: it offered %s, which is not the key recorded in %s. "+
-			"stopping and starting a pod, or updating it, clears its container disk, and most images then generate a new host key. "+
-			"if that happened since your last connection, delete the %q line from that file and retry. "+
-			"otherwise the connection may be intercepted: %w",
-			podID, ssh.FingerprintSHA256(key), path, alias, err)
+		var recorded []knownhosts.KnownKey
+		if keyErr != nil {
+			recorded = sortedByLine(keyErr.Want)
+		}
+		return &hostKeyMismatchError{podID: podID, path: path, offered: key, recorded: recorded, cause: err}
 	}, nil
+}
+
+// recordedKnownKeys returns the keys recorded for podID in file order, or nil
+// when none are. knownhosts has no lookup, so it is offered a key that cannot
+// match and the recorded ones are read off the mismatch (golang/go#29286).
+func recordedKnownKeys(podID, path string) ([]knownhosts.KnownKey, error) {
+	check, err := knownhosts.New(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	err = check(hostKeyLookup(podID), &net.TCPAddr{IP: net.IPv4zero}, placeholderHostKey{})
+	var keyErr *knownhosts.KeyError
+	if !errors.As(err, &keyErr) {
+		return nil, nil
+	}
+	return sortedByLine(keyErr.Want), nil
+}
+
+// sortedByLine puts keys in file order; KeyError.Want is built from a map.
+func sortedByLine(keys []knownhosts.KnownKey) []knownhosts.KnownKey {
+	return slices.SortedFunc(slices.Values(keys), func(a, b knownhosts.KnownKey) int {
+		return cmp.Compare(a.Line, b.Line)
+	})
 }
 
 // recordedHostKeyAlgorithms returns the host key algorithms of the keys
@@ -143,21 +195,10 @@ func podHostKeyCallback(podID, path string) (ssh.HostKeyCallback, error) {
 // key of another type as a mismatch, so a client must negotiate one of these
 // or a trusted pod reads as an interception.
 func recordedHostKeyAlgorithms(podID, path string) ([]string, error) {
-	check, err := knownhosts.New(path)
+	recorded, err := recordedKnownKeys(podID, path)
 	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", path, err)
+		return nil, err
 	}
-	// knownhosts has no lookup, so offer a key that cannot match and read the
-	// recorded ones off the mismatch (golang/go#29286).
-	err = check(hostKeyLookup(podID), &net.TCPAddr{IP: net.IPv4zero}, placeholderHostKey{})
-	var keyErr *knownhosts.KeyError
-	if !errors.As(err, &keyErr) {
-		return nil, nil
-	}
-	// Want is built from a map, so its order is not the file's.
-	recorded := slices.SortedFunc(slices.Values(keyErr.Want), func(a, b knownhosts.KnownKey) int {
-		return cmp.Compare(a.Line, b.Line)
-	})
 	var algos []string
 	for _, known := range recorded {
 		for _, algo := range signingAlgorithms(known.Key.Type()) {
@@ -275,4 +316,175 @@ func lacksTrailingNewline(f *os.File) (bool, error) {
 		return false, err
 	}
 	return last[0] != '\n', nil
+}
+
+// ForgetHostKey drops the host key recorded for podID and returns the store
+// path and the fingerprints it removed, so the next exec or project connection
+// enrolls the key the pod then offers. a pod with nothing recorded is not an
+// error: a script can forget and retry without checking first.
+func ForgetHostKey(podID string) (string, []string, error) {
+	path, err := knownHostsFile()
+	if err != nil {
+		return "", nil, err
+	}
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return path, nil, nil
+		}
+		return path, nil, err
+	}
+	removed, err := forgetKnownHost(path, hostKeyAlias(podID))
+	if err != nil {
+		return path, nil, err
+	}
+	fingerprints := make([]string, 0, len(removed))
+	for _, key := range removed {
+		fingerprints = append(fingerprints, ssh.FingerprintSHA256(key))
+	}
+	return path, fingerprints, nil
+}
+
+// forgetKnownHost removes every line recording alias and returns the keys
+// those lines held.
+func forgetKnownHost(path, alias string) (removed []ssh.PublicKey, err error) {
+	lock, err := lockKnownHosts(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := lock.Close(); err == nil && closeErr != nil {
+			err = fmt.Errorf("releasing host key lock for %s: %w", path, closeErr)
+		}
+	}()
+	return rewriteKnownHosts(path, alias, nil)
+}
+
+// replaceKnownHost records key for alias in place of whatever was recorded,
+// as one locked rewrite so a concurrent enrollment cannot interleave.
+func replaceKnownHost(path, alias string, key ssh.PublicKey) (err error) {
+	lock, err := lockKnownHosts(path)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := lock.Close(); err == nil && closeErr != nil {
+			err = fmt.Errorf("releasing host key lock for %s: %w", path, closeErr)
+		}
+	}()
+	_, err = rewriteKnownHosts(path, alias, key)
+	return err
+}
+
+// rewriteKnownHosts drops alias's lines, appends key when given, and lands the
+// result through a rename rather than truncating in place: a crash mid-write
+// would otherwise leave an empty store, and an empty store re-enrolls every
+// pod on next contact. every other byte of the file is kept as it was.
+func rewriteKnownHosts(path, alias string, key ssh.PublicKey) ([]ssh.PublicKey, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	// a store the user made read-only refuses enrollment, so it must refuse
+	// this too; the rename below would otherwise bypass its mode.
+	probe, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	if err := probe.Close(); err != nil {
+		return nil, err
+	}
+
+	var removed []ssh.PublicKey
+	lines := strings.Split(string(raw), "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if !knownHostsLineNames(line, alias) {
+			kept = append(kept, line)
+			continue
+		}
+		if key, ok := parseKnownHostsKey(line); ok {
+			removed = append(removed, key)
+		}
+	}
+	if len(kept) == len(lines) && key == nil {
+		return nil, nil
+	}
+
+	content := strings.Join(kept, "\n")
+	if key != nil {
+		if content != "" && !strings.HasSuffix(content, "\n") {
+			content += "\n"
+		}
+		content += knownhosts.Line([]string{alias}, key) + "\n"
+	}
+	if err := writeKnownHostsAtomically(path, content, info.Mode().Perm()); err != nil {
+		return nil, err
+	}
+	return removed, nil
+}
+
+// knownHostsLineNames reports whether a known_hosts line records alias: its
+// host field, after any @marker, lists alias as one of its comma-separated
+// patterns. hashed and wildcard patterns are not matched; neither client
+// writes them, and the lookup only ever asks about the plain alias.
+func knownHostsLineNames(line, alias string) bool {
+	fields := knownHostsFields(line)
+	if len(fields) < 3 {
+		return false
+	}
+	return slices.Contains(strings.Split(fields[0], ","), alias)
+}
+
+// knownHostsFields splits a line into hosts, key type, key and comment,
+// dropping a leading @cert-authority or @revoked marker.
+func knownHostsFields(line string) []string {
+	fields := strings.Fields(line)
+	if len(fields) > 0 && strings.HasPrefix(fields[0], "@") {
+		fields = fields[1:]
+	}
+	return fields
+}
+
+func parseKnownHostsKey(line string) (ssh.PublicKey, bool) {
+	fields := knownHostsFields(line)
+	if len(fields) < 3 {
+		return nil, false
+	}
+	key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(strings.Join(fields[1:], " ")))
+	return key, err == nil
+}
+
+func writeKnownHostsAtomically(path, content string, perm os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".known_hosts.*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	discard := func(err error) error {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		return discard(err)
+	}
+	if _, err := tmp.WriteString(content); err != nil {
+		return discard(err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return discard(err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return nil
 }
