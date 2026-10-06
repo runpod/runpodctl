@@ -3,11 +3,13 @@ package transfer
 import (
 	"archive/zip"
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // destFolds measures whether the test filesystem aliases names by case, so the
@@ -686,5 +688,74 @@ func TestSwapASCIICase(t *testing.T) {
 		if got != tc.want || ok != tc.ok {
 			t.Errorf("swapASCIICase(%q) = %q, %v, want %q, %v", tc.name, got, ok, tc.want, tc.ok)
 		}
+	}
+}
+
+// caseVariants returns n distinct spellings of one name that differ only by
+// case, each declaring the same content so no conflict rule refuses them.
+func caseVariants(folder string, n int) []FileInfo {
+	const base = "abcdefghijklmnop"
+	out := make([]FileInfo, 0, n)
+	for i := 0; i < n; i++ {
+		b := []byte(base)
+		for bit := range b {
+			if i&(1<<bit) != 0 {
+				b[bit] -= 'a' - 'A'
+			}
+		}
+		out = append(out, file(folder, string(b)))
+	}
+	return out
+}
+
+// TestValidateManifestBoundsSpellings: a sender cannot make validation
+// quadratic by declaring one name in thousands of case variants. before the
+// bound, 4000 of them took 16s on APFS; now the manifest is refused at the
+// first spelling past the limit, whatever the filesystem.
+func TestValidateManifestBoundsSpellings(t *testing.T) {
+	root, err := os.OpenRoot(t.TempDir())
+	if err != nil {
+		t.Fatalf("opening destination: %v", err)
+	}
+	defer root.Close()
+
+	start := time.Now()
+	_, _, err = validateManifest(root, SenderInfo{FilesToTransfer: caseVariants("./", 4000)})
+	if err == nil || !strings.Contains(err.Error(), "spellings") {
+		t.Fatalf("validateManifest = %v, want the spellings refusal", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("refusing 4000 variants took %v", elapsed)
+	}
+
+	// the same bound applies to a directory spelled many ways.
+	var viaDirs []FileInfo
+	for i, f := range caseVariants("./", maxSpellings+1) {
+		viaDirs = append(viaDirs, file(f.Name+"/", fmt.Sprintf("f%d", i)))
+	}
+	if _, _, err := validateManifest(root, SenderInfo{FilesToTransfer: viaDirs}); err == nil || !strings.Contains(err.Error(), "spellings") {
+		t.Errorf("directory variants: validateManifest = %v, want the spellings refusal", err)
+	}
+}
+
+// TestValidateManifestAllowsSpellingsUpToTheBound: up to maxSpellings variants
+// of identical content are still the harmless repeat they were, and exact
+// repeats of one name never count against the bound.
+func TestValidateManifestAllowsSpellingsUpToTheBound(t *testing.T) {
+	root, err := os.OpenRoot(t.TempDir())
+	if err != nil {
+		t.Fatalf("opening destination: %v", err)
+	}
+	defer root.Close()
+
+	if _, _, err := validateManifest(root, SenderInfo{FilesToTransfer: caseVariants("./", maxSpellings)}); err != nil {
+		t.Errorf("%d variants refused: %v", maxSpellings, err)
+	}
+	repeats := make([]FileInfo, 5000)
+	for i := range repeats {
+		repeats[i] = file("./", "a.txt")
+	}
+	if _, _, err := validateManifest(root, SenderInfo{FilesToTransfer: repeats}); err != nil {
+		t.Errorf("exact repeats refused: %v", err)
 	}
 }

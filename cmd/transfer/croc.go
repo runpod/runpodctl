@@ -977,9 +977,6 @@ func fileChunks(size int64) int64 {
 // allocation ChunkRangesToChunks makes stays bounded whatever the file.
 const maxResumeChunks = 1 << 24
 
-// refuse records a rejected manifest, tells the peer, and stops the transfer.
-// The wire message keeps upstream's "refusing files" prefix, which a stock croc
-// sender matches on to exit cleanly rather than reporting a transport fault.
 // verifyLinksOnExit re-resolves the links a receive created when it ended
 // before the success path could, and adds any escape to err.
 func (c *Client) verifyLinksOnExit(err error) error {
@@ -993,6 +990,9 @@ func (c *Client) verifyLinksOnExit(err error) error {
 	return err
 }
 
+// refuse records a rejected manifest, tells the peer, and stops the transfer.
+// The wire message keeps upstream's "refusing files" prefix, which a stock croc
+// sender matches on to exit cleanly rather than reporting a transport fault.
 func (c *Client) refuse(reason string) (done bool, err error) {
 	c.refused = &refusalError{reason: "refusing files: " + reason}
 	if len(c.conn) > 0 && c.conn[0] != nil {

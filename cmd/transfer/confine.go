@@ -546,13 +546,20 @@ func (v *validator) aliases(rel string) ([]string, error) {
 		out = append(out, rel)
 	}
 
+	// the directory is probed at most once per call, and only when some other
+	// spelling exists: the probe stats its way up the tree, and a manifest that
+	// repeats one name is peer-chosen.
+	probed, folds := false, false
 	for _, candidate := range v.folded[foldKey(rel)] {
 		if candidate == rel {
 			continue
 		}
-		folds, err := v.probe.insensitive(parentRel(rel))
-		if err != nil {
-			return nil, err
+		if !probed {
+			var err error
+			if folds, err = v.probe.insensitive(parentRel(rel)); err != nil {
+				return nil, err
+			}
+			probed = true
 		}
 		if folds {
 			out = append(out, candidate)
@@ -569,14 +576,25 @@ func (v *validator) claimed(rel string) bool {
 	return v.dirs[rel]
 }
 
-func (v *validator) note(rel string) {
+// maxSpellings bounds how many distinct spellings of one name under foldKey a
+// manifest may declare. every lookup walks the spellings of its key, so an
+// unbounded count lets a sender make validation quadratic before any write:
+// 4000 case variants of one name took 16s to validate. a real tree has one or
+// two (README beside readme on a case-sensitive sender).
+const maxSpellings = 16
+
+func (v *validator) note(rel string) error {
 	key := foldKey(rel)
 	for _, seen := range v.folded[key] {
 		if seen == rel {
-			return
+			return nil
 		}
 	}
+	if len(v.folded[key]) >= maxSpellings {
+		return refusef("%q is declared in more than %d spellings that differ only by case or normalization", rel, maxSpellings)
+	}
 	v.folded[key] = append(v.folded[key], rel)
+	return nil
 }
 
 // sameContent reports whether two declarations of one destination agree well
@@ -625,7 +643,9 @@ func checkEntries(root *os.Root, entries []entry) error {
 			}
 		}
 
-		v.note(e.rel)
+		if err := v.note(e.rel); err != nil {
+			return err
+		}
 		switch e.kind {
 		case kindDir:
 			v.dirs[e.rel] = true
@@ -639,7 +659,9 @@ func checkEntries(root *os.Root, entries []entry) error {
 		// every ancestor has to be a directory, so a declaration of the
 		// ancestor itself as a file is a conflict.
 		for _, dir := range ancestors(e.rel) {
-			v.note(dir)
+			if err := v.note(dir); err != nil {
+				return err
+			}
 			v.dirs[dir] = true
 		}
 	}
