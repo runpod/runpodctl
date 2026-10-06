@@ -715,3 +715,55 @@ func TestChunkFits(t *testing.T) {
 		}
 	}
 }
+
+// TestTextReceiveNeverTouchesAnExistingFile: the message lands in a file the
+// receiver names, so a declared name that matches a file the user already had
+// is neither written nor removed, whether that file is writable or not.
+func TestTextReceiveNeverTouchesAnExistingFile(t *testing.T) {
+	for _, mode := range []os.FileMode{0o644, 0o444} {
+		t.Run(mode.String(), func(t *testing.T) {
+			quietStderr(t)
+			_, src, dest := hostileDirs(t)
+			mine := filepath.Join(dest, "mine.txt")
+			if err := os.WriteFile(mine, []byte("MINE"), mode); err != nil {
+				t.Fatalf("seeding: %v", err)
+			}
+
+			entry := sendable(t, src, "mine.txt", "hello")
+			runPairWith(t, []FileInfo{entry}, nil, dest, func(o *Options) { o.SendingText = true })
+
+			got, err := os.ReadFile(mine)
+			if err != nil || string(got) != "MINE" {
+				t.Fatalf("mine.txt = %q (%v), want it untouched", got, err)
+			}
+			entries, err := os.ReadDir(dest)
+			if err != nil {
+				t.Fatalf("reading destination: %v", err)
+			}
+			for _, e := range entries {
+				if e.Name() != "mine.txt" {
+					t.Errorf("text receive left %s in the destination", e.Name())
+				}
+			}
+		})
+	}
+}
+
+// TestTextTransferMustBeOneMessage: a text transfer declaring anything but one
+// regular file is refused before any write.
+func TestTextTransferMustBeOneMessage(t *testing.T) {
+	quietStderr(t)
+	_, src, dest := hostileDirs(t)
+	files := []FileInfo{
+		sendable(t, src, "croc-stdin-a", "one"),
+		sendable(t, src, "croc-stdin-b", "two"),
+	}
+	_, recvErr := runPairWith(t, files, nil, dest, func(o *Options) { o.SendingText = true })
+
+	if recvErr == nil || !strings.Contains(recvErr.Error(), "single message") {
+		t.Errorf("receiver error = %v, want the refusal", recvErr)
+	}
+	if entries, err := os.ReadDir(dest); err != nil || len(entries) != 0 {
+		t.Errorf("destination = %v (%v), want empty", entries, err)
+	}
+}

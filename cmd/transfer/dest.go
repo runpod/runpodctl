@@ -140,7 +140,7 @@ func (d *confinedDest) displayPath(rel string) string {
 // filesystem does more (8.3 short names, trailing dots and spaces), a target
 // that stayed inside by its letters can resolve through a declared link and
 // leave. os.Root follows every link on the way and reports an escape as an
-// error, so asking it is exact where the lexical check was approximate. An
+// error, so asking it is exact where the lexical check was approximate. Every
 // escaping link is removed before the error returns, so none survives the
 // receive. What this cannot give back is all-or-nothing, which is why the
 // validator still runs first and this only backs it.
@@ -148,17 +148,19 @@ func (d *confinedDest) displayPath(rel string) string {
 // Only an escape counts. A dangling target, a target through a file and a
 // cycle are what the sender's tree held, and are kept.
 func (d *confinedDest) verifySymlinks(rels []string) error {
+	var errs []error
 	for _, rel := range rels {
 		_, err := d.root.Stat(rel)
 		if !escapesRoot(err) {
 			continue
 		}
 		if removeErr := d.root.Remove(rel); removeErr != nil {
-			return fmt.Errorf("symlink %s resolves outside the destination and could not be removed: %w", rel, removeErr)
+			errs = append(errs, fmt.Errorf("symlink %s resolves outside the destination and could not be removed: %w", rel, removeErr))
+			continue
 		}
-		return fmt.Errorf("symlink %s resolved outside the destination and was removed", rel)
+		errs = append(errs, fmt.Errorf("symlink %s resolved outside the destination and was removed", rel))
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // escapesRoot reports whether err is os.Root refusing to leave the

@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -115,6 +116,13 @@ type Client struct {
 	// aborted records a receive that a data goroutine had to end. It is
 	// guarded by mutex, and checked alongside refused for the same reason.
 	aborted error
+	// stdinTemp is the file a text receive created for the message, named by
+	// the receiver. It is the only file the text cleanup may remove.
+	stdinTemp string
+	// createdLinks are the symlinks this receive created, re-resolved once it
+	// ends however it ends; linksVerified records that the success path did so.
+	createdLinks  []string
+	linksVerified bool
 
 	CurrentFile            *os.File
 	CurrentFileChunkRanges []int64
@@ -768,27 +776,30 @@ func (c *Client) Receive() (err error) {
 func (c *Client) transfer() (err error) {
 	c.quit = make(chan bool)
 
-	// Stdout is set from the peer's SendingText, and FilesToTransferCurrentNum
-	// is a peer-supplied index, so this needs bounds before it indexes. It is
 	// deferred because a refusal or an abort returns early below, and the
 	// croc-stdin- file the receiver created in the destination has to go
-	// either way, with its handle closed first.
+	// either way, with its handle closed first. only that file: the name is
+	// the receiver's, so a sender cannot point the cleanup at a file the user
+	// already had.
 	defer func() {
-		if !c.Options.Stdout || c.Options.IsSender || !c.currentFileInRange() {
+		if c.Options.IsSender || c.stdinTemp == "" {
 			return
 		}
-		rel := c.filePaths[c.FilesToTransferCurrentNum]
 		c.mutex.Lock()
 		defer c.mutex.Unlock()
-		if !c.CurrentFileIsClosed {
+		if !c.CurrentFileIsClosed && c.CurrentFile != nil {
 			c.CurrentFile.Close()
 			c.CurrentFileIsClosed = true
 		}
-		if err := c.dest.remove(rel); err != nil {
-			log.Warnf("error removing %s: %v", rel, err)
+		if err := c.dest.remove(c.stdinTemp); err != nil {
+			log.Warnf("error removing %s: %v", c.stdinTemp, err)
 		}
 		fmt.Print("\n")
 	}()
+
+	// a refusal or an abort can come after some links were created, and the
+	// success path below is the only other place they are re-resolved.
+	defer func() { err = c.verifyLinksOnExit(err) }()
 
 	if !c.Options.IsSender && !c.Step1ChannelSecured {
 		err = message.Send(c.conn[0], c.Key, message.Message{
@@ -850,13 +861,8 @@ func (c *Client) transfer() (err error) {
 		// every declared link exists now, so each is re-resolved through the
 		// root. the validator's lexical check approximated how the filesystem
 		// aliases names; this is the filesystem's own answer.
-		var links []string
-		for i, file := range c.FilesToTransfer {
-			if file.Symlink != "" && i < len(c.filePaths) {
-				links = append(links, c.filePaths[i])
-			}
-		}
-		if verifyErr := c.dest.verifySymlinks(links); verifyErr != nil {
+		c.linksVerified = true
+		if verifyErr := c.dest.verifySymlinks(c.createdLinks); verifyErr != nil {
 			return verifyErr
 		}
 
@@ -974,6 +980,19 @@ const maxResumeChunks = 1 << 24
 // refuse records a rejected manifest, tells the peer, and stops the transfer.
 // The wire message keeps upstream's "refusing files" prefix, which a stock croc
 // sender matches on to exit cleanly rather than reporting a transport fault.
+// verifyLinksOnExit re-resolves the links a receive created when it ended
+// before the success path could, and adds any escape to err.
+func (c *Client) verifyLinksOnExit(err error) error {
+	if c.Options.IsSender || c.linksVerified || len(c.createdLinks) == 0 {
+		return err
+	}
+	c.linksVerified = true
+	if verifyErr := c.dest.verifySymlinks(c.createdLinks); verifyErr != nil {
+		return errors.Join(err, verifyErr)
+	}
+	return err
+}
+
 func (c *Client) refuse(reason string) (done bool, err error) {
 	c.refused = &refusalError{reason: "refusing files: " + reason}
 	if len(c.conn) > 0 && c.conn[0] != nil {
@@ -1044,6 +1063,15 @@ func (c *Client) processMessageFileInfo(m message.Message) (done bool, err error
 	if verr != nil {
 		return c.refuse(verr.Error())
 	}
+	// `send` of text is one regular file the receiver names and removes. any
+	// other shape would have the cleanup or the temp name apply to entries it
+	// was never meant for.
+	if senderInfo.SendingText {
+		if len(senderInfo.FilesToTransfer) != 1 || len(senderInfo.EmptyFoldersToTransfer) != 0 ||
+			senderInfo.FilesToTransfer[0].Symlink != "" || senderInfo.FilesToTransfer[0].TempFile {
+			return c.refuse("a text transfer must be a single message")
+		}
+	}
 
 	c.Options.SendingText = senderInfo.SendingText
 	c.Options.NoCompress = senderInfo.NoCompress
@@ -1079,8 +1107,10 @@ func (c *Client) processMessageFileInfo(m message.Message) (done bool, err error
 		if len(fi.Name) > c.longestFilename {
 			c.longestFilename = len(fi.Name)
 		}
-		if strings.HasPrefix(fi.Name, "croc-stdin-") && c.Options.SendingText {
-			// the peer decides a name is needed, but must not choose it.
+		if c.Options.SendingText {
+			// the message is written to a file the receiver names, whatever
+			// name the peer declared: the cleanup removes it afterwards, so a
+			// peer-chosen name would let it delete a file the user already had.
 			// utils.RandomFileName would also create it relative to the process
 			// working directory rather than the destination.
 			var name string
@@ -1088,6 +1118,7 @@ func (c *Client) processMessageFileInfo(m message.Message) (done bool, err error
 			if err != nil {
 				return
 			}
+			c.stdinTemp = name
 			c.FilesToTransfer[i].Name = name
 			c.FilesToTransfer[i].FolderRemote = "./"
 			c.filePaths[i] = name
@@ -1494,6 +1525,7 @@ func (c *Client) createEmptyFileAndFinish(fileInfo FileInfo, i int) (err error) 
 		if err = c.dest.symlink(fileInfo.Symlink, rel); err != nil {
 			return
 		}
+		c.createdLinks = append(c.createdLinks, rel)
 	} else if err = c.dest.createEmpty(rel); err != nil {
 		return
 	}

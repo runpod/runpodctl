@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"crypto/rand"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -503,5 +504,55 @@ func TestIsEmptyDir(t *testing.T) {
 		if got != want {
 			t.Errorf("isEmptyDir(%s) = %v, want %v", rel, got, want)
 		}
+	}
+}
+
+// TestVerifySymlinksRemovesEveryEscapingLink: the backstop does not stop at the
+// first escape, so a second escaping link cannot survive behind it.
+func TestVerifySymlinksRemovesEveryEscapingLink(t *testing.T) {
+	dest, _ := destPair(t)
+	for _, rel := range []string{"esc1", "esc2"} {
+		if err := os.Symlink(filepath.Join("..", "outside", "secret"), filepath.Join(dest, rel)); err != nil {
+			t.Fatalf("seeding %s: %v", rel, err)
+		}
+	}
+	d := openTestDest(t, dest)
+
+	err := d.verifySymlinks([]string{"esc1", "esc2"})
+	for _, rel := range []string{"esc1", "esc2"} {
+		if err == nil || !strings.Contains(err.Error(), rel) {
+			t.Errorf("verifySymlinks = %v, want %s named", err, rel)
+		}
+		if _, statErr := os.Lstat(filepath.Join(dest, rel)); statErr == nil {
+			t.Errorf("%s survived", rel)
+		}
+	}
+}
+
+// TestVerifyLinksOnExitCoversAnEndedReceive: a receive that ends before the
+// success path still re-resolves the links it created, keeps its own error,
+// and does it once.
+func TestVerifyLinksOnExitCoversAnEndedReceive(t *testing.T) {
+	dest, _ := destPair(t)
+	if err := os.Symlink(filepath.Join("..", "outside", "secret"), filepath.Join(dest, "esc")); err != nil {
+		t.Fatalf("seeding esc: %v", err)
+	}
+	c := &Client{dest: openTestDest(t, dest), createdLinks: []string{"esc"}}
+
+	aborted := errors.New("receive aborted")
+	err := c.verifyLinksOnExit(aborted)
+	if !errors.Is(err, aborted) || !strings.Contains(err.Error(), "esc") {
+		t.Fatalf("verifyLinksOnExit = %v, want the abort and the escape", err)
+	}
+	if _, statErr := os.Lstat(filepath.Join(dest, "esc")); statErr == nil {
+		t.Error("the escaping link survived an aborted receive")
+	}
+	if again := c.verifyLinksOnExit(nil); again != nil {
+		t.Errorf("second verifyLinksOnExit = %v, want nil", again)
+	}
+
+	sender := &Client{Options: Options{IsSender: true}, createdLinks: []string{"esc"}}
+	if got := sender.verifyLinksOnExit(nil); got != nil {
+		t.Errorf("a sender verified links: %v", got)
 	}
 }
