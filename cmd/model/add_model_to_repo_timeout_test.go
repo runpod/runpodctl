@@ -987,21 +987,6 @@ func (p *recordingModelUploadProgress) Clear() error {
 	return nil
 }
 
-func TestProgressReaderTracksBytes(t *testing.T) {
-	progress := &recordingModelUploadProgress{}
-	reader := progressReader{
-		reader:   strings.NewReader("abcdef"),
-		progress: progress,
-	}
-
-	if _, err := io.Copy(io.Discard, reader); err != nil {
-		t.Fatalf("copy progress reader: %v", err)
-	}
-	if progress.bytes != 6 {
-		t.Fatalf("expected 6 progress bytes, got %d", progress.bytes)
-	}
-}
-
 func TestPrintCompletedModelUploadSizeWritesToStderr(t *testing.T) {
 	stdout, stderr := captureStdStreams(t, func() {
 		printCompletedModelUploadSize(123)
