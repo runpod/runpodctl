@@ -35,6 +35,11 @@ type RelayResponse struct {
 // fixed in parallel. Moving the json needs a deprecation window, not a commit.
 var relayURL = "https://raw.githubusercontent.com/runpod/runpodctl/main/cmd/croc/relays.json"
 
+// relayFetchTimeout bounds the fetch of the (tiny) relay list, which runs on
+// every send/receive. Kept short so a slow or blocked GitHub fails fast instead
+// of stalling the whole command; it was previously 2 minutes.
+var relayFetchTimeout = 10 * time.Second
+
 var sendCode string
 
 // SendCmd is the send command
@@ -60,7 +65,7 @@ func init() {
 }
 
 func getRelays() ([]Relay, error) {
-	client := &http.Client{Timeout: 2 * time.Minute}
+	client := &http.Client{Timeout: relayFetchTimeout}
 	res, err := client.Get(relayURL)
 	if err != nil {
 		return nil, err
