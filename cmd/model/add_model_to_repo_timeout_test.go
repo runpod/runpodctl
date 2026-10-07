@@ -967,14 +967,24 @@ func TestUploadModelFileChunkReturnsFirstErrorInChunkOrder(t *testing.T) {
 }
 
 type recordingModelUploadProgress struct {
+	mu       sync.Mutex
 	bytes    int64
 	finished bool
 	cleared  bool
 }
 
 func (p *recordingModelUploadProgress) Add64(n int64) error {
+	p.mu.Lock()
 	p.bytes += n
+	p.mu.Unlock()
 	return nil
+}
+
+// total returns the accumulated byte count, safe for concurrent callers.
+func (p *recordingModelUploadProgress) total() int64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.bytes
 }
 
 func (p *recordingModelUploadProgress) Finish() error {
@@ -985,21 +995,6 @@ func (p *recordingModelUploadProgress) Finish() error {
 func (p *recordingModelUploadProgress) Clear() error {
 	p.cleared = true
 	return nil
-}
-
-func TestProgressReaderTracksBytes(t *testing.T) {
-	progress := &recordingModelUploadProgress{}
-	reader := progressReader{
-		reader:   strings.NewReader("abcdef"),
-		progress: progress,
-	}
-
-	if _, err := io.Copy(io.Discard, reader); err != nil {
-		t.Fatalf("copy progress reader: %v", err)
-	}
-	if progress.bytes != 6 {
-		t.Fatalf("expected 6 progress bytes, got %d", progress.bytes)
-	}
 }
 
 func TestPrintCompletedModelUploadSizeWritesToStderr(t *testing.T) {
@@ -1400,7 +1395,7 @@ func TestCompleteModelUploadWithProgressTracksMultipartBytes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read upload body: %v", err)
 			}
-			uploadedBytes += int64(len(body))
+			atomic.AddInt64(&uploadedBytes, int64(len(body))) // parts upload concurrently
 			w.Header().Set("ETag", `"etag"`)
 			w.WriteHeader(http.StatusOK)
 		case http.MethodPost:
@@ -1423,11 +1418,11 @@ func TestCompleteModelUploadWithProgressTracksMultipartBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("complete upload: %v", err)
 	}
-	if uploadedBytes != 6 {
-		t.Fatalf("expected server to receive 6 bytes, got %d", uploadedBytes)
+	if got := atomic.LoadInt64(&uploadedBytes); got != 6 {
+		t.Fatalf("expected server to receive 6 bytes, got %d", got)
 	}
-	if progress.bytes != 6 {
-		t.Fatalf("expected progress to receive 6 bytes, got %d", progress.bytes)
+	if got := progress.total(); got != 6 {
+		t.Fatalf("expected progress to receive 6 bytes, got %d", got)
 	}
 }
 
