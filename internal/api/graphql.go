@@ -80,31 +80,41 @@ func (c *GraphQLClient) Query(input GraphQLInput) ([]byte, error) {
 		return nil, err
 	}
 
-	req, err := http.NewRequest("POST", c.url, bytes.NewBuffer(jsonValue))
-	if err != nil {
-		return nil, err
+	for attempt := 1; attempt <= maxRetryAttempts; attempt++ {
+		req, err := http.NewRequest("POST", c.url, bytes.NewReader(jsonValue))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Add("Content-Type", "application/json")
+		req.Header.Set("User-Agent", c.userAgent)
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+
+		body, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+
+		if resp.StatusCode != 200 {
+			// Only 429 is retried: every GraphQL call is a POST and we cannot
+			// tell a read from a mutation, so a 5xx must not be re-issued (it
+			// could double-execute a mutation). A 429 was rejected before
+			// processing, so retrying is safe.
+			if attempt < maxRetryAttempts && resp.StatusCode == http.StatusTooManyRequests {
+				time.Sleep(retryDelay(resp, attempt))
+				continue
+			}
+			return nil, parseGraphQLHTTPError(body, resp.StatusCode)
+		}
+
+		return body, nil
 	}
-
-	req.Header.Add("Content-Type", "application/json")
-	req.Header.Set("User-Agent", c.userAgent)
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != 200 {
-		return nil, parseGraphQLHTTPError(body, resp.StatusCode)
-	}
-
-	return body, nil
+	return nil, parseGraphQLHTTPError(nil, http.StatusTooManyRequests)
 }
 
 // SSHKey represents an SSH key
