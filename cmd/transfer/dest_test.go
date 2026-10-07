@@ -1,0 +1,558 @@
+package transfer
+
+import (
+	"archive/zip"
+	"bytes"
+	"crypto/rand"
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/schollz/croc/v9/src/utils"
+)
+
+// destPair returns a destination to receive into and a sibling directory that
+// must stay untouched, so every escape assertion is "the outside file does not
+// exist" rather than "the transfer failed" -- which would pass against the
+// unfixed code too.
+func destPair(t *testing.T) (dest, outside string) {
+	t.Helper()
+	base := t.TempDir()
+	dest = filepath.Join(base, "dest")
+	outside = filepath.Join(base, "outside")
+	for _, dir := range []string{dest, outside} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("creating %s: %v", dir, err)
+		}
+	}
+	return dest, outside
+}
+
+func openTestDest(t *testing.T, dir string) *confinedDest {
+	t.Helper()
+	d, err := openDest(dir)
+	if err != nil {
+		t.Fatalf("openDest(%s): %v", dir, err)
+	}
+	t.Cleanup(func() { d.Close() })
+	return d
+}
+
+func TestOpenForWriteRefusesEscapingSymlink(t *testing.T) {
+	dest, outside := destPair(t)
+	if err := os.Symlink(filepath.Join(outside, "target"), filepath.Join(dest, "link")); err != nil {
+		t.Fatalf("seeding symlink: %v", err)
+	}
+	d := openTestDest(t, dest)
+
+	f, _, err := d.openForWrite("link")
+	if err == nil {
+		f.Close()
+		t.Fatal("openForWrite followed a symlink out of the destination")
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "target")); err == nil {
+		t.Error("a file was created outside the destination")
+	}
+}
+
+func TestMkdirAllRefusesEscapingSymlink(t *testing.T) {
+	dest, outside := destPair(t)
+	if err := os.Symlink(outside, filepath.Join(dest, "sub")); err != nil {
+		t.Fatalf("seeding symlink: %v", err)
+	}
+	d := openTestDest(t, dest)
+
+	if err := d.mkdirAll("sub/deep"); err == nil {
+		t.Fatal("mkdirAll descended a symlink out of the destination")
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "deep")); err == nil {
+		t.Error("a directory was created outside the destination")
+	}
+}
+
+func TestOpenForWriteRefusesTraversal(t *testing.T) {
+	dest, outside := destPair(t)
+	d := openTestDest(t, dest)
+
+	for _, rel := range []string{"../outside/pwn", "/etc/pwn"} {
+		if f, _, err := d.openForWrite(rel); err == nil {
+			f.Close()
+			t.Errorf("openForWrite(%q) succeeded", rel)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "pwn")); err == nil {
+		t.Error("a file was created outside the destination")
+	}
+}
+
+// TestSymlinkCanEscapeTheRoot documents the gap that makes prevalidation
+// load-bearing: os.Root refuses to *follow* a link out of the tree, but it
+// creates one without complaint, and the link outlives the transfer. If this
+// ever starts failing, os.Root grew a guard and validateManifest's target check
+// became belt-and-braces rather than the only thing standing there.
+func TestSymlinkCanEscapeTheRoot(t *testing.T) {
+	dest, outside := destPair(t)
+	d := openTestDest(t, dest)
+
+	if err := d.symlink("../outside/secret", "esc"); err != nil {
+		t.Skipf("os.Root now refuses to create an escaping symlink (%v); validateManifest still refuses it earlier", err)
+	}
+	target, err := os.Readlink(filepath.Join(dest, "esc"))
+	if err != nil {
+		t.Fatalf("reading back the link: %v", err)
+	}
+	if target != "../outside/secret" {
+		t.Errorf("link target = %q, want ../outside/secret", target)
+	}
+	// writing *through* it is still refused, which is why nothing escapes
+	// during the transfer itself.
+	if f, _, err := d.openForWrite("esc"); err == nil {
+		f.Close()
+		t.Error("wrote through an escaping symlink")
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "secret")); err == nil {
+		t.Error("a file was created outside the destination")
+	}
+}
+
+// buildZip writes an archive into the destination so extractZip can read it
+// back the way a received TempFile arrives.
+func buildZip(t *testing.T, dest, name string, entries map[string]string) {
+	t.Helper()
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	for entryName, content := range entries {
+		f, err := w.Create(entryName)
+		if err != nil {
+			t.Fatalf("adding %s: %v", entryName, err)
+		}
+		if _, err := f.Write([]byte(content)); err != nil {
+			t.Fatalf("writing %s: %v", entryName, err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("closing archive: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dest, name), buf.Bytes(), 0o600); err != nil {
+		t.Fatalf("writing archive: %v", err)
+	}
+}
+
+func TestExtractZipRefusesSlipAndWritesNothing(t *testing.T) {
+	dest, outside := destPair(t)
+	// the legitimate-looking entry is listed too: extraction validates the whole
+	// archive first, so neither entry may land.
+	buildZip(t, dest, "payload.zip", map[string]string{
+		"../outside/escape.txt": "pwned",
+		"innocent.txt":          "fine",
+	})
+	d := openTestDest(t, dest)
+
+	if err := d.extractZip("payload.zip"); err == nil {
+		t.Fatal("extractZip accepted an archive with a traversing entry")
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "escape.txt")); err == nil {
+		t.Error("archive wrote outside the destination")
+	}
+	if _, err := os.Lstat(filepath.Join(dest, "innocent.txt")); err == nil {
+		t.Error("archive was partly extracted; validation must precede the first write")
+	}
+}
+
+func TestExtractZipWritesEntries(t *testing.T) {
+	dest, _ := destPair(t)
+	buildZip(t, dest, "payload.zip", map[string]string{
+		"pkg/a.txt":     "alpha",
+		"pkg/sub/b.txt": "beta",
+	})
+	d := openTestDest(t, dest)
+
+	if err := d.extractZip("payload.zip"); err != nil {
+		t.Fatalf("extractZip: %v", err)
+	}
+	for rel, want := range map[string]string{
+		"pkg/a.txt":     "alpha",
+		"pkg/sub/b.txt": "beta",
+	} {
+		got, err := os.ReadFile(filepath.Join(dest, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Errorf("reading %s: %v", rel, err)
+			continue
+		}
+		if string(got) != want {
+			t.Errorf("%s = %q, want %q", rel, got, want)
+		}
+	}
+}
+
+// TestExtractZipOverwritesWithoutPrompting matters because upstream's extractor
+// reads stdin mid-extraction, which would hang a non-interactive receive.
+func TestExtractZipOverwritesWithoutPrompting(t *testing.T) {
+	dest, _ := destPair(t)
+	if err := os.WriteFile(filepath.Join(dest, "a.txt"), []byte("old"), 0o644); err != nil {
+		t.Fatalf("seeding file: %v", err)
+	}
+	buildZip(t, dest, "payload.zip", map[string]string{"a.txt": "new"})
+	d := openTestDest(t, dest)
+
+	if err := d.extractZip("payload.zip"); err != nil {
+		t.Fatalf("extractZip: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dest, "a.txt"))
+	if err != nil {
+		t.Fatalf("reading a.txt: %v", err)
+	}
+	if string(got) != "new" {
+		t.Errorf("a.txt = %q, want the archive's content", got)
+	}
+}
+
+// TestExtractZipIgnoresEntryModes pins that an archive entry gets the mode any
+// other received file does. The entry's mode is peer-controlled. Comparing with
+// a file created through the manifest path keeps this independent of umask.
+func TestExtractZipIgnoresEntryModes(t *testing.T) {
+	dest, _ := destPair(t)
+	declared := map[string]fs.FileMode{
+		"open":    0o777,
+		"script":  0o755,
+		"private": 0o600,
+		"plain":   0o644,
+	}
+
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	for name, mode := range declared {
+		header := &zip.FileHeader{Name: name, Method: zip.Deflate}
+		header.SetMode(mode)
+		f, err := w.CreateHeader(header)
+		if err != nil {
+			t.Fatalf("adding %s: %v", name, err)
+		}
+		if _, err := f.Write([]byte(name)); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("closing archive: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dest, "payload.zip"), buf.Bytes(), 0o600); err != nil {
+		t.Fatalf("writing archive: %v", err)
+	}
+
+	d := openTestDest(t, dest)
+	if err := d.createEmpty("reference"); err != nil {
+		t.Fatalf("creating the reference file: %v", err)
+	}
+	reference, err := os.Stat(filepath.Join(dest, "reference"))
+	if err != nil {
+		t.Fatalf("stat reference: %v", err)
+	}
+	want := reference.Mode().Perm()
+
+	if err := d.extractZip("payload.zip"); err != nil {
+		t.Fatalf("extractZip: %v", err)
+	}
+	for name, mode := range declared {
+		info, err := os.Stat(filepath.Join(dest, name))
+		if err != nil {
+			t.Errorf("stat %s: %v", name, err)
+			continue
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Errorf("%s declared %o, got %o, want %o like any received file", name, mode, got, want)
+		}
+	}
+}
+
+// TestExtractZipRefusesAnEntryNamedAfterTheArchive: the archive is open for
+// reading while its entries are written, so an entry at its own path used to
+// truncate the source halfway through. With a.txt, foo.zip and z/b.txt inside
+// foo.zip, a.txt landed, foo.zip was emptied and z/b.txt never arrived,
+// reported as "unexpected EOF". That broke both "refused outright rather than
+// partly applied" and "a refused archive is left in place". `send` never
+// builds such an archive, so refusing it costs nothing.
+func TestExtractZipRefusesAnEntryNamedAfterTheArchive(t *testing.T) {
+	dest, _ := destPair(t)
+	buildZip(t, dest, "foo.zip", map[string]string{
+		"a.txt":   "alpha",
+		"foo.zip": "not an archive",
+		"z/b.txt": "beta",
+	})
+	before, err := os.ReadFile(filepath.Join(dest, "foo.zip"))
+	if err != nil {
+		t.Fatalf("reading the archive: %v", err)
+	}
+	d := openTestDest(t, dest)
+
+	err = d.extractZip("foo.zip")
+	if err == nil {
+		t.Fatal("extractZip accepted an archive containing itself")
+	}
+	if !strings.Contains(err.Error(), "archive's own name") {
+		t.Errorf("error = %v, want the entry named", err)
+	}
+	for _, rel := range []string{"a.txt", "z/b.txt"} {
+		if _, err := os.Lstat(filepath.Join(dest, filepath.FromSlash(rel))); err == nil {
+			t.Errorf("%s was written; validation must precede the first write", rel)
+		}
+	}
+	after, err := os.ReadFile(filepath.Join(dest, "foo.zip"))
+	if err != nil {
+		t.Fatalf("reading the archive back: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Errorf("the archive was changed: %d bytes before, %d after", len(before), len(after))
+	}
+}
+
+// TestVerifySymlinksRemovesOnlyAnEscapingLink pins the backstop behind the
+// validator. The escaping link is planted directly, standing in for one that
+// passed the lexical check through an alias the fold key does not model.
+// Everything else a sender's tree can legitimately hold stays: a dangling
+// target, a target through a file, a cycle, and an in-tree "..".
+func TestVerifySymlinksRemovesOnlyAnEscapingLink(t *testing.T) {
+	dest, _ := destPair(t)
+	if err := os.WriteFile(filepath.Join(dest, "a.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("seeding file: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dest, "d"), 0o755); err != nil {
+		t.Fatalf("seeding dir: %v", err)
+	}
+	kept := map[string]string{
+		"ok":     "a.txt",
+		"dangle": "nowhere",
+		"notdir": "a.txt/x",
+		"loop1":  "loop2",
+		"loop2":  "loop1",
+		"d/up":   "..",
+	}
+	for rel, target := range kept {
+		if err := os.Symlink(target, filepath.Join(dest, filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("seeding %s: %v", rel, err)
+		}
+	}
+	if err := os.Symlink(filepath.Join("..", "outside", "secret"), filepath.Join(dest, "esc")); err != nil {
+		t.Fatalf("seeding esc: %v", err)
+	}
+	d := openTestDest(t, dest)
+
+	rels := []string{"ok", "dangle", "notdir", "loop1", "d/up", "esc"}
+	err := d.verifySymlinks(rels)
+	if err == nil || !strings.Contains(err.Error(), "esc") {
+		t.Fatalf("verifySymlinks = %v, want the escaping link named", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dest, "esc")); err == nil {
+		// if os.Root's escape error ever changes its text, escapesRoot stops
+		// matching and this is the assertion that says so.
+		t.Error("the escaping link survived")
+	}
+	for rel := range kept {
+		if _, err := os.Lstat(filepath.Join(dest, filepath.FromSlash(rel))); err != nil {
+			t.Errorf("%s was removed: %v", rel, err)
+		}
+	}
+	if err := d.verifySymlinks(rels[:len(rels)-1]); err != nil {
+		t.Errorf("verifySymlinks over the kept links = %v, want nil", err)
+	}
+}
+
+// TestHashFileMatchesUpstream is the compatibility check that keeps resume and
+// skip working: the sender hashes with utils.HashFile, so a receiver computing
+// different bytes for identical content would re-download every time.
+func TestHashFileMatchesUpstream(t *testing.T) {
+	dest, _ := destPair(t)
+
+	payload := make([]byte, 300*1024) // larger than one chunk, and not all zero
+	if _, err := rand.Read(payload); err != nil {
+		t.Fatalf("generating payload: %v", err)
+	}
+	for name, content := range map[string][]byte{
+		"empty.bin": {},
+		"small.bin": []byte("alpha beta gamma"),
+		"large.bin": payload,
+	} {
+		if err := os.WriteFile(filepath.Join(dest, name), content, 0o644); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+	}
+	if err := os.Symlink("small.bin", filepath.Join(dest, "link")); err != nil {
+		t.Fatalf("seeding symlink: %v", err)
+	}
+
+	d := openTestDest(t, dest)
+	for _, algorithm := range []string{"xxhash", "md5"} {
+		for _, name := range []string{"empty.bin", "small.bin", "large.bin", "link"} {
+			want, err := utils.HashFile(filepath.Join(dest, name), algorithm)
+			if err != nil {
+				t.Fatalf("utils.HashFile(%s, %s): %v", name, algorithm, err)
+			}
+			got, err := d.hashFile(name, algorithm)
+			if err != nil {
+				t.Fatalf("hashFile(%s, %s): %v", name, algorithm, err)
+			}
+			if !bytes.Equal(got, want) {
+				t.Errorf("%s/%s: hash = %x, want %x", name, algorithm, got, want)
+			}
+		}
+	}
+
+	// the empty algorithm is croc's default of xxhash.
+	want, err := utils.HashFile(filepath.Join(dest, "small.bin"), "xxhash")
+	if err != nil {
+		t.Fatalf("utils.HashFile: %v", err)
+	}
+	got, err := d.hashFile("small.bin", "")
+	if err != nil {
+		t.Fatalf("hashFile with the default algorithm: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("default algorithm hash = %x, want xxhash %x", got, want)
+	}
+
+	// imohash has no streaming or ReaderAt api, so it is reported rather than
+	// computed by reading a whole received file into memory. the caller treats
+	// that like any hash failure and re-transfers.
+	if _, err := d.hashFile("small.bin", "imohash"); err == nil {
+		t.Error("imohash reported a hash; it cannot be computed without buffering the file")
+	}
+}
+
+func TestMissingChunksMatchesUpstream(t *testing.T) {
+	dest, _ := destPair(t)
+	const chunkSize = 1024
+
+	// a sparse file: written regions interleaved with all-zero holes, which is
+	// what a partially received file looks like.
+	content := make([]byte, chunkSize*8)
+	for _, region := range [][2]int{{0, chunkSize}, {chunkSize * 3, chunkSize * 5}} {
+		for i := region[0]; i < region[1]; i++ {
+			content[i] = 0xAB
+		}
+	}
+	name := "partial.bin"
+	full := filepath.Join(dest, name)
+	if err := os.WriteFile(full, content, 0o644); err != nil {
+		t.Fatalf("writing %s: %v", name, err)
+	}
+
+	d := openTestDest(t, dest)
+	size := int64(len(content))
+	want := utils.MissingChunks(full, size, chunkSize)
+	got := d.missingChunks(name, size, chunkSize)
+	if len(got) != len(want) {
+		t.Fatalf("missingChunks = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("missingChunks = %v, want %v", got, want)
+		}
+	}
+
+	// a size mismatch yields nothing from both, which is how a resume decides
+	// to start over.
+	if chunks := d.missingChunks(name, size+1, chunkSize); len(chunks) != 0 {
+		t.Errorf("missingChunks with a wrong size = %v, want empty", chunks)
+	}
+}
+
+func TestCreateTempStaysInTheDestination(t *testing.T) {
+	dest, _ := destPair(t)
+	d := openTestDest(t, dest)
+
+	first, err := d.createTemp("croc-stdin-")
+	if err != nil {
+		t.Fatalf("createTemp: %v", err)
+	}
+	second, err := d.createTemp("croc-stdin-")
+	if err != nil {
+		t.Fatalf("createTemp: %v", err)
+	}
+	if first == second {
+		t.Error("createTemp returned the same name twice")
+	}
+	for _, name := range []string{first, second} {
+		if strings.ContainsAny(name, "/\\") {
+			t.Errorf("createTemp returned a path, not a name: %q", name)
+		}
+		if _, err := os.Lstat(filepath.Join(dest, name)); err != nil {
+			t.Errorf("createTemp did not create %s: %v", name, err)
+		}
+	}
+}
+
+func TestIsEmptyDir(t *testing.T) {
+	dest, _ := destPair(t)
+	if err := os.MkdirAll(filepath.Join(dest, "empty"), 0o755); err != nil {
+		t.Fatalf("creating dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dest, "full"), 0o755); err != nil {
+		t.Fatalf("creating dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dest, "full", "x"), nil, 0o644); err != nil {
+		t.Fatalf("seeding file: %v", err)
+	}
+
+	d := openTestDest(t, dest)
+	for rel, want := range map[string]bool{"empty": true, "full": false} {
+		got, err := d.isEmptyDir(rel)
+		if err != nil {
+			t.Fatalf("isEmptyDir(%s): %v", rel, err)
+		}
+		if got != want {
+			t.Errorf("isEmptyDir(%s) = %v, want %v", rel, got, want)
+		}
+	}
+}
+
+// TestVerifySymlinksRemovesEveryEscapingLink: the backstop does not stop at the
+// first escape, so a second escaping link cannot survive behind it.
+func TestVerifySymlinksRemovesEveryEscapingLink(t *testing.T) {
+	dest, _ := destPair(t)
+	for _, rel := range []string{"esc1", "esc2"} {
+		if err := os.Symlink(filepath.Join("..", "outside", "secret"), filepath.Join(dest, rel)); err != nil {
+			t.Fatalf("seeding %s: %v", rel, err)
+		}
+	}
+	d := openTestDest(t, dest)
+
+	err := d.verifySymlinks([]string{"esc1", "esc2"})
+	for _, rel := range []string{"esc1", "esc2"} {
+		if err == nil || !strings.Contains(err.Error(), rel) {
+			t.Errorf("verifySymlinks = %v, want %s named", err, rel)
+		}
+		if _, statErr := os.Lstat(filepath.Join(dest, rel)); statErr == nil {
+			t.Errorf("%s survived", rel)
+		}
+	}
+}
+
+// TestVerifyLinksOnExitCoversAnEndedReceive: a receive that ends before the
+// success path still re-resolves the links it created, keeps its own error,
+// and does it once.
+func TestVerifyLinksOnExitCoversAnEndedReceive(t *testing.T) {
+	dest, _ := destPair(t)
+	if err := os.Symlink(filepath.Join("..", "outside", "secret"), filepath.Join(dest, "esc")); err != nil {
+		t.Fatalf("seeding esc: %v", err)
+	}
+	c := &Client{dest: openTestDest(t, dest), createdLinks: []string{"esc"}}
+
+	aborted := errors.New("receive aborted")
+	err := c.verifyLinksOnExit(aborted)
+	if !errors.Is(err, aborted) || !strings.Contains(err.Error(), "esc") {
+		t.Fatalf("verifyLinksOnExit = %v, want the abort and the escape", err)
+	}
+	if _, statErr := os.Lstat(filepath.Join(dest, "esc")); statErr == nil {
+		t.Error("the escaping link survived an aborted receive")
+	}
+	if again := c.verifyLinksOnExit(nil); again != nil {
+		t.Errorf("second verifyLinksOnExit = %v, want nil", again)
+	}
+
+	sender := &Client{Options: Options{IsSender: true}, createdLinks: []string{"esc"}}
+	if got := sender.verifyLinksOnExit(nil); got != nil {
+		t.Errorf("a sender verified links: %v", got)
+	}
+}

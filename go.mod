@@ -3,6 +3,7 @@ module github.com/runpod/runpodctl
 go 1.26.6
 
 require (
+	github.com/cespare/xxhash v1.1.0
 	github.com/denisbrodbeck/machineid v1.0.1
 	github.com/fatih/color v1.16.0
 	github.com/gobwas/glob v0.2.3
@@ -23,12 +24,12 @@ require (
 	golang.org/x/mod v0.38.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/term v0.45.0
+	golang.org/x/text v0.41.0
 	golang.org/x/time v0.5.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
-	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/chzyer/readline v1.5.1 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
@@ -59,6 +60,5 @@ require (
 	go.uber.org/multierr v1.9.0 // indirect
 	golang.org/x/exp v0.0.0-20230905200255-921286631fa9 // indirect
 	golang.org/x/net v0.57.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 )

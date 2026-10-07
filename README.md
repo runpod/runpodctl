@@ -328,6 +328,37 @@ runpodctl send data.txt
 runpodctl receive 8338-galileo-collect-fidel
 ```
 
+`receive` writes only inside the current directory. the sender chooses the
+filenames, so the whole list is checked before anything is written, and the
+transfer is refused outright rather than partly applied. refused: a path
+containing `..` or a backslash, an absolute path, a symlink whose target
+resolves outside the directory, the same destination declared twice with
+different contents, a path that is both a file and a directory, and a path
+that already exists as the wrong kind (a file where a directory is needed, or
+the reverse). the reason is reported to both sides.
+
+two consequences worth knowing:
+
+- a symlinked subdirectory in the destination blocks a transfer that writes
+  into it. if `./dir` is a symlink pointing anywhere outside the current
+  directory, `receive` refuses instead of following it. earlier versions
+  followed it silently, which let whoever held the codephrase pick which of
+  your symlinks to write through. the same goes for a symlink at the path of
+  an incoming file: it is refused wherever it points, since writing through
+  it would change some other file than the one sent. the refusal says what to
+  do: run `receive` inside the directory the link points to, or replace the
+  link with a real directory.
+- sending a tree that contains a symlink pointing outside it (`link ->
+  ../elsewhere`) is refused on the receiving side, because the link would
+  resolve outside the receive directory. symlinks pointing within the tree
+  transfer normally. a symlink whose target steps into a directory and back
+  out (`sub/../x`) is refused whatever it resolves to: on a filesystem that
+  reads two spellings as one name, the directory it steps out of may be
+  another link. no tool writes such a target unless given one.
+
+a refused archive is left in place rather than deleted, so nothing that
+arrived is lost, and the error names where it is.
+
 ## output format
 
 default output is json (optimized for agents). `--output` takes `json` or `yaml`:
