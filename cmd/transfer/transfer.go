@@ -42,8 +42,16 @@ var SendCmd = &cobra.Command{
 	Use:   "send <file>",
 	Args:  cobra.MinimumNArgs(1),
 	Short: "send files or folders",
-	Long:  "send files or folders to a pod or any computer using croc",
-	RunE:  runSend,
+	Long: `send files or folders to a pod or any computer using croc.
+
+send prints a one-time code; run 'runpodctl receive <code>' on the other machine
+(e.g. inside a pod) to complete the transfer.`,
+	Example: `  # on this machine: prints a one-time code like 1234-word-word-word
+  runpodctl send ./model.safetensors
+
+  # then, on the pod (or any other computer):
+  runpodctl receive 1234-word-word-word`,
+	RunE: runSend,
 }
 
 // ReceiveCmd is the receive command
@@ -51,8 +59,15 @@ var ReceiveCmd = &cobra.Command{
 	Use:   "receive <code>",
 	Args:  cobra.ExactArgs(1),
 	Short: "receive files or folders",
-	Long:  "receive files or folders from a pod or any computer using croc",
-	RunE:  runReceive,
+	Long: `receive files or folders from a pod or any computer using croc.
+
+use the one-time code printed by 'runpodctl send' on the sending machine.`,
+	Example: `  # receive using the code printed by 'runpodctl send'
+  runpodctl receive 1234-word-word-word
+
+  # a fixed codephrase agreed out of band also works via --code on send
+  runpodctl send --code my-secret ./file.txt`,
+	RunE: runReceive,
 }
 
 func init() {
