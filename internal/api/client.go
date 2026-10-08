@@ -147,6 +147,39 @@ func (c *Client) requestV2(method, endpoint string, params url.Values, body inte
 	return c.requestURL(method, u, body)
 }
 
+// getV2AllPages walks a cursor-paginated rest v2 list, handing each page body to
+// decode. v2 list routes cap a page (1000 by default), so reading only the first
+// page silently truncates a large account.
+func (c *Client) getV2AllPages(endpoint string, params url.Values, decode func([]byte) error) error {
+	query := url.Values{}
+	for k, v := range params {
+		query[k] = v
+	}
+	for {
+		data, err := c.GetV2(endpoint, query)
+		if err != nil {
+			return err
+		}
+		if err := decode(data); err != nil {
+			return err
+		}
+		var page struct {
+			Pagination struct {
+				NextCursor  *string `json:"nextCursor"`
+				HasNextPage bool    `json:"hasNextPage"`
+			} `json:"pagination"`
+		}
+		if err := json.Unmarshal(data, &page); err != nil {
+			return fmt.Errorf("failed to parse response: %w", err)
+		}
+		next := page.Pagination.NextCursor
+		if !page.Pagination.HasNextPage || next == nil || *next == "" {
+			return nil
+		}
+		query.Set("cursor", *next)
+	}
+}
+
 // GetV2 makes a GET request against the rest v2 api
 func (c *Client) GetV2(endpoint string, params url.Values) ([]byte, error) {
 	return c.requestV2(http.MethodGet, endpoint, params, nil)

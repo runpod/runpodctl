@@ -87,6 +87,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	if updateReadme != "" {
 		req.Readme = updateReadme
 	}
+	readmeChanged := req.Readme != ""
 	if updateContainerDiskInGb >= 0 {
 		req.ContainerDiskInGb = &updateContainerDiskInGb
 	}
@@ -96,32 +97,45 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		req.ContainerRegistryAuthID = &value
 	}
 
-	// If only --port-labels was given, there is no REST field to PATCH; just
-	// fetch the current template so the GraphQL save below has fresh state.
+	// Port labels and readme have no rest field; they go through GraphQL below.
+	// If only those were given there is nothing to PATCH.
 	hasRESTUpdate := req.Name != "" || req.ImageName != "" || req.Ports != nil || req.Env != nil ||
-		req.Readme != "" || req.ContainerDiskInGb != nil || req.ContainerRegistryAuthID != nil
-
-	var template *api.Template
-	if portLabelsChanged && !hasRESTUpdate {
-		template, err = client.GetTemplate(templateID)
-	} else {
-		template, err = client.UpdateTemplate(templateID, req)
-	}
-	if err != nil {
-		return fmt.Errorf("failed to update template: %w", err)
+		req.ContainerDiskInGb != nil || req.ContainerRegistryAuthID != nil
+	if hasRESTUpdate || !(portLabelsChanged || readmeChanged) {
+		if _, err := client.UpdateTemplate(templateID, req); err != nil {
+			return fmt.Errorf("failed to update template: %w", err)
+		}
 	}
 
-	if portLabelsChanged {
+	if portLabelsChanged || readmeChanged {
+		what := "port labels"
+		if portLabelsChanged && readmeChanged {
+			what = "port labels and readme"
+		}
 		graphqlClient, graphqlErr := api.NewGraphQLClient()
 		if graphqlErr == nil {
-			graphqlErr = graphqlClient.UpdateTemplatePortLabels(templateID, portLabels, updatePortLabelOverrides(req))
+			if portLabelsChanged {
+				graphqlErr = graphqlClient.UpdateTemplatePortLabels(templateID, portLabels, updatePortLabelOverrides(req))
+			} else {
+				what = "readme"
+				graphqlErr = graphqlClient.UpdateTemplateReadme(templateID, updatePortLabelOverrides(req))
+			}
 		}
 		if graphqlErr != nil {
 			if hasRESTUpdate {
-				return fmt.Errorf("template fields updated but failed to update port labels: %w", graphqlErr)
+				return fmt.Errorf("template fields updated but failed to update %s: %w", what, graphqlErr)
 			}
-			return fmt.Errorf("failed to update port labels: %w", graphqlErr)
+			return fmt.Errorf("failed to update %s: %w", what, graphqlErr)
 		}
+	}
+
+	// read back: the rest response carries no readme or labels, which the v1
+	// update output always included.
+	template, err := client.GetTemplate(templateID)
+	if err != nil {
+		return fmt.Errorf("failed to read updated template: %w", err)
+	}
+	if portLabelsChanged {
 		template.PortsConfig = portLabels
 	}
 	if req.ContainerRegistryAuthID != nil {

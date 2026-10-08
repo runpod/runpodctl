@@ -114,23 +114,41 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create template: %w", err)
 	}
 
-	// Port labels (portsConfig) are not part of the REST template schema, so
-	// they are applied via a follow-up GraphQL saveTemplate. If that fails the
-	// template would exist without labels, so delete it to keep create atomic.
-	if len(portLabels) > 0 {
-		graphqlClient, labelErr := api.NewGraphQLClient()
-		if labelErr == nil {
-			labelErr = graphqlClient.UpdateTemplatePortLabels(template.ID, portLabels, createPortLabelOverrides(req))
+	// Port labels (portsConfig) and readme are not part of the rest template
+	// schema, so they are applied via a follow-up GraphQL saveTemplate. If that
+	// fails the template would exist without them, so delete it to keep create
+	// atomic.
+	if len(portLabels) > 0 || req.Readme != "" {
+		// the graphql save re-sends every field, ports included; use what the
+		// create stored, so ports defaulted server-side are not blanked
+		if len(req.Ports) == 0 {
+			req.Ports = template.Ports
 		}
-		if labelErr != nil {
-			if cleanupErr := client.DeleteTemplate(template.ID); cleanupErr != nil {
-				labelErr = fmt.Errorf("failed to set port labels: %v; failed to clean up template %s: %w", labelErr, template.ID, cleanupErr)
+		what := "port labels"
+		if len(portLabels) > 0 && req.Readme != "" {
+			what = "port labels and readme"
+		}
+		graphqlClient, gqlErr := api.NewGraphQLClient()
+		if gqlErr == nil {
+			if len(portLabels) > 0 {
+				gqlErr = graphqlClient.UpdateTemplatePortLabels(template.ID, portLabels, createPortLabelOverrides(req))
 			} else {
-				labelErr = fmt.Errorf("failed to set port labels: %w", labelErr)
+				what = "readme"
+				gqlErr = graphqlClient.UpdateTemplateReadme(template.ID, createPortLabelOverrides(req))
 			}
-			return labelErr
 		}
-		template.PortsConfig = portLabels
+		if gqlErr != nil {
+			if cleanupErr := client.DeleteTemplate(template.ID); cleanupErr != nil {
+				gqlErr = fmt.Errorf("failed to set %s: %v; failed to clean up template %s: %w", what, gqlErr, template.ID, cleanupErr)
+			} else {
+				gqlErr = fmt.Errorf("failed to set %s: %w", what, gqlErr)
+			}
+			return gqlErr
+		}
+		if len(portLabels) > 0 {
+			template.PortsConfig = portLabels
+		}
+		template.Readme = req.Readme
 	}
 	if req.ContainerRegistryAuthID != "" {
 		template.ContainerRegistryAuthID = req.ContainerRegistryAuthID

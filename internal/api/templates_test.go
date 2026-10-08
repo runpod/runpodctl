@@ -2,8 +2,12 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -12,189 +16,154 @@ func intPtr(v int) *int {
 }
 
 func TestListTemplates(t *testing.T) {
+	pages := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/templates" {
 			t.Errorf("expected /templates, got %s", r.URL.Path)
 		}
-		json.NewEncoder(w).Encode([]Template{
-			{ID: "tpl-1", Name: "template-1"},
-			{ID: "tpl-2", Name: "template-2"},
-		})
+		pages++
+		if r.URL.Query().Get("cursor") == "" {
+			_, _ = io.WriteString(w, `{"templates":[{"id":"tpl-1","name":"template-1","image":"img:1"}],
+				"pagination":{"hasNextPage":true,"nextCursor":"c2"}}`)
+			return
+		}
+		if got := r.URL.Query().Get("cursor"); got != "c2" {
+			t.Errorf("cursor = %q, want c2", got)
+		}
+		_, _ = io.WriteString(w, `{"templates":[{"id":"tpl-2","name":"template-2","image":"img:2"}],
+			"pagination":{"hasNextPage":false,"nextCursor":null}}`)
 	}))
 	defer server.Close()
 
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-
-	client, _ := NewClient()
-	client.baseURL = server.URL
-
-	templates, err := client.ListTemplates()
+	templates, err := newV2TestClient(t, server).ListTemplates()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(templates) != 2 {
-		t.Errorf("expected 2 templates, got %d", len(templates))
+	if pages != 2 || len(templates) != 2 || templates[1].ImageName != "img:2" {
+		t.Fatalf("pages = %d, templates = %+v; want both pages read", pages, templates)
 	}
 }
 
 func TestGetTemplate(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(Template{
-			ID:        "tpl-123",
-			Name:      "my-template",
-			ImageName: "runpod/pytorch",
-		})
+		if r.URL.Path != "/templates/tpl-123" {
+			t.Errorf("expected /templates/tpl-123, got %s", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"id":"tpl-123","name":"my-template","image":"runpod/pytorch",
+			"ports":["8888/http","22/tcp"],"env":{"A":"1"},"disk":20,"registry":"reg-1",
+			"mounts":{"persistent":{"size":30,"path":"/workspace"}},"entrypoint":["bash"],"cmd":["-c","run"],
+			"serverless":false,"public":true,"category":"NVIDIA"}`)
 	}))
 	defer server.Close()
+	graphql := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"data":{"podTemplate":{"id":"tpl-123","readme":"# hi","isRunpod":true,
+			"portsConfig":[{"port":"22","name":"SSH"}]}}}`)
+	}))
+	defer graphql.Close()
+	t.Setenv("RUNPOD_GRAPHQL_URL", graphql.URL)
 
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-
-	client, _ := NewClient()
-	client.baseURL = server.URL
-
-	template, err := client.GetTemplate("tpl-123")
+	template, err := newV2TestClient(t, server).GetTemplate("tpl-123")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if template.ID != "tpl-123" {
-		t.Errorf("expected tpl-123, got %s", template.ID)
+	want := Template{
+		ID: "tpl-123", Name: "my-template", ImageName: "runpod/pytorch", IsPublic: true, IsRunpod: true,
+		Category: "NVIDIA", Ports: []string{"8888/http", "22/tcp"}, Env: map[string]string{"A": "1"},
+		PortsConfig:      []TemplatePortConfig{{Port: "22", Name: "SSH"}},
+		DockerEntrypoint: []string{"bash"}, DockerStartCmd: []string{"-c", "run"},
+		ContainerDiskInGb: 20, ContainerRegistryAuthID: "reg-1", VolumeInGb: 30, VolumeMountPath: "/workspace",
+		Readme: "# hi",
+	}
+	if !reflect.DeepEqual(*template, want) {
+		t.Fatalf("template =\n%+v\nwant\n%+v", *template, want)
 	}
 }
 
 func TestCreateTemplate(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Errorf("expected POST, got %s", r.Method)
+		if r.Method != http.MethodPost || r.URL.Path != "/templates" {
+			t.Errorf("expected POST /templates, got %s %s", r.Method, r.URL.Path)
 		}
-		var req TemplateCreateRequest
-		json.NewDecoder(r.Body).Decode(&req)
-		json.NewEncoder(w).Encode(Template{
-			ID:                "new-tpl-id",
-			Name:              req.Name,
-			ImageName:         req.ImageName,
-			VolumeMountPath:   req.VolumeMountPath,
-			ContainerDiskInGb: req.ContainerDiskInGb,
-		})
+		var body map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		want := map[string]interface{}{
+			// no ports given: v1's default is sent, since v2 has none
+			"name": "test-template", "image": "runpod/pytorch", "serverless": false, "disk": float64(30),
+			"ports":  []interface{}{"8888/http", "22/tcp"},
+			"mounts": map[string]interface{}{"persistent": map[string]interface{}{"size": float64(20), "path": "/models"}},
+		}
+		if !reflect.DeepEqual(body, want) {
+			t.Errorf("body = %v, want %v", body, want)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"id":"new-tpl-id","name":"test-template","image":"runpod/pytorch","disk":30,
+			"mounts":{"persistent":{"size":20,"path":"/models"}}}`)
 	}))
 	defer server.Close()
 
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-
-	client, _ := NewClient()
-	client.baseURL = server.URL
-
-	template, err := client.CreateTemplate(&TemplateCreateRequest{
+	template, err := newV2TestClient(t, server).CreateTemplate(&TemplateCreateRequest{
 		Name:              "test-template",
 		ImageName:         "runpod/pytorch",
+		VolumeInGb:        20,
 		VolumeMountPath:   "/models",
 		ContainerDiskInGb: 30,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if template.ID != "new-tpl-id" {
-		t.Errorf("expected new-tpl-id, got %s", template.ID)
-	}
-	if template.VolumeMountPath != "/models" {
-		t.Errorf("expected /models, got %s", template.VolumeMountPath)
-	}
-	if template.ContainerDiskInGb != 30 {
-		t.Errorf("expected 30, got %d", template.ContainerDiskInGb)
+	if template.ID != "new-tpl-id" || template.VolumeMountPath != "/models" || template.ContainerDiskInGb != 30 {
+		t.Errorf("template = %+v", *template)
 	}
 }
 
 func TestUpdateTemplate(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPatch {
-			t.Errorf("expected PATCH, got %s", r.Method)
-		}
-		if r.URL.Path != "/templates/tpl-123" {
-			t.Errorf("expected /templates/tpl-123, got %s", r.URL.Path)
-		}
+	tests := []struct {
+		name string
+		disk int
+	}{
+		{name: "sets container disk", disk: 40},
+		// v1 accepted 0; v2's minimum is 1, but the value is still sent so the api,
+		// not the cli, decides
+		{name: "sends a zero container disk", disk: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPatch || r.URL.Path != "/templates/tpl-123" {
+					t.Errorf("expected PATCH /templates/tpl-123, got %s %s", r.Method, r.URL.Path)
+				}
+				var body map[string]interface{}
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				if disk, ok := body["disk"]; !ok || disk != float64(tt.disk) {
+					t.Fatalf("disk = %#v (present %v), want %d", disk, ok, tt.disk)
+				}
+				_, _ = io.WriteString(w, `{"id":"tpl-123","disk":`+strconv.Itoa(tt.disk)+`}`)
+			}))
+			defer server.Close()
 
-		var req TemplateUpdateRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
-		if req.ContainerDiskInGb == nil || *req.ContainerDiskInGb != 40 {
-			t.Fatalf("expected containerDiskInGb 40, got %#v", req.ContainerDiskInGb)
-		}
-
-		json.NewEncoder(w).Encode(Template{
-			ID:                "tpl-123",
-			ContainerDiskInGb: *req.ContainerDiskInGb,
+			template, err := newV2TestClient(t, server).UpdateTemplate("tpl-123", &TemplateUpdateRequest{
+				ContainerDiskInGb: intPtr(tt.disk),
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if template.ContainerDiskInGb != tt.disk {
+				t.Errorf("expected %d, got %d", tt.disk, template.ContainerDiskInGb)
+			}
 		})
-	}))
-	defer server.Close()
-
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-
-	client, _ := NewClient()
-	client.baseURL = server.URL
-
-	template, err := client.UpdateTemplate("tpl-123", &TemplateUpdateRequest{
-		ContainerDiskInGb: intPtr(40),
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if template.ContainerDiskInGb != 40 {
-		t.Errorf("expected 40, got %d", template.ContainerDiskInGb)
-	}
-}
-
-func TestUpdateTemplate_AllowsZeroContainerDisk(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req TemplateUpdateRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
-		if req.ContainerDiskInGb == nil {
-			t.Fatal("expected containerDiskInGb to be present")
-		}
-		if *req.ContainerDiskInGb != 0 {
-			t.Fatalf("expected containerDiskInGb 0, got %d", *req.ContainerDiskInGb)
-		}
-
-		json.NewEncoder(w).Encode(Template{
-			ID:                "tpl-123",
-			ContainerDiskInGb: *req.ContainerDiskInGb,
-		})
-	}))
-	defer server.Close()
-
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-
-	client, _ := NewClient()
-	client.baseURL = server.URL
-
-	template, err := client.UpdateTemplate("tpl-123", &TemplateUpdateRequest{
-		ContainerDiskInGb: intPtr(0),
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if template.ContainerDiskInGb != 0 {
-		t.Errorf("expected 0, got %d", template.ContainerDiskInGb)
 	}
 }
 
 func TestDeleteTemplate(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodDelete {
-			t.Errorf("expected DELETE, got %s", r.Method)
+		if r.Method != http.MethodDelete || r.URL.Path != "/templates/tpl-123" {
+			t.Errorf("expected DELETE /templates/tpl-123, got %s %s", r.Method, r.URL.Path)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
 
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-
-	client, _ := NewClient()
-	client.baseURL = server.URL
-
-	err := client.DeleteTemplate("tpl-123")
-	if err != nil {
+	if err := newV2TestClient(t, server).DeleteTemplate("tpl-123"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -245,5 +214,26 @@ func TestTemplatePortsUnmarshal(t *testing.T) {
 	}
 	if len(ports) != 2 || ports[0] != "22/tcp" || ports[1] != "80/http" {
 		t.Errorf("unexpected ports: %v", ports)
+	}
+}
+
+// v1 listed templates by name ignoring case, which --limit/--offset page by;
+// v2 lists newest first
+func TestListTemplatesSortsByNameIgnoringCase(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"templates":[{"id":"3","name":"zeta"},{"id":"1","name":"AI crew"},{"id":"2","name":"a111"}],"pagination":{"hasNextPage":false}}`))
+	}))
+	defer server.Close()
+
+	templates, err := newV2TestClient(t, server).ListTemplates()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var names []string
+	for _, tpl := range templates {
+		names = append(names, tpl.Name)
+	}
+	if strings.Join(names, ",") != "a111,AI crew,zeta" {
+		t.Errorf("order = %v", names)
 	}
 }
