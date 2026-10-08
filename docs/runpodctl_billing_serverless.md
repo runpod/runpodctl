@@ -4,7 +4,7 @@ view serverless billing history
 
 ### Synopsis
 
-view billing history for serverless endpoints
+view billing history for serverless endpoints, one record per endpoint per time bucket, split into gpu, cpu and disk cost
 
 ```
 runpodctl billing serverless [flags]
@@ -16,8 +16,6 @@ runpodctl billing serverless [flags]
       --bucket-size string   bucket size (hour, day, week, month, year) (default "day")
       --end-time string      end time (RFC3339 format)
       --endpoint-id string   filter by endpoint id
-      --gpu-id string        filter by gpu id
-      --grouping string      grouping (endpointId, podId, gpuId) (default "endpointId")
   -h, --help                 help for serverless
       --start-time string    start time (RFC3339 format)
 ```

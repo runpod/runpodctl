@@ -6,15 +6,40 @@ import (
 	"net/url"
 )
 
-// BillingRecord represents a billing record
-type BillingRecord struct {
-	Time            string  `json:"time"`
-	Amount          float64 `json:"amount"`
-	TimeBilledMs    int64   `json:"timeBilledMs,omitempty"`
-	DiskSpaceBilled int     `json:"diskSpaceBilledGb,omitempty"`
-	PodID           string  `json:"podId,omitempty"`
-	EndpointID      string  `json:"endpointId,omitempty"`
-	GpuTypeID       string  `json:"gpuTypeId,omitempty"`
+// Billing records are printed in the rest v2 shape: one record per resource per
+// time bucket, with the cost split into its components. v2 has no grouping by
+// gpu type and no gpu filter, which v1 had.
+
+// PodBillingRecord is one pod's cost for one time bucket.
+type PodBillingRecord struct {
+	StartTime   string  `json:"startTime"`
+	EndTime     string  `json:"endTime"`
+	PodID       string  `json:"podId"`
+	TotalAmount float64 `json:"totalAmount"`
+	GpuAmount   float64 `json:"gpuAmount"`
+	CpuAmount   float64 `json:"cpuAmount"`
+	DiskAmount  float64 `json:"diskAmount"`
+}
+
+// ServerlessBillingRecord is one serverless endpoint's cost for one time bucket.
+type ServerlessBillingRecord struct {
+	StartTime    string  `json:"startTime"`
+	EndTime      string  `json:"endTime"`
+	ServerlessID string  `json:"serverlessId"`
+	TotalAmount  float64 `json:"totalAmount"`
+	GpuAmount    float64 `json:"gpuAmount"`
+	CpuAmount    float64 `json:"cpuAmount"`
+	DiskAmount   float64 `json:"diskAmount"`
+}
+
+// NetworkVolumeBillingRecord is one network volume's cost for one time bucket.
+type NetworkVolumeBillingRecord struct {
+	StartTime             string  `json:"startTime"`
+	EndTime               string  `json:"endTime"`
+	NetworkVolumeID       string  `json:"networkVolumeId"`
+	TotalAmount           float64 `json:"totalAmount"`
+	StandardAmount        float64 `json:"standardAmount"`
+	HighPerformanceAmount float64 `json:"highPerformanceAmount"`
 }
 
 // BillingOptions are options for billing queries
@@ -22,110 +47,68 @@ type BillingOptions struct {
 	StartTime  string
 	EndTime    string
 	BucketSize string // hour, day, week, month, year
-	Grouping   string // podId, gpuTypeId, endpointId
 	PodID      string
 	EndpointID string
-	GpuTypeID  string
+}
+
+func (o *BillingOptions) params(idParam, id string) url.Values {
+	params := url.Values{}
+	if o == nil {
+		return params
+	}
+	if o.StartTime != "" {
+		params.Set("startTime", o.StartTime)
+	}
+	if o.EndTime != "" {
+		params.Set("endTime", o.EndTime)
+	}
+	if o.BucketSize != "" {
+		params.Set("bucketSize", o.BucketSize)
+	}
+	if id != "" {
+		params.Set(idParam, id)
+	}
+	return params
+}
+
+func getBillingRecords[T any](c *Client, path string, params url.Values) ([]T, error) {
+	data, err := c.GetV2(path, params)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Records []T `json:"records"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	if resp.Records == nil {
+		resp.Records = []T{}
+	}
+	return resp.Records, nil
 }
 
 // GetPodBilling returns billing history for pods
-func (c *Client) GetPodBilling(opts *BillingOptions) ([]BillingRecord, error) {
-	params := url.Values{}
+func (c *Client) GetPodBilling(opts *BillingOptions) ([]PodBillingRecord, error) {
+	var podID string
 	if opts != nil {
-		if opts.StartTime != "" {
-			params.Set("startTime", opts.StartTime)
-		}
-		if opts.EndTime != "" {
-			params.Set("endTime", opts.EndTime)
-		}
-		if opts.BucketSize != "" {
-			params.Set("bucketSize", opts.BucketSize)
-		}
-		if opts.Grouping != "" {
-			params.Set("grouping", opts.Grouping)
-		}
-		if opts.PodID != "" {
-			params.Set("podId", opts.PodID)
-		}
-		if opts.GpuTypeID != "" {
-			params.Set("gpuTypeId", opts.GpuTypeID)
-		}
+		podID = opts.PodID
 	}
-
-	data, err := c.Get("/billing/pods", params)
-	if err != nil {
-		return nil, err
-	}
-
-	var records []BillingRecord
-	if err := json.Unmarshal(data, &records); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return records, nil
+	return getBillingRecords[PodBillingRecord](c, "/billing/pods", opts.params("podId", podID))
 }
 
-// GetEndpointBilling returns billing history for serverless endpoints
-func (c *Client) GetEndpointBilling(opts *BillingOptions) ([]BillingRecord, error) {
-	params := url.Values{}
+// GetEndpointBilling returns billing history for serverless endpoints. this is
+// v2's /billing/serverless: v2's /billing/endpoints bills public endpoints, a
+// different product.
+func (c *Client) GetEndpointBilling(opts *BillingOptions) ([]ServerlessBillingRecord, error) {
+	var endpointID string
 	if opts != nil {
-		if opts.StartTime != "" {
-			params.Set("startTime", opts.StartTime)
-		}
-		if opts.EndTime != "" {
-			params.Set("endTime", opts.EndTime)
-		}
-		if opts.BucketSize != "" {
-			params.Set("bucketSize", opts.BucketSize)
-		}
-		if opts.Grouping != "" {
-			params.Set("grouping", opts.Grouping)
-		}
-		if opts.EndpointID != "" {
-			params.Set("endpointId", opts.EndpointID)
-		}
-		if opts.GpuTypeID != "" {
-			params.Set("gpuTypeId", opts.GpuTypeID)
-		}
+		endpointID = opts.EndpointID
 	}
-
-	data, err := c.Get("/billing/endpoints", params)
-	if err != nil {
-		return nil, err
-	}
-
-	var records []BillingRecord
-	if err := json.Unmarshal(data, &records); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return records, nil
+	return getBillingRecords[ServerlessBillingRecord](c, "/billing/serverless", opts.params("serverlessId", endpointID))
 }
 
 // GetNetworkVolumeBilling returns billing history for network volumes
-func (c *Client) GetNetworkVolumeBilling(opts *BillingOptions) ([]BillingRecord, error) {
-	params := url.Values{}
-	if opts != nil {
-		if opts.StartTime != "" {
-			params.Set("startTime", opts.StartTime)
-		}
-		if opts.EndTime != "" {
-			params.Set("endTime", opts.EndTime)
-		}
-		if opts.BucketSize != "" {
-			params.Set("bucketSize", opts.BucketSize)
-		}
-	}
-
-	data, err := c.Get("/billing/networkvolumes", params)
-	if err != nil {
-		return nil, err
-	}
-
-	var records []BillingRecord
-	if err := json.Unmarshal(data, &records); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return records, nil
+func (c *Client) GetNetworkVolumeBilling(opts *BillingOptions) ([]NetworkVolumeBillingRecord, error) {
+	return getBillingRecords[NetworkVolumeBillingRecord](c, "/billing/network-volumes", opts.params("", ""))
 }

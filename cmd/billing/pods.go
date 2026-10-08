@@ -10,7 +10,7 @@ import (
 var podsCmd = &cobra.Command{
 	Use:   "pods",
 	Short: "view pod billing history",
-	Long:  "view billing history for gpu pods",
+	Long:  "view billing history for pods, one record per pod per time bucket, split into gpu, cpu and disk cost",
 	Args:  cobra.NoArgs,
 	RunE:  runPodsBilling,
 }
@@ -19,18 +19,14 @@ var (
 	podsStartTime  string
 	podsEndTime    string
 	podsBucketSize string
-	podsGrouping   string
 	podsPodID      string
-	podsGpuTypeID  string
 )
 
 func init() {
 	podsCmd.Flags().StringVar(&podsStartTime, "start-time", "", "start time (RFC3339 format)")
 	podsCmd.Flags().StringVar(&podsEndTime, "end-time", "", "end time (RFC3339 format)")
 	podsCmd.Flags().StringVar(&podsBucketSize, "bucket-size", "day", "bucket size (hour, day, week, month, year)")
-	podsCmd.Flags().StringVar(&podsGrouping, "grouping", "gpuId", "grouping (podId, gpuId)")
 	podsCmd.Flags().StringVar(&podsPodID, "pod-id", "", "filter by pod id")
-	podsCmd.Flags().StringVar(&podsGpuTypeID, "gpu-id", "", "filter by gpu id")
 }
 
 func runPodsBilling(cmd *cobra.Command, args []string) error {
@@ -39,14 +35,11 @@ func runPodsBilling(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	grouping := normalizeGpuGrouping(podsGrouping)
 	opts := &api.BillingOptions{
 		StartTime:  podsStartTime,
 		EndTime:    podsEndTime,
 		BucketSize: podsBucketSize,
-		Grouping:   grouping,
 		PodID:      podsPodID,
-		GpuTypeID:  podsGpuTypeID,
 	}
 
 	records, err := client.GetPodBilling(opts)
