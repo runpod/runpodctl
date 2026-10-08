@@ -3,6 +3,8 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/runpod/runpodctl/internal/configenv"
@@ -15,12 +17,8 @@ type GpuType struct {
 	MemoryInGb     int    `json:"memoryInGb"`
 	SecureCloud    bool   `json:"secureCloud"`
 	CommunityCloud bool   `json:"communityCloud"`
-	// DO NOT rename these json tags to add a PerHr suffix. They are the *decode*
-	// contract for the graphql response (which returns securePrice /
-	// communityPrice), not an output shape — renaming them makes json.Unmarshal
-	// miss the fields and silently reports every price as 0. The user-facing names
-	// (securePricePerHr / communityPricePerHr) are set by cmd/gpu's own output
-	// struct, which is the only thing that marshals gpu data.
+	// the user-facing names (securePricePerHr / communityPricePerHr) are set by
+	// cmd/gpu's own output struct, which is the only thing that marshals gpu data.
 	SecurePrice    float64 `json:"securePrice"`
 	CommunityPrice float64 `json:"communityPrice"`
 }
@@ -89,108 +87,105 @@ func (c *Client) graphqlRequest(query string, variables map[string]interface{}) 
 	return c.Post("", body)
 }
 
-// ListGpuTypes returns all available GPU types (filters out deprecated/unavailable)
-func (c *Client) ListGpuTypes(includeUnavailable bool) ([]GpuTypeWithAvailability, error) {
-	query := `
-		query {
-			gpuTypes {
-				id
-				displayName
-				memoryInGb
-				secureCloud
-				communityCloud
-				securePrice
-				communityPrice
-			}
-		}
-	`
+// v2CatalogGpu is a gpu type from GET /v2/catalog/gpus.
+type v2CatalogGpu struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Memory       int    `json:"memory"`
+	Secure       bool   `json:"secure"`
+	Community    bool   `json:"community"`
+	Pool         string `json:"pool"`
+	Availability string `json:"availability"`
+	Price        struct {
+		Secure    float64 `json:"secure"`
+		Community float64 `json:"community"`
+	} `json:"price"`
+	DataCenters []struct {
+		ID           string `json:"id"`
+		Availability string `json:"availability"`
+	} `json:"dataCenters"`
+}
 
-	data, err := c.graphqlRequest(query, nil)
+func (c *Client) listCatalogGpus(params url.Values) ([]v2CatalogGpu, error) {
+	data, err := c.GetV2("/catalog/gpus", params)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Gpus []v2CatalogGpu `json:"gpus"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return resp.Gpus, nil
+}
+
+// legacyStockStatus spells a v2 availability (HIGH/MEDIUM/LOW/NONE) the way the
+// cli has always printed it (High/Medium/Low), so agents comparing against
+// those values keep matching.
+func legacyStockStatus(availability string) string {
+	switch strings.ToUpper(availability) {
+	case "HIGH":
+		return "High"
+	case "MEDIUM":
+		return "Medium"
+	case "LOW":
+		return "Low"
+	case "NONE", "":
+		return ""
+	default:
+		return availability
+	}
+}
+
+// ListGpuTypes returns all available GPU types (filters out deprecated/unavailable),
+// with pod availability from the v2 catalog.
+func (c *Client) ListGpuTypes(includeUnavailable bool) ([]GpuTypeWithAvailability, error) {
+	gpus, err := c.listCatalogGpus(url.Values{"include": {"AVAILABILITY"}, "product": {"POD"}})
 	if err != nil {
 		return nil, err
 	}
 
-	var resp struct {
-		Data struct {
-			GpuTypes []GpuType `json:"gpuTypes"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-
-	if err := json.Unmarshal(data, &resp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	if len(resp.Errors) > 0 {
-		return nil, newGraphQLError(resp.Errors[0].Message)
-	}
-
-	// get availability from datacenters
-	dataCenters, err := c.ListDataCenters()
-	if err != nil {
-		// if we can't get availability, just return GPU types without it
-		var result []GpuTypeWithAvailability
-		for _, gpu := range resp.Data.GpuTypes {
-			if includeUnavailable || (gpu.SecureCloud || gpu.CommunityCloud) {
-				result = append(result, GpuTypeWithAvailability{
-					GpuType:   gpu,
-					Available: gpu.SecureCloud || gpu.CommunityCloud,
-				})
+	var result []GpuTypeWithAvailability
+	for _, gpu := range gpus {
+		// the overall status is the better of v2's top-level availability and the
+		// best data center: the top level also counts community stock that has no
+		// data center entry, but it can read NONE while a data center reads LOW
+		// (observed 2026-10-03 for the RTX A4000 without a cloud filter).
+		stockStatus := legacyStockStatus(gpu.Availability)
+		var perDC []GpuDataCenterAvailability
+		for _, dc := range gpu.DataCenters {
+			stock := legacyStockStatus(dc.Availability)
+			if betterStock(stock, stockStatus) {
+				stockStatus = stock
 			}
-		}
-		return result, nil
-	}
-
-	// build availability maps from datacenters: the best stock status overall
-	// and the per-data-center breakdown.
-	availabilityMap := make(map[string]string)               // gpuTypeId -> best stock status
-	perDCMap := make(map[string][]GpuDataCenterAvailability) // gpuTypeId -> per-dc availability
-	for _, dc := range dataCenters {
-		for _, avail := range dc.GpuAvailability {
-			current, exists := availabilityMap[avail.GpuTypeID]
-			// prefer High > Medium > Low
-			if !exists || betterStock(avail.StockStatus, current) {
-				availabilityMap[avail.GpuTypeID] = avail.StockStatus
-			}
-			// list every data center the gpu appears in, but make an unreported
-			// status explicit ("none") rather than an empty string, so an agent
-			// can tell "offered here, currently no stock" from a missing entry.
-			stock := avail.StockStatus
 			if stock == "" {
 				stock = "none"
 			}
-			perDCMap[avail.GpuTypeID] = append(perDCMap[avail.GpuTypeID], GpuDataCenterAvailability{
-				DataCenterID: dc.ID,
-				StockStatus:  stock,
-			})
+			perDC = append(perDC, GpuDataCenterAvailability{DataCenterID: dc.ID, StockStatus: stock})
 		}
-	}
-
-	var result []GpuTypeWithAvailability
-	for _, gpu := range resp.Data.GpuTypes {
-		stockStatus, statusKnown := availabilityMap[gpu.ID]
-		available := statusKnown && hasStock(stockStatus)
-
-		// filter out GPUs with no availability unless includeUnavailable
+		available := hasStock(stockStatus)
 		if !includeUnavailable && !available {
 			continue
 		}
-
-		// filter out "unknown" GPU type
 		if gpu.ID == "unknown" {
 			continue
 		}
-
 		result = append(result, GpuTypeWithAvailability{
-			GpuType:                gpu,
+			GpuType: GpuType{
+				ID:             gpu.ID,
+				DisplayName:    gpu.Name,
+				MemoryInGb:     gpu.Memory,
+				SecureCloud:    gpu.Secure,
+				CommunityCloud: gpu.Community,
+				SecurePrice:    gpu.Price.Secure,
+				CommunityPrice: gpu.Price.Community,
+			},
 			StockStatus:            stockStatus,
 			Available:              available,
-			DataCenterAvailability: perDCMap[gpu.ID],
+			DataCenterAvailability: perDC,
 		})
 	}
-
 	return result, nil
 }
 
@@ -245,40 +240,27 @@ type ServerlessGpuPool struct {
 }
 
 // ListServerlessGpuPools returns the serverless gpu pools and their member
-// gpu type ids.
+// gpu type ids, grouped from each catalog gpu's `pool`.
 func (c *Client) ListServerlessGpuPools() ([]ServerlessGpuPool, error) {
-	query := `
-		query {
-			serverlessGpuPools {
-				id
-				gpuTypeIds
-			}
-		}
-	`
-
-	data, err := c.graphqlRequest(query, nil)
+	gpus, err := c.listCatalogGpus(nil)
 	if err != nil {
 		return nil, err
 	}
-
-	var resp struct {
-		Data struct {
-			ServerlessGpuPools []ServerlessGpuPool `json:"serverlessGpuPools"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
+	var pools []ServerlessGpuPool
+	index := map[string]int{}
+	for _, gpu := range gpus {
+		if gpu.Pool == "" {
+			continue
+		}
+		i, ok := index[gpu.Pool]
+		if !ok {
+			i = len(pools)
+			index[gpu.Pool] = i
+			pools = append(pools, ServerlessGpuPool{ID: gpu.Pool})
+		}
+		pools[i].GpuTypeIDs = append(pools[i].GpuTypeIDs, gpu.ID)
 	}
-
-	if err := json.Unmarshal(data, &resp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	if len(resp.Errors) > 0 {
-		return nil, newGraphQLError(resp.Errors[0].Message)
-	}
-
-	return resp.Data.ServerlessGpuPools, nil
+	return pools, nil
 }
 
 // ResolveServerlessGpuPoolID maps a --gpu-id value to the gpu pool id(s) that
@@ -298,6 +280,7 @@ func (c *Client) ResolveServerlessGpuPoolID(gpuID string) (string, error) {
 	for _, p := range pools {
 		poolIDs = append(poolIDs, p.ID)
 	}
+	sort.Strings(poolIDs) // the catalog's order is arbitrary
 
 	resolveOne := func(id string) (string, bool) {
 		for _, p := range pools {
@@ -335,46 +318,42 @@ func (c *Client) ResolveServerlessGpuPoolID(gpuID string) (string, error) {
 	return strings.Join(resolved, ","), nil
 }
 
-// ListDataCenters returns all data centers with GPU availability
+// ListDataCenters returns the deployable data centers with GPU availability.
+// v2 reports a region (e.g. NORTH_AMERICA) where graphql had a country-level
+// location; it is carried in Location.
 func (c *Client) ListDataCenters() ([]DataCenter, error) {
-	query := `
-		query {
-			dataCenters {
-				id
-				name
-				location
-				gpuAvailability {
-					gpuTypeId
-					displayName
-					stockStatus
-				}
-			}
-		}
-	`
-
-	data, err := c.graphqlRequest(query, nil)
+	data, err := c.GetV2("/catalog/datacenters", url.Values{"include": {"GPU_AVAILABILITY"}})
 	if err != nil {
 		return nil, err
 	}
-
 	var resp struct {
-		Data struct {
-			DataCenters []DataCenter `json:"dataCenters"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
+		DataCenters []struct {
+			ID              string `json:"id"`
+			Name            string `json:"name"`
+			Region          string `json:"region"`
+			GpuAvailability []struct {
+				ID           string `json:"id"`
+				Name         string `json:"name"`
+				Availability string `json:"availability"`
+			} `json:"gpuAvailability"`
+		} `json:"dataCenters"`
 	}
-
 	if err := json.Unmarshal(data, &resp); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
-
-	if len(resp.Errors) > 0 {
-		return nil, newGraphQLError(resp.Errors[0].Message)
+	dataCenters := make([]DataCenter, 0, len(resp.DataCenters))
+	for _, dc := range resp.DataCenters {
+		out := DataCenter{ID: dc.ID, Name: dc.Name, Location: dc.Region}
+		for _, g := range dc.GpuAvailability {
+			out.GpuAvailability = append(out.GpuAvailability, GpuAvailabilityInDataCenter{
+				GpuTypeID:   g.ID,
+				DisplayName: g.Name,
+				StockStatus: legacyStockStatus(g.Availability),
+			})
+		}
+		dataCenters = append(dataCenters, out)
 	}
-
-	return resp.Data.DataCenters, nil
+	return dataCenters, nil
 }
 
 // GetUser returns the current user's account info
