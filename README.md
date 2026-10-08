@@ -286,15 +286,10 @@ what each one waits for, precisely:
   does fill a standby pool at 0 min workers whenever `--workers-max` is above 1,
   and `/health` counts those cached workers as `ready` — it is just slower and less
   certain than `--workers-min 1`, which starts (and bills for) a worker right away.
-- `pod create --wait` needs ssh, so it cannot be combined with `--ssh=false`. two
-  combinations warn on stderr instead of failing, because they are satisfiable but
-  often are not:
-  - `--compute-type CPU` — cpu pods are created over rest, which cannot request
-    runpod-managed ssh, so only an image that starts its own sshd becomes
-    reachable.
-  - `--cloud-type COMMUNITY` without `--public-ip` — community cloud only maps a
-    public ssh port on a machine that has a public ip, and `--public-ip` is what
-    asks the scheduler for one.
+- `pod create --wait` needs ssh, so it cannot be combined with `--ssh=false`.
+  `--cloud-type COMMUNITY` warns on stderr instead of failing: community cloud only
+  maps a public ssh port on a machine that has a public ip, which the api cannot
+  ask for, so the wait may time out.
 - a transient api failure during a wait does **not** end it: the poll error is
   reported as the current state and polling continues to the deadline, because the
   resource already exists and bills. only a failure that cannot resolve stops the

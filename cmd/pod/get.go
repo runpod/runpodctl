@@ -46,9 +46,8 @@ func runGet(cmd *cobra.Command, args []string) error {
 	return output.Print(details, &output.Config{Format: format})
 }
 
-// fetchPodDetails reads a pod over rest and enriches it with the derived runtime
-// state and the live ssh connection info from graphql (rest leaves runtime null,
-// so it has neither telemetry nor ports).
+// fetchPodDetails reads a pod and enriches it with the derived runtime state and
+// the live ssh connection info, all from the one rest v2 read.
 //
 // `pod create --wait` prints this same shape once ssh is up, instead of the
 // create response: the point of waiting is to hand back a pod you can connect
@@ -64,54 +63,37 @@ func fetchPodDetails(podID string, includeMachine, includeNetworkVolume bool) (*
 		return nil, fmt.Errorf("failed to get pod: %w", err)
 	}
 
-	// The graphql side-call below is the only source of runtime telemetry (rest
-	// never returns `runtime` at all), and it was already being made for the ssh
-	// block, so runtimeStatus costs no extra round trip here.
+	// rest v2 reports runtime telemetry and port mappings in the same read, so
+	// the derived state, uptime and ssh block all come from one snapshot.
 	sshInfo := map[string]interface{}{"error": "ssh info unavailable"}
-	// Without the graphql snapshot there is no telemetry at all, so the honest
-	// answer is unknown rather than a guess from desiredStatus alone.
-	state := podstate.Derive(podstate.Signals{
-		DesiredStatus:    pod.DesiredStatus,
-		LastStatusChange: pod.LastStatusChange,
-	})
+	state := podstate.Derive(podstate.Signals{DesiredStatus: pod.DesiredStatus})
 
-	if gqlClient, gqlClientErr := api.NewGraphQLClient(); gqlClientErr == nil {
-		if pods, gqlErr := gqlClient.GetPods(); gqlErr == nil {
-			keyInfo := sshconnect.ResolveKeyInfo(client)
-			sshPod, conn := sshconnect.FindPodConnection(pods, podID, keyInfo)
-			if sshPod != nil {
-				if pod.LastStatusChange == nil && sshPod.LastStatusChange != nil {
-					pod.LastStatusChange = sshPod.LastStatusChange
+	if view := pod.Legacy(); view != nil {
+		keyInfo := sshconnect.ResolveKeyInfo(client)
+		sshPod, conn := sshconnect.FindPodConnection([]*api.LegacyPod{view}, podID, keyInfo)
+		if sshPod != nil {
+			state = sshconnect.PodState(sshPod)
+			pod.UptimeSeconds = runtimeUptime(state, sshPod.Runtime)
+			// A stopped pod keeps reporting stale runtime ports for a while,
+			// which is enough for FindPodConnection to hand back an ssh
+			// command that cannot possibly work.
+			if conn == nil || state.IsKnownDown() {
+				declared := pod.Ports
+				if len(declared) == 0 {
+					declared = sshconnect.SplitPorts(sshPod.Ports)
 				}
-				// Derive from the graphql snapshot, not from rest's
-				// desiredStatus: the runtime block and its ports come from this
-				// snapshot, and gating them on a status read from the *other*
-				// surface means momentary skew between the two bypasses the
-				// gate and hands back an ssh command for a dead container.
-				// rest's desiredStatus is still published as desiredStatus.
-				state = sshconnect.PodState(sshPod)
-				pod.UptimeSeconds = runtimeUptime(state, sshPod.Runtime)
-				// A stopped pod keeps reporting stale runtime ports for a while,
-				// which is enough for FindPodConnection to hand back an ssh
-				// command that cannot possibly work.
-				if conn == nil || state.IsKnownDown() {
-					declared := pod.Ports
-					if len(declared) == 0 {
-						declared = sshconnect.SplitPorts(sshPod.Ports)
-					}
-					var runtimePorts []*api.LegacyPort
-					if sshPod.Runtime != nil {
-						runtimePorts = sshPod.Runtime.Ports
-					}
-					sshInfo = map[string]interface{}{
-						"error":  sshconnect.NotReadyMessage(sshPod.ID, state, declared, runtimePorts),
-						"id":     sshPod.ID,
-						"name":   sshPod.Name,
-						"status": sshPod.DesiredStatus,
-					}
-				} else {
-					sshInfo = conn
+				var runtimePorts []*api.LegacyPort
+				if sshPod.Runtime != nil {
+					runtimePorts = sshPod.Runtime.Ports
 				}
+				sshInfo = map[string]interface{}{
+					"error":  sshconnect.NotReadyMessage(sshPod.ID, state, declared, runtimePorts),
+					"id":     sshPod.ID,
+					"name":   sshPod.Name,
+					"status": sshPod.DesiredStatus,
+				}
+			} else {
+				sshInfo = conn
 			}
 		}
 	}
@@ -124,9 +106,8 @@ func fetchPodDetails(podID string, includeMachine, includeNetworkVolume bool) (*
 	}, nil
 }
 
-// podDetails is a pod read over rest enriched with the derived runtime state and
-// the live ssh block from graphql. It is the `pod get` payload, and the
-// `pod create --wait` payload.
+// podDetails is a pod read enriched with the derived runtime state and the live
+// ssh block. It is the `pod get` payload, and the `pod create --wait` payload.
 type podDetails struct {
 	*api.Pod
 	RuntimeStatus       string                 `json:"runtimeStatus"`

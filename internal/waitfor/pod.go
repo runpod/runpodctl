@@ -11,9 +11,8 @@ import (
 	"github.com/runpod/runpodctl/internal/sshconnect"
 )
 
-// PodLister is the slice of the graphql client a pod wait needs. Only graphql
-// returns runtime.ports (the rest read shape leaves runtime null on a running
-// pod, verified against prod), so ssh readiness has to come from here.
+// PodLister is the slice of the api client a pod wait needs: the pod list with
+// its runtime ports, which ssh readiness is read from.
 type PodLister interface {
 	GetPods() ([]*api.LegacyPod, error)
 }
@@ -25,6 +24,7 @@ var terminalPodStatuses = map[string]bool{
 	"EXITED":     true,
 	"TERMINATED": true,
 	"DEAD":       true,
+	"ERROR":      true, // rest v2: the container is in an unrecoverable state
 }
 
 // PodSSHPoller polls until pod podID is running, has a public ssh port, and that

@@ -25,7 +25,7 @@ func TestPodCmd_Structure(t *testing.T) {
 	}
 
 	// check subcommands exist
-	expectedSubcommands := []string{"list", "get <pod-id>", "create", "update <pod-id>", "start <pod-id>", "stop <pod-id>", "restart <pod-id>", "reset <pod-id>", "delete <pod-id>"}
+	expectedSubcommands := []string{"list", "get <pod-id>", "create", "update <pod-id>", "start <pod-id>", "stop <pod-id>", "restart <pod-id>", "delete <pod-id>"}
 	for _, expected := range expectedSubcommands {
 		found := false
 		for _, cmd := range Cmd.Commands() {
@@ -91,8 +91,9 @@ func TestCreateCmd_Flags(t *testing.T) {
 	if flags.Lookup("global-networking") == nil {
 		t.Error("expected --global-networking flag")
 	}
-	if flags.Lookup("public-ip") == nil {
-		t.Error("expected --public-ip flag")
+	// the api cannot ask for a public ip, so the flag is gone
+	if flags.Lookup("public-ip") != nil {
+		t.Error("--public-ip must not be registered")
 	}
 	if flags.Lookup("ssh") == nil {
 		t.Error("expected --ssh flag")
@@ -164,6 +165,13 @@ func TestParseCreatedAt(t *testing.T) {
 			input:    "1750000000",
 			wantZero: false,
 			wantTime: time.Unix(1750000000, 0),
+		},
+		{
+			// what pod reads print as createdAt; list used to drop it
+			name:     "go time.String layout",
+			input:    "2026-10-02 05:28:38.366 +0000 UTC",
+			wantZero: false,
+			wantTime: time.Date(2026, 10, 2, 5, 28, 38, 366000000, time.UTC),
 		},
 		{
 			name:     "invalid string",

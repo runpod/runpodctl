@@ -134,7 +134,6 @@ func TestResolveWaitTimeout(t *testing.T) {
 		setup        func()
 		computeType  string
 		cloudType    string
-		publicIP     bool
 		changedFlags []string
 		want         time.Duration
 		wantErr      string
@@ -178,32 +177,21 @@ func TestResolveWaitTimeout(t *testing.T) {
 			wantErr:     "--wait waits for ssh, so it cannot be combined with --ssh=false",
 		},
 		{
-			// cpu pods go through rest, which cannot request runpod-managed ssh;
-			// prod still allocates a public port 22, so this warns instead of
-			// refusing outright.
-			name:        "cpu warns that ssh depends on the image",
+			// v2 sets up ssh on cpu pods too, so a cpu wait needs no caveat
+			name:        "cpu waits like gpu",
 			setup:       func() { createWait = true },
 			computeType: "CPU",
 			want:        10 * time.Minute,
-			wantStderr:  "cpu pods are created through the rest api",
 		},
 		{
-			// no public ip means no publicly mapped port 22 to probe, so this wait
-			// can time out for a reason the flags do not make obvious.
-			name:        "community cloud without a public ip is called out",
+			// the api cannot ask for a community machine with a public ip, and
+			// without one there is no public port 22 to probe
+			name:        "community cloud is called out",
 			setup:       func() { createWait = true },
 			computeType: "GPU",
 			cloudType:   "COMMUNITY",
 			want:        10 * time.Minute,
 			wantStderr:  "community cloud only maps a public ssh port",
-		},
-		{
-			name:        "community cloud with a public ip is fine",
-			setup:       func() { createWait = true },
-			computeType: "GPU",
-			cloudType:   "COMMUNITY",
-			publicIP:    true,
-			want:        10 * time.Minute,
 		},
 		{
 			name:        "secure cloud says nothing about public ips",
@@ -226,7 +214,7 @@ func TestResolveWaitTimeout(t *testing.T) {
 			if cloudType == "" {
 				cloudType = "SECURE"
 			}
-			got, err := resolveWaitTimeout(cmd, tc.computeType, cloudType, tc.publicIP)
+			got, err := resolveWaitTimeout(cmd, cloudType)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("error = %v, want it to contain %q", err, tc.wantErr)
