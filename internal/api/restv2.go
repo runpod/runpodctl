@@ -13,11 +13,9 @@ import (
 	"github.com/spf13/viper"
 )
 
-// The v2 rest api is a separate host from the v1 control plane this cli does its
-// crud against (see configenv.RESTV2URL). Only the two features that do not
-// exist on v1 live here: the log streams (logs.go) and the worker listing.
-// Everything else must keep using Client, so that one api version change does not
-// silently move unrelated commands.
+// V2Client serves the v2 calls that need a per-call context: the log streams
+// (logs.go) and the worker listing. Ordinary v2 requests go through Client's
+// GetV2/PostV2/PatchV2/DeleteV2 helpers.
 
 // restV2BaseURL resolves the v2 base url, falling back to prod.
 func restV2BaseURL() string {

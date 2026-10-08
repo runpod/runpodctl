@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -266,6 +267,8 @@ func TestParseAPIError(t *testing.T) {
 		{"explicit code is preserved", `{"error":"denied","code":"quota_exceeded"}`, 403, "denied", "quota_exceeded"},
 		{"raw non-json body is used verbatim", "internal error", 500, "internal error", "server_error"},
 		{"empty body falls back to status message", "", 502, "api request failed with status 502", "server_error"},
+		{"rest v2 validation errors are appended to detail", `{"detail":"Request validation failed.","errors":["$: missing property 'image'","$: additional properties 'imageName' not allowed"],"status":422,"title":"Unprocessable Entity"}`, 422, "Request validation failed. $: missing property 'image'; $: additional properties 'imageName' not allowed", "bad_request"},
+		{"rest v2 detail without errors is used alone", `{"detail":"pod not found","status":404,"title":"Not Found"}`, 404, "pod not found", "not_found"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -371,9 +374,9 @@ func TestCodeForStatus(t *testing.T) {
 		{500, "server_error"},
 		{502, "server_error"},
 		{503, "server_error"},
-		{418, "api_error"}, // any other non-zero status
-		{422, "api_error"},
-		{0, ""}, // no status to derive from
+		{418, "api_error"},   // any other non-zero status
+		{422, "bad_request"}, // rest v2 validation failure
+		{0, ""},              // no status to derive from
 	}
 	for _, tt := range tests {
 		if got := codeForStatus(tt.status); got != tt.want {
@@ -407,5 +410,78 @@ func TestParseAPIError_NeverEmitsANestedJSONBlob(t *testing.T) {
 				t.Errorf("message must never be a raw json blob, got %q", got.Message)
 			}
 		})
+	}
+}
+
+func TestRequestV2UsesV2BaseURL(t *testing.T) {
+	var gotPath, gotQuery, gotMethod string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath, gotQuery = r.Method, r.URL.Path, r.URL.RawQuery
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	client := &Client{
+		baseURL:    "http://v1.invalid",
+		v2BaseURL:  server.URL + "/v2/",
+		apiKey:     "test-key",
+		httpClient: server.Client(),
+	}
+	if _, err := client.GetV2("/pods", url.Values{"limit": {"5"}}); err != nil {
+		t.Fatalf("GetV2: %v", err)
+	}
+	if gotMethod != http.MethodGet || gotPath != "/v2/pods" || gotQuery != "limit=5" {
+		t.Fatalf("got %s %s?%s, want GET /v2/pods?limit=5", gotMethod, gotPath, gotQuery)
+	}
+	if _, err := client.DeleteV2("/pods/abc"); err != nil {
+		t.Fatalf("DeleteV2: %v", err)
+	}
+	if gotMethod != http.MethodDelete || gotPath != "/v2/pods/abc" {
+		t.Fatalf("got %s %s, want DELETE /v2/pods/abc", gotMethod, gotPath)
+	}
+}
+
+func TestV2URLFollowsConfig(t *testing.T) {
+	t.Setenv("RUNPOD_REST_V2_URL", "https://v2.example.test/v2/")
+	if got := (&Client{}).v2URL(); got != "https://v2.example.test/v2" {
+		t.Fatalf("v2URL = %q, want the configured url without a trailing slash", got)
+	}
+}
+
+// v2 redirects an empty path segment to the collection; following it would
+// turn `delete ""` into a successful read of the list
+func TestRequestV2RefusesEmptyIDAndRedirects(t *testing.T) {
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		if r.URL.Path == "/old" {
+			http.Redirect(w, r, "/registries", http.StatusMovedPermanently)
+			return
+		}
+		_, _ = w.Write([]byte(`{"registries":[]}`))
+	}))
+	defer server.Close()
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+	client, err := NewClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.baseURL = "http://v1.invalid"
+	client.v2BaseURL = server.URL
+
+	_, err = client.DeleteV2("/registries/")
+	var usage interface{ ErrorCode() string }
+	if !errors.As(err, &usage) || usage.ErrorCode() != "usage_error" {
+		t.Fatalf("empty id: err = %v, want a usage_error", err)
+	}
+	if hits != 0 {
+		t.Fatalf("an empty id must not reach the api, got %d requests", hits)
+	}
+
+	if _, err := client.DeleteV2("/old"); err == nil {
+		t.Fatal("a redirected delete must fail, not follow the redirect")
+	}
+	if hits != 1 {
+		t.Errorf("redirect was followed: %d requests", hits)
 	}
 }
