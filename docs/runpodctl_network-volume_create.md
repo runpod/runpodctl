@@ -16,7 +16,7 @@ runpodctl network-volume create [flags]
       --data-center-id string   data center id (required)
   -h, --help                    help for create
       --name string             volume name (required)
-      --size int                volume size in gb (1-4000, required)
+      --size int                volume size in gb (10-4096, required)
 ```
 
 ### Options inherited from parent commands

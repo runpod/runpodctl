@@ -25,7 +25,7 @@ var (
 
 func init() {
 	createCmd.Flags().StringVar(&createName, "name", "", "volume name (required)")
-	createCmd.Flags().IntVar(&createSize, "size", 0, "volume size in gb (1-4000, required)")
+	createCmd.Flags().IntVar(&createSize, "size", 0, "volume size in gb (10-4096, required)")
 	createCmd.Flags().StringVar(&createDataCenterID, "data-center-id", "", "data center id (required)")
 
 	createCmd.MarkFlagRequired("name")           //nolint:errcheck
