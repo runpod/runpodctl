@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/runpod/runpodctl/api"
 	"github.com/runpod/runpodctl/cmd/ssh"
 	internalapi "github.com/runpod/runpodctl/internal/api"
 	"github.com/runpod/runpodctl/internal/configenv"
@@ -187,7 +186,13 @@ func checkSSHKey() checkResult {
 	}
 
 	// check if key exists in cloud
-	_, cloudKeys, err := api.GetPublicSSHKeys()
+	client, err := internalapi.NewClient()
+	if err != nil {
+		result.Status = "fail"
+		result.Error = fmt.Sprintf("failed to get cloud ssh keys: %v", err)
+		return result
+	}
+	cloudKeys, err := client.GetPublicSSHKeys()
 	if err != nil {
 		result.Status = "fail"
 		result.Error = fmt.Sprintf("failed to get cloud ssh keys: %v", err)
@@ -215,7 +220,7 @@ func checkSSHKey() checkResult {
 	// add if not in cloud
 	if !keyInCloud {
 		fmt.Fprintln(os.Stderr, "adding ssh key to runpod...")
-		if err := api.AddPublicSSHKey(publicKey); err != nil {
+		if err := client.AddPublicSSHKey(publicKey); err != nil {
 			result.Status = "fail"
 			result.Error = fmt.Sprintf("failed to add ssh key: %v", err)
 			return result

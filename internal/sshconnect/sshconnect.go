@@ -24,9 +24,15 @@ type KeyInfo struct {
 	InAccount   *bool  `json:"in_account,omitempty"`
 }
 
+// SSHKeyLister reads the account's registered ssh keys.
+type SSHKeyLister interface {
+	GetPublicSSHKeys() ([]api.SSHKey, error)
+}
+
 // ResolveKeyInfo returns local key info and whether it exists in the account.
-// This never returns an error; missing data is simply omitted.
-func ResolveKeyInfo(client *api.GraphQLClient) KeyInfo {
+// This never returns an error; missing data is simply omitted. A nil client
+// skips the account check.
+func ResolveKeyInfo(client SSHKeyLister) KeyInfo {
 	keyPath, exists := defaultKeyPath()
 	info := KeyInfo{
 		Path:   keyPath,
@@ -46,7 +52,7 @@ func ResolveKeyInfo(client *api.GraphQLClient) KeyInfo {
 	if client == nil {
 		return info
 	}
-	_, keys, err := client.GetPublicSSHKeys()
+	keys, err := client.GetPublicSSHKeys()
 	if err != nil {
 		return info
 	}
