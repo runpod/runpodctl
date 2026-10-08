@@ -81,45 +81,68 @@ func resetUpdateVars(t *testing.T) {
 	})
 }
 
-func TestRunUpdate_WarnsWhenTemplateSwapFailsAfterRESTUpdate(t *testing.T) {
-	resetUpdateVars(t)
+// updateServer is a fake control plane for runUpdate: rest v2 serves the
+// endpoint (GET/PATCH /serverless/ep-123, plus the gpu catalog), graphql (POST
+// /) serves the template swap and the model-reference round trip.
+type updateServer struct {
+	endpoint  string // raw v2 endpoint json
+	patchBody map[string]interface{}
+	renamed   map[string]interface{} // v1 rename body
+	gql       func(query string, body map[string]interface{}) string
+}
 
+func (s *updateServer) start(t *testing.T) {
+	t.Helper()
+	if s.endpoint == "" {
+		s.endpoint = `{"id":"ep-123","name":"my-endpoint","flashboot":"OFF","timeout":600000,
+			"scaling":{"type":"REQUEST_COUNT","requestCount":9},
+			"workers":{"min":0,"max":5,"idleTimeout":42}}`
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodPatch && r.URL.Path == "/endpoints/ep-123":
+		case r.URL.Path == "/catalog/gpus":
+			_, _ = w.Write([]byte(`{"gpus":[]}`))
+		case r.URL.Path == "/serverless/ep-123" && r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(s.endpoint))
+		case r.URL.Path == "/serverless/ep-123" && r.Method == http.MethodPatch:
+			if err := json.NewDecoder(r.Body).Decode(&s.patchBody); err != nil {
+				t.Errorf("decode patch body: %v", err)
+			}
+			_, _ = w.Write([]byte(s.endpoint))
+		case r.URL.Path == "/endpoints/ep-123" && r.Method == http.MethodPatch:
+			if err := json.NewDecoder(r.Body).Decode(&s.renamed); err != nil {
+				t.Errorf("decode rename body: %v", err)
+			}
+			_, _ = w.Write([]byte(`{}`))
+		case r.URL.Path == "/" && r.Method == http.MethodPost && s.gql != nil:
 			var body map[string]interface{}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Fatalf("decode rest request: %v", err)
+				t.Errorf("decode gql body: %v", err)
+				return
 			}
-			if body["name"] != "patched-name" {
-				t.Fatalf("expected name patched-name, got %#v", body["name"])
-			}
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id":   "ep-123",
-				"name": "patched-name",
-			})
-		case r.Method == http.MethodPost && r.URL.Path == "/":
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"errors": []map[string]interface{}{
-					{"message": "template swap failed"},
-				},
-			})
+			query, _ := body["query"].(string)
+			_, _ = w.Write([]byte(s.gql(query, body)))
 		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 
 	t.Setenv("RUNPOD_API_KEY", "test-key")
+	t.Setenv("RUNPOD_REST_V2_URL", server.URL)
 	viper.Set("restApiUrl", server.URL)
 	viper.Set("apiUrl", server.URL)
 	t.Cleanup(func() {
 		viper.Set("restApiUrl", "")
 		viper.Set("apiUrl", "")
 	})
+}
 
-	updateName = "patched-name"
-	updateTemplateID = "tpl-456"
+// setUpdateFlags sets every update flag to unset, then applies fn.
+func setUpdateFlags(fn func()) {
+	updateName = ""
+	updateTemplateID = ""
 	updateWorkersMin = -1
 	updateWorkersMax = -1
 	updateIdleTimeout = -1
@@ -127,15 +150,36 @@ func TestRunUpdate_WarnsWhenTemplateSwapFailsAfterRESTUpdate(t *testing.T) {
 	updateScaleThreshold = -1
 	updateModelRefs = nil
 	updateClearModels = false
+	if fn != nil {
+		fn()
+	}
+}
 
+func jsonOutputCmd(format string) *cobra.Command {
 	cmd := &cobra.Command{}
-	cmd.Flags().String("output", "json", "")
+	cmd.Flags().String("output", format, "")
+	return cmd
+}
+
+func TestRunUpdate_WarnsWhenTemplateSwapFailsAfterRESTUpdate(t *testing.T) {
+	resetUpdateVars(t)
+	s := &updateServer{gql: func(string, map[string]interface{}) string {
+		return `{"errors":[{"message":"template swap failed"}]}`
+	}}
+	s.start(t)
+	setUpdateFlags(func() {
+		updateName = "patched-name"
+		updateTemplateID = "tpl-456"
+	})
 
 	var runErr error
 	stderr := captureStderr(t, func() {
-		runErr = runUpdate(cmd, []string{"ep-123"})
+		runErr = runUpdate(jsonOutputCmd("json"), []string{"ep-123"})
 	})
 
+	if s.renamed["name"] != "patched-name" {
+		t.Fatalf("expected name patched-name, got %#v", s.renamed)
+	}
 	if runErr == nil {
 		t.Fatal("expected error")
 	}
@@ -152,18 +196,12 @@ func TestRunUpdate_WarnsWhenTemplateSwapFailsAfterRESTUpdate(t *testing.T) {
 
 func TestRunUpdate_ClearModelsAndModelReferenceMutuallyExclusive(t *testing.T) {
 	resetUpdateVars(t)
+	setUpdateFlags(func() {
+		updateModelRefs = []string{"https://huggingface.co/org/model:main"}
+		updateClearModels = true
+	})
 
-	updateModelRefs = []string{"https://huggingface.co/org/model:main"}
-	updateClearModels = true
-	updateWorkersMin = -1
-	updateWorkersMax = -1
-	updateIdleTimeout = -1
-	updateScaleThreshold = -1
-
-	cmd := &cobra.Command{}
-	cmd.Flags().String("output", "json", "")
-
-	err := runUpdate(cmd, []string{"ep-123"})
+	err := runUpdate(jsonOutputCmd("json"), []string{"ep-123"})
 	if err == nil {
 		t.Fatal("expected error for mutually exclusive flags")
 	}
@@ -175,126 +213,54 @@ func TestRunUpdate_ClearModelsAndModelReferenceMutuallyExclusive(t *testing.T) {
 // distinct values: identical ones would hide a flag wired to the wrong field.
 func TestRunUpdate_AllNumericFlagsAreWired(t *testing.T) {
 	resetUpdateVars(t)
-
-	var patchBody map[string]interface{}
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPatch && r.URL.Path == "/endpoints/ep-123":
-			if err := json.NewDecoder(r.Body).Decode(&patchBody); err != nil {
-				t.Errorf("decode rest request: %v", err)
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "ep-123"})
-		case r.Method == http.MethodGet && r.URL.Path == "/endpoints/ep-123":
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "ep-123"})
-		default:
-			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-	viper.Set("restApiUrl", server.URL)
-	viper.Set("apiUrl", server.URL)
-	t.Cleanup(func() {
-		viper.Set("restApiUrl", "")
-		viper.Set("apiUrl", "")
+	s := &updateServer{}
+	s.start(t)
+	setUpdateFlags(func() {
+		updateName = "renamed"
+		updateWorkersMin = 0
+		updateWorkersMax = 7
+		updateIdleTimeout = 30
+		updateScaleBy = "delay"
+		updateScaleThreshold = 4
 	})
 
-	updateName = "renamed"
-	updateTemplateID = ""
-	updateWorkersMin = 0
-	updateWorkersMax = 7
-	updateIdleTimeout = 30
-	updateScaleBy = "requests"
-	updateScaleThreshold = 4
-	updateModelRefs = nil
-	updateClearModels = false
-
-	cmd := &cobra.Command{}
-	cmd.Flags().String("output", "json", "")
-
-	if err := runUpdate(cmd, []string{"ep-123"}); err != nil {
+	if err := runUpdate(jsonOutputCmd("json"), []string{"ep-123"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	want := map[string]interface{}{
-		"name":        "renamed",
-		"workersMin":  float64(0),
-		"workersMax":  float64(7),
-		"idleTimeout": float64(30),
-		"scalerValue": float64(4),
-		"scalerType":  "REQUEST_COUNT",
+	if s.renamed["name"] != "renamed" {
+		t.Errorf("name = %#v", s.renamed)
 	}
-	for field, expected := range want {
-		got, ok := patchBody[field]
-		if !ok {
-			t.Errorf("expected %s in patch body, got %#v", field, patchBody)
-			continue
+	workers, _ := s.patchBody["workers"].(map[string]interface{})
+	wantWorkers := map[string]float64{"min": 0, "max": 7, "idleTimeout": 30}
+	for field, want := range wantWorkers {
+		if got, ok := workers[field]; !ok || got != want {
+			t.Errorf("workers.%s = %#v, want %v (body %#v)", field, got, want, s.patchBody)
 		}
-		if got != expected {
-			t.Errorf("expected %s %#v, got %#v", field, expected, got)
-		}
+	}
+	scaling, _ := s.patchBody["scaling"].(map[string]interface{})
+	if scaling["type"] != "QUEUE_DELAY" || scaling["queueDelay"] != float64(4) {
+		t.Errorf("scaling = %#v", scaling)
 	}
 }
 
 func TestRunUpdate_WorkersMinZeroIsSent(t *testing.T) {
 	resetUpdateVars(t)
+	s := &updateServer{endpoint: `{"id":"ep-123","name":"x","scaling":{"type":"QUEUE_DELAY","queueDelay":4},"workers":{"min":2,"max":5,"idleTimeout":5}}`}
+	s.start(t)
+	setUpdateFlags(func() { updateWorkersMin = 0 })
 
-	var patchBody map[string]interface{}
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPatch && r.URL.Path == "/endpoints/ep-123":
-			if err := json.NewDecoder(r.Body).Decode(&patchBody); err != nil {
-				t.Fatalf("decode rest request: %v", err)
-			}
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id":         "ep-123",
-				"workersMin": 0,
-			})
-		case r.Method == http.MethodGet && r.URL.Path == "/endpoints/ep-123":
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id":         "ep-123",
-				"workersMin": 0,
-			})
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-	viper.Set("restApiUrl", server.URL)
-	viper.Set("apiUrl", server.URL)
-	t.Cleanup(func() {
-		viper.Set("restApiUrl", "")
-		viper.Set("apiUrl", "")
-	})
-
-	updateName = ""
-	updateTemplateID = ""
-	updateWorkersMin = 0
-	updateWorkersMax = -1
-	updateIdleTimeout = -1
-	updateScaleBy = ""
-	updateScaleThreshold = -1
-	updateModelRefs = nil
-	updateClearModels = false
-
-	cmd := &cobra.Command{}
-	cmd.Flags().String("output", "json", "")
-
-	if err := runUpdate(cmd, []string{"ep-123"}); err != nil {
+	if err := runUpdate(jsonOutputCmd("json"), []string{"ep-123"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// see issue #298.
-	if got, ok := patchBody["workersMin"]; !ok {
-		t.Fatalf("expected workersMin in patch body, got %#v", patchBody)
-	} else if got != float64(0) {
-		t.Fatalf("expected workersMin 0, got %#v", got)
+	workers, _ := s.patchBody["workers"].(map[string]interface{})
+	if got, ok := workers["min"]; !ok || got != float64(0) {
+		t.Fatalf("expected workers.min 0, got %#v", s.patchBody)
+	}
+	if workers["max"] != float64(5) {
+		t.Errorf("workers.max must keep its current value, got %#v", workers["max"])
 	}
 }
 
@@ -315,62 +281,30 @@ func TestRunUpdate_RejectsOutOfRangeNumericFlags(t *testing.T) {
 		name           string
 		idleTimeout    int
 		scaleThreshold int
-		wantField      string
+		block, field   string
 		wantValue      float64
 	}{
-		{"idle timeout min", 1, -1, "idleTimeout", 1},
-		{"idle timeout max", 3600, -1, "idleTimeout", 3600},
-		{"scale threshold min", -1, 1, "scalerValue", 1},
+		{"idle timeout min", 1, -1, "workers", "idleTimeout", 1},
+		{"idle timeout max", 3600, -1, "workers", "idleTimeout", 3600},
+		{"scale threshold min", -1, 1, "scaling", "requestCount", 1},
 	}
 
 	for _, tc := range accepted {
 		t.Run("accepts "+tc.name, func(t *testing.T) {
 			resetUpdateVars(t)
-
-			var patchBody map[string]interface{}
-
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				switch {
-				case r.Method == http.MethodPatch && r.URL.Path == "/endpoints/ep-123":
-					if err := json.NewDecoder(r.Body).Decode(&patchBody); err != nil {
-						t.Errorf("decode rest request: %v", err)
-						return
-					}
-					_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "ep-123"})
-				case r.Method == http.MethodGet && r.URL.Path == "/endpoints/ep-123":
-					_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "ep-123"})
-				default:
-					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
-				}
-			}))
-			defer server.Close()
-
-			t.Setenv("RUNPOD_API_KEY", "test-key")
-			viper.Set("restApiUrl", server.URL)
-			viper.Set("apiUrl", server.URL)
-			t.Cleanup(func() {
-				viper.Set("restApiUrl", "")
-				viper.Set("apiUrl", "")
+			s := &updateServer{}
+			s.start(t)
+			setUpdateFlags(func() {
+				updateIdleTimeout = tc.idleTimeout
+				updateScaleThreshold = tc.scaleThreshold
 			})
 
-			updateName = ""
-			updateTemplateID = ""
-			updateWorkersMin = -1
-			updateWorkersMax = -1
-			updateIdleTimeout = tc.idleTimeout
-			updateScaleBy = ""
-			updateScaleThreshold = tc.scaleThreshold
-			updateModelRefs = nil
-			updateClearModels = false
-
-			cmd := &cobra.Command{}
-			cmd.Flags().String("output", "json", "")
-
-			if err := runUpdate(cmd, []string{"ep-123"}); err != nil {
+			if err := runUpdate(jsonOutputCmd("json"), []string{"ep-123"}); err != nil {
 				t.Fatalf("expected boundary value to be accepted, got %v", err)
 			}
-			if got := patchBody[tc.wantField]; got != tc.wantValue {
-				t.Errorf("expected %s %v, got %#v", tc.wantField, tc.wantValue, got)
+			block, _ := s.patchBody[tc.block].(map[string]interface{})
+			if got := block[tc.field]; got != tc.wantValue {
+				t.Errorf("expected %s.%s %v, got %#v", tc.block, tc.field, tc.wantValue, s.patchBody)
 			}
 		})
 	}
@@ -378,22 +312,13 @@ func TestRunUpdate_RejectsOutOfRangeNumericFlags(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			resetUpdateVars(t)
-
-			updateName = ""
-			updateTemplateID = ""
-			updateWorkersMin = -1
-			updateWorkersMax = -1
-			updateIdleTimeout = tc.idleTimeout
-			updateScaleBy = ""
-			updateScaleThreshold = tc.scaleThreshold
-			updateModelRefs = nil
-			updateClearModels = false
-
-			cmd := &cobra.Command{}
-			cmd.Flags().String("output", "json", "")
+			setUpdateFlags(func() {
+				updateIdleTimeout = tc.idleTimeout
+				updateScaleThreshold = tc.scaleThreshold
+			})
 
 			// validation must fail before any api client is built, so no server here.
-			err := runUpdate(cmd, []string{"ep-123"})
+			err := runUpdate(jsonOutputCmd("json"), []string{"ep-123"})
 			if err == nil {
 				t.Fatal("expected validation error")
 			}
@@ -414,78 +339,33 @@ func TestRunUpdate_ModelReferences(t *testing.T) {
 				if clear {
 					savedRefs = []string{}
 				}
-				var gqlBody map[string]interface{}
+				var saveInput map[string]interface{}
 
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					switch {
-					case r.Method == http.MethodGet && r.URL.Path == "/endpoints/ep-123":
-						// serve raw rest wire shape with non-default config to catch round-trip regressions.
-						_, _ = w.Write([]byte(`{
-				"id":          "ep-123",
-				"name":        "my-endpoint",
-				"idleTimeout": 42,
-				"scalerType":  "REQUEST_COUNT",
-				"scalerValue": 9,
-				"workersMax":  5
-			}`))
-					case r.Method == http.MethodPost && r.URL.Path == "/":
-						var body map[string]interface{}
-						if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-							t.Errorf("decode gql request: %v", err)
-							return
-						}
-						query, _ := body["query"].(string)
-						// gpuIds is unreadable over rest, so the update reads it over graphql
-						// before writing the config back.
-						if strings.Contains(query, "EndpointGpuIDs") {
-							_ = json.NewEncoder(w).Encode(map[string]interface{}{
-								"data": map[string]interface{}{
-									"myself": map[string]interface{}{
-										"endpoint": map[string]interface{}{"gpuIds": "ADA_24"},
-									},
-								},
-							})
-							return
-						}
-						gqlBody = body
-						_ = json.NewEncoder(w).Encode(map[string]interface{}{
-							"data": map[string]interface{}{
-								"saveEndpoint": map[string]interface{}{
-									"id":              "ep-123",
-									"name":            "my-endpoint",
-									"modelReferences": savedRefs,
-								},
-							},
-						})
-					default:
-						t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+				s := &updateServer{gql: func(query string, body map[string]interface{}) string {
+					// rest v2 reports no templateId, so the saveEndpoint round
+					// trip reads its config over graphql
+					if strings.Contains(query, "EndpointConfig") {
+						return `{"data":{"myself":{"endpoint":{"id":"ep-123","name":"my-endpoint",
+							"templateId":"tpl-1","gpuIds":"ADA_24","idleTimeout":42,
+							"scalerType":"REQUEST_COUNT","scalerValue":9,"workersMax":5,
+							"flashBootType":"OFF"}}}}`
 					}
-				}))
-				defer server.Close()
-
-				t.Setenv("RUNPOD_API_KEY", "test-key")
-				viper.Set("restApiUrl", server.URL)
-				viper.Set("apiUrl", server.URL)
-				t.Cleanup(func() {
-					viper.Set("restApiUrl", "")
-					viper.Set("apiUrl", "")
+					vars, _ := body["variables"].(map[string]interface{})
+					saveInput, _ = vars["input"].(map[string]interface{})
+					refs, _ := json.Marshal(savedRefs)
+					return `{"data":{"saveEndpoint":{"id":"ep-123","name":"my-endpoint","modelReferences":` + string(refs) + `}}}`
+				}}
+				s.start(t)
+				setUpdateFlags(func() {
+					updateModelRefs = []string{"https://huggingface.co/org/model:main"}
+					updateClearModels = clear
+					if clear {
+						updateModelRefs = nil
+					}
 				})
 
-				updateModelRefs = []string{"https://huggingface.co/org/model:main"}
-				updateClearModels = clear
-				if clear {
-					updateModelRefs = nil
-				}
-				updateWorkersMin = -1
-				updateWorkersMax = -1
-				updateIdleTimeout = -1
-				updateScaleThreshold = -1
-
-				cmd := &cobra.Command{}
-				cmd.Flags().String("output", format, "")
-
 				stdout, _ := captureOutput(t, func() {
-					if err := runUpdate(cmd, []string{"ep-123"}); err != nil {
+					if err := runUpdate(jsonOutputCmd(format), []string{"ep-123"}); err != nil {
 						t.Errorf("unexpected error: %v", err)
 					}
 				})
@@ -500,34 +380,27 @@ func TestRunUpdate_ModelReferences(t *testing.T) {
 				if !clear && got[0] != savedRefs[0] {
 					t.Fatalf("expected resolved reference, got %v", got)
 				}
+				// the rest of the output is the v2 read
 				if result["id"] != "ep-123" || result["idleTimeout"] != 42 {
-					t.Fatalf("REST fields lost: %s", stdout)
+					t.Fatalf("endpoint fields lost: %s", stdout)
 				}
 
-				vars, _ := gqlBody["variables"].(map[string]interface{})
-				input, _ := vars["input"].(map[string]interface{})
-
-				// model references must carry the new value.
-				refs, _ := input["modelReferences"].([]interface{})
+				refs, _ := saveInput["modelReferences"].([]interface{})
 				if (clear && len(refs) != 0) || (!clear && (len(refs) != 1 || refs[0] != "https://huggingface.co/org/model:main")) {
 					t.Fatalf("expected modelReferences to contain the provided ref, got %#v", refs)
 				}
-
 				// existing config must be round-tripped, not reset to defaults.
-				if input["idleTimeout"] != float64(42) {
-					t.Errorf("idleTimeout not round-tripped: got %v", input["idleTimeout"])
+				for field, want := range map[string]interface{}{
+					"templateId": "tpl-1", "gpuIds": "ADA_24", "idleTimeout": float64(42),
+					"scalerValue": float64(9), "workersMax": float64(5),
+				} {
+					if saveInput[field] != want {
+						t.Errorf("%s not round-tripped: got %v, want %v", field, saveInput[field], want)
+					}
 				}
-				if input["scalerValue"] != float64(9) {
-					t.Errorf("scalerValue not round-tripped: got %v", input["scalerValue"])
+				if s.patchBody != nil {
+					t.Errorf("a model-only update must not patch rest fields: %#v", s.patchBody)
 				}
-				if input["workersMax"] != float64(5) {
-					t.Errorf("workersMax not round-tripped: got %v", input["workersMax"])
-				}
-				// the gpu selection comes from the graphql read, since rest never reports it.
-				if input["gpuIds"] != "ADA_24" {
-					t.Errorf("gpuIds not round-tripped: got %v", input["gpuIds"])
-				}
-
 			})
 		}
 	}

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
 	"strings"
 
@@ -16,7 +17,7 @@ type Endpoint struct {
 	ID                 string                  `json:"id"`
 	Name               string                  `json:"name"`
 	TemplateID         string                  `json:"templateId,omitempty"`
-	GpuIDs             string                  `json:"gpuIds,omitempty"`     // graphql write side only: pool ids
+	GpuIDs             string                  `json:"gpuIds,omitempty"`     // graphql only (read and write): pool ids with "-<type>" exclusions
 	GpuTypeIDs         []string                `json:"gpuTypeIds,omitempty"` // rest read side only: gpu type ids
 	InstanceIDs        []string                `json:"instanceIds,omitempty"`
 	NetworkVolumeID    string                  `json:"networkVolumeId,omitempty"`
@@ -93,39 +94,20 @@ type EndpointNetworkVolume struct {
 	DataCenterID    string `json:"dataCenterId,omitempty"`
 }
 
-// UnmarshalJSON tolerates both shapes of networkVolumeIds: the rest read
-// endpoint returns bare id strings (["vol-1"]) while the graphql saveEndpoint
-// write path uses objects ([{"networkVolumeId":"vol-1"}]).
-func (v *EndpointNetworkVolume) UnmarshalJSON(data []byte) error {
-	var id string
-	if err := json.Unmarshal(data, &id); err == nil {
-		v.NetworkVolumeID = id
-		return nil
-	}
-
-	type alias EndpointNetworkVolume
-	var obj alias
-	if err := json.Unmarshal(data, &obj); err != nil {
-		return err
-	}
-	*v = EndpointNetworkVolume(obj)
-	return nil
-}
-
 // EndpointListResponse is the response from listing endpoints
 type EndpointListResponse struct {
 	Endpoints []Endpoint `json:"endpoints"`
 }
 
-// EndpointUpdateRequest is the request to update an endpoint
+// EndpointUpdateRequest is an endpoint update in the cli's terms; nil and ""
+// leave a setting unchanged. UpdateEndpoint maps it onto the v2 body.
 type EndpointUpdateRequest struct {
-	Name        string `json:"name,omitempty"`
-	WorkersMin  *int   `json:"workersMin,omitempty"`
-	WorkersMax  *int   `json:"workersMax,omitempty"`
-	IdleTimeout *int   `json:"idleTimeout,omitempty"`
-	ScalerType  string `json:"scalerType,omitempty"`
-	ScalerValue *int   `json:"scalerValue,omitempty"`
-	Flashboot   *bool  `json:"flashboot,omitempty"`
+	Name        string
+	WorkersMin  *int
+	WorkersMax  *int
+	IdleTimeout *int
+	ScalerType  string
+	ScalerValue *int
 }
 
 // EndpointListOptions are options for listing endpoints
@@ -134,76 +116,141 @@ type EndpointListOptions struct {
 	IncludeWorkers  bool
 }
 
-// ListEndpoints returns all endpoints
+// ListEndpoints returns all endpoints, from rest v2.
 func (c *Client) ListEndpoints(opts *EndpointListOptions) ([]Endpoint, error) {
-	params := url.Values{}
-	if opts != nil {
-		if opts.IncludeTemplate {
-			params.Set("includeTemplate", "true")
-		}
-		if opts.IncludeWorkers {
-			params.Set("includeWorkers", "true")
-		}
-	}
-
-	data, err := c.Get("/endpoints", params)
+	v2Endpoints, err := c.listV2Endpoints()
 	if err != nil {
 		return nil, err
 	}
-
-	var endpoints []Endpoint
-	if err := json.Unmarshal(data, &endpoints); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+	// without the catalog, gpuIds would print empty, which reads as "no gpus"
+	poolTypes, err := c.gpuPoolTypes()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read the gpu catalog: %w", err)
 	}
-
-	for i := range endpoints {
-		endpoints[i].URLs = invokeURLs(endpoints[i].ID)
+	workers, err := c.workerClient(opts)
+	if err != nil {
+		return nil, err
 	}
-
+	endpoints := make([]Endpoint, 0, len(v2Endpoints))
+	for i := range v2Endpoints {
+		out := v2Endpoints[i].toEndpoint(poolTypes)
+		if err := c.decorateEndpoint(&out, &v2Endpoints[i], opts, workers); err != nil {
+			return nil, err
+		}
+		endpoints = append(endpoints, out)
+	}
 	return endpoints, nil
 }
 
-// GetEndpoint returns a single endpoint by ID
+// GetEndpoint returns a single endpoint, from rest v2.
 func (c *Client) GetEndpoint(endpointID string, includeTemplate, includeWorkers bool) (*Endpoint, error) {
-	params := url.Values{}
-	if includeTemplate {
-		params.Set("includeTemplate", "true")
-	}
-	if includeWorkers {
-		params.Set("includeWorkers", "true")
-	}
-
-	data, err := c.Get("/endpoints/"+endpointID, params)
+	e, err := c.getV2Endpoint(endpointID)
 	if err != nil {
 		return nil, err
 	}
-
-	var endpoint Endpoint
-	if err := json.Unmarshal(data, &endpoint); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+	poolTypes, err := c.gpuPoolTypes()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read the gpu catalog: %w", err)
 	}
-
-	endpoint.URLs = invokeURLs(endpoint.ID)
-
-	return &endpoint, nil
-}
-
-// UpdateEndpoint updates an existing endpoint
-func (c *Client) UpdateEndpoint(endpointID string, req *EndpointUpdateRequest) (*Endpoint, error) {
-	data, err := c.Patch("/endpoints/"+endpointID, req)
+	opts := &EndpointListOptions{IncludeTemplate: includeTemplate, IncludeWorkers: includeWorkers}
+	workers, err := c.workerClient(opts)
 	if err != nil {
 		return nil, err
 	}
-
-	var endpoint Endpoint
-	if err := json.Unmarshal(data, &endpoint); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+	out := e.toEndpoint(poolTypes)
+	if err := c.decorateEndpoint(&out, e, opts, workers); err != nil {
+		return nil, err
 	}
-
-	endpoint.URLs = invokeURLs(endpoint.ID)
-
-	return &endpoint, nil
+	return &out, nil
 }
+
+type v2EndpointUpdate struct {
+	Workers map[string]int         `json:"workers,omitempty"`
+	Scaling map[string]interface{} `json:"scaling,omitempty"`
+}
+
+// UpdateEndpoint updates an endpoint. v2 nests the worker and scaling
+// settings, so a change to any of them is sent with the endpoint's current
+// values for the rest. the v2 patch goes first, since it is the write that can
+// fail validation; the rename (over v1) goes last.
+func (c *Client) UpdateEndpoint(endpointID string, req *EndpointUpdateRequest) error {
+	body := &v2EndpointUpdate{}
+	if req.WorkersMin != nil || req.WorkersMax != nil || req.IdleTimeout != nil || req.ScalerType != "" || req.ScalerValue != nil {
+		current, err := c.getV2Endpoint(endpointID)
+		if err != nil {
+			return err
+		}
+		if req.WorkersMin != nil || req.WorkersMax != nil || req.IdleTimeout != nil {
+			workers := map[string]int{"min": current.Workers.Min, "max": current.Workers.Max}
+			if current.Workers.IdleTimeout != nil {
+				workers["idleTimeout"] = *current.Workers.IdleTimeout
+			}
+			if req.WorkersMin != nil {
+				workers["min"] = *req.WorkersMin
+			}
+			if req.WorkersMax != nil {
+				workers["max"] = *req.WorkersMax
+			}
+			if req.IdleTimeout != nil {
+				workers["idleTimeout"] = *req.IdleTimeout
+			}
+			body.Workers = workers
+		}
+		if req.ScalerType != "" || req.ScalerValue != nil {
+			scalerType := current.Scaling.Type
+			if req.ScalerType != "" {
+				scalerType = strings.ToUpper(req.ScalerType)
+			}
+			// kept as a float so an unchanged fractional queue delay survives
+			value := 0.0
+			switch {
+			case req.ScalerValue != nil:
+				value = float64(*req.ScalerValue)
+			case current.Scaling.QueueDelay != nil:
+				value = *current.Scaling.QueueDelay
+			case current.Scaling.RequestCount != nil:
+				value = float64(*current.Scaling.RequestCount)
+			}
+			body.Scaling = map[string]interface{}{"type": scalerType}
+			if scalerType == "REQUEST_COUNT" {
+				body.Scaling["requestCount"] = int(math.Round(value))
+			} else {
+				body.Scaling["queueDelay"] = value
+			}
+		}
+	}
+	patched := body.Workers != nil || body.Scaling != nil
+	if patched {
+		if _, err := c.PatchV2("/serverless/"+url.PathEscape(endpointID), body); err != nil {
+			return err
+		}
+	}
+	if req.Name != "" {
+		if err := c.renameEndpointV1(endpointID, req.Name); err != nil {
+			if patched {
+				return fmt.Errorf("endpoint settings were updated, but the rename failed: %w", err)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+// rp-migrate: keep-v1 start
+// renameEndpointV1 renames over rest v1. a v2 rename also renames the
+// endpoint's template to "<name>-template", including a template other
+// endpoints share; v1 renames only the endpoint.
+func (c *Client) renameEndpointV1(endpointID, name string) error {
+	_, err := c.Patch("/endpoints/"+url.PathEscape(endpointID), map[string]string{"name": name})
+	return err
+}
+
+// rp-migrate: keep-v1 end
+
+// rp-migrate: keep-v1 start
+// endpoint templates stay on graphql: rest v2 copies a template into a hidden
+// per-endpoint template, on create and on a templateId patch alike, so the
+// endpoint stops receiving later edits to the template. graphql links it.
 
 // UpdateEndpointTemplate updates the template attached to an endpoint via GraphQL.
 func (c *Client) UpdateEndpointTemplate(endpointID, templateID string) error {
@@ -245,25 +292,44 @@ func (c *Client) UpdateEndpointTemplate(endpointID, templateID string) error {
 	return nil
 }
 
+// rp-migrate: keep-v1 end
+
 // DeleteEndpoint deletes an endpoint
 func (c *Client) DeleteEndpoint(endpointID string) error {
-	_, err := c.Delete("/endpoints/" + endpointID)
+	_, err := c.DeleteV2("/serverless/" + url.PathEscape(endpointID))
 	return err
 }
 
-// getEndpointGpuIDs reads an endpoint's gpuIds: the gpu *pool* id string
-// saveEndpoint's write side expects, e.g. "AMPERE_48", or
-// "AMPERE_48,-NVIDIA RTX A6000" when the endpoint is restricted to a subset of
-// a pool. This has to go through GraphQL. A REST read only reports gpuTypeIds
-// — gpu *type* names in a different identifier space, with no way to express
-// those "-" exclusions — so a pool id derived from the REST shape drops any
-// exclusion and widens the endpoint's permitted hardware.
-func (c *Client) getEndpointGpuIDs(endpointID string) (string, error) {
+// rp-migrate: keep-v1 start
+// model references have no rest v2 field, so this whole round trip stays on
+// graphql.
+
+// gqlEndpointConfig reads the saveEndpoint fields of an endpoint over graphql.
+// rest v2 reports no template link, and saveEndpoint is a full replace that
+// needs templateId and the gpuIds pool string (with its "-<type>" exclusions)
+// back verbatim.
+func (c *Client) gqlEndpointConfig(endpointID string) (*Endpoint, error) {
 	query := `
-		query EndpointGpuIDs($id: String!) {
+		query EndpointConfig($id: String!) {
 			myself {
 				endpoint(id: $id) {
+					id
+					name
+					templateId
 					gpuIds
+					gpuCount
+					instanceIds
+					workersMin
+					workersMax
+					locations
+					networkVolumeId
+					networkVolumeIds { networkVolumeId }
+					idleTimeout
+					scalerType
+					scalerValue
+					executionTimeoutMs
+					minCudaVersion
+					flashBootType
 				}
 			}
 		}
@@ -271,35 +337,29 @@ func (c *Client) getEndpointGpuIDs(endpointID string) (string, error) {
 
 	data, err := c.graphqlRequest(query, map[string]interface{}{"id": endpointID})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	var resp struct {
 		Data struct {
 			Myself *struct {
-				Endpoint *struct {
-					GpuIDs string `json:"gpuIds"`
-				} `json:"endpoint"`
+				Endpoint *Endpoint `json:"endpoint"`
 			} `json:"myself"`
 		} `json:"data"`
 		Errors []struct {
 			Message string `json:"message"`
 		} `json:"errors"`
 	}
-
 	if err := json.Unmarshal(data, &resp); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
+		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
-
 	if len(resp.Errors) > 0 {
-		return "", newGraphQLError(resp.Errors[0].Message)
+		return nil, newGraphQLError(resp.Errors[0].Message)
 	}
-
 	if resp.Data.Myself == nil || resp.Data.Myself.Endpoint == nil {
-		return "", fmt.Errorf("endpoint %s not found", endpointID)
+		return nil, fmt.Errorf("endpoint %s not found", endpointID)
 	}
-
-	return resp.Data.Myself.Endpoint.GpuIDs, nil
+	return resp.Data.Myself.Endpoint, nil
 }
 
 // UpdateEndpointModels sets the model references on an existing endpoint via
@@ -308,7 +368,7 @@ func (c *Client) getEndpointGpuIDs(endpointID string) (string, error) {
 // would reset them to server defaults. Pass nil or an empty slice to clear all
 // model references.
 func (c *Client) UpdateEndpointModels(endpointID string, modelRefs []string) (*Endpoint, error) {
-	endpoint, err := c.GetEndpoint(endpointID, false, false)
+	endpoint, err := c.gqlEndpointConfig(endpointID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch endpoint: %w", err)
 	}
@@ -317,44 +377,21 @@ func (c *Client) UpdateEndpointModels(endpointID string, modelRefs []string) (*E
 		modelRefs = []string{}
 	}
 
-	// saveEndpoint expects networkVolumeIds as [{networkVolumeId}] objects; the
-	// REST read shape uses bare id strings which UnmarshalJSON normalises into
-	// EndpointNetworkVolume — convert to the GraphQL write shape here.
 	nvIDs := make([]NetworkVolumeIDInput, len(endpoint.NetworkVolumeIDs))
 	for i, nv := range endpoint.NetworkVolumeIDs {
 		nvIDs[i] = NetworkVolumeIDInput{NetworkVolumeID: nv.NetworkVolumeID}
 	}
 
-	// REST GET /v1/endpoints/{id} returns a "flashboot" bool, not the
-	// "flashBootType" enum string saveEndpoint expects — so endpoint.FlashBootType
-	// is always empty after GetEndpoint, and sending "" fails saveEndpoint's
-	// FlashBootType enum validation. Verified live (STO-360 e2e test): calling
-	// UpdateEndpointModels on a real endpoint returned
-	// `Value "" does not exist in "FlashBootType" enum.` every time. Derive the
-	// enum from the REST bool the same way cmd/serverless/create.go does.
+	// saveEndpoint rejects "" for its FlashBootType enum.
 	flashBootType := endpoint.FlashBootType
 	if flashBootType == "" {
 		flashBootType = "OFF"
-		if endpoint.Flashboot != nil && *endpoint.Flashboot {
-			flashBootType = "FLASHBOOT"
-		}
-	}
-
-	// A REST read never returns gpuIds, so a GPU endpoint round-tripped straight
-	// back through saveEndpoint fails "gpuId(s) is required for a gpu endpoint".
-	// Read the authoritative value over GraphQL rather than rebuilding one from
-	// the REST gpuTypeIds: that translation cannot express the "-<type>"
-	// exclusions that restrict an endpoint to a subset of a pool, so a
-	// model-only update would silently widen its permitted hardware.
-	gpuIDs, err := c.getEndpointGpuIDs(endpointID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read endpoint gpu ids: %w", err)
 	}
 
 	// saveEndpoint rejects an empty gpuIds on anything without instanceIds, so a
 	// GPU endpoint that reports none is a read we do not understand — say so
 	// instead of writing a config that drops its gpu selection.
-	if gpuIDs == "" && len(endpoint.InstanceIDs) == 0 {
+	if endpoint.GpuIDs == "" && len(endpoint.InstanceIDs) == 0 {
 		return nil, fmt.Errorf("endpoint %s reports no gpuIds and no instanceIds; refusing to update model references with an empty gpu selection", endpointID)
 	}
 
@@ -388,7 +425,7 @@ func (c *Client) UpdateEndpointModels(endpointID string, modelRefs []string) (*E
 			"id":                 endpointID,
 			"name":               endpoint.Name,
 			"templateId":         endpoint.TemplateID,
-			"gpuIds":             gpuIDs,
+			"gpuIds":             endpoint.GpuIDs,
 			"gpuCount":           endpoint.GpuCount,
 			"instanceIds":        endpoint.InstanceIDs,
 			"workersMin":         endpoint.WorkersMin,
@@ -437,6 +474,8 @@ func (c *Client) UpdateEndpointModels(endpointID string, modelRefs []string) (*E
 	return resp.Data.SaveEndpoint, nil
 }
 
+// rp-migrate: keep-v1 end
+
 // NetworkVolumeIDInput is a single multi-region network volume entry for the
 // graphql saveEndpoint mutation (rest uses a flat []string instead).
 type NetworkVolumeIDInput struct {
@@ -478,7 +517,10 @@ type EndpointTemplateInput struct {
 	Env               []*PodEnvVar `json:"env"`
 }
 
-// CreateEndpointGQL creates an endpoint via GraphQL (saveEndpoint mutation)
+// rp-migrate: keep-v1 start
+// CreateEndpointGQL creates an endpoint via GraphQL (saveEndpoint mutation).
+// rest v2 has no hubReleaseId or modelReferences, and it copies --template-id
+// into a hidden template instead of linking it, so creates stay here.
 func (c *Client) CreateEndpointGQL(req *EndpointCreateGQLInput) (*Endpoint, error) {
 	query := `
 		mutation SaveEndpoint($input: EndpointInput!) {
@@ -543,3 +585,5 @@ func (c *Client) CreateEndpointGQL(req *EndpointCreateGQLInput) (*Endpoint, erro
 
 	return resp.Data.SaveEndpoint, nil
 }
+
+// rp-migrate: keep-v1 end
