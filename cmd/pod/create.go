@@ -10,7 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/google/shlex"
 	"github.com/runpod/runpodctl/internal/api"
 	"github.com/runpod/runpodctl/internal/duration"
 	"github.com/runpod/runpodctl/internal/output"
@@ -398,7 +397,7 @@ func createPodV2(computeType, gpuTypeID, cloudType string) (interface{}, error) 
 		req.Compliance = strings.Split(createCompliance, ",")
 	}
 	if createDockerArgs != "" {
-		req.Cmd, req.Entrypoint = parseDockerArgs(createDockerArgs)
+		req.Cmd, req.Entrypoint = api.ParseDockerArgs(createDockerArgs)
 	}
 	if createEnv != "" {
 		var env map[string]string
@@ -416,29 +415,6 @@ func createPodV2(computeType, gpuTypeID, cloudType string) (interface{}, error) 
 		return api.LegacyCreateOutput(pod), nil
 	}
 	return pod, nil
-}
-
-// parseDockerArgs converts the --docker-args string into the dockerStartCmd /
-// dockerEntrypoint arrays the REST API expects (its schema has no dockerArgs
-// field and rejects it as an extra key). It mirrors the backend's decoding of
-// legacy dockerArgs strings so the flag means the same thing on the GraphQL
-// and REST paths: a JSON `{"cmd":[...],"entrypoint":[...]}` object (the
-// backend's canonical encoding, also produced by template create) is used
-// as-is, anything else is shlex-split into the start cmd, falling back to a
-// whitespace split when the shell lexer fails (e.g. unbalanced quotes).
-func parseDockerArgs(args string) (cmd, entrypoint []string) {
-	var parsed struct {
-		Cmd        []string `json:"cmd"`
-		Entrypoint []string `json:"entrypoint"`
-	}
-	if err := json.Unmarshal([]byte(args), &parsed); err == nil {
-		return parsed.Cmd, parsed.Entrypoint
-	}
-	tokens, err := shlex.Split(args)
-	if err != nil {
-		return strings.Fields(args), nil
-	}
-	return tokens, nil
 }
 
 func decorateGlobalNetworkingError(err error, dataCenterIDs string) error {

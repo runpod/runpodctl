@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/runpod/runpodctl/api"
 	"github.com/runpod/runpodctl/format"
+	"github.com/runpod/runpodctl/internal/api"
 
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
@@ -20,15 +20,17 @@ var GetPodCmd = &cobra.Command{
 	Short: "get all pods",
 	Long:  "get all pods or specify pod id",
 	Run: func(cmd *cobra.Command, args []string) {
-		pods, err := api.GetPods()
+		client, err := api.NewClient()
+		cobra.CheckErr(err)
+		pods, err := client.GetLegacyPods()
 		cobra.CheckErr(err)
 
 		data := make([][]string, len(pods))
 		for i, p := range pods {
-			if len(args) == 1 && p.Id != strings.ToLower(args[0]) {
+			if len(args) == 1 && p.ID != strings.ToLower(args[0]) {
 				continue
 			}
-			row := []string{p.Id, p.Name, fmt.Sprintf("%d %s", p.GpuCount, p.Machine.GpuDisplayName), p.ImageName, p.DesiredStatus}
+			row := []string{p.ID, p.Name, fmt.Sprintf("%d %s", p.GpuCount, p.Machine.GpuDisplayName), p.ImageName, p.DesiredStatus}
 			if AllFields {
 
 				var portEntries int = 0

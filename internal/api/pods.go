@@ -47,29 +47,6 @@ type PodListResponse struct {
 	Pods []Pod `json:"pods"`
 }
 
-// PodCreateRequest is the request to create a pod
-type PodCreateRequest struct {
-	Name              string            `json:"name,omitempty"`
-	ImageName         string            `json:"imageName,omitempty"`
-	TemplateID        string            `json:"templateId,omitempty"`
-	ComputeType       string            `json:"computeType,omitempty"`
-	GlobalNetworking  bool              `json:"globalNetworking,omitempty"`
-	SupportPublicIp   bool              `json:"supportPublicIp,omitempty"`
-	GpuTypeIDs        []string          `json:"gpuTypeIds,omitempty"`
-	GpuCount          int               `json:"gpuCount,omitempty"`
-	VolumeInGb        int               `json:"volumeInGb,omitempty"`
-	ContainerDiskInGb int               `json:"containerDiskInGb,omitempty"`
-	VolumeMountPath   string            `json:"volumeMountPath,omitempty"`
-	Ports             []string          `json:"ports,omitempty"`
-	Env               map[string]string `json:"env,omitempty"`
-	CloudType         string            `json:"cloudType,omitempty"`
-	DataCenterIDs     []string          `json:"dataCenterIds,omitempty"`
-	NetworkVolumeID   string            `json:"networkVolumeId,omitempty"`
-	MinCudaVersion    string            `json:"minCudaVersion,omitempty"`
-	DockerStartCmd    []string          `json:"dockerStartCmd,omitempty"`
-	DockerEntrypoint  []string          `json:"dockerEntrypoint,omitempty"`
-}
-
 // PodUpdateRequest is the request to update a pod
 type PodUpdateRequest struct {
 	Name              string            `json:"name,omitempty"`
@@ -162,21 +139,6 @@ func (c *Client) GetPod(podID string, includeMachine, includeNetworkVolume bool)
 		}
 		pod.NetworkVolume = volume
 	}
-	return &pod, nil
-}
-
-// CreatePod creates a new pod
-func (c *Client) CreatePod(req *PodCreateRequest) (*Pod, error) {
-	data, err := c.Post("/pods", req)
-	if err != nil {
-		return nil, err
-	}
-
-	var pod Pod
-	if err := json.Unmarshal(data, &pod); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
 	return &pod, nil
 }
 

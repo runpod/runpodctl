@@ -3,7 +3,7 @@ package pod
 import (
 	"fmt"
 
-	"github.com/runpod/runpodctl/api"
+	"github.com/runpod/runpodctl/internal/api"
 
 	"github.com/spf13/cobra"
 )
@@ -14,8 +14,9 @@ var RemovePodCmd = &cobra.Command{
 	Short: "remove a pod",
 	Long:  "remove a pod from runpod.io",
 	Run: func(cmd *cobra.Command, args []string) {
-		_, err := api.RemovePod(args[0])
+		client, err := api.NewClient()
 		cobra.CheckErr(err)
+		cobra.CheckErr(client.DeletePod(args[0]))
 
 		fmt.Printf(`pod "%s" removed`, args[0])
 		fmt.Println()

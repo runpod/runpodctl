@@ -165,47 +165,6 @@ func TestIsPublicIP(t *testing.T) {
 	}
 }
 
-func TestCreatePod(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Errorf("expected POST, got %s", r.Method)
-		}
-		if r.URL.Path != "/pods" {
-			t.Errorf("expected /pods, got %s", r.URL.Path)
-		}
-
-		var req PodCreateRequest
-		json.NewDecoder(r.Body).Decode(&req)
-		if req.ImageName != "runpod/pytorch" {
-			t.Errorf("expected runpod/pytorch, got %s", req.ImageName)
-		}
-
-		json.NewEncoder(w).Encode(Pod{
-			ID:        "new-pod-id",
-			Name:      req.Name,
-			ImageName: req.ImageName,
-		})
-	}))
-	defer server.Close()
-
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-
-	client, _ := NewClient()
-	client.baseURL = server.URL
-
-	pod, err := client.CreatePod(&PodCreateRequest{
-		Name:      "test-pod",
-		ImageName: "runpod/pytorch",
-		GpuCount:  1,
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if pod.ID != "new-pod-id" {
-		t.Errorf("expected new-pod-id, got %s", pod.ID)
-	}
-}
-
 func TestPodActions(t *testing.T) {
 	tests := []struct {
 		name   string

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/runpod/runpodctl/api"
+	internalapi "github.com/runpod/runpodctl/internal/api"
 
 	"github.com/spf13/cobra"
 )
@@ -16,20 +17,27 @@ var StartPodCmd = &cobra.Command{
 	Short: "start a pod",
 	Long:  "start a pod from runpod.io",
 	Run: func(cmd *cobra.Command, args []string) {
-		var err error
-		var pod map[string]interface{}
+		var status string
+		var costPerHr float64
 		if bidPerGpu > 0 {
-			pod, err = api.StartSpotPod(args[0], bidPerGpu, gpuCount)
+			// rp-migrate: keep-v1 -- rest v2 has no spot bids
+			pod, err := api.StartSpotPod(args[0], bidPerGpu, gpuCount)
+			cobra.CheckErr(err)
+			status, _ = pod["desiredStatus"].(string)
+			costPerHr, _ = pod["costPerHr"].(float64)
 		} else {
-			pod, err = api.StartOnDemandPod(args[0])
+			client, err := internalapi.NewClient()
+			cobra.CheckErr(err)
+			pod, err := client.StartPod(args[0])
+			cobra.CheckErr(err)
+			status, costPerHr = pod.DesiredStatus, pod.CostPerHr
 		}
-		cobra.CheckErr(err)
 
-		if pod["desiredStatus"] == "RUNNING" {
-			fmt.Printf(`pod "%s" started with $%.3f / hr`, args[0], pod["costPerHr"])
+		if status == "RUNNING" {
+			fmt.Printf(`pod "%s" started with $%.3f / hr`, args[0], costPerHr)
 			fmt.Println()
 		} else {
-			cobra.CheckErr(fmt.Errorf(`pod "%s" start failed; status is %s`, args[0], pod["desiredStatus"]))
+			cobra.CheckErr(fmt.Errorf(`pod "%s" start failed; status is %s`, args[0], status))
 		}
 	},
 }

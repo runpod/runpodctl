@@ -13,19 +13,17 @@ func TestDerive(t *testing.T) {
 		{
 			name: "running with telemetry is running",
 			signals: Signals{
-				DesiredStatus:    "RUNNING",
-				LastStatusChange: "Rented by User: Wed Jul 29 2026 21:51:59 GMT+0000",
-				RuntimeProbed:    true,
-				RuntimeReported:  true,
+				DesiredStatus:   "RUNNING",
+				RuntimeProbed:   true,
+				RuntimeReported: true,
 			},
 			wantStatus: StatusRunning,
 		},
 		{
 			name: "running without telemetry is initializing",
 			signals: Signals{
-				DesiredStatus:    "RUNNING",
-				LastStatusChange: "Rented by User: Wed Jul 29 2026 21:51:59 GMT+0000",
-				RuntimeProbed:    true,
+				DesiredStatus: "RUNNING",
+				RuntimeProbed: true,
 			},
 			wantStatus: StatusInitializing,
 			wantReason: ReasonAwaitingContainer,
@@ -42,123 +40,18 @@ func TestDerive(t *testing.T) {
 			wantStatus: StatusRunning,
 		},
 
-		// --- EXITED: telemetry is deliberately ignored. a stopped pod keeps
-		// reporting stale runtime for a while, so consulting it would report a
-		// stopped pod as running.
+		// --- EXITED/TERMINATED: telemetry is deliberately ignored. a stopped
+		// pod keeps reporting stale runtime for a while, so consulting it would
+		// report a stopped pod as running.
 		{
-			name: "exited by user",
-			signals: Signals{
-				DesiredStatus:    "EXITED",
-				LastStatusChange: "Exited by user: Wed Jul 29 2026 21:56:48 GMT+0000",
-				RuntimeProbed:    true,
-				RuntimeReported:  true,
-			},
-			wantStatus: StatusStopped,
-			wantReason: ReasonStoppedByUser,
-		},
-		{
-			name: "exited by runpod",
-			signals: Signals{
-				DesiredStatus:    "EXITED",
-				LastStatusChange: "Exited by Runpod: Wed Jul 29 2026 21:56:48 GMT+0000",
-				RuntimeProbed:    true,
-			},
-			wantStatus: StatusStopped,
-			wantReason: ReasonStoppedByRunpod,
-		},
-		{
-			// the backend spells it both "Runpod" and "RunPod"; a
-			// case-sensitive check silently stops matching.
-			name: "exited by runpod with legacy capitalisation",
-			signals: Signals{
-				DesiredStatus:    "EXITED",
-				LastStatusChange: "Exited by RunPod: Insufficient balance",
-			},
-			wantStatus: StatusStopped,
-			wantReason: ReasonStoppedByRunpod,
-		},
-		{
-			// the one involuntary stop the platform records a real cause for:
-			// model/src/pod/resumePod.ts writes "Outbid: <date>" on both the
-			// EXITED and TERMINATED paths for spot/community pods.
-			name: "exited after losing the bid",
-			signals: Signals{
-				DesiredStatus:    "EXITED",
-				LastStatusChange: "Outbid: Wed Jul 29 2026 21:56:48 GMT+0000",
-				RuntimeProbed:    true,
-			},
-			wantStatus: StatusStopped,
-			wantReason: ReasonStoppedOutbid,
-		},
-		{
-			name:       "exited with unattributed status change has no reason",
-			signals:    Signals{DesiredStatus: "EXITED", LastStatusChange: "something else"},
+			name:       "exited is stopped, with no reason",
+			signals:    Signals{DesiredStatus: "EXITED", RuntimeProbed: true, RuntimeReported: true},
 			wantStatus: StatusStopped,
 		},
 		{
-			name:       "exited with nil status change has no reason",
-			signals:    Signals{DesiredStatus: "EXITED"},
-			wantStatus: StatusStopped,
-		},
-		{
-			name:       "exited with non-string status change has no reason",
-			signals:    Signals{DesiredStatus: "EXITED", LastStatusChange: 12345},
-			wantStatus: StatusStopped,
-		},
-
-		// --- EXITED carrying a *terminate*: the path a real terminate takes.
-		// Every "Terminated by ..." writer in runpod-backend sets desiredStatus
-		// EXITED (terminatePod.ts:218/:276, terminateAllStoppedPods.ts:80,
-		// deleteCluster.ts:129/:210), so the attribution text is the only way to
-		// tell a destroy from a stop.
-		{
-			name: "exited carrying a user terminate is terminated, not stopped",
-			signals: Signals{
-				DesiredStatus:    "EXITED",
-				LastStatusChange: "Terminated by user: Wed Jul 29 2026 21:58:00 GMT+0000",
-				RuntimeProbed:    true,
-				RuntimeReported:  true,
-			},
+			name:       "terminated is terminated, with no reason",
+			signals:    Signals{DesiredStatus: "TERMINATED", RuntimeProbed: true},
 			wantStatus: StatusTerminated,
-			wantReason: ReasonTerminatedByUser,
-		},
-		{
-			name: "exited carrying a runpod terminate is terminated",
-			signals: Signals{
-				DesiredStatus:    "EXITED",
-				LastStatusChange: "Terminated by RunPod: Wed Jul 29 2026 21:58:00 GMT+0000",
-			},
-			wantStatus: StatusTerminated,
-			wantReason: ReasonTerminatedByRunpod,
-		},
-
-		// --- TERMINATED ---
-		{
-			name: "terminated by user",
-			signals: Signals{
-				DesiredStatus:    "TERMINATED",
-				LastStatusChange: "Terminated by user: Wed Jul 29 2026 21:58:00 GMT+0000",
-			},
-			wantStatus: StatusTerminated,
-			wantReason: ReasonTerminatedByUser,
-		},
-		{
-			name: "terminated after losing the bid",
-			signals: Signals{
-				DesiredStatus:    "TERMINATED",
-				LastStatusChange: "Outbid: Wed Jul 29 2026 21:58:00 GMT+0000",
-			},
-			wantStatus: StatusTerminated,
-			wantReason: ReasonTerminatedOutbid,
-		},
-		{
-			name: "terminated by runpod",
-			signals: Signals{
-				DesiredStatus:    "TERMINATED",
-				LastStatusChange: "Terminated by RunPod: Wed Jul 29 2026 21:58:00 GMT+0000",
-			},
-			wantStatus: StatusTerminated,
-			wantReason: ReasonTerminatedByRunpod,
 		},
 
 		// --- statuses the platform defines but does not surface in practice.
@@ -176,6 +69,11 @@ func TestDerive(t *testing.T) {
 		{
 			name:       "paused is unknown",
 			signals:    Signals{DesiredStatus: "PAUSED"},
+			wantStatus: StatusUnknown,
+		},
+		{
+			name:       "v2 error is unknown",
+			signals:    Signals{DesiredStatus: "ERROR", RuntimeProbed: true},
 			wantStatus: StatusUnknown,
 		},
 		{
@@ -209,10 +107,7 @@ func TestDeriveVocabularyIsLowercase(t *testing.T) {
 	values := []string{
 		string(StatusRunning), string(StatusInitializing), string(StatusStopped),
 		string(StatusTerminated), string(StatusUnknown),
-		string(ReasonAwaitingContainer), string(ReasonStoppedByUser),
-		string(ReasonStoppedByRunpod), string(ReasonTerminatedByUser),
-		string(ReasonTerminatedByRunpod), string(ReasonRuntimeUnavailable),
-		string(ReasonStoppedOutbid), string(ReasonTerminatedOutbid),
+		string(ReasonAwaitingContainer), string(ReasonRuntimeUnavailable),
 	}
 	for _, v := range values {
 		for _, r := range v {
@@ -244,13 +139,13 @@ func TestExplain(t *testing.T) {
 		},
 		{
 			name:  "stopped points at pod start with the real pod id",
-			state: State{Status: StatusStopped, Reason: ReasonStoppedByUser},
+			state: State{Status: StatusStopped},
 			podID: "abc123",
 			want:  "pod is stopped; start it with 'runpodctl pod start abc123'",
 		},
 		{
 			name:  "stopped without a pod id keeps the placeholder",
-			state: State{Status: StatusStopped, Reason: ReasonStoppedByUser},
+			state: State{Status: StatusStopped},
 			want:  "pod is stopped; start it with 'runpodctl pod start <pod-id>'",
 		},
 		{
