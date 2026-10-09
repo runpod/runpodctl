@@ -152,7 +152,13 @@ type Client struct {
 	numberOfTransferredFiles int
 }
 
-// FileInfo registers the information about the file
+// FileInfo registers the information about the file.
+//
+// WIRE FORMAT: this is serialized to JSON and sent to the peer, so the json tags
+// below are part of the croc wire contract. Both ends must agree, including the
+// runpodctl copy the platform mounts into the container. Renaming a field or
+// changing a tag breaks transfers and must be a deliberate, versioned change.
+// See cmd/croc/croc.go and E-3968; locked by cmd/transfer/wireformat_test.go.
 type FileInfo struct {
 	Name         string      `json:"n,omitempty"`
 	FolderRemote string      `json:"fr,omitempty"`
@@ -174,7 +180,11 @@ type RemoteFileRequest struct {
 	MachineID                 string
 }
 
-// SenderInfo lists the files to be transferred
+// SenderInfo lists the files to be transferred.
+//
+// WIRE FORMAT: this is sent to the peer as JSON. It has no struct tags, so its
+// Go field names are the wire keys and renaming a field changes the wire. Keep
+// both ends in sync; locked by cmd/transfer/wireformat_test.go. See E-3968.
 type SenderInfo struct {
 	FilesToTransfer        []FileInfo
 	EmptyFoldersToTransfer []FileInfo
