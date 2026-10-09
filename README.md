@@ -88,7 +88,7 @@ pixi global install runpodctl
 
 ```bash
 # configure api key
-runpodctl config --apiKey=your_api_key
+runpodctl doctor
 
 # list all pods
 runpodctl pod list
