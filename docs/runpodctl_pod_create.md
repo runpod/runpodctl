@@ -15,7 +15,7 @@ examples:
   # create with custom image
   runpodctl pod create --image runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404 --gpu-id "NVIDIA GeForce RTX 4090"
 
-  # create a cpu pod
+  # create a 2-vcpu cpu pod (uses the cpu3c flavor; name is generated if omitted)
   runpodctl pod create --compute-type cpu --image ubuntu:22.04
 
   # block until the pod's ssh is actually reachable, then print it
@@ -24,6 +24,8 @@ examples:
   # find templates first
   runpodctl template search pytorch
   runpodctl template list --type official
+
+cpu pods currently default to the 2-vcpu cpu3c flavor. cpu pods support container disk and network volumes; persistent volumes and --public-ip are not supported.
 
 ```
 runpodctl pod create [flags]
@@ -68,4 +70,3 @@ runpodctl pod create [flags]
 ### SEE ALSO
 
 * [runpodctl pod](runpodctl_pod.md)	 - manage gpu pods
-

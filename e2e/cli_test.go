@@ -442,7 +442,6 @@ func TestCLI_PodCreateFromTemplate(t *testing.T) {
 	if createdAt, ok := podDetails["createdAt"].(string); !ok || strings.TrimSpace(createdAt) == "" {
 		t.Errorf("expected createdAt to be set for pod %s", podID)
 	}
-
 	stdout, stderr, err = runCLI("ssh", "info", podID)
 	if err != nil {
 		t.Fatalf("failed to run ssh info for pod %s: %v\nstderr: %s", podID, err, stderr)
@@ -506,12 +505,83 @@ func TestCLI_PodCreateCPU(t *testing.T) {
 	if createdAt, ok := podDetails["createdAt"].(string); !ok || strings.TrimSpace(createdAt) == "" {
 		t.Errorf("expected createdAt to be set for pod %s", podID)
 	}
+	if podDetails["name"] != name {
+		t.Errorf("expected created pod name %q, got %v", name, podDetails["name"])
+	}
 
 	// CON-842 regression: --docker-args must land as dockerStartCmd tokens,
 	// not be rejected as an extra dockerArgs key.
 	startCmd, ok := podDetails["dockerStartCmd"].([]interface{})
 	if !ok || len(startCmd) != 2 || startCmd[0] != "sleep" || startCmd[1] != "infinity" {
 		t.Errorf("expected dockerStartCmd [sleep infinity] for pod %s, got %v", podID, podDetails["dockerStartCmd"])
+	}
+
+	stdout, stderr, err = runCLI("pod", "list")
+	if err != nil {
+		t.Fatalf("failed to list pods: %v\nstderr: %s", err, stderr)
+	}
+	var pods []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &pods); err != nil {
+		t.Fatalf("pod list output is not valid json: %v\noutput: %s", err, stdout)
+	}
+	found := false
+	for _, listed := range pods {
+		if listed["id"] == podID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("created pod %s was not returned by pod list", podID)
+	}
+
+	updatedName := name + "-updated"
+	stdout, stderr, err = runCLI("pod", "update", podID, "--name", updatedName)
+	if err != nil {
+		t.Fatalf("failed to update cpu pod %s: %v\nstderr: %s", podID, err, stderr)
+	}
+	if err := json.Unmarshal([]byte(stdout), &podDetails); err != nil {
+		t.Fatalf("pod update output is not valid json: %v\noutput: %s", err, stdout)
+	}
+	if podDetails["name"] != updatedName {
+		t.Errorf("expected updated pod name %q, got %v", updatedName, podDetails["name"])
+	}
+
+	if _, stderr, err = runCLI("pod", "stop", podID); err != nil {
+		t.Fatalf("failed to stop cpu pod %s: %v\nstderr: %s", podID, err, stderr)
+	}
+	waitForPodDesiredStatus(t, podID, "EXITED")
+	if _, stderr, err = runCLI("pod", "start", podID); err != nil {
+		t.Fatalf("failed to start cpu pod %s: %v\nstderr: %s", podID, err, stderr)
+	}
+	waitForPodDesiredStatus(t, podID, "RUNNING")
+	if _, stderr, err = runCLI("pod", "restart", podID); err != nil {
+		t.Fatalf("failed to restart cpu pod %s: %v\nstderr: %s", podID, err, stderr)
+	}
+	waitForPodDesiredStatus(t, podID, "RUNNING")
+}
+
+func waitForPodDesiredStatus(t *testing.T, podID, status string) {
+	t.Helper()
+	for attempt := 0; attempt < 30; attempt++ {
+		stdout, _, err := runCLI("pod", "get", podID)
+		if err == nil {
+			var pod map[string]interface{}
+			if json.Unmarshal([]byte(stdout), &pod) == nil {
+				if actual, ok := pod["desiredStatus"].(string); ok && strings.EqualFold(actual, status) {
+					return
+				}
+			}
+		}
+		time.Sleep(2 * time.Second)
+	}
+	t.Fatalf("pod %s did not reach %s", podID, status)
+}
+
+func TestCLI_PodResetExplainsV2Limitation(t *testing.T) {
+	_, stderr, err := runCLI("pod", "reset", "pod-id")
+	if err == nil || !strings.Contains(stderr, "pod reset is not supported by api v2") {
+		t.Fatalf("expected reset limitation error, got err=%v stderr=%q", err, stderr)
 	}
 }
 

@@ -18,12 +18,12 @@ var restartCmd = &cobra.Command{
 func runRestart(cmd *cobra.Command, args []string) error {
 	podID := args[0]
 
-	client, err := api.NewClient()
+	client, err := api.NewV2Client()
 	if err != nil {
 		return err
 	}
 
-	pod, err := client.RestartPod(podID)
+	pod, err := client.RestartPodV2(podID)
 	if err != nil {
 		return err
 	}

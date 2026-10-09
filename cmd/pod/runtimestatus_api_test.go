@@ -20,7 +20,7 @@ import (
 // are gated). Those paths are unreachable from a pure function test, and the e2e
 // suite is `//go:build e2e` so CI never runs it.
 
-// stub is a fake runpod control plane: rest /pods + /pods/{id} and graphql.
+// stub is a fake runpod control plane: v2 /pods + /pods/{id} and graphql.
 type stub struct {
 	restPods    []map[string]interface{}
 	gqlPods     []map[string]interface{}
@@ -57,7 +57,10 @@ func (s *stub) start(t *testing.T) {
 
 		switch {
 		case r.URL.Path == "/pods":
-			_ = json.NewEncoder(w).Encode(s.restPods)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"pods":       s.restPods,
+				"pagination": map[string]interface{}{"hasNextPage": false},
+			})
 		case strings.HasPrefix(r.URL.Path, "/pods/"):
 			id := strings.TrimPrefix(r.URL.Path, "/pods/")
 			for _, p := range s.restPods {
@@ -75,7 +78,7 @@ func (s *stub) start(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	t.Setenv("RUNPOD_API_KEY", "test-key")
-	t.Setenv("RUNPOD_API_URL", server.URL)
+	t.Setenv("RUNPOD_REST_V2_URL", server.URL)
 	t.Setenv("RUNPOD_GRAPHQL_URL", server.URL+"/graphql")
 }
 
@@ -83,11 +86,12 @@ func restPod(id, status string, extra map[string]interface{}) map[string]interfa
 	p := map[string]interface{}{
 		"id":               id,
 		"name":             id + "-name",
-		"desiredStatus":    status,
-		"imageName":        "img:1",
-		"gpuCount":         1,
+		"status":           "RUNNING",
+		"image":            "img:1",
+		"gpu":              map[string]interface{}{"id": "test-gpu", "count": 1},
 		"lastStatusChange": "Rented by User: Wed Jul 29 2026",
 	}
+	p["status"] = status
 	for k, v := range extra {
 		p[k] = v
 	}
@@ -292,11 +296,6 @@ func TestRunList_RuntimeStatus(t *testing.T) {
 						t.Errorf("%s uptimeSeconds = %v, want %v", id, got, want)
 					}
 				}
-				// the raw text always survives, so a phrasing this cli does not
-				// tokenise still reaches the caller.
-				if _, ok := item["lastStatusChange"].(string); !ok {
-					t.Errorf("%s is missing lastStatusChange: %v", id, item)
-				}
 			}
 		})
 	}
@@ -490,12 +489,9 @@ func TestRunGet_RuntimeStatus(t *testing.T) {
 	}
 }
 
-// TestRunList_SkipsRuntimeCallWhenNoPodCanUseIt is the other half of the latency
-// guard: podstate ignores telemetry for a stopped or terminated pod (it is
-// stale), so `pod list --all` on an account of stopped pods must not pay up to 5s
-// for a probe whose answer is provably discarded. The rows must be identical
-// either way.
-func TestRunList_SkipsRuntimeCallWhenNoPodCanUseIt(t *testing.T) {
+// v2 omits lastStatusChange, so the graphql snapshot supplies attribution for
+// stopped and terminated pods as well as runtime telemetry for running pods.
+func TestRunList_ProbesStoppedPodsForStatusAttribution(t *testing.T) {
 	s := &stub{
 		restPods: []map[string]interface{}{
 			restPod("p-stop", "EXITED", map[string]interface{}{"lastStatusChange": "Exited by user: x"}),
@@ -513,8 +509,8 @@ func TestRunList_SkipsRuntimeCallWhenNoPodCanUseIt(t *testing.T) {
 	if len(items) != 2 {
 		t.Fatalf("expected 2 pods, got %v", items)
 	}
-	if s.graphqlHits != 0 {
-		t.Errorf("graphql was called %d times for a result set with no running pod", s.graphqlHits)
+	if s.graphqlHits != 1 {
+		t.Errorf("graphql calls = %d, want one status-attribution snapshot", s.graphqlHits)
 	}
 	want := map[string][2]string{
 		"p-stop": {"stopped", "stopped_by_user"},
@@ -529,7 +525,7 @@ func TestRunList_SkipsRuntimeCallWhenNoPodCanUseIt(t *testing.T) {
 		}
 	}
 
-	// one RUNNING pod anywhere in the result set brings the probe back.
+	// one graphql snapshot serves all rows when a RUNNING pod is listed.
 	s2 := &stub{
 		restPods: []map[string]interface{}{
 			restPod("p-stop", "EXITED", nil),
@@ -545,7 +541,7 @@ func TestRunList_SkipsRuntimeCallWhenNoPodCanUseIt(t *testing.T) {
 		t.Fatalf("expected 2 pods, got %v", items)
 	}
 	if s2.graphqlHits != 1 {
-		t.Errorf("graphql called %d times, want exactly 1 when a running pod is listed", s2.graphqlHits)
+		t.Errorf("graphql called %d times, want exactly 1 snapshot", s2.graphqlHits)
 	}
 }
 

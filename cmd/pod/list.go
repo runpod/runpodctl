@@ -72,7 +72,7 @@ func init() {
 }
 
 func runList(cmd *cobra.Command, args []string) error {
-	client, err := api.NewClient()
+	client, err := api.NewV2Client()
 	if err != nil {
 		return err
 	}
@@ -82,7 +82,7 @@ func runList(cmd *cobra.Command, args []string) error {
 		Name:        listName,
 	}
 
-	pods, err := client.ListPods(opts)
+	pods, err := client.ListPodsV2(opts)
 	if err != nil {
 		return err
 	}
@@ -209,17 +209,11 @@ func statusText(v interface{}) string {
 }
 
 // needsRuntimeProbe reports whether the graphql side-call can change any of the
-// rows we are about to print.
-//
-// podstate only consults runtime telemetry on the RUNNING branch — a stopped or
-// terminated pod is derived from lastStatusChange alone, on purpose, because its
-// telemetry is stale — so probing a result set with no RUNNING pod in it buys
-// nothing and can still cost the full 5s cap. `pod list --all` on an account of
-// stopped pods is the common shape of that, and it is exactly the case an
-// unresponsive graphql would otherwise have made slow for no reason.
+// rows we are about to print. v2 does not return lastStatusChange, so every pod
+// without that value can gain status attribution from the graphql snapshot.
 func needsRuntimeProbe(matched []api.Pod) bool {
 	for _, p := range matched {
-		if strings.EqualFold(strings.TrimSpace(p.DesiredStatus), "RUNNING") {
+		if strings.EqualFold(strings.TrimSpace(p.DesiredStatus), "RUNNING") || p.LastStatusChange == nil {
 			return true
 		}
 	}

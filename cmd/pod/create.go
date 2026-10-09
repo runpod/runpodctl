@@ -167,8 +167,8 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	var result interface{}
 
 	if computeType == "CPU" {
-		// CPU pods use the REST API (GraphQL requires gpuTypeId)
-		result, err = createPodREST(computeType, gpuTypeID, cloudType, supportPublicIP)
+		// v2 requires an explicit CPU flavor; keep the existing CLI flow with a 2-vCPU default.
+		result, err = createPodV2CPU(cloudType)
 	} else {
 		// GPU pods use GraphQL (supports startSsh)
 		result, err = createPodGraphQL(gpuTypeID, cloudType, supportPublicIP)
@@ -216,14 +216,6 @@ func resolveWaitTimeout(cmd *cobra.Command, computeType, cloudType string, suppo
 	timeout, err := duration.Parse(createWaitTimeout)
 	if err != nil {
 		return 0, fmt.Errorf("invalid --wait-timeout: %w", err)
-	}
-
-	if computeType == "CPU" {
-		// cpu pods are created over rest, which rejects startSsh, so runpod does
-		// not set ssh up for them. prod does still allocate a public port 22, and
-		// an image that runs its own sshd is reachable there — but plain images
-		// are not, and that only shows up as a timeout. warn instead of guessing.
-		fmt.Fprintln(cmd.ErrOrStderr(), "note: cpu pods are created through the rest api, which cannot request runpod-managed ssh; --wait only succeeds if the image starts sshd itself")
 	}
 
 	if cloudType == "COMMUNITY" && !supportPublicIP {
@@ -461,59 +453,63 @@ func createPodGraphQL(gpuTypeID, cloudType string, supportPublicIP bool) (map[st
 	return gqlClient.CreatePod(req)
 }
 
-func createPodREST(computeType, gpuTypeID, cloudType string, supportPublicIP bool) (*api.Pod, error) {
-	client, err := api.NewClient()
+func createPodV2CPU(cloudType string) (*api.Pod, error) {
+	if createVolumeInGb > 0 {
+		return nil, fmt.Errorf("persistent volumes are not supported for cpu pods; use --network-volume-id")
+	}
+	if createPublicIP {
+		return nil, fmt.Errorf("--public-ip is not supported for cpu pods")
+	}
+	client, err := api.NewV2Client()
 	if err != nil {
 		return nil, err
 	}
 
-	req := &api.PodCreateRequest{
-		Name:              createName,
-		ImageName:         createImageName,
-		TemplateID:        createTemplateID,
-		ComputeType:       computeType,
-		GlobalNetworking:  createGlobalNetworking,
-		SupportPublicIp:   supportPublicIP,
-		GpuCount:          0,
-		VolumeInGb:        createVolumeInGb,
-		ContainerDiskInGb: createContainerDiskInGb,
-		VolumeMountPath:   createVolumeMountPath,
-		CloudType:         cloudType,
+	name := createName
+	if name == "" {
+		name = fmt.Sprintf("runpodctl-cpu-%d", time.Now().UnixNano())
 	}
-
-	if gpuTypeID != "" {
-		req.GpuTypeIDs = []string{gpuTypeID}
+	req := &api.PodV2CreateRequest{
+		Name:             name,
+		Image:            createImageName,
+		TemplateID:       createTemplateID,
+		Args:             createDockerArgs,
+		Disk:             createContainerDiskInGb,
+		Cloud:            cloudType,
+		DataCenterIDs:    splitCreateValues(createDataCenterIDs),
+		GlobalNetworking: createGlobalNetworking,
+		StartSSH:         createSSH,
+		CPU:              &api.PodV2CPURequest{ID: "cpu3c", VCPUCount: 2},
+		Ports:            []string{},
+		Env:              map[string]string{},
 	}
-
 	if createNetworkVolumeID != "" {
-		req.NetworkVolumeID = createNetworkVolumeID
-	}
-
-	if createPorts != "" {
-		req.Ports = strings.Split(createPorts, ",")
-	}
-
-	if createDataCenterIDs != "" {
-		req.DataCenterIDs = strings.Split(createDataCenterIDs, ",")
-	}
-
-	if createMinCudaVersion != "" {
-		req.MinCudaVersion = createMinCudaVersion
-	}
-
-	if createDockerArgs != "" {
-		req.DockerStartCmd, req.DockerEntrypoint = parseDockerArgs(createDockerArgs)
+		req.Mounts = &api.PodV2MountRequest{
+			Network: []api.PodV2NetworkMount{{VolumeID: createNetworkVolumeID, Path: createVolumeMountPath}},
+		}
 	}
 
 	if createEnv != "" {
-		var env map[string]string
-		if err := json.Unmarshal([]byte(createEnv), &env); err != nil {
+		if err := json.Unmarshal([]byte(createEnv), &req.Env); err != nil {
 			return nil, fmt.Errorf("invalid env json: %w", err)
 		}
-		req.Env = env
+	}
+	if ports := splitCreateValues(createPorts); len(ports) > 0 {
+		req.Ports = ports
 	}
 
-	return client.CreatePod(req)
+	return client.CreatePodV2(req)
+}
+
+func splitCreateValues(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	return parts
 }
 
 // parseDockerArgs converts the --docker-args string into the dockerStartCmd /
