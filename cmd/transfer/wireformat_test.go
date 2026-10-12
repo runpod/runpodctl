@@ -167,6 +167,26 @@ func TestSenderInfoWireGolden(t *testing.T) {
 	}
 }
 
+// TestRemoteFileRequestWireGolden locks RemoteFileRequest, which the recipient
+// marshals into the TypeRecipientReady message to ask the sender for specific
+// chunks, and the sender unmarshals on the other end. Like SenderInfo it has no
+// json tags, so its wire keys are the Go field names; renaming one silently
+// breaks the chunk-request wire.
+func TestRemoteFileRequestWireGolden(t *testing.T) {
+	b, err := json.Marshal(RemoteFileRequest{
+		CurrentFileChunkRanges:    []int64{1, 2},
+		FilesToTransferCurrentNum: 3,
+		MachineID:                 "mid",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"CurrentFileChunkRanges":[1,2],"FilesToTransferCurrentNum":3,"MachineID":"mid"}`
+	if string(b) != want {
+		t.Errorf("RemoteFileRequest wire json =\n  %s\nwant\n  %s", b, want)
+	}
+}
+
 // TestMessageRoundTrip locks that the pinned message+crypt libraries interoperate:
 // a message encoded with a key decodes back to the same message. Catches an
 // incompatible library change even when the version string still looks right.

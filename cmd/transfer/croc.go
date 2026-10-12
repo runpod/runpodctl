@@ -173,7 +173,12 @@ type FileInfo struct {
 	TempFile     bool        `json:"tf,omitempty"`
 }
 
-// RemoteFileRequest requests specific bytes
+// RemoteFileRequest requests specific bytes.
+//
+// WIRE FORMAT: this is sent to the peer as JSON inside a TypeRecipientReady
+// message. It has no struct tags, so its wire keys are the Go field names;
+// renaming a field silently changes the wire and breaks the chunk request.
+// Locked by TestRemoteFileRequestWireGolden.
 type RemoteFileRequest struct {
 	CurrentFileChunkRanges    []int64
 	FilesToTransferCurrentNum int
