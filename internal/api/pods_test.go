@@ -317,8 +317,8 @@ func TestUpdatePodRefusesToResizeANetworkVolume(t *testing.T) {
 	defer server.Close()
 
 	_, err := newV2TestClient(t, server).UpdatePod("p", &PodUpdateRequest{VolumeInGb: 100})
-	if err == nil || !strings.Contains(err.Error(), "volume update vol-1") {
-		t.Fatalf("expected a pointer to volume update, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "network-volume update vol-1") {
+		t.Fatalf("expected a pointer to network-volume update, got %v", err)
 	}
 	if patched {
 		t.Error("nothing may be patched")

@@ -224,7 +224,7 @@ func (c *Client) UpdatePod(podID string, req *PodUpdateRequest) (*Pod, error) {
 			// a network volume's size belongs to the volume, not the pod; only
 			// its mount path can change
 			if req.VolumeInGb > 0 {
-				return nil, fmt.Errorf("pod %s uses network volume %s, which a pod update cannot resize; use 'runpodctl volume update %s --size <gb>'", podID, current.NetworkVolumeID, current.NetworkVolumeID)
+				return nil, fmt.Errorf("pod %s uses network volume %s, which a pod update cannot resize; use 'runpodctl network-volume update %s --size <gb>'", podID, current.NetworkVolumeID, current.NetworkVolumeID)
 			}
 			body.Mounts = &v2PodMounts{Network: []v2NetworkMount{{VolumeID: current.NetworkVolumeID, Path: path}}}
 		} else {
