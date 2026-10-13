@@ -1250,6 +1250,13 @@ func TestRsyncConnectionLost(t *testing.T) {
 		"root@1.2.3.4: Permission denied (publickey).\nrsync: connection unexpectedly closed (0 bytes received so far) [sender]":                                                                          false,
 		"bash: line 1: rsync: command not found\nrsync: connection unexpectedly closed (0 bytes received so far) [sender]":                                                                                false,
 		"rsync: [receiver] write failed on \"/x\": No space left on device (28)\nrsync: connection unexpectedly closed (5 bytes received so far) [sender]\nrsync: [sender] write error: Broken pipe (32)": false,
+		// openssh hides "Connection closed by" under LogLevel=ERROR, so a drop
+		// before the first byte can leave only rsync's own two lines.
+		"rsync: connection unexpectedly closed (0 bytes received so far) [sender]\nrsync error: error in rsync protocol data stream (code 12) at io.c(232) [sender=3.2.7]": true,
+		// ...but not once any other line says why, or bytes already moved.
+		"rsync: change_dir \"/src\" failed: No such file or directory (2)\nrsync: connection unexpectedly closed (0 bytes received so far) [sender]":                          false,
+		"rsync: connection unexpectedly closed (1234 bytes received so far) [sender]\nrsync error: error in rsync protocol data stream (code 12) at io.c(232) [sender=3.2.7]": false,
+		"rsync error: error in rsync protocol data stream (code 12) at io.c(232) [sender=3.2.7]":                                                                              false,
 		"": false,
 	} {
 		if got := rsyncConnectionLost(output); got != want {
