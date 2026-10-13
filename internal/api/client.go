@@ -141,13 +141,13 @@ func (c *Client) requestV2(method, endpoint string, params url.Values, body inte
 	// segments are checked decoded, so a caller that forgets url.PathEscape
 	// can't slip "%2e" or "%2f" past the check.
 	segs := strings.Split(strings.TrimPrefix(endpoint, "/"), "/")
-	for i, seg := range segs {
+	for _, seg := range segs {
 		decoded, err := url.PathUnescape(seg)
 		if err != nil {
 			return nil, clierr.Usagef("invalid resource id %q", seg)
 		}
 		switch {
-		case decoded == "" || (strings.Contains(decoded, "/") && i > 0):
+		case decoded == "" || strings.Contains(decoded, "/"):
 			return nil, clierr.Usagef("a resource id is required")
 		case decoded == "." || decoded == "..":
 			return nil, clierr.Usagef("invalid resource id %q", decoded)
@@ -211,9 +211,14 @@ func (c *Client) getV2AllPages(endpoint string, params url.Values, decode func([
 		if err := json.Unmarshal(data, &page); err != nil {
 			return fmt.Errorf("failed to parse response: %w", err)
 		}
-		next := page.Pagination.NextCursor
-		if !page.Pagination.HasNextPage || next == nil || *next == "" {
+		if !page.Pagination.HasNextPage {
 			return nil
+		}
+		next := page.Pagination.NextCursor
+		// more pages but no way to ask for them: stopping here would hand back
+		// a partial list as if it were the whole thing
+		if next == nil || *next == "" {
+			return fmt.Errorf("the api reported more pages of %s but no cursor to fetch them", endpoint)
 		}
 		// a cursor the api already handed out would loop forever
 		if seen[*next] {

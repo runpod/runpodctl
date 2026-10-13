@@ -485,7 +485,7 @@ func TestRequestV2RefusesEmptyIDAndRedirects(t *testing.T) {
 	}
 	// a caller that skipped url.PathEscape: encoded dots and slashes are
 	// checked decoded
-	for _, raw := range []string{"%2e", "%2E%2e", "%2f", "a%2fb"} {
+	for _, raw := range []string{"%2e", "%2E%2e", "%2f", "a%2fb", "%2e%2e%2f"} {
 		_, err = client.GetV2("/registries/"+raw, nil)
 		if !errors.As(err, &usage) || usage.ErrorCode() != "usage_error" {
 			t.Fatalf("path segment %q: err = %v, want a usage_error", raw, err)
@@ -548,5 +548,21 @@ func TestGetV2AllPagesFollowsCursorsAndStopsOnRepeat(t *testing.T) {
 	}
 	if len(cursors) != 2 {
 		t.Fatalf("expected the walk to stop after the repeat, got %d requests", len(cursors))
+	}
+}
+
+func TestGetV2AllPagesFailsOnMissingCursor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"items":[1],"pagination":{"hasNextPage":true,"nextCursor":null}}`))
+	}))
+	defer server.Close()
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+	client, err := NewClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.v2BaseURL = server.URL
+	if err := client.getV2AllPages("/things", nil, func([]byte) error { return nil }); err == nil {
+		t.Fatal("more pages without a cursor must be an error, not a partial list")
 	}
 }
