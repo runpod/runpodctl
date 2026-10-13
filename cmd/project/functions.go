@@ -89,7 +89,6 @@ func createNewProject(projectName string, cudaVersion string, pythonVersion stri
 		}
 
 		examplePath := fmt.Sprintf("%s/%s", basePath, modelType)
-		err = copyFiles(starterTemplates, examplePath, projectFolder)
 		if err := copyFiles(starterTemplates, examplePath, projectFolder); err != nil {
 			log.Fatalf("Failed to copy starter example: %v", err)
 		}
