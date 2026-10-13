@@ -66,6 +66,8 @@ func (e *v2Endpoint) toEndpoint(poolTypes map[string][]string) Endpoint {
 	case e.Scaling.RequestCount != nil:
 		out.ScalerValue = float64(*e.Scaling.RequestCount)
 	}
+	// graphql's comma-separated spelling; v1 never reported placement
+	out.Locations = strings.Join(e.DataCenterIDs, ",")
 	flashboot := e.Flashboot != "" && !strings.EqualFold(e.Flashboot, "OFF")
 	out.Flashboot = &flashboot
 	if len(e.NetworkVolumes) > 0 {
@@ -114,6 +116,11 @@ func (e *v2Endpoint) inlineTemplate() map[string]interface{} {
 	}
 	if e.Registry != nil {
 		t["containerRegistryAuthId"] = *e.Registry
+	}
+	// the start command can live in cmd instead of args; templates print it
+	// under the same name
+	if len(e.Cmd) > 0 {
+		t["dockerStartCmd"] = e.Cmd
 	}
 	return t
 }

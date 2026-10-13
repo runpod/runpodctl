@@ -545,3 +545,20 @@ func TestEndpointReads_MissingV1IdleTimeoutIsAnError(t *testing.T) {
 		t.Fatalf("list: err = %v, want an idle timeout read error", err)
 	}
 }
+
+// placement and a cmd-based start command are part of what the endpoint runs.
+func TestGetEndpoint_LocationsAndStartCmd(t *testing.T) {
+	raw := strings.Replace(v2CpuEndpoint, `"networkVolumes":[]`, `"networkVolumes":[],"dataCenterIds":["EU-RO-1","US-MO-1"],"cmd":["python","-u","handler.py"]`, 1)
+	stub := &v2EndpointStub{endpoints: map[string]string{"ep-2": raw}}
+	ep, err := stub.client(t).GetEndpoint("ep-2", true, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ep.Locations != "EU-RO-1,US-MO-1" {
+		t.Errorf("locations = %q", ep.Locations)
+	}
+	cmd, _ := ep.Template["dockerStartCmd"].([]string)
+	if strings.Join(cmd, " ") != "python -u handler.py" {
+		t.Errorf("template dockerStartCmd = %#v", ep.Template["dockerStartCmd"])
+	}
+}
