@@ -81,9 +81,11 @@ expect_fail_with() {
   echo "failed as expected ($pattern): $*"
 }
 
-# make_copy DIR copies the working tree (tracked and untracked-but-not-ignored
-# files, as the flake sees them) into DIR and commits it, so a step can mutate
-# it and `git reset --hard` back.
+# make_copy DIR copies the working tree's tracked files (with their working
+# tree contents: what lib.fileset.gitTracked gives the flake) into DIR and
+# commits it, so a step can mutate it and `git reset --hard` back. untracked
+# files stay out: the flake never sees them, so a copy with them would test
+# a different tree.
 make_copy() {
   local dest="$1" f
   mkdir -p "$dest"
@@ -91,7 +93,7 @@ make_copy() {
     if [ -e "$f" ] || [ -L "$f" ]; then
       cp -a --parents "$f" "$dest"
     fi
-  done < <(git ls-files -z --cached --others --exclude-standard)
+  done < <(git ls-files -z --cached)
   git -C "$dest" init -q
   git -C "$dest" add -A
   git -C "$dest" -c user.name=integration -c user.email=integration@localhost commit -qm base
@@ -111,7 +113,12 @@ echo "logs in $logdir"
 # ---- 1. flake shape ---------------------------------------------------------
 step_flake_shape() {
   nix flake show --json > "$scratch/show.json"
-  jq -e --arg sys "$sys" '.packages[$sys] and .checks[$sys] and .apps[$sys] and .devShells[$sys]' "$scratch/show.json"
+  # determinate nix prints the flake-schemas shape, where each output's
+  # systems sit under .inventory.<output>.output.children.
+  jq -e --arg sys "$sys" '
+    (if has("inventory") then .inventory | map_values(.output.children) else . end) as $o
+    | all("packages", "checks", "apps", "devShells"; $o[.][$sys] != null)
+  ' "$scratch/show.json"
   nix flake check --no-build --all-systems
 }
 run_step flake-shape "flake show + eval of every system (incl. the go.mod assert)" step_flake_shape
@@ -162,11 +169,24 @@ step_binary() {
   file -L "$bin" | tee "$scratch/file.txt"
   if [ "$(uname -s)" = Linux ]; then
     grep -q 'statically linked' "$scratch/file.txt"
-  fi
-  grep -q 'stripped' "$scratch/file.txt"
-  if grep -q 'not stripped' "$scratch/file.txt"; then
-    echo "binary is not stripped"
-    return 1
+    grep -q 'stripped' "$scratch/file.txt"
+    if grep -q 'not stripped' "$scratch/file.txt"; then
+      echo "binary is not stripped"
+      return 1
+    fi
+  else
+    # file(1) doesn't report stripping for Mach-O, and darwin binaries always
+    # link libSystem. stripped: no defined symbols, only dyld imports; and
+    # every dylib comes from the os, none from /nix/store.
+    if [ -n "$(nm -U "$bin")" ]; then
+      echo "binary is not stripped"
+      return 1
+    fi
+    otool -L "$bin" | tail -n +2 | tee "$scratch/dylibs.txt"
+    if grep -vqE '^[[:space:]]+/(usr/lib|System/Library)/' "$scratch/dylibs.txt"; then
+      echo "binary links a dylib from outside the os"
+      return 1
+    fi
   fi
   # nixpkgs' Go looks up /etc/services, mime types and zoneinfo in these
   # data packages; anything else (a toolchain, a libc) is a leak.
