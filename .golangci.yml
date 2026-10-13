@@ -24,6 +24,10 @@ run:
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
+  # keep every issue on a line: with the default (true) golangci-lint keeps
+  # one of several same-line issues, and which one varies between runs,
+  # which the per-finding baseline reads as one new and one fixed.
+  uniq-by-line: false
 
 formatters:
   enable:
