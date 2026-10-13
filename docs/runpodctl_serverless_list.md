@@ -14,7 +14,7 @@ runpodctl serverless list [flags]
 
 ```
   -h, --help               help for list
-      --include-template   include the container config (image, disk, args, env, ports)
+      --include-template   include the container config (image, disk, args, env, ports); env values may contain secrets
       --include-workers    include workers info
 ```
 

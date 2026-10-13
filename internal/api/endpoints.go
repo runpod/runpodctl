@@ -24,7 +24,7 @@ type Endpoint struct {
 	Locations          string                  `json:"locations,omitempty"`
 	IdleTimeout        int                     `json:"idleTimeout"`
 	ScalerType         string                  `json:"scalerType,omitempty"`
-	ScalerValue        int                     `json:"scalerValue"`
+	ScalerValue        float64                 `json:"scalerValue"` // a queue delay is fractional (minimum 0.5)
 	WorkersMin         int                     `json:"workersMin"`
 	WorkersMax         int                     `json:"workersMax"`
 	GpuCount           int                     `json:"gpuCount"`
@@ -163,7 +163,11 @@ func (c *Client) fillIdleTimeouts(out []Endpoint, v2 []v2Endpoint) error {
 	}
 	for i := range out {
 		if v2[i].Workers.IdleTimeout == nil {
-			out[i].IdleTimeout = idle[out[i].ID]
+			value, ok := idle[out[i].ID]
+			if !ok {
+				return fmt.Errorf("failed to read the idle timeout: rest v1 did not report endpoint %s", out[i].ID)
+			}
+			out[i].IdleTimeout = value
 		}
 	}
 	return nil

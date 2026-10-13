@@ -120,7 +120,7 @@ func TestGetEndpoint_MapsV2Shape(t *testing.T) {
 		t.Errorf("workers = %d/%d idle %d", ep.WorkersMin, ep.WorkersMax, ep.IdleTimeout)
 	}
 	if ep.ScalerType != "REQUEST_COUNT" || ep.ScalerValue != 4 {
-		t.Errorf("scaler = %s/%d", ep.ScalerType, ep.ScalerValue)
+		t.Errorf("scaler = %s/%v", ep.ScalerType, ep.ScalerValue)
 	}
 	if ep.GpuCount != 2 || ep.MinCudaVersion != "12.4" || ep.ExecutionTimeoutMs != 600000 {
 		t.Errorf("gpuCount %d cuda %q timeout %d", ep.GpuCount, ep.MinCudaVersion, ep.ExecutionTimeoutMs)
@@ -155,7 +155,7 @@ func TestGetEndpoint_CPUEndpoint(t *testing.T) {
 		t.Errorf("flashboot = %v, want false for OFF", ep.Flashboot)
 	}
 	if ep.ScalerType != "QUEUE_DELAY" || ep.ScalerValue != 1 {
-		t.Errorf("scaler = %s/%d", ep.ScalerType, ep.ScalerValue)
+		t.Errorf("scaler = %s/%v", ep.ScalerType, ep.ScalerValue)
 	}
 	if len(ep.GpuTypeIDs) != 0 || ep.GpuCount != 0 {
 		t.Errorf("cpu endpoint reports gpus: %v x%d", ep.GpuTypeIDs, ep.GpuCount)
@@ -509,5 +509,39 @@ func TestEndpointReads_FillIdleTimeoutFromV1(t *testing.T) {
 		if strings.HasPrefix(r, "GET /endpoints") {
 			t.Errorf("an endpoint v2 reports in full must not read v1: %v", stub.requests)
 		}
+	}
+}
+
+// a fractional queue delay prints as itself, and a pool the catalog doesn't
+// list prints as its id rather than leaving the endpoint with no gpus.
+func TestGetEndpoint_FractionalDelayAndUnknownPool(t *testing.T) {
+	raw := strings.NewReplacer(
+		`"scaling":{"type":"REQUEST_COUNT","requestCount":4}`, `"scaling":{"type":"QUEUE_DELAY","queueDelay":0.5}`,
+		`"pools":["AMPERE_48"]`, `"pools":["ada_24","RETIRED_80"]`,
+	).Replace(v2GpuEndpoint)
+	stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": raw}}
+	ep, err := stub.client(t).GetEndpoint("ep-1", false, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ep.ScalerType != "QUEUE_DELAY" || ep.ScalerValue != 0.5 {
+		t.Errorf("scaler = %s/%v, want QUEUE_DELAY/0.5", ep.ScalerType, ep.ScalerValue)
+	}
+	// ada_24 matches the catalog's ADA_24 case-insensitively
+	want := []string{"NVIDIA L4", "RETIRED_80"}
+	if strings.Join(ep.GpuTypeIDs, ",") != strings.Join(want, ",") {
+		t.Errorf("gpuTypeIds = %v, want %v", ep.GpuTypeIDs, want)
+	}
+}
+
+// an endpoint v1 doesn't report is an error, not an idle timeout of 0.
+func TestEndpointReads_MissingV1IdleTimeoutIsAnError(t *testing.T) {
+	noIdle := strings.Replace(v2GpuEndpoint, `"workers":{"min":0,"max":3,"idleTimeout":7}`, `"workers":{"min":0,"max":3}`, 1)
+	noIdleCPU := strings.Replace(v2CpuEndpoint, `"workers":{"min":1,"max":2,"idleTimeout":60}`, `"workers":{"min":1,"max":2}`, 1)
+	// two endpoints miss it, so the fill reads v1's list, which lacks ep-1
+	stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": noIdle, "ep-2": noIdleCPU}, v1Idle: map[string]int{"ep-2": 5}}
+	client := stub.client(t)
+	if _, err := client.ListEndpoints(nil); err == nil || !strings.Contains(err.Error(), "idle timeout") {
+		t.Fatalf("list: err = %v, want an idle timeout read error", err)
 	}
 }

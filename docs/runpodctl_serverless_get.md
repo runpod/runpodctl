@@ -14,7 +14,7 @@ runpodctl serverless get <endpoint-id> [flags]
 
 ```
   -h, --help               help for get
-      --include-template   include the container config (image, disk, args, env, ports)
+      --include-template   include the container config (image, disk, args, env, ports); env values may contain secrets
       --include-workers    include workers info
 ```
 

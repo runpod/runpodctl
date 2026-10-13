@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"net/url"
 	"strings"
 )
@@ -45,8 +44,8 @@ type v2Endpoint struct {
 	} `json:"workers"`
 }
 
-// toEndpoint maps the endpoint; poolTypes expands pools into the gpu type ids
-// v1 reported (nil skips that).
+// toEndpoint maps the endpoint; poolTypes (keyed by upper-case pool id)
+// expands pools into the gpu type ids v1 reported.
 func (e *v2Endpoint) toEndpoint(poolTypes map[string][]string) Endpoint {
 	out := Endpoint{
 		ID:                 e.ID,
@@ -63,9 +62,9 @@ func (e *v2Endpoint) toEndpoint(poolTypes map[string][]string) Endpoint {
 	}
 	switch {
 	case e.Scaling.QueueDelay != nil:
-		out.ScalerValue = int(math.Round(*e.Scaling.QueueDelay))
+		out.ScalerValue = *e.Scaling.QueueDelay
 	case e.Scaling.RequestCount != nil:
-		out.ScalerValue = *e.Scaling.RequestCount
+		out.ScalerValue = float64(*e.Scaling.RequestCount)
 	}
 	flashboot := e.Flashboot != "" && !strings.EqualFold(e.Flashboot, "OFF")
 	out.Flashboot = &flashboot
@@ -83,7 +82,15 @@ func (e *v2Endpoint) toEndpoint(poolTypes map[string][]string) Endpoint {
 			excluded[strings.ToUpper(t)] = true
 		}
 		for _, pool := range e.Gpu.Pools {
-			for _, t := range poolTypes[pool] {
+			types, ok := poolTypes[strings.ToUpper(pool)]
+			if !ok {
+				// a pool the catalog doesn't list (inactive, or not offered to
+				// this account) is printed as its id, so the endpoint never reads
+				// as one with no gpus.
+				out.GpuTypeIDs = append(out.GpuTypeIDs, pool)
+				continue
+			}
+			for _, t := range types {
 				if !excluded[strings.ToUpper(t)] {
 					out.GpuTypeIDs = append(out.GpuTypeIDs, t)
 				}
@@ -119,7 +126,7 @@ func (c *Client) gpuPoolTypes() (map[string][]string, error) {
 	}
 	out := make(map[string][]string, len(pools))
 	for _, p := range pools {
-		out[p.ID] = p.GpuTypeIDs
+		out[strings.ToUpper(p.ID)] = p.GpuTypeIDs
 	}
 	return out, nil
 }
