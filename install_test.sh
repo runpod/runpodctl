@@ -176,6 +176,10 @@ run_download_cleanup_calculation_failure_test() {
         calculate_sha256() {
             return 1
         }
+        if calculate_sha256 "$work_dir"; then
+            echo "calculate_sha256 stub is not in effect" >&2
+            exit 1
+        fi
 
         tar() {
             touch "$tar_called"

@@ -1,0 +1,119 @@
+# .golangci-comprehensive.yml — runpodctl
+#
+# Tier 2 — comprehensive lint: standard + complexity, duplication and style.
+#
+# Run:
+#   lint-comprehensive               (inside nix develop)
+#   nix build .#static-analysis-report   (all tiers, hermetic)
+#
+# The three tiers are supersets: .golangci-quick.yml ⊂ .golangci.yml ⊂ this.
+# Every exclusion states why; when a linter fires, the default is to fix the
+# code. Existing findings are recorded in the ratchet
+# (nix/checks/lint-baseline.txt) and fixed in follow-up PRs.
+#
+# Never pass --timeout on the command line: it silently overrides run.timeout.
+
+version: "2"
+
+run:
+  timeout: 20m
+  modules-download-mode: mod
+  build-tags:
+    - e2e
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+linters:
+  default: none
+  enable:
+    # Tier 0
+    - govet
+    - errcheck
+    - ineffassign
+    - unused
+    - staticcheck
+    # Tier 1
+    - gosec
+    - gocritic
+    - revive
+    - noctx
+    - contextcheck
+    - bodyclose
+    - errorlint
+    - misspell
+    - modernize
+    - nolintlint
+    - durationcheck
+    - copyloopvar
+    - usestdlibvars
+    - nilerr
+    # Tier 2
+    - exhaustive
+    - prealloc
+    - dupl
+    - goconst
+    - unconvert
+    - unparam
+    - nakedret
+    - gocyclo
+    - gocognit
+    - nilnil
+    - forcetypeassert
+    - errname
+    - perfsprint
+    - wastedassign
+    - makezero
+    - predeclared
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+
+    govet:
+      enable-all: true
+      disable:
+        # struct field reordering for padding: churn with no correctness or
+        # measurable memory benefit for a cli.
+        - fieldalignment
+
+    staticcheck:
+      checks:
+        - all
+
+    misspell:
+      locale: US
+
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+
+    gocritic:
+      enable-all: true
+
+    gocyclo:
+      min-complexity: 30
+
+    gocognit:
+      min-complexity: 40
+
+    exhaustive:
+      default-signifies-exhaustive: true
+
+  exclusions:
+    warn-unused: true
+    rules:
+      # Table-driven test rows repeat fixture literals ("a.go", "-baseline")
+      # by design; hoisting each into a constant makes every row harder to
+      # read without making any test more correct.
+      - path: _test\.go
+        linters:
+          - goconst

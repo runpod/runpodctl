@@ -38,7 +38,8 @@ check_root() {
 install_with_brew() {
     local package=$1
     echo "Installing $package with Homebrew..."
-    local original_user=$(logname)
+    local original_user
+    original_user=$(logname)
     su - "$original_user" -c "brew install $package"
 }
 
@@ -99,8 +100,9 @@ fetch_latest_version() {
 
 # ------------------------------- Download URL ------------------------------- #
 download_url_constructor() {
-    local os_type=$(uname -s | tr '[:upper:]' '[:lower:]')
-    local arch_type=$(uname -m)
+    local os_type arch_type
+    os_type=$(uname -s | tr '[:upper:]' '[:lower:]')
+    arch_type=$(uname -m)
 
     if [[ "$os_type" == "darwin" ]]; then
         # macOS uses a universal binary (all architectures)

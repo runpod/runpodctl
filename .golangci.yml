@@ -1,0 +1,86 @@
+# .golangci.yml — runpodctl
+#
+# Tier 1 — standard lint: quick + security, context, error and API hygiene.
+#
+# Run:
+#   lint                             (inside nix develop)
+#   nix build .#static-analysis-report   (all tiers, hermetic)
+#
+# The three tiers are supersets: .golangci-quick.yml ⊂ this ⊂
+# .golangci-comprehensive.yml. Every exclusion states why; when a linter
+# fires, the default is to fix the code. Existing findings are recorded in the
+# ratchet (nix/checks/lint-baseline.txt) and fixed in follow-up PRs.
+#
+# Never pass --timeout on the command line: it silently overrides run.timeout.
+
+version: "2"
+
+run:
+  timeout: 10m
+  modules-download-mode: mod
+  build-tags:
+    - e2e
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+linters:
+  default: none
+  enable:
+    # Tier 0
+    - govet
+    - errcheck
+    - ineffassign
+    - unused
+    - staticcheck
+    # Tier 1
+    - gosec
+    - gocritic
+    - revive
+    - noctx
+    - contextcheck
+    - bodyclose
+    - errorlint
+    - misspell
+    - modernize
+    - nolintlint
+    - durationcheck
+    - copyloopvar
+    - usestdlibvars
+    - nilerr
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+
+    govet:
+      enable-all: true
+      disable:
+        # struct field reordering for padding: churn with no correctness or
+        # measurable memory benefit for a cli. shadow is enabled in Tier 2.
+        - fieldalignment
+        - shadow
+
+    staticcheck:
+      checks:
+        - all
+
+    # US English, matching the existing code and docs.
+    misspell:
+      locale: US
+
+    # A //nolint must name the linter and say why (design §7).
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+
+    gocritic:
+      enable-all: true
