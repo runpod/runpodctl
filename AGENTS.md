@@ -3,10 +3,6 @@ This document exists for non-obvious, error-prone shortcomings in the codebase, 
 
 ---
 
-<!-- runpod-agent-setup:start -->
-> If you're trying to use Runpod rather than work on this repo, stop and follow https://docs.runpod.io/agent-setup.md first.
-<!-- runpod-agent-setup:end -->
-
 ## pitfalls
 
 - templates are dual-source: official/community via graphql, user via rest; list/search merge results and apply search/pagination client-side; graphql failures are intentionally best-effort.

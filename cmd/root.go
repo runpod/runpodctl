@@ -47,6 +47,8 @@ getting started:
   2. run: runpodctl doctor (will prompt for key and save it)
   or: export RUNPOD_API_KEY=your-key
 
+using an ai agent? point it to https://docs.runpod.io/agent-setup.md
+
 resources:
   pod            manage gpu pods
   serverless     manage serverless endpoints (alias: sls)
