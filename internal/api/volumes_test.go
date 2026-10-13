@@ -26,9 +26,16 @@ func TestListNetworkVolumes(t *testing.T) {
 		if r.URL.Path != "/network-volumes" {
 			t.Errorf("expected /network-volumes, got %s", r.URL.Path)
 		}
+		// two pages: the list must follow the cursor, not stop at the first
+		if r.URL.Query().Get("cursor") == "" {
+			_, _ = io.WriteString(w, `{"networkVolumes":[
+				{"id":"vol-1","name":"volume-1","size":100,"dataCenter":"EU-RO-1","type":"STANDARD"}],
+				"pagination":{"hasNextPage":true,"nextCursor":"c1"}}`)
+			return
+		}
 		_, _ = io.WriteString(w, `{"networkVolumes":[
-			{"id":"vol-1","name":"volume-1","size":100,"dataCenter":"EU-RO-1","type":"STANDARD"},
-			{"id":"vol-2","name":"volume-2","size":200,"dataCenter":"US-TX-1","type":"STANDARD"}]}`)
+			{"id":"vol-2","name":"volume-2","size":200,"dataCenter":"US-TX-1","type":"STANDARD"}],
+			"pagination":{"hasNextPage":false}}`)
 	}))
 	defer server.Close()
 

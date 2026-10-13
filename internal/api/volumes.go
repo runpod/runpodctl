@@ -60,19 +60,19 @@ type NetworkVolumeUpdateRequest struct {
 
 // ListNetworkVolumes returns all network volumes
 func (c *Client) ListNetworkVolumes() ([]NetworkVolume, error) {
-	data, err := c.GetV2("/network-volumes", nil)
+	volumes := []NetworkVolume{}
+	err := c.getV2AllPages("/network-volumes", nil, func(data []byte) error {
+		var list v2NetworkVolumeList
+		if err := json.Unmarshal(data, &list); err != nil {
+			return fmt.Errorf("failed to parse response: %w", err)
+		}
+		for _, v := range list.NetworkVolumes {
+			volumes = append(volumes, *v.toNetworkVolume())
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-
-	var list v2NetworkVolumeList
-	if err := json.Unmarshal(data, &list); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	volumes := make([]NetworkVolume, 0, len(list.NetworkVolumes))
-	for _, v := range list.NetworkVolumes {
-		volumes = append(volumes, *v.toNetworkVolume())
 	}
 	return volumes, nil
 }
