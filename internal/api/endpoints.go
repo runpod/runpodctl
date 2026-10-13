@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"net/url"
 	"strings"
 
@@ -99,15 +98,15 @@ type EndpointListResponse struct {
 	Endpoints []Endpoint `json:"endpoints"`
 }
 
-// EndpointUpdateRequest is an endpoint update in the cli's terms; nil and ""
-// leave a setting unchanged. UpdateEndpoint maps it onto the v2 body.
+// EndpointUpdateRequest is an endpoint update, in rest v1's wire shape; nil and
+// "" leave a setting unchanged.
 type EndpointUpdateRequest struct {
-	Name        string
-	WorkersMin  *int
-	WorkersMax  *int
-	IdleTimeout *int
-	ScalerType  string
-	ScalerValue *int
+	Name        string `json:"name,omitempty"`
+	WorkersMin  *int   `json:"workersMin,omitempty"`
+	WorkersMax  *int   `json:"workersMax,omitempty"`
+	IdleTimeout *int   `json:"idleTimeout,omitempty"`
+	ScalerType  string `json:"scalerType,omitempty"`
+	ScalerValue *int   `json:"scalerValue,omitempty"`
 }
 
 // EndpointListOptions are options for listing endpoints
@@ -139,7 +138,35 @@ func (c *Client) ListEndpoints(opts *EndpointListOptions) ([]Endpoint, error) {
 		}
 		endpoints = append(endpoints, out)
 	}
+	if err := c.fillIdleTimeouts(endpoints, v2Endpoints); err != nil {
+		return nil, err
+	}
 	return endpoints, nil
+}
+
+// fillIdleTimeouts reads, over rest v1, the idle timeouts v2 leaves out (see
+// v1IdleTimeouts). out[i] is the mapping of v2[i]. a failed read is an error:
+// 0 would read as a real setting.
+func (c *Client) fillIdleTimeouts(out []Endpoint, v2 []v2Endpoint) error {
+	var missing []string
+	for i := range v2 {
+		if v2[i].Workers.IdleTimeout == nil {
+			missing = append(missing, v2[i].ID)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	idle, err := c.v1IdleTimeouts(missing)
+	if err != nil {
+		return fmt.Errorf("failed to read the idle timeout: %w", err)
+	}
+	for i := range out {
+		if v2[i].Workers.IdleTimeout == nil {
+			out[i].IdleTimeout = idle[out[i].ID]
+		}
+	}
+	return nil
 }
 
 // GetEndpoint returns a single endpoint, from rest v2.
@@ -161,88 +188,56 @@ func (c *Client) GetEndpoint(endpointID string, includeTemplate, includeWorkers 
 	if err := c.decorateEndpoint(&out, e, opts, workers); err != nil {
 		return nil, err
 	}
-	return &out, nil
-}
-
-type v2EndpointUpdate struct {
-	Workers map[string]int         `json:"workers,omitempty"`
-	Scaling map[string]interface{} `json:"scaling,omitempty"`
-}
-
-// UpdateEndpoint updates an endpoint. v2 nests the worker and scaling
-// settings, so a change to any of them is sent with the endpoint's current
-// values for the rest. the v2 patch goes first, since it is the write that can
-// fail validation; the rename (over v1) goes last.
-func (c *Client) UpdateEndpoint(endpointID string, req *EndpointUpdateRequest) error {
-	body := &v2EndpointUpdate{}
-	if req.WorkersMin != nil || req.WorkersMax != nil || req.IdleTimeout != nil || req.ScalerType != "" || req.ScalerValue != nil {
-		current, err := c.getV2Endpoint(endpointID)
-		if err != nil {
-			return err
-		}
-		if req.WorkersMin != nil || req.WorkersMax != nil || req.IdleTimeout != nil {
-			workers := map[string]int{"min": current.Workers.Min, "max": current.Workers.Max}
-			if current.Workers.IdleTimeout != nil {
-				workers["idleTimeout"] = *current.Workers.IdleTimeout
-			}
-			if req.WorkersMin != nil {
-				workers["min"] = *req.WorkersMin
-			}
-			if req.WorkersMax != nil {
-				workers["max"] = *req.WorkersMax
-			}
-			if req.IdleTimeout != nil {
-				workers["idleTimeout"] = *req.IdleTimeout
-			}
-			body.Workers = workers
-		}
-		if req.ScalerType != "" || req.ScalerValue != nil {
-			scalerType := current.Scaling.Type
-			if req.ScalerType != "" {
-				scalerType = strings.ToUpper(req.ScalerType)
-			}
-			// kept as a float so an unchanged fractional queue delay survives
-			value := 0.0
-			switch {
-			case req.ScalerValue != nil:
-				value = float64(*req.ScalerValue)
-			case current.Scaling.QueueDelay != nil:
-				value = *current.Scaling.QueueDelay
-			case current.Scaling.RequestCount != nil:
-				value = float64(*current.Scaling.RequestCount)
-			}
-			body.Scaling = map[string]interface{}{"type": scalerType}
-			if scalerType == "REQUEST_COUNT" {
-				body.Scaling["requestCount"] = int(math.Round(value))
-			} else {
-				body.Scaling["queueDelay"] = value
-			}
-		}
+	outs := []Endpoint{out}
+	if err := c.fillIdleTimeouts(outs, []v2Endpoint{*e}); err != nil {
+		return nil, err
 	}
-	patched := body.Workers != nil || body.Scaling != nil
-	if patched {
-		if _, err := c.PatchV2("/serverless/"+url.PathEscape(endpointID), body); err != nil {
-			return err
-		}
-	}
-	if req.Name != "" {
-		if err := c.renameEndpointV1(endpointID, req.Name); err != nil {
-			if patched {
-				return fmt.Errorf("endpoint settings were updated, but the rename failed: %w", err)
-			}
-			return err
-		}
-	}
-	return nil
+	return &outs[0], nil
 }
 
 // rp-migrate: keep-v1 start
-// renameEndpointV1 renames over rest v1. a v2 rename also renames the
-// endpoint's template to "<name>-template", including a template other
-// endpoints share; v1 renames only the endpoint.
-func (c *Client) renameEndpointV1(endpointID, name string) error {
-	_, err := c.Patch("/endpoints/"+url.PathEscape(endpointID), map[string]string{"name": name})
+// UpdateEndpoint updates an endpoint over rest v1, in one patch. every v2 patch
+// of an endpoint, even one that only changes workers, also renames the
+// endpoint's template to "<endpoint name>-template", including a template
+// other endpoints share; v1 leaves the template alone.
+func (c *Client) UpdateEndpoint(endpointID string, req *EndpointUpdateRequest) error {
+	_, err := c.Patch("/endpoints/"+url.PathEscape(endpointID), req)
 	return err
+}
+
+// v1IdleTimeouts reads idle timeouts over rest v1, keyed by endpoint id. v2
+// leaves workers.idleTimeout out on request-count endpoints, though the
+// endpoint still has one.
+func (c *Client) v1IdleTimeouts(endpointIDs []string) (map[string]int, error) {
+	type v1Endpoint struct {
+		ID          string `json:"id"`
+		IdleTimeout int    `json:"idleTimeout"`
+	}
+	var endpoints []v1Endpoint
+	if len(endpointIDs) == 1 {
+		data, err := c.Get("/endpoints/"+url.PathEscape(endpointIDs[0]), nil)
+		if err != nil {
+			return nil, err
+		}
+		var e v1Endpoint
+		if err := json.Unmarshal(data, &e); err != nil {
+			return nil, fmt.Errorf("failed to parse response: %w", err)
+		}
+		endpoints = append(endpoints, e)
+	} else {
+		data, err := c.Get("/endpoints", nil)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(data, &endpoints); err != nil {
+			return nil, fmt.Errorf("failed to parse response: %w", err)
+		}
+	}
+	out := make(map[string]int, len(endpoints))
+	for _, e := range endpoints {
+		out[e.ID] = e.IdleTimeout
+	}
+	return out, nil
 }
 
 // rp-migrate: keep-v1 end

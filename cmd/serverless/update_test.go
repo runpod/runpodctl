@@ -81,13 +81,14 @@ func resetUpdateVars(t *testing.T) {
 	})
 }
 
-// updateServer is a fake control plane for runUpdate: rest v2 serves the
-// endpoint (GET/PATCH /serverless/ep-123, plus the gpu catalog), graphql (POST
+// updateServer is a fake control plane for runUpdate: rest v1 takes the update
+// (PATCH /endpoints/ep-123) and reports idle timeouts, rest v2 serves the
+// endpoint read (GET /serverless/ep-123, plus the gpu catalog), graphql (POST
 // /) serves the template swap and the model-reference round trip.
 type updateServer struct {
-	endpoint  string // raw v2 endpoint json
-	patchBody map[string]interface{}
-	renamed   map[string]interface{} // v1 rename body
+	endpoint  string                 // raw v2 endpoint json
+	patchBody map[string]interface{} // v2 patch body (must stay unused)
+	renamed   map[string]interface{} // v1 update body
 	gql       func(query string, body map[string]interface{}) string
 }
 
@@ -109,6 +110,8 @@ func (s *updateServer) start(t *testing.T) {
 				t.Errorf("decode patch body: %v", err)
 			}
 			_, _ = w.Write([]byte(s.endpoint))
+		case r.URL.Path == "/endpoints/ep-123" && r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{"id":"ep-123","idleTimeout":42}`))
 		case r.URL.Path == "/endpoints/ep-123" && r.Method == http.MethodPatch:
 			if err := json.NewDecoder(r.Body).Decode(&s.renamed); err != nil {
 				t.Errorf("decode rename body: %v", err)
@@ -228,19 +231,17 @@ func TestRunUpdate_AllNumericFlagsAreWired(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if s.renamed["name"] != "renamed" {
-		t.Errorf("name = %#v", s.renamed)
+	want := map[string]interface{}{
+		"name": "renamed", "workersMin": float64(0), "workersMax": float64(7),
+		"idleTimeout": float64(30), "scalerType": "QUEUE_DELAY", "scalerValue": float64(4),
 	}
-	workers, _ := s.patchBody["workers"].(map[string]interface{})
-	wantWorkers := map[string]float64{"min": 0, "max": 7, "idleTimeout": 30}
-	for field, want := range wantWorkers {
-		if got, ok := workers[field]; !ok || got != want {
-			t.Errorf("workers.%s = %#v, want %v (body %#v)", field, got, want, s.patchBody)
+	for field, v := range want {
+		if got, ok := s.renamed[field]; !ok || got != v {
+			t.Errorf("%s = %#v, want %v (body %#v)", field, got, v, s.renamed)
 		}
 	}
-	scaling, _ := s.patchBody["scaling"].(map[string]interface{})
-	if scaling["type"] != "QUEUE_DELAY" || scaling["queueDelay"] != float64(4) {
-		t.Errorf("scaling = %#v", scaling)
+	if s.patchBody != nil {
+		t.Errorf("an update must not patch v2: %#v", s.patchBody)
 	}
 }
 
@@ -255,12 +256,11 @@ func TestRunUpdate_WorkersMinZeroIsSent(t *testing.T) {
 	}
 
 	// see issue #298.
-	workers, _ := s.patchBody["workers"].(map[string]interface{})
-	if got, ok := workers["min"]; !ok || got != float64(0) {
-		t.Fatalf("expected workers.min 0, got %#v", s.patchBody)
+	if got, ok := s.renamed["workersMin"]; !ok || got != float64(0) {
+		t.Fatalf("expected workersMin 0, got %#v", s.renamed)
 	}
-	if workers["max"] != float64(5) {
-		t.Errorf("workers.max must keep its current value, got %#v", workers["max"])
+	if _, ok := s.renamed["workersMax"]; ok {
+		t.Errorf("an unset workersMax must be omitted, got %#v", s.renamed)
 	}
 }
 
@@ -281,12 +281,12 @@ func TestRunUpdate_RejectsOutOfRangeNumericFlags(t *testing.T) {
 		name           string
 		idleTimeout    int
 		scaleThreshold int
-		block, field   string
+		field          string
 		wantValue      float64
 	}{
-		{"idle timeout min", 1, -1, "workers", "idleTimeout", 1},
-		{"idle timeout max", 3600, -1, "workers", "idleTimeout", 3600},
-		{"scale threshold min", -1, 1, "scaling", "requestCount", 1},
+		{"idle timeout min", 1, -1, "idleTimeout", 1},
+		{"idle timeout max", 3600, -1, "idleTimeout", 3600},
+		{"scale threshold min", -1, 1, "scalerValue", 1},
 	}
 
 	for _, tc := range accepted {
@@ -302,9 +302,8 @@ func TestRunUpdate_RejectsOutOfRangeNumericFlags(t *testing.T) {
 			if err := runUpdate(jsonOutputCmd("json"), []string{"ep-123"}); err != nil {
 				t.Fatalf("expected boundary value to be accepted, got %v", err)
 			}
-			block, _ := s.patchBody[tc.block].(map[string]interface{})
-			if got := block[tc.field]; got != tc.wantValue {
-				t.Errorf("expected %s.%s %v, got %#v", tc.block, tc.field, tc.wantValue, s.patchBody)
+			if got := s.renamed[tc.field]; got != tc.wantValue {
+				t.Errorf("expected %s %v, got %#v", tc.field, tc.wantValue, s.renamed)
 			}
 		})
 	}

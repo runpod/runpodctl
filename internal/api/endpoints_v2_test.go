@@ -10,13 +10,14 @@ import (
 	"github.com/spf13/viper"
 )
 
-// v2EndpointStub is a fake rest v2 control plane for the serverless reads and
-// writes: /serverless, /serverless/{id}, /catalog/gpus (pool membership) and
-// the worker listing.
+// v2EndpointStub is a fake control plane for the serverless reads and writes:
+// rest v2 /serverless, /serverless/{id}, /catalog/gpus (pool membership) and
+// the worker listing, plus rest v1 /endpoints for updates and idle timeouts.
 type v2EndpointStub struct {
 	endpoints map[string]string // id -> raw v2 json
 	patched   map[string]interface{}
-	renamed   map[string]interface{} // the v1 rename body
+	v1Patched map[string]interface{} // the v1 update body
+	v1Idle    map[string]int         // id -> idleTimeout, as v1 reports it
 	requests  []string
 }
 
@@ -40,10 +41,19 @@ func (s *v2EndpointStub) client(t *testing.T) *Client {
 			}
 			_, _ = w.Write([]byte(`{"endpoints":[` + strings.Join(items, ",") + `],"pagination":{"hasNextPage":false}}`))
 		case strings.HasPrefix(r.URL.Path, "/endpoints/") && r.Method == http.MethodPatch:
-			if err := json.NewDecoder(r.Body).Decode(&s.renamed); err != nil {
-				t.Errorf("decode rename body: %v", err)
+			if err := json.NewDecoder(r.Body).Decode(&s.v1Patched); err != nil {
+				t.Errorf("decode v1 update body: %v", err)
 			}
 			_, _ = w.Write([]byte(`{}`))
+		case r.URL.Path == "/endpoints" && r.Method == http.MethodGet:
+			var items []map[string]interface{}
+			for id, idle := range s.v1Idle {
+				items = append(items, map[string]interface{}{"id": id, "idleTimeout": idle})
+			}
+			_ = json.NewEncoder(w).Encode(items)
+		case strings.HasPrefix(r.URL.Path, "/endpoints/") && r.Method == http.MethodGet:
+			id := strings.TrimPrefix(r.URL.Path, "/endpoints/")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": id, "idleTimeout": s.v1Idle[id]})
 		case strings.HasSuffix(r.URL.Path, "/workers"):
 			_, _ = w.Write([]byte(`{"workers":[{"id":"w-1","status":"RUNNING"}]}`))
 		case strings.HasPrefix(r.URL.Path, "/serverless/"):
@@ -73,7 +83,7 @@ func (s *v2EndpointStub) client(t *testing.T) *Client {
 	t.Cleanup(server.Close)
 	t.Setenv("RUNPOD_REST_V2_URL", server.URL)
 	client := newV2TestClient(t, server)
-	client.baseURL = server.URL // v1, for renames only
+	client.baseURL = server.URL // v1, for updates and idle timeouts
 	return client
 }
 
@@ -199,82 +209,6 @@ func TestListEndpoints_MapsEveryEndpoint(t *testing.T) {
 	}
 	if eps[0].WorkersMax != 3 || eps[1].WorkersMin != 1 {
 		t.Errorf("workers not mapped: %+v", eps)
-	}
-}
-
-func TestUpdateEndpoint_FillsNestedBlocksFromCurrent(t *testing.T) {
-	stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": v2GpuEndpoint}}
-	client := stub.client(t)
-
-	zero, five := 0, 5
-	if err := client.UpdateEndpoint("ep-1", &EndpointUpdateRequest{WorkersMax: &five, ScalerValue: &zero}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	workers, _ := stub.patched["workers"].(map[string]interface{})
-	// max changes; min and idleTimeout keep their current values, so a v2
-	// partial update of the nested block cannot reset them
-	if workers["max"] != float64(5) || workers["min"] != float64(0) || workers["idleTimeout"] != float64(7) {
-		t.Errorf("workers = %v", workers)
-	}
-	scaling, _ := stub.patched["scaling"].(map[string]interface{})
-	if scaling["type"] != "REQUEST_COUNT" || scaling["requestCount"] != float64(0) {
-		t.Errorf("scaling = %v", scaling)
-	}
-	if _, ok := scaling["queueDelay"]; ok {
-		t.Errorf("request count scaling must not send queueDelay: %v", scaling)
-	}
-	if _, ok := stub.patched["flashboot"]; ok {
-		t.Errorf("unset flashboot must be omitted: %v", stub.patched)
-	}
-}
-
-func TestUpdateEndpoint_ScalerTypeSwitch(t *testing.T) {
-	stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": v2GpuEndpoint}}
-	client := stub.client(t)
-
-	if err := client.UpdateEndpoint("ep-1", &EndpointUpdateRequest{ScalerType: "queue_delay"}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	scaling, _ := stub.patched["scaling"].(map[string]interface{})
-	// the current value carries over into the new scaler
-	if scaling["type"] != "QUEUE_DELAY" || scaling["queueDelay"] != float64(4) {
-		t.Errorf("scaling = %v", scaling)
-	}
-	if _, ok := stub.patched["workers"]; ok {
-		t.Errorf("workers must be omitted when no worker flag is set: %v", stub.patched)
-	}
-}
-
-// a v2 rename also renames the endpoint's template, shared or not, so the name
-// goes over v1 and never into the v2 body.
-func TestUpdateEndpoint_RenameGoesOverV1(t *testing.T) {
-	stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": v2GpuEndpoint}}
-	client := stub.client(t)
-
-	if err := client.UpdateEndpoint("ep-1", &EndpointUpdateRequest{Name: "renamed"}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if stub.renamed["name"] != "renamed" || len(stub.renamed) != 1 {
-		t.Errorf("v1 rename body = %v", stub.renamed)
-	}
-	if stub.patched != nil {
-		t.Errorf("a rename alone must not patch v2: %v", stub.patched)
-	}
-	if len(stub.requests) != 1 {
-		t.Errorf("a rename alone is one request, got %v", stub.requests)
-	}
-
-	stub.renamed, stub.requests = nil, nil
-	five := 5
-	if err := client.UpdateEndpoint("ep-1", &EndpointUpdateRequest{Name: "again", WorkersMax: &five}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if _, ok := stub.patched["name"]; ok {
-		t.Errorf("name must never reach the v2 body: %v", stub.patched)
-	}
-	if stub.renamed["name"] != "again" {
-		t.Errorf("v1 rename body = %v", stub.renamed)
 	}
 }
 
@@ -458,30 +392,6 @@ func TestUpdateEndpointModels_CPUEndpointNeedsNoGpuIDs(t *testing.T) {
 	}
 }
 
-// queue delay is fractional in v2 (minimum 0.5): it must parse, and a worker
-// change must send the current value back unrounded.
-func TestUpdateEndpoint_FractionalQueueDelaySurvives(t *testing.T) {
-	stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": `{"id":"ep-1","name":"x",
-		"scaling":{"type":"QUEUE_DELAY","queueDelay":0.5},"workers":{"min":0,"max":1,"idleTimeout":5}}`}}
-	client := stub.client(t)
-
-	ep, err := client.GetEndpoint("ep-1", false, false)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if ep.ScalerType != "QUEUE_DELAY" {
-		t.Errorf("scalerType = %q", ep.ScalerType)
-	}
-
-	if err := client.UpdateEndpoint("ep-1", &EndpointUpdateRequest{ScalerType: "QUEUE_DELAY"}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	scaling, _ := stub.patched["scaling"].(map[string]interface{})
-	if scaling["queueDelay"] != 0.5 {
-		t.Errorf("queueDelay = %v, want 0.5 kept", scaling["queueDelay"])
-	}
-}
-
 // a missing catalog must not print as an endpoint with no gpus
 func TestGetEndpoint_CatalogFailureIsAnError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -497,35 +407,6 @@ func TestGetEndpoint_CatalogFailureIsAnError(t *testing.T) {
 
 	if _, err := client.GetEndpoint("ep-1", false, false); err == nil || !strings.Contains(err.Error(), "gpu catalog") {
 		t.Fatalf("expected a catalog error, got %v", err)
-	}
-}
-
-// the v2 patch can fail validation, so it goes first: a rejected patch must
-// leave the name alone rather than report failure after renaming
-func TestUpdateEndpoint_RejectedPatchDoesNotRename(t *testing.T) {
-	renamed := false
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet:
-			_, _ = w.Write([]byte(v2GpuEndpoint))
-		case strings.HasPrefix(r.URL.Path, "/endpoints/"):
-			renamed = true
-			_, _ = w.Write([]byte(`{}`))
-		default:
-			w.WriteHeader(http.StatusUnprocessableEntity)
-			_, _ = w.Write([]byte(`{"title":"Unprocessable Entity","status":422,"detail":"Request validation failed."}`))
-		}
-	}))
-	defer server.Close()
-	client := newV2TestClient(t, server)
-	client.baseURL = server.URL
-
-	five := 5
-	if err := client.UpdateEndpoint("ep-1", &EndpointUpdateRequest{Name: "new", WorkersMax: &five}); err == nil {
-		t.Fatal("expected the rejected patch to be an error")
-	}
-	if renamed {
-		t.Error("the endpoint was renamed although its update was rejected")
 	}
 }
 
@@ -560,6 +441,73 @@ func TestListEndpoints_IncludeWorkers(t *testing.T) {
 	for _, ep := range eps {
 		if len(ep.Workers) != 1 {
 			t.Errorf("%s workers = %v", ep.ID, ep.Workers)
+		}
+	}
+}
+
+// every v2 patch of an endpoint renames its template, so an update is one v1
+// patch, in v1's flat shape, and never touches v2.
+func TestUpdateEndpoint_OneV1Patch(t *testing.T) {
+	stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": v2GpuEndpoint}}
+	client := stub.client(t)
+
+	five, thirty := 5, 30
+	req := &EndpointUpdateRequest{Name: "renamed", WorkersMax: &five, IdleTimeout: &thirty, ScalerType: "QUEUE_DELAY"}
+	if err := client.UpdateEndpoint("ep-1", req); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := map[string]interface{}{"name": "renamed", "workersMax": float64(5), "idleTimeout": float64(30), "scalerType": "QUEUE_DELAY"}
+	if len(stub.v1Patched) != len(want) {
+		t.Errorf("v1 body = %v, want exactly %v", stub.v1Patched, want)
+	}
+	for k, v := range want {
+		if stub.v1Patched[k] != v {
+			t.Errorf("v1 body %s = %v, want %v", k, stub.v1Patched[k], v)
+		}
+	}
+	if stub.patched != nil || len(stub.requests) != 1 {
+		t.Errorf("an update must be a single v1 request, got %v (v2 body %v)", stub.requests, stub.patched)
+	}
+}
+
+// v2 leaves workers.idleTimeout out on request-count endpoints; get and list
+// read it from v1 rather than print 0.
+func TestEndpointReads_FillIdleTimeoutFromV1(t *testing.T) {
+	noIdle := strings.Replace(v2GpuEndpoint, `"workers":{"min":0,"max":3,"idleTimeout":7}`, `"workers":{"min":0,"max":3}`, 1)
+	if noIdle == v2GpuEndpoint {
+		t.Fatal("fixture did not change")
+	}
+	stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": noIdle, "ep-2": v2CpuEndpoint}, v1Idle: map[string]int{"ep-1": 50, "ep-2": 999}}
+	client := stub.client(t)
+
+	ep, err := client.GetEndpoint("ep-1", false, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ep.IdleTimeout != 50 {
+		t.Errorf("get idleTimeout = %d, want 50 from v1", ep.IdleTimeout)
+	}
+
+	eps, err := client.ListEndpoints(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := map[string]int{}
+	for _, e := range eps {
+		got[e.ID] = e.IdleTimeout
+	}
+	// ep-2's v2 value stands; only the missing one comes from v1
+	if got["ep-1"] != 50 || got["ep-2"] != 60 {
+		t.Errorf("list idle timeouts = %v, want ep-1 50 (v1) and ep-2 60 (v2)", got)
+	}
+
+	stub.requests = nil
+	if _, err := client.GetEndpoint("ep-2", false, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range stub.requests {
+		if strings.HasPrefix(r, "GET /endpoints") {
+			t.Errorf("an endpoint v2 reports in full must not read v1: %v", stub.requests)
 		}
 	}
 }
