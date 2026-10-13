@@ -18,6 +18,7 @@ _note: all pods automatically come with runpodctl installed with a pod-scoped ap
       - [macos](#macos)
       - [windows powershell](#windows-powershell)
       - [conda, mamba, pixi (conda-forge)](#conda-mamba-pixi-conda-forge)
+      - [nix](#nix)
   - [quick start](#quick-start)
   - [commands](#commands)
     - [pod management](#pod-management)
@@ -83,6 +84,17 @@ mamba install conda-forge::runpodctl
 # pixi (user-global install)
 pixi global install runpodctl
 ```
+
+#### nix
+
+run it straight from github, or install it into your profile (linux and apple silicon):
+
+```bash
+nix run github:runpod/runpodctl -- pod list
+nix profile install github:runpod/runpodctl
+```
+
+`runpodctl update` cannot replace a binary in the read-only nix store; upgrade with `nix profile upgrade` instead. the flake also provides the dev shell, hermetic checks, oci images and the static analysis report: see [nix/README.md](nix/README.md).
 
 ## quick start
 
