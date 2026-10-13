@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/runpod/runpodctl/internal/clierr"
@@ -11,6 +12,59 @@ import (
 
 // SSH keys live on the account: rest v2 lists them with GET /account/ssh-keys
 // and replaces the whole set with PUT. Add and remove are read-modify-write.
+
+// v2SSHKeyPattern is the pattern rest v2 validates every entry of a key list
+// against. one entry that fails it makes v2 reject the whole PUT.
+var v2SSHKeyPattern = regexp.MustCompile(`^(ssh|ecdsa|sk)-[^\s]+ [^\s]+([ \t][^\n\r]*)?$`)
+
+// validV2SSHKey reports whether v2 will accept line as a key list entry.
+func validV2SSHKey(line string) bool {
+	if !v2SSHKeyPattern.MatchString(line) {
+		return false
+	}
+	_, ok := parseSSHKey(line)
+	return ok
+}
+
+// InvalidStoredSSHKeysError is an account key list holding entries v2 rejects,
+// left over from when keys were one free-text blob. while they are there, no
+// key can be added or removed, so the cli stops before writing and says how
+// to clear them.
+type InvalidStoredSSHKeysError struct {
+	Entries []string
+}
+
+func (e *InvalidStoredSSHKeysError) Error() string {
+	return fmt.Sprintf("your account's ssh key list has %d saved entr%s that %s not a valid public key (first: %q). "+
+		"rest v2 rejects the whole list while %s there, so no key can be added or removed. "+
+		"run 'runpodctl ssh remove-key --invalid' to delete %s, or remove %s in the console under settings, ssh public keys",
+		len(e.Entries), plural(len(e.Entries), "y", "ies"), plural(len(e.Entries), "is", "are"), truncateForError(e.Entries[0]),
+		plural(len(e.Entries), "it is", "they are"), plural(len(e.Entries), "it", "them"), plural(len(e.Entries), "it", "them"))
+}
+
+// ErrorCode is conflict: an account state no retry fixes.
+func (e *InvalidStoredSSHKeysError) ErrorCode() string { return "conflict" }
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
+// checkStoredSSHKeys refuses a key list v2 would reject as a whole.
+func checkStoredSSHKeys(lines []string) error {
+	var invalid []string
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" && !validV2SSHKey(strings.TrimSpace(line)) {
+			invalid = append(invalid, line)
+		}
+	}
+	if len(invalid) > 0 {
+		return &InvalidStoredSSHKeysError{Entries: invalid}
+	}
+	return nil
+}
 
 type sshKeysBody struct {
 	Keys []string `json:"keys"`
@@ -90,7 +144,7 @@ func (c *Client) AddPublicSSHKey(key []byte) error {
 		// v2 validates every entry of the list it is sent, so one line that
 		// isn't a key would fail the whole update; refuse it up front.
 		parsed, ok := parseSSHKey(newKey)
-		if !ok {
+		if !ok || !validV2SSHKey(newKey) {
 			return clierr.Usagef("not an ssh public key: %q", truncateForError(newKey))
 		}
 		if have[parsed.Fingerprint] {
@@ -102,6 +156,9 @@ func (c *Client) AddPublicSSHKey(key []byte) error {
 	}
 	if !added {
 		return nil
+	}
+	if err := checkStoredSSHKeys(lines); err != nil {
+		return err
 	}
 	if err := c.putSSHKeyLines(lines); err != nil {
 		return fmt.Errorf("failed to update SSH keys: %w", err)
@@ -133,6 +190,9 @@ func (c *Client) RemovePublicSSHKey(name, fingerprint string) error {
 	case name != "" && fingerprint == "" && matchCount > 1:
 		return fmt.Errorf("multiple ssh keys found with name %q; use --fingerprint", name)
 	}
+	if err := checkStoredSSHKeys(kept); err != nil {
+		return err
+	}
 
 	if err := c.putSSHKeyLines(kept); err != nil {
 		return fmt.Errorf("failed to update SSH keys: %w", err)
@@ -147,4 +207,28 @@ func truncateForError(s string) string {
 		return s[:40] + "..."
 	}
 	return s
+}
+
+// RemoveInvalidSSHKeys deletes the key list entries v2 rejects (see
+// InvalidStoredSSHKeysError) and keeps every valid key. it returns how many
+// entries it removed; with none, it writes nothing.
+func (c *Client) RemoveInvalidSSHKeys() (int, error) {
+	lines, err := c.getSSHKeyLines()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get existing SSH keys: %w", err)
+	}
+	kept := []string{}
+	for _, line := range lines {
+		if validV2SSHKey(strings.TrimSpace(line)) {
+			kept = append(kept, line)
+		}
+	}
+	removed := len(lines) - len(kept)
+	if removed == 0 {
+		return 0, nil
+	}
+	if err := c.putSSHKeyLines(kept); err != nil {
+		return 0, fmt.Errorf("failed to update SSH keys: %w", err)
+	}
+	return removed, nil
 }

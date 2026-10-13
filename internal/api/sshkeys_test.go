@@ -147,3 +147,66 @@ func TestAddPublicSSHKeyRefusesNonKeyLines(t *testing.T) {
 		t.Fatalf("a refused add must not write: %v", puts)
 	}
 }
+
+// an entry v2 rejects, saved back when keys were one free-text blob, blocks
+// every key change: add and remove stop before writing, with a conflict error
+// that names the way out.
+func TestStoredInvalidSSHKeysBlockWritesWithAProperError(t *testing.T) {
+	stored := []string{testKeyFirst, "my laptop key, see notes", testKeySecond}
+	for name, write := range map[string]func(*Client) error{
+		"add":    func(c *Client) error { return c.AddPublicSSHKey([]byte(testKeyFirstAgain)) },
+		"remove": func(c *Client) error { return c.RemovePublicSSHKey("second", "") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			var puts [][]string
+			server := sshKeyServer(t, stored, &puts)
+			defer server.Close()
+
+			err := write(newV2TestClient(t, server))
+			var invalid *InvalidStoredSSHKeysError
+			if !errors.As(err, &invalid) || invalid.ErrorCode() != "conflict" || len(invalid.Entries) != 1 {
+				t.Fatalf("err = %v, want an InvalidStoredSSHKeysError for the one bad entry", err)
+			}
+			if !strings.Contains(err.Error(), "runpodctl ssh remove-key --invalid") {
+				t.Errorf("the error must name the fix: %v", err)
+			}
+			if len(puts) != 0 {
+				t.Fatalf("a blocked change must not write: %v", puts)
+			}
+		})
+	}
+}
+
+func TestRemoveInvalidSSHKeys(t *testing.T) {
+	var puts [][]string
+	optionsPrefixed := `from="10.0.0.1" ` + testKeySecond // parses, but v2's pattern rejects it
+	server := sshKeyServer(t, []string{testKeyFirst, "not a key", optionsPrefixed, testKeyFirstAgain}, &puts)
+	defer server.Close()
+
+	n, err := newV2TestClient(t, server).RemoveInvalidSSHKeys()
+	if err != nil || n != 2 {
+		t.Fatalf("removed %d, err %v; want 2 removed", n, err)
+	}
+	if !reflect.DeepEqual(puts, [][]string{{testKeyFirst, testKeyFirstAgain}}) {
+		t.Fatalf("puts = %v, want only the valid keys kept", puts)
+	}
+
+	// nothing invalid: nothing written
+	puts = nil
+	clean := sshKeyServer(t, []string{testKeyFirst}, &puts)
+	defer clean.Close()
+	if n, err := newV2TestClient(t, clean).RemoveInvalidSSHKeys(); err != nil || n != 0 || len(puts) != 0 {
+		t.Fatalf("clean list: removed %d, err %v, puts %v", n, err, puts)
+	}
+}
+
+// a pasted key with authorized_keys options parses, but v2 rejects it
+func TestAddPublicSSHKeyRefusesOptionsPrefixedKey(t *testing.T) {
+	var puts [][]string
+	server := sshKeyServer(t, []string{testKeyFirst}, &puts)
+	defer server.Close()
+	err := newV2TestClient(t, server).AddPublicSSHKey([]byte(`from="10.0.0.1" ` + testKeySecond))
+	if err == nil || len(puts) != 0 {
+		t.Fatalf("err = %v, puts = %v; want a refusal and no write", err, puts)
+	}
+}

@@ -40,8 +40,14 @@ var sshRemoveKeyCmd = &cobra.Command{
 	Short: "remove an ssh key",
 	Long:  "remove an ssh key from your account",
 	PreRunE: func(cmd *cobra.Command, args []string) error {
+		if sshKeyInvalid {
+			if sshKeyName != "" || sshKeyFingerprint != "" {
+				return fmt.Errorf("--invalid removes every invalid entry; it can't be combined with --name or --fingerprint")
+			}
+			return nil
+		}
 		if sshKeyName == "" && sshKeyFingerprint == "" {
-			return fmt.Errorf("either --fingerprint or --name must be provided")
+			return fmt.Errorf("either --fingerprint, --name or --invalid must be provided")
 		}
 		return nil
 	},
@@ -82,6 +88,7 @@ var (
 	sshKey            string
 	sshKeyName        string
 	sshKeyFingerprint string
+	sshKeyInvalid     bool
 	sshVerbose        bool
 )
 
@@ -97,6 +104,7 @@ func init() {
 	sshAddKeyCmd.Flags().StringVar(&sshKeyFile, "key-file", "", "file containing the public key")
 	sshRemoveKeyCmd.Flags().StringVar(&sshKeyFingerprint, "fingerprint", "", "fingerprint of the key to remove")
 	sshRemoveKeyCmd.Flags().StringVar(&sshKeyName, "name", "", "name of the key to remove")
+	sshRemoveKeyCmd.Flags().BoolVar(&sshKeyInvalid, "invalid", false, "remove every saved entry that isn't a valid public key (they block all key changes)")
 
 	sshInfoCmd.Flags().BoolVarP(&sshVerbose, "verbose", "v", false, "include pod id and name in output")
 	sshConnectCmd.Flags().BoolVarP(&sshVerbose, "verbose", "v", false, "include pod id and name in output")
@@ -160,11 +168,18 @@ func runSSHRemoveKey(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	format := output.ParseFormat(cmd.Flag("output").Value.String())
+	if sshKeyInvalid {
+		n, err := client.RemoveInvalidSSHKeys()
+		if err != nil {
+			return fmt.Errorf("failed to remove invalid ssh key entries: %w", err)
+		}
+		return output.Print(map[string]interface{}{"removed": n > 0, "removedCount": n}, &output.Config{Format: format})
+	}
+
 	if err := client.RemovePublicSSHKey(sshKeyName, sshKeyFingerprint); err != nil {
 		return fmt.Errorf("failed to remove ssh key: %w", err)
 	}
-
-	format := output.ParseFormat(cmd.Flag("output").Value.String())
 	return output.Print(map[string]interface{}{"removed": true}, &output.Config{Format: format})
 }
 
