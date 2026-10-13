@@ -8,6 +8,11 @@ _note: all pods automatically come with runpodctl installed with a pod-scoped ap
 
 </div>
 
+<!-- runpod-agent-setup:start -->
+> [!TIP]
+> **Using an AI agent?** Point it to https://docs.runpod.io/agent-setup.md to install the Runpod skills and MCP server.
+<!-- runpod-agent-setup:end -->
+
 ## table of contents
 
 - [runpodctl cli](#runpodctl-cli)
