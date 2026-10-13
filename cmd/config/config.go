@@ -105,7 +105,7 @@ func ensureSSHKeyInCloud(publicKey []byte) error {
 	}
 
 	// If the key doesn't exist, add it
-	if err := client.AddPublicSSHKey(publicKey); err != nil {
+	if err := client.AddPublicSSHKey(publicKey, false); err != nil {
 		return fmt.Errorf("failed to add the SSH key: %w", err)
 	}
 

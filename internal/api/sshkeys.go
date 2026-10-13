@@ -37,7 +37,8 @@ type InvalidStoredSSHKeysError struct {
 func (e *InvalidStoredSSHKeysError) Error() string {
 	return fmt.Sprintf("your account's ssh key list has %d saved entr%s that %s not a valid public key (first: %q). "+
 		"rest v2 rejects the whole list while %s there, so no key can be added or removed. "+
-		"run 'runpodctl ssh remove-key --invalid' to delete %s, or remove %s in the console under settings, ssh public keys",
+		"re-run with --remove-invalid to delete %s as part of this command, run 'runpodctl ssh remove-key --invalid', "+
+		"or remove %s in the console under settings, ssh public keys",
 		len(e.Entries), plural(len(e.Entries), "y", "ies"), plural(len(e.Entries), "is", "are"), truncateForError(e.Entries[0]),
 		plural(len(e.Entries), "it is", "they are"), plural(len(e.Entries), "it", "them"), plural(len(e.Entries), "it", "them"))
 }
@@ -52,18 +53,23 @@ func plural(n int, one, many string) string {
 	return many
 }
 
-// checkStoredSSHKeys refuses a key list v2 would reject as a whole.
-func checkStoredSSHKeys(lines []string) error {
+// checkStoredSSHKeys returns lines ready to send: with removeInvalid, minus the
+// entries v2 rejects; without it, an InvalidStoredSSHKeysError if there are any,
+// since v2 would reject the whole list.
+func checkStoredSSHKeys(lines []string, removeInvalid bool) ([]string, error) {
 	var invalid []string
+	kept := []string{}
 	for _, line := range lines {
 		if strings.TrimSpace(line) != "" && !validV2SSHKey(strings.TrimSpace(line)) {
 			invalid = append(invalid, line)
+			continue
 		}
+		kept = append(kept, line)
 	}
-	if len(invalid) > 0 {
-		return &InvalidStoredSSHKeysError{Entries: invalid}
+	if len(invalid) > 0 && !removeInvalid {
+		return nil, &InvalidStoredSSHKeysError{Entries: invalid}
 	}
-	return nil
+	return kept, nil
 }
 
 type sshKeysBody struct {
@@ -122,8 +128,9 @@ func (c *Client) GetPublicSSHKeys() ([]SSHKey, error) {
 // AddPublicSSHKey adds each key in key (one per line) that the account does
 // not already have. keys are compared by fingerprint, so a comment does not
 // make a registered key look new. v2 stores one key per entry, so a pasted
-// block of several keys is split.
-func (c *Client) AddPublicSSHKey(key []byte) error {
+// block of several keys is split. removeInvalid drops saved entries v2 rejects
+// (see InvalidStoredSSHKeysError) in the same write instead of refusing.
+func (c *Client) AddPublicSSHKey(key []byte, removeInvalid bool) error {
 	lines, err := c.getSSHKeyLines()
 	if err != nil {
 		return fmt.Errorf("failed to get existing SSH keys: %w", err)
@@ -157,7 +164,8 @@ func (c *Client) AddPublicSSHKey(key []byte) error {
 	if !added {
 		return nil
 	}
-	if err := checkStoredSSHKeys(lines); err != nil {
+	lines, err = checkStoredSSHKeys(lines, removeInvalid)
+	if err != nil {
 		return err
 	}
 	if err := c.putSSHKeyLines(lines); err != nil {
@@ -167,8 +175,9 @@ func (c *Client) AddPublicSSHKey(key []byte) error {
 }
 
 // RemovePublicSSHKey removes the key matching name and/or fingerprint. a name
-// matching several keys is ambiguous and needs the fingerprint.
-func (c *Client) RemovePublicSSHKey(name, fingerprint string) error {
+// matching several keys is ambiguous and needs the fingerprint. removeInvalid
+// is as for AddPublicSSHKey.
+func (c *Client) RemovePublicSSHKey(name, fingerprint string, removeInvalid bool) error {
 	lines, err := c.getSSHKeyLines()
 	if err != nil {
 		return fmt.Errorf("failed to get existing SSH keys: %w", err)
@@ -190,7 +199,8 @@ func (c *Client) RemovePublicSSHKey(name, fingerprint string) error {
 	case name != "" && fingerprint == "" && matchCount > 1:
 		return fmt.Errorf("multiple ssh keys found with name %q; use --fingerprint", name)
 	}
-	if err := checkStoredSSHKeys(kept); err != nil {
+	kept, err = checkStoredSSHKeys(kept, removeInvalid)
+	if err != nil {
 		return err
 	}
 

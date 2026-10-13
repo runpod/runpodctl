@@ -1,17 +1,21 @@
 package cmd
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/runpod/runpodctl/internal/api"
 	"github.com/spf13/cobra"
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -349,5 +353,61 @@ func TestSSHForget_RemovesOnlyThatPod(t *testing.T) {
 	again := sshForgetJSON(t, "pod123")
 	if again["forgotten"] != false {
 		t.Errorf("second forget reported a removal: %v", again)
+	}
+}
+
+// the invalid-entry prompt: asked only of a person, never of a pipe or an
+// agent, and --remove-invalid skips it.
+func TestWithInvalidKeyPrompt(t *testing.T) {
+	invalidErr := &api.InvalidStoredSSHKeysError{Entries: []string{"my laptop key, see notes"}}
+	cases := []struct {
+		name        string
+		flag        bool
+		interactive bool
+		answer      string
+		firstErr    error
+		wantCalls   []bool // the removeInvalid value of each write
+		wantErr     bool
+		wantPrompt  bool
+	}{
+		{name: "flag skips the prompt", flag: true, interactive: true, wantCalls: []bool{true}},
+		{name: "person answers yes", interactive: true, answer: "y\n", firstErr: invalidErr, wantCalls: []bool{false, true}, wantPrompt: true},
+		{name: "person answers no", interactive: true, answer: "n\n", firstErr: invalidErr, wantCalls: []bool{false}, wantErr: true, wantPrompt: true},
+		{name: "agent or pipe gets the error", interactive: false, firstErr: invalidErr, wantCalls: []bool{false}, wantErr: true},
+		{name: "other errors pass through", interactive: true, firstErr: errors.New("boom"), wantCalls: []bool{false}, wantErr: true},
+		{name: "no invalid entries, no prompt", interactive: true, wantCalls: []bool{false}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			savedInteractive, savedIn, savedOut := invalidKeyPromptIsInteractive, invalidKeyPromptIn, invalidKeyPromptOut
+			t.Cleanup(func() {
+				invalidKeyPromptIsInteractive, invalidKeyPromptIn, invalidKeyPromptOut = savedInteractive, savedIn, savedOut
+			})
+			var out bytes.Buffer
+			invalidKeyPromptIsInteractive = func() bool { return tc.interactive }
+			invalidKeyPromptIn, invalidKeyPromptOut = strings.NewReader(tc.answer), &out
+
+			var calls []bool
+			err := withInvalidKeyPrompt(tc.flag, func(removeInvalid bool) error {
+				calls = append(calls, removeInvalid)
+				if !removeInvalid {
+					return tc.firstErr
+				}
+				return nil
+			})
+			if (err != nil) != tc.wantErr {
+				t.Errorf("err = %v, wantErr %t", err, tc.wantErr)
+			}
+			if !reflect.DeepEqual(calls, tc.wantCalls) {
+				t.Errorf("writes = %v, want %v", calls, tc.wantCalls)
+			}
+			prompted := strings.Contains(out.String(), "delete them and continue?")
+			if prompted != tc.wantPrompt {
+				t.Errorf("prompted = %t, want %t (stderr %q)", prompted, tc.wantPrompt, out.String())
+			}
+			if tc.wantPrompt && !strings.Contains(out.String(), "my laptop key, see notes") {
+				t.Errorf("the prompt must show the entries it would delete: %q", out.String())
+			}
+		})
 	}
 }

@@ -2,17 +2,21 @@ package cmd
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	"github.com/runpod/runpodctl/cmd/project"
 	"github.com/runpod/runpodctl/cmd/ssh"
+	"github.com/runpod/runpodctl/internal/agent"
 	"github.com/runpod/runpodctl/internal/api"
 	"github.com/runpod/runpodctl/internal/output"
 	"github.com/runpod/runpodctl/internal/sshconnect"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var sshCmd = &cobra.Command{
@@ -89,6 +93,7 @@ var (
 	sshKeyName        string
 	sshKeyFingerprint string
 	sshKeyInvalid     bool
+	sshRemoveInvalid  bool
 	sshVerbose        bool
 )
 
@@ -104,6 +109,8 @@ func init() {
 	sshAddKeyCmd.Flags().StringVar(&sshKeyFile, "key-file", "", "file containing the public key")
 	sshRemoveKeyCmd.Flags().StringVar(&sshKeyFingerprint, "fingerprint", "", "fingerprint of the key to remove")
 	sshRemoveKeyCmd.Flags().StringVar(&sshKeyName, "name", "", "name of the key to remove")
+	sshAddKeyCmd.Flags().BoolVar(&sshRemoveInvalid, "remove-invalid", false, "also delete saved entries that aren't valid public keys, which block every key change, without asking")
+	sshRemoveKeyCmd.Flags().BoolVar(&sshRemoveInvalid, "remove-invalid", false, "also delete saved entries that aren't valid public keys, which block every key change, without asking")
 	sshRemoveKeyCmd.Flags().BoolVar(&sshKeyInvalid, "invalid", false, "remove every saved entry that isn't a valid public key (they block all key changes)")
 
 	sshInfoCmd.Flags().BoolVarP(&sshVerbose, "verbose", "v", false, "include pod id and name in output")
@@ -154,7 +161,10 @@ func runSSHAddKey(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if err := client.AddPublicSSHKey(publicKey); err != nil {
+	err = withInvalidKeyPrompt(sshRemoveInvalid, func(removeInvalid bool) error {
+		return client.AddPublicSSHKey(publicKey, removeInvalid)
+	})
+	if err != nil {
 		return fmt.Errorf("failed to add ssh key: %w", err)
 	}
 
@@ -177,7 +187,10 @@ func runSSHRemoveKey(cmd *cobra.Command, args []string) error {
 		return output.Print(map[string]interface{}{"removed": n > 0, "removedCount": n}, &output.Config{Format: format})
 	}
 
-	if err := client.RemovePublicSSHKey(sshKeyName, sshKeyFingerprint); err != nil {
+	err = withInvalidKeyPrompt(sshRemoveInvalid, func(removeInvalid bool) error {
+		return client.RemovePublicSSHKey(sshKeyName, sshKeyFingerprint, removeInvalid)
+	})
+	if err != nil {
 		return fmt.Errorf("failed to remove ssh key: %w", err)
 	}
 	return output.Print(map[string]interface{}{"removed": true}, &output.Config{Format: format})
@@ -281,4 +294,50 @@ func promptKeyName() string {
 		return ssh.DefaultKeyName
 	}
 	return strings.ReplaceAll(keyName, " ", "-")
+}
+
+// invalidKeyPromptIsInteractive reports whether the prompt can be seen and
+// answered by a person: stdin and stderr are terminals, and no ai agent is
+// driving the cli (agents often run in a pseudo-terminal, and a prompt would
+// hang them). otherwise the error names --remove-invalid instead.
+var invalidKeyPromptIsInteractive = func() bool {
+	return agent.Detect() == "" && term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stderr.Fd()))
+}
+
+// invalidKeyPromptIn and invalidKeyPromptOut are the prompt's ends; it goes to
+// stderr so stdout stays the command's json.
+var (
+	invalidKeyPromptIn  io.Reader = os.Stdin
+	invalidKeyPromptOut io.Writer = os.Stderr
+)
+
+// withInvalidKeyPrompt runs write, and when the account's key list holds saved
+// entries v2 rejects, asks a person whether to delete them and retries. with
+// removeInvalid set it deletes them without asking; non-interactive, the
+// error is returned as is and names --remove-invalid.
+func withInvalidKeyPrompt(removeInvalid bool, write func(removeInvalid bool) error) error {
+	err := write(removeInvalid)
+	var invalid *api.InvalidStoredSSHKeysError
+	if removeInvalid || !errors.As(err, &invalid) || !invalidKeyPromptIsInteractive() {
+		return err
+	}
+	entries, verb := "entries", "are"
+	if len(invalid.Entries) == 1 {
+		entries, verb = "entry", "is"
+	}
+	fmt.Fprintf(invalidKeyPromptOut, "your account's ssh key list has %d saved %s that %s not a valid public key, which blocks every key change:\n",
+		len(invalid.Entries), entries, verb)
+	for _, entry := range invalid.Entries {
+		if len(entry) > 60 {
+			entry = entry[:60] + "..."
+		}
+		fmt.Fprintf(invalidKeyPromptOut, "  %s\n", entry)
+	}
+	fmt.Fprint(invalidKeyPromptOut, "delete them and continue? (y/n) ")
+	scanner := bufio.NewScanner(invalidKeyPromptIn)
+	scanner.Scan()
+	if strings.ToLower(strings.TrimSpace(scanner.Text())) != "y" {
+		return err
+	}
+	return write(true)
 }

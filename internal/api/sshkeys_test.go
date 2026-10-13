@@ -76,7 +76,7 @@ func TestAddPublicSSHKey(t *testing.T) {
 			server := sshKeyServer(t, tt.existing, &puts)
 			defer server.Close()
 
-			if err := newV2TestClient(t, server).AddPublicSSHKey([]byte(tt.add)); err != nil {
+			if err := newV2TestClient(t, server).AddPublicSSHKey([]byte(tt.add), false); err != nil {
 				t.Fatalf("AddPublicSSHKey: %v", err)
 			}
 			if !reflect.DeepEqual(puts, tt.wantPuts) {
@@ -111,7 +111,7 @@ func TestRemovePublicSSHKey(t *testing.T) {
 			server := sshKeyServer(t, tt.existing, &puts)
 			defer server.Close()
 
-			err := newV2TestClient(t, server).RemovePublicSSHKey(tt.byName, tt.byPrint)
+			err := newV2TestClient(t, server).RemovePublicSSHKey(tt.byName, tt.byPrint, false)
 			if tt.wantErrText != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErrText) {
 					t.Fatalf("error = %v, want %q", err, tt.wantErrText)
@@ -138,7 +138,7 @@ func TestAddPublicSSHKeyRefusesNonKeyLines(t *testing.T) {
 	server := sshKeyServer(t, []string{testKeyFirst}, &puts)
 	defer server.Close()
 
-	err := newV2TestClient(t, server).AddPublicSSHKey([]byte(testKeySecond + "\nnot a key at all"))
+	err := newV2TestClient(t, server).AddPublicSSHKey([]byte(testKeySecond+"\nnot a key at all"), false)
 	var usage interface{ ErrorCode() string }
 	if !errors.As(err, &usage) || usage.ErrorCode() != "usage_error" || !strings.Contains(err.Error(), "not an ssh public key") {
 		t.Fatalf("err = %v, want a usage_error naming the bad line", err)
@@ -154,8 +154,8 @@ func TestAddPublicSSHKeyRefusesNonKeyLines(t *testing.T) {
 func TestStoredInvalidSSHKeysBlockWritesWithAProperError(t *testing.T) {
 	stored := []string{testKeyFirst, "my laptop key, see notes", testKeySecond}
 	for name, write := range map[string]func(*Client) error{
-		"add":    func(c *Client) error { return c.AddPublicSSHKey([]byte(testKeyFirstAgain)) },
-		"remove": func(c *Client) error { return c.RemovePublicSSHKey("second", "") },
+		"add":    func(c *Client) error { return c.AddPublicSSHKey([]byte(testKeyFirstAgain), false) },
+		"remove": func(c *Client) error { return c.RemovePublicSSHKey("second", "", false) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			var puts [][]string
@@ -205,8 +205,28 @@ func TestAddPublicSSHKeyRefusesOptionsPrefixedKey(t *testing.T) {
 	var puts [][]string
 	server := sshKeyServer(t, []string{testKeyFirst}, &puts)
 	defer server.Close()
-	err := newV2TestClient(t, server).AddPublicSSHKey([]byte(`from="10.0.0.1" ` + testKeySecond))
+	err := newV2TestClient(t, server).AddPublicSSHKey([]byte(`from="10.0.0.1" `+testKeySecond), false)
 	if err == nil || len(puts) != 0 {
 		t.Fatalf("err = %v, puts = %v; want a refusal and no write", err, puts)
+	}
+}
+
+// with removeInvalid, the bad entries go in the same write as the change.
+func TestRemoveInvalidInTheSameWrite(t *testing.T) {
+	stored := []string{testKeyFirst, "my laptop key, see notes", testKeySecond}
+	var puts [][]string
+	server := sshKeyServer(t, stored, &puts)
+	defer server.Close()
+	client := newV2TestClient(t, server)
+
+	if err := client.AddPublicSSHKey([]byte(testKeyFirstAgain), true); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if err := client.RemovePublicSSHKey("second", "", true); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	want := [][]string{{testKeyFirst, testKeySecond, testKeyFirstAgain}, {testKeyFirst}}
+	if !reflect.DeepEqual(puts, want) {
+		t.Fatalf("puts = %v, want %v", puts, want)
 	}
 }

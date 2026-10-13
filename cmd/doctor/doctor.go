@@ -220,7 +220,7 @@ func checkSSHKey() checkResult {
 	// add if not in cloud
 	if !keyInCloud {
 		fmt.Fprintln(os.Stderr, "adding ssh key to runpod...")
-		if err := client.AddPublicSSHKey(publicKey); err != nil {
+		if err := client.AddPublicSSHKey(publicKey, false); err != nil {
 			result.Status = "fail"
 			result.Error = fmt.Sprintf("failed to add ssh key: %v", err)
 			return result
