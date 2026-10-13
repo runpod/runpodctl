@@ -88,7 +88,9 @@ var CreatePodCmd = &cobra.Command{
 		if note := input.VolumeNote(); note != "" {
 			fmt.Fprintln(os.Stderr, note)
 		}
-		if ct == "CPU" && volumeInGb > 0 && networkVolumeId == "" && cmd.Flags().Changed("volumeSize") {
+		// said for the default --volumeSize too, which would otherwise vanish
+		// without a word
+		if ct == "CPU" && volumeInGb > 0 && networkVolumeId == "" {
 			fmt.Fprintln(os.Stderr, "note: cpu pods cannot have a pod volume; creating without one")
 		}
 

@@ -34,6 +34,12 @@ var CreatePodsCmd = &cobra.Command{
 	Long:  "create a group of pods on runpod.io",
 	Run: func(cmd *cobra.Command, args []string) {
 		gpus := strings.Split(gpuTypeId, ",")
+		// an empty gpu type would make the v2 create a cpu pod
+		for _, g := range gpus {
+			if strings.TrimSpace(g) == "" {
+				cobra.CheckErr(fmt.Errorf("gpuType must name a gpu type, e.g. 'NVIDIA GeForce RTX 3090'"))
+			}
+		}
 		gpusIndex := 0
 		input := &api.LegacyPodCreate{
 			ContainerDiskInGb: containerDiskInGb,
