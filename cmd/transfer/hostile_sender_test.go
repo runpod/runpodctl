@@ -648,6 +648,10 @@ func TestSenderRejectsMalformedResumeRequest(t *testing.T) {
 		// a chunk size of 1 would make a bound of size/ranges[0] the file's
 		// size in bytes, so the peer's chunk size does not count.
 		{1, 0, 4},
+		// a count that overflows the running total wraps it negative, under
+		// any limit; found by FuzzValidateChunkRanges.
+		{chunk, 0, 1, chunk, math.MaxInt64},
+		{chunk, 0, math.MaxInt64, chunk, math.MaxInt64},
 	} {
 		c := &Client{Options: Options{IsSender: true}, mutex: &sync.Mutex{}}
 		c.FilesToTransfer = []FileInfo{{Name: "a", Size: size}}
