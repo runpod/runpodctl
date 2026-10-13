@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -66,6 +67,8 @@ func TestAddPublicSSHKey(t *testing.T) {
 		// v2 stores one key per entry
 		{name: "several pasted keys are stored one per entry", existing: []string{testKeyFirst}, add: testKeyFirst + "\n\n" + testKeySecond + "\n", wantPuts: [][]string{{testKeyFirst, testKeySecond}}},
 		{name: "first key on an empty account", existing: []string{}, add: testKeyFirst, wantPuts: [][]string{{testKeyFirst}}},
+		// comment lines in a pasted authorized_keys block are skipped
+		{name: "comments are skipped", existing: []string{testKeyFirst}, add: "# laptop\n" + testKeySecond, wantPuts: [][]string{{testKeyFirst, testKeySecond}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -125,5 +128,22 @@ func TestRemovePublicSSHKey(t *testing.T) {
 				t.Fatalf("puts = %v, want [%v]", puts, tt.wantPut)
 			}
 		})
+	}
+}
+
+// v2 validates every entry it is sent, so a line that isn't a key is refused
+// before any write rather than failing, or polluting, the whole list.
+func TestAddPublicSSHKeyRefusesNonKeyLines(t *testing.T) {
+	var puts [][]string
+	server := sshKeyServer(t, []string{testKeyFirst}, &puts)
+	defer server.Close()
+
+	err := newV2TestClient(t, server).AddPublicSSHKey([]byte(testKeySecond + "\nnot a key at all"))
+	var usage interface{ ErrorCode() string }
+	if !errors.As(err, &usage) || usage.ErrorCode() != "usage_error" || !strings.Contains(err.Error(), "not an ssh public key") {
+		t.Fatalf("err = %v, want a usage_error naming the bad line", err)
+	}
+	if len(puts) != 0 {
+		t.Fatalf("a refused add must not write: %v", puts)
 	}
 }

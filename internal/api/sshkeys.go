@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/runpod/runpodctl/internal/clierr"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -82,15 +83,20 @@ func (c *Client) AddPublicSSHKey(key []byte) error {
 	added := false
 	for _, newKey := range strings.Split(string(key), "\n") {
 		newKey = strings.TrimSpace(newKey)
-		if newKey == "" {
+		// blank lines and comments, as in an authorized_keys file
+		if newKey == "" || strings.HasPrefix(newKey, "#") {
 			continue
 		}
-		if parsed, ok := parseSSHKey(newKey); ok {
-			if have[parsed.Fingerprint] {
-				continue
-			}
-			have[parsed.Fingerprint] = true
+		// v2 validates every entry of the list it is sent, so one line that
+		// isn't a key would fail the whole update; refuse it up front.
+		parsed, ok := parseSSHKey(newKey)
+		if !ok {
+			return clierr.Usagef("not an ssh public key: %q", truncateForError(newKey))
 		}
+		if have[parsed.Fingerprint] {
+			continue
+		}
+		have[parsed.Fingerprint] = true
 		lines = append(lines, newKey)
 		added = true
 	}
@@ -132,4 +138,13 @@ func (c *Client) RemovePublicSSHKey(name, fingerprint string) error {
 		return fmt.Errorf("failed to update SSH keys: %w", err)
 	}
 	return nil
+}
+
+// truncateForError shortens a line for an error message, so a pasted private
+// key or a long blob isn't echoed back in full.
+func truncateForError(s string) string {
+	if len(s) > 40 {
+		return s[:40] + "..."
+	}
+	return s
 }
