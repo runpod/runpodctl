@@ -34,15 +34,7 @@ let
 
   app = pkgs.writeShellApplication {
     name = "runpodctl-${name}";
-    runtimeInputs = [
-      pkgs.coreutils
-      pkgs.findutils
-      pkgs.gnugrep
-      pkgs.gnused
-      pkgs.gawk
-      pkgs.jq
-    ]
-    ++ runtimeInputs;
+    runtimeInputs = import ./base-tools.nix pkgs ++ runtimeInputs;
     text = ''
       out="$1"
       mkdir -p "$out"

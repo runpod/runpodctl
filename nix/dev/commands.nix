@@ -317,7 +317,7 @@ lib.mapAttrs (
   name: entry:
   pkgs.writeShellApplication {
     inherit name;
-    runtimeInputs = entry.runtimeInputs or [ ];
+    runtimeInputs = import ../lib/base-tools.nix pkgs ++ entry.runtimeInputs or [ ];
     text = prelude + entry.text;
     meta = { inherit (entry) description; };
     passthru = { inherit (entry) group; };
