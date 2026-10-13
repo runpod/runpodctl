@@ -73,6 +73,26 @@ const v1DefaultCpuVcpus = 2
 
 var stockOrderV2 = map[string]int{"HIGH": 0, "MEDIUM": 1, "LOW": 2, "NONE": 3}
 
+// defaultPodName is the name a create sends when none was given: v2 requires
+// one, where v1 picked it server-side. the image name without its tag, as the
+// legacy create always did, or the template id for a template-only create.
+func defaultPodName(req *PodCreateV2Request) string {
+	if name := strings.TrimSpace(req.Name); name != "" {
+		return name
+	}
+	image := req.ImageName
+	if i := strings.LastIndex(image, ":"); i > strings.LastIndex(image, "/") {
+		image = image[:i]
+	}
+	if image != "" {
+		return image
+	}
+	if req.TemplateID != "" {
+		return req.TemplateID
+	}
+	return "pod"
+}
+
 // CreatePodV2 creates a pod over rest v2 and returns the raw v2 pod.
 //
 // A cpu pod names no flavor, and v1 walked its list of cpu flavors server-side;
@@ -84,7 +104,7 @@ func (c *Client) CreatePodV2(req *PodCreateV2Request) (*Pod, map[string]interfac
 		return nil, nil, err
 	}
 	body := &v2PodCreate{
-		Name:             req.Name,
+		Name:             defaultPodName(req),
 		Image:            req.ImageName,
 		TemplateID:       req.TemplateID,
 		Cloud:            req.CloudType,

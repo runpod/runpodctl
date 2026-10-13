@@ -699,3 +699,20 @@ func TestPodCreateRequestDockerArgsWireFormat(t *testing.T) {
 		t.Fatalf("request body missing dockerStartCmd tokens: %s", body)
 	}
 }
+
+// a gpu create with no gpu id must be refused before any request: the v2 create
+// would otherwise fall through to a cpu pod.
+func TestRunCreate_GPUWithoutGpuIDIsRefused(t *testing.T) {
+	saved := []string{createImageName, createComputeType, createGpuTypeID, createTemplateID}
+	t.Cleanup(func() {
+		createImageName, createComputeType, createGpuTypeID, createTemplateID = saved[0], saved[1], saved[2], saved[3]
+	})
+	t.Setenv("RUNPOD_API_KEY", "")
+	createImageName, createComputeType, createGpuTypeID, createTemplateID = "alpine", "GPU", "", ""
+
+	err := runCreate(&cobra.Command{}, nil)
+	var usage interface{ ErrorCode() string }
+	if !errors.As(err, &usage) || usage.ErrorCode() != "usage_error" || !strings.Contains(err.Error(), "--gpu-id is required") {
+		t.Fatalf("err = %v, want a usage_error asking for --gpu-id", err)
+	}
+}

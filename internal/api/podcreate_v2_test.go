@@ -178,3 +178,21 @@ func TestCreatePodV2RefusesUnplaceableRequests(t *testing.T) {
 		})
 	}
 }
+
+func TestDefaultPodName(t *testing.T) {
+	for _, tc := range []struct {
+		req  PodCreateV2Request
+		want string
+	}{
+		{PodCreateV2Request{Name: "mine", ImageName: "alpine:3"}, "mine"},
+		{PodCreateV2Request{ImageName: "runpod/base:0.6.2-cuda12.2.0"}, "runpod/base"},
+		{PodCreateV2Request{ImageName: "registry.io:5000/team/img"}, "registry.io:5000/team/img"},
+		{PodCreateV2Request{ImageName: "registry.io:5000/team/img:v1"}, "registry.io:5000/team/img"},
+		{PodCreateV2Request{TemplateID: "tpl-1"}, "tpl-1"},
+		{PodCreateV2Request{Name: "  "}, "pod"},
+	} {
+		if got := defaultPodName(&tc.req); got != tc.want {
+			t.Errorf("defaultPodName(%+v) = %q, want %q", tc.req, got, tc.want)
+		}
+	}
+}

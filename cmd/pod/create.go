@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/shlex"
 	"github.com/runpod/runpodctl/internal/api"
+	"github.com/runpod/runpodctl/internal/clierr"
 	"github.com/runpod/runpodctl/internal/duration"
 	"github.com/runpod/runpodctl/internal/output"
 	"github.com/runpod/runpodctl/internal/waitfor"
@@ -126,6 +127,11 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	if computeType == "CPU" && gpuTypeID != "" {
 		return fmt.Errorf("--gpu-id is not supported for compute type CPU")
+	}
+	// without a gpu id the create would fall through to a cpu pod and bill
+	// the user for something they didn't ask for.
+	if computeType == "GPU" && gpuTypeID == "" {
+		return clierr.Usagef("--gpu-id is required for compute type GPU (see 'runpodctl gpu list'), or set --compute-type CPU")
 	}
 
 	cloudType := strings.ToUpper(strings.TrimSpace(createCloudType))
