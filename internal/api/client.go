@@ -138,12 +138,19 @@ func (c *Client) requestV2(method, endpoint string, params url.Values, body inte
 	// redirects to the collection: a get would print an empty object and a
 	// delete would report success without deleting anything. an id of "." or
 	// ".." is the same hazard once anything on the way resolves dot segments.
-	if strings.HasSuffix(endpoint, "/") || strings.Contains(endpoint, "//") {
-		return nil, clierr.Usagef("a resource id is required")
-	}
-	for _, seg := range strings.Split(endpoint, "/") {
-		if seg == "." || seg == ".." {
+	// segments are checked decoded, so a caller that forgets url.PathEscape
+	// can't slip "%2e" or "%2f" past the check.
+	segs := strings.Split(strings.TrimPrefix(endpoint, "/"), "/")
+	for i, seg := range segs {
+		decoded, err := url.PathUnescape(seg)
+		if err != nil {
 			return nil, clierr.Usagef("invalid resource id %q", seg)
+		}
+		switch {
+		case decoded == "" || (strings.Contains(decoded, "/") && i > 0):
+			return nil, clierr.Usagef("a resource id is required")
+		case decoded == "." || decoded == "..":
+			return nil, clierr.Usagef("invalid resource id %q", decoded)
 		}
 	}
 	u := c.v2URL() + endpoint

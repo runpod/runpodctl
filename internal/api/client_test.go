@@ -483,6 +483,14 @@ func TestRequestV2RefusesEmptyIDAndRedirects(t *testing.T) {
 			t.Fatalf("id %q: err = %v, want a usage_error", id, err)
 		}
 	}
+	// a caller that skipped url.PathEscape: encoded dots and slashes are
+	// checked decoded
+	for _, raw := range []string{"%2e", "%2E%2e", "%2f", "a%2fb"} {
+		_, err = client.GetV2("/registries/"+raw, nil)
+		if !errors.As(err, &usage) || usage.ErrorCode() != "usage_error" {
+			t.Fatalf("path segment %q: err = %v, want a usage_error", raw, err)
+		}
+	}
 	if hits != 0 {
 		t.Fatalf("a dot-segment id must not reach the api, got %d requests", hits)
 	}
