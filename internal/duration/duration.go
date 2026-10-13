@@ -6,10 +6,16 @@ package duration
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
 )
+
+const day = 24 * time.Hour
+
+// maxDays is the largest day count an int64 nanosecond time.Duration holds.
+const maxDays = int(math.MaxInt64 / int64(day))
 
 // Parse parses a duration string like "30m", "1h", "1h30m" or "7d". It handles
 // "d" (days) itself because time.ParseDuration has no day unit, and rejects
@@ -24,15 +30,15 @@ func Parse(s string) (time.Duration, error) {
 		if n <= 0 {
 			return 0, fmt.Errorf("invalid duration %q: must be positive", s)
 		}
-		// check the product, not just the operand: time.Duration is int64
-		// nanoseconds, so 106752d and up wrap to a negative value. A caller that
-		// only guards its own input against <= 0 would then silently substitute a
-		// default (waitfor.Until) or put a --since cutoff in the future.
-		d := time.Duration(n) * 24 * time.Hour
-		if d <= 0 {
-			return 0, fmt.Errorf("invalid duration %q: out of range (max 106751d)", s)
+		// bound the operand, not the product: time.Duration is int64
+		// nanoseconds, so 106752d and up wrap, to a negative value (which a
+		// caller guarding only <= 0 would replace with a default, or turn into
+		// a --since cutoff in the future) or, from 213504d, past zero to a
+		// positive one that is simply wrong (25m for 213504d).
+		if n > maxDays {
+			return 0, fmt.Errorf("invalid duration %q: out of range (max %dd)", s, maxDays)
 		}
-		return d, nil
+		return time.Duration(n) * day, nil
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil {
