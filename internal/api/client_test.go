@@ -477,11 +477,68 @@ func TestRequestV2RefusesEmptyIDAndRedirects(t *testing.T) {
 	if hits != 0 {
 		t.Fatalf("an empty id must not reach the api, got %d requests", hits)
 	}
+	for _, id := range []string{".", ".."} {
+		_, err = client.GetV2("/registries/"+url.PathEscape(id), nil)
+		if !errors.As(err, &usage) || usage.ErrorCode() != "usage_error" {
+			t.Fatalf("id %q: err = %v, want a usage_error", id, err)
+		}
+	}
+	if hits != 0 {
+		t.Fatalf("a dot-segment id must not reach the api, got %d requests", hits)
+	}
 
 	if _, err := client.DeleteV2("/old"); err == nil {
 		t.Fatal("a redirected delete must fail, not follow the redirect")
 	}
 	if hits != 1 {
 		t.Errorf("redirect was followed: %d requests", hits)
+	}
+}
+
+func TestGetV2AllPagesFollowsCursorsAndStopsOnRepeat(t *testing.T) {
+	var cursors []string
+	repeat := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c := r.URL.Query().Get("cursor")
+		cursors = append(cursors, c)
+		switch {
+		case c == "":
+			_, _ = w.Write([]byte(`{"items":[1],"pagination":{"hasNextPage":true,"nextCursor":"a b"}}`))
+		case repeat:
+			_, _ = w.Write([]byte(`{"items":[2],"pagination":{"hasNextPage":true,"nextCursor":"a b"}}`))
+		default:
+			_, _ = w.Write([]byte(`{"items":[2],"pagination":{"hasNextPage":false,"nextCursor":null}}`))
+		}
+	}))
+	defer server.Close()
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+	client, err := NewClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.v2BaseURL = server.URL
+
+	var items []int
+	decode := func(data []byte) error {
+		var page struct{ Items []int }
+		if err := json.Unmarshal(data, &page); err != nil {
+			return err
+		}
+		items = append(items, page.Items...)
+		return nil
+	}
+	if err := client.getV2AllPages("/things", url.Values{"limit": {"1"}}, decode); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 || len(cursors) != 2 || cursors[1] != "a b" {
+		t.Fatalf("items = %v, cursors = %q", items, cursors)
+	}
+
+	repeat, items, cursors = true, nil, nil
+	if err := client.getV2AllPages("/things", nil, decode); err == nil {
+		t.Fatal("a repeated cursor must stop the walk with an error")
+	}
+	if len(cursors) != 2 {
+		t.Fatalf("expected the walk to stop after the repeat, got %d requests", len(cursors))
 	}
 }

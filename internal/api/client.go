@@ -136,9 +136,15 @@ func (c *Client) v2URL() string {
 func (c *Client) requestV2(method, endpoint string, params url.Values, body interface{}) ([]byte, error) {
 	// an empty id leaves an empty path segment ("/registries/"), which v2
 	// redirects to the collection: a get would print an empty object and a
-	// delete would report success without deleting anything.
+	// delete would report success without deleting anything. an id of "." or
+	// ".." is the same hazard once anything on the way resolves dot segments.
 	if strings.HasSuffix(endpoint, "/") || strings.Contains(endpoint, "//") {
 		return nil, clierr.Usagef("a resource id is required")
+	}
+	for _, seg := range strings.Split(endpoint, "/") {
+		if seg == "." || seg == ".." {
+			return nil, clierr.Usagef("invalid resource id %q", seg)
+		}
 	}
 	u := c.v2URL() + endpoint
 	if len(params) > 0 {
@@ -170,6 +176,45 @@ func (c *Client) PutV2(endpoint string, body interface{}) ([]byte, error) {
 // DeleteV2 makes a DELETE request against the rest v2 api
 func (c *Client) DeleteV2(endpoint string) ([]byte, error) {
 	return c.requestV2(http.MethodDelete, endpoint, nil, nil)
+}
+
+// getV2AllPages walks a cursor-paginated rest v2 list, handing each page body to
+// decode. v2 list routes cap a page (1000 by default), so reading only the first
+// page silently truncates a large account.
+func (c *Client) getV2AllPages(endpoint string, params url.Values, decode func([]byte) error) error {
+	query := url.Values{}
+	for k, v := range params {
+		query[k] = v
+	}
+	seen := map[string]bool{}
+	for {
+		data, err := c.GetV2(endpoint, query)
+		if err != nil {
+			return err
+		}
+		if err := decode(data); err != nil {
+			return err
+		}
+		var page struct {
+			Pagination struct {
+				NextCursor  *string `json:"nextCursor"`
+				HasNextPage bool    `json:"hasNextPage"`
+			} `json:"pagination"`
+		}
+		if err := json.Unmarshal(data, &page); err != nil {
+			return fmt.Errorf("failed to parse response: %w", err)
+		}
+		next := page.Pagination.NextCursor
+		if !page.Pagination.HasNextPage || next == nil || *next == "" {
+			return nil
+		}
+		// a cursor the api already handed out would loop forever
+		if seen[*next] {
+			return fmt.Errorf("the api repeated page cursor %q while listing %s", *next, endpoint)
+		}
+		seen[*next] = true
+		query.Set("cursor", *next)
+	}
 }
 
 // Get makes a GET request
