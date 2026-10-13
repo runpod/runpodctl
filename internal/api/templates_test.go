@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -235,5 +236,38 @@ func TestListTemplatesSortsByNameIgnoringCase(t *testing.T) {
 	}
 	if strings.Join(names, ",") != "a111,AI crew,zeta" {
 		t.Errorf("order = %v", names)
+	}
+}
+
+// only a 404 falls back to graphql: any other v2 failure is the real error.
+func TestGetTemplateFallsBackToGraphQLOnlyOnNotFound(t *testing.T) {
+	for _, tc := range []struct {
+		status       int
+		wantFallback bool
+	}{{http.StatusNotFound, true}, {http.StatusServiceUnavailable, false}, {http.StatusUnauthorized, false}} {
+		v2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(tc.status)
+			_, _ = io.WriteString(w, `{"error":"nope"}`)
+		}))
+		gqlHits := 0
+		graphql := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gqlHits++
+			_, _ = io.WriteString(w, `{"data":{"podTemplate":{"id":"tpl-123","name":"from-graphql"}}}`)
+		}))
+		t.Setenv("RUNPOD_GRAPHQL_URL", graphql.URL)
+
+		template, err := newV2TestClient(t, v2).GetTemplate("tpl-123")
+		v2.Close()
+		graphql.Close()
+		if tc.wantFallback {
+			if err != nil || gqlHits != 1 || template.Name != "from-graphql" {
+				t.Errorf("status %d: want the graphql fallback, got %v (graphql hits %d)", tc.status, err, gqlHits)
+			}
+			continue
+		}
+		var apiErr *APIError
+		if !errors.As(err, &apiErr) || apiErr.Status != tc.status || gqlHits != 0 {
+			t.Errorf("status %d: want the v2 error and no graphql call, got %v (graphql hits %d)", tc.status, err, gqlHits)
+		}
 	}
 }

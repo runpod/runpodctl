@@ -2,7 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -399,7 +401,9 @@ func (c *Client) ListAllTemplates(opts *TemplateListOptions) ([]Template, error)
 
 	// Apply pagination
 	if opts != nil {
-		if opts.Offset > 0 && opts.Offset < len(allTemplates) {
+		if opts.Offset >= len(allTemplates) {
+			allTemplates = allTemplates[:0]
+		} else if opts.Offset > 0 {
 			allTemplates = allTemplates[opts.Offset:]
 		}
 		if opts.Limit > 0 && opts.Limit < len(allTemplates) {
@@ -417,6 +421,12 @@ func (c *Client) ListAllTemplates(opts *TemplateListOptions) ([]Template, error)
 func (c *Client) GetTemplate(templateID string) (*Template, error) {
 	data, err := c.GetV2("/templates/"+url.PathEscape(templateID), nil)
 	if err != nil {
+		// only a template v2 doesn't know falls back; any other failure (a
+		// usage error, auth, a 5xx) is the real error and is reported as-is.
+		var apiErr *APIError
+		if !errors.As(err, &apiErr) || apiErr.Status != http.StatusNotFound {
+			return nil, err
+		}
 		// rp-migrate: keep-v1
 		return c.getTemplateByIDGraphQL(templateID)
 	}
