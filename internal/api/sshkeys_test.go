@@ -254,3 +254,43 @@ func TestSSHKeyWritesAreTrimmed(t *testing.T) {
 		t.Fatalf("puts = %q, want trimmed entries and no blanks", puts)
 	}
 }
+
+// an options-prefixed copy of a key parses but v2 rejects it: adding the clean
+// copy must not be a no-op that leaves every later write blocked.
+func TestAddCleanCopyOfInvalidStoredKey(t *testing.T) {
+	prefixed := `from="10.0.0.1" ` + testKeySecond
+	var puts [][]string
+	server := sshKeyServer(t, []string{testKeyFirst, prefixed}, &puts)
+	defer server.Close()
+	client := newV2TestClient(t, server)
+
+	var invalid *InvalidStoredSSHKeysError
+	if err := client.AddPublicSSHKey([]byte(testKeySecond), false); !errors.As(err, &invalid) {
+		t.Fatalf("without the flag: err = %v, want the invalid-entry error (so a person is asked)", err)
+	}
+	if err := client.AddPublicSSHKey([]byte(testKeySecond), true); err != nil {
+		t.Fatalf("with the flag: %v", err)
+	}
+	if !reflect.DeepEqual(puts, [][]string{{testKeyFirst, testKeySecond}}) {
+		t.Fatalf("puts = %q, want the clean copy in and the prefixed one gone", puts)
+	}
+}
+
+// with --remove-invalid and nothing new to add, the invalid entries still go.
+func TestAddExistingKeyWithRemoveInvalidStillCleans(t *testing.T) {
+	var puts [][]string
+	server := sshKeyServer(t, []string{testKeyFirst, "not a key"}, &puts)
+	defer server.Close()
+	if err := newV2TestClient(t, server).AddPublicSSHKey([]byte(testKeyFirst), true); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if !reflect.DeepEqual(puts, [][]string{{testKeyFirst}}) {
+		t.Fatalf("puts = %q, want the invalid entry removed", puts)
+	}
+
+	// without the flag, re-adding a key that's present stays a no-op
+	puts = nil
+	if err := newV2TestClient(t, server).AddPublicSSHKey([]byte(testKeyFirst), false); err != nil || len(puts) != 0 {
+		t.Fatalf("err %v, puts %q; want a no-op", err, puts)
+	}
+}

@@ -143,9 +143,12 @@ func (c *Client) AddPublicSSHKey(key []byte, removeInvalid bool) error {
 	if err != nil {
 		return fmt.Errorf("failed to get existing SSH keys: %w", err)
 	}
+	// only entries v2 accepts count as present: an options-prefixed copy of a
+	// key parses, but v2 rejects it, so a clean copy must still go in and the
+	// bad one be cleared rather than the add becoming a silent no-op.
 	have := map[string]bool{}
 	for _, line := range lines {
-		if existing, ok := parseSSHKey(line); ok {
+		if existing, ok := parseSSHKey(line); ok && validV2SSHKey(strings.TrimSpace(line)) {
 			have[existing.Fingerprint] = true
 		}
 	}
@@ -170,7 +173,10 @@ func (c *Client) AddPublicSSHKey(key []byte, removeInvalid bool) error {
 		added = true
 	}
 	if !added {
-		return nil
+		// nothing new, but asked to clear invalid entries: still do that
+		if _, invalid := checkStoredSSHKeys(lines, false); !removeInvalid || invalid == nil {
+			return nil
+		}
 	}
 	lines, err = checkStoredSSHKeys(lines, removeInvalid)
 	if err != nil {
