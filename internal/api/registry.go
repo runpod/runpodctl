@@ -25,19 +25,23 @@ type ContainerRegistryAuthCreateRequest struct {
 	Password string `json:"password"`
 }
 
-// ListContainerRegistryAuths returns all container registry auths
+// ListContainerRegistryAuths returns all container registry auths. v2 returns
+// the whole list in one page today; walking pages keeps a large account whole
+// if that changes.
 func (c *Client) ListContainerRegistryAuths() ([]ContainerRegistryAuth, error) {
-	data, err := c.GetV2("/registries", nil)
+	auths := []ContainerRegistryAuth{}
+	err := c.getV2AllPages("/registries", nil, func(data []byte) error {
+		var resp registryListResponse
+		if err := json.Unmarshal(data, &resp); err != nil {
+			return fmt.Errorf("failed to parse response: %w", err)
+		}
+		auths = append(auths, resp.Registries...)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	var resp registryListResponse
-	if err := json.Unmarshal(data, &resp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return resp.Registries, nil
+	return auths, nil
 }
 
 // GetContainerRegistryAuth returns a single container registry auth by ID

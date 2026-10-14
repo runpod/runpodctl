@@ -19,9 +19,7 @@ func TestListContainerRegistryAuths(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-
-	client := registryTestClient(t, server)
+	client := newV2TestClient(t, server)
 
 	auths, err := client.ListContainerRegistryAuths()
 	if err != nil {
@@ -45,9 +43,7 @@ func TestGetContainerRegistryAuth(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-
-	client := registryTestClient(t, server)
+	client := newV2TestClient(t, server)
 
 	auth, err := client.GetContainerRegistryAuth("reg-123")
 	if err != nil {
@@ -73,9 +69,7 @@ func TestCreateContainerRegistryAuth(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-
-	client := registryTestClient(t, server)
+	client := newV2TestClient(t, server)
 
 	auth, err := client.CreateContainerRegistryAuth(&ContainerRegistryAuthCreateRequest{
 		Name:     "test-registry",
@@ -99,9 +93,7 @@ func TestDeleteContainerRegistryAuth(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-
-	client := registryTestClient(t, server)
+	client := newV2TestClient(t, server)
 
 	err := client.DeleteContainerRegistryAuth("reg-123")
 	if err != nil {
@@ -109,15 +101,21 @@ func TestDeleteContainerRegistryAuth(t *testing.T) {
 	}
 }
 
-// registryTestClient points both control planes away from production: v2 at
-// the fake server, v1 at an unroutable host.
-func registryTestClient(t *testing.T, server *httptest.Server) *Client {
-	t.Helper()
-	client, err := NewClient()
+func TestListContainerRegistryAuthsFollowsPages(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("cursor") == "" {
+			_, _ = w.Write([]byte(`{"registries":[{"id":"reg-1","name":"a"}],"pagination":{"hasNextPage":true,"nextCursor":"c1"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"registries":[{"id":"reg-2","name":"b"}],"pagination":{"hasNextPage":false}}`))
+	}))
+	defer server.Close()
+
+	auths, err := newV2TestClient(t, server).ListContainerRegistryAuths()
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.baseURL = "http://v1.invalid"
-	client.v2BaseURL = server.URL
-	return client
+	if len(auths) != 2 || auths[1].ID != "reg-2" {
+		t.Fatalf("auths = %+v, want both pages", auths)
+	}
 }
