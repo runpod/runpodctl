@@ -15,18 +15,6 @@ import (
 // SetReadDeadline returns os.ErrNoDeadline, and switching the fd to
 // non-blocking would leak into the parent shell if the process were killed
 // mid-prompt. an unexpected poll error falls back to a plain blocking read.
-// isForeground reports whether this process group owns the terminal on fd. if
-// the check itself fails, the process is treated as foreground.
-func isForeground(fd int) bool {
-	pgrp, err := unix.IoctlGetInt(fd, unix.TIOCGPGRP)
-	return err != nil || pgrp == unix.Getpgrp()
-}
-
-// dirWritable reports whether the current user can create files in dir.
-func dirWritable(dir string) bool {
-	return unix.Access(dir, unix.W_OK) == nil
-}
-
 func waitReadable(f *os.File, d time.Duration) bool {
 	for {
 		if d <= 0 {
@@ -44,4 +32,16 @@ func waitReadable(f *os.File, d time.Duration) bool {
 		}
 		return n > 0
 	}
+}
+
+// isForeground reports whether this process group owns the terminal on fd. if
+// the check itself fails, the process is treated as foreground.
+func isForeground(fd int) bool {
+	pgrp, err := unix.IoctlGetInt(fd, unix.TIOCGPGRP)
+	return err != nil || pgrp == unix.Getpgrp()
+}
+
+// dirWritable reports whether the current user can create files in dir.
+func dirWritable(dir string) bool {
+	return unix.Access(dir, unix.W_OK) == nil
 }

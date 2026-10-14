@@ -38,11 +38,11 @@ func newUpdatePromptHarness(t *testing.T, currentVersion string) *updatePromptHa
 
 	oldVersion, oldPath, oldInteractive := version, updateStatePath, updateInteractive
 	oldFetch, oldInstall, oldNow := fetchLatestVersion, installUpdate, updateNow
-	oldAgent, oldWait, oldCommand := updateAgent, waitForInput, updateCommand
+	oldAgent, oldWait, oldRoot := updateAgent, waitForInput, updateNeedsRoot
 	t.Cleanup(func() {
 		version, updateStatePath, updateInteractive = oldVersion, oldPath, oldInteractive
 		fetchLatestVersion, installUpdate, updateNow = oldFetch, oldInstall, oldNow
-		updateAgent, waitForInput, updateCommand = oldAgent, oldWait, oldCommand
+		updateAgent, waitForInput, updateNeedsRoot = oldAgent, oldWait, oldRoot
 		pendingUpdateCheck = nil
 	})
 
@@ -60,7 +60,7 @@ func newUpdatePromptHarness(t *testing.T, currentVersion string) *updatePromptHa
 		return nil
 	}
 	updateNow = func() time.Time { return h.now }
-	updateCommand = func() string { return "runpodctl update" }
+	updateNeedsRoot = func() bool { return false }
 	return h
 }
 
@@ -424,13 +424,14 @@ func TestPromptAnswers(t *testing.T) {
 func TestUnwritableInstallGetsSudoNoticeInsteadOfPrompt(t *testing.T) {
 	h := newUpdatePromptHarness(t, "2.13.0-abc1234")
 	saveUpdateState(h.statePath, updateState{CheckedAt: h.now, LatestVersion: "v2.14.0"})
-	updateCommand = func() string { return "sudo runpodctl update" }
+	updateNeedsRoot = func() bool { return true }
 
 	in := strings.NewReader("y\n")
 	var out bytes.Buffer
 	maybePromptUpdate(subcommand(), in, &out)
 
-	want := "runpodctl v2.14.0 is available (you have v2.13.0). to update, run: sudo runpodctl update\n"
+	want := "runpodctl v2.14.0 is available (you have v2.13.0). to update, run: sudo runpodctl update\n" +
+		"to stop this notice, set RUNPOD_NO_UPDATE_CHECK=1\n"
 	if out.String() != want {
 		t.Fatalf("output = %q, want %q", out.String(), want)
 	}

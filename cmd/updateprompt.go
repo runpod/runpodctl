@@ -61,7 +61,7 @@ const (
 var (
 	updateStatePath    = defaultUpdateStatePath
 	updateInteractive  = defaultUpdateInteractive
-	updateCommand      = defaultUpdateCommand
+	updateNeedsRoot    = installNeedsRoot
 	updateAgent        = agent.Detect
 	waitForInput       = waitReadable
 	fetchLatestVersion = fetchLatestReleaseTag
@@ -99,16 +99,23 @@ func defaultUpdateInteractive() bool {
 	return term.IsTerminal(in) && term.IsTerminal(errFd) && isForeground(in)
 }
 
-// defaultUpdateCommand is the command that installs the update for this
-// binary. a direct install in a directory the user cannot write, such as
-// /usr/local/bin from `curl ... | sudo bash`, needs sudo. package managers
-// handle their own permissions.
-func defaultUpdateCommand() string {
+func installNeedsRoot() bool {
 	exe, err := os.Executable()
-	if err != nil || packageManagerUpdate(exe) != nil || dirWritable(filepath.Dir(selfUpdateDestPath(exe))) {
-		return "runpodctl update"
+	return err == nil && needsRoot(exe)
+}
+
+// needsRoot reports whether updating exe needs sudo: a direct install in a
+// directory the user cannot write, such as /usr/local/bin from
+// `curl ... | sudo bash`. package managers handle their own permissions.
+func needsRoot(exe string) bool {
+	return packageManagerUpdate(exe) == nil && !dirWritable(filepath.Dir(selfUpdateDestPath(exe)))
+}
+
+func updateCommandFor(root bool) string {
+	if root {
+		return "sudo runpodctl update"
 	}
-	return "sudo runpodctl update"
+	return "runpodctl update"
 }
 
 func updatePromptMode(c *cobra.Command) updateMode {
@@ -153,9 +160,13 @@ func maybePromptUpdate(c *cobra.Command, in io.Reader, out io.Writer) {
 
 	state.PromptedAt = now
 	// `y` cannot install without root, so print the command instead of offering it.
-	command := updateCommand()
-	if mode == updateModeNotice || command != "runpodctl update" {
-		fmt.Fprintf(out, "runpodctl %s is available (you have %s). to update, run: %s\n", state.LatestVersion, current, command)
+	root := updateNeedsRoot()
+	if mode == updateModeNotice || root {
+		fmt.Fprintf(out, "runpodctl %s is available (you have %s). to update, run: %s\n", state.LatestVersion, current, updateCommandFor(root))
+		if root {
+			// `s` is never offered here, so name the way to stop the daily notice
+			fmt.Fprintf(out, "to stop this notice, set %s=1\n", noUpdateCheckEnv)
+		}
 		saveUpdateState(path, state)
 		return
 	}

@@ -545,7 +545,7 @@ once a day, in the background. when one exists, the next command asks
 
 if runpodctl is installed in a directory you cannot write, such as `/usr/local/bin`
 from the install script, you get a one-line notice to run `sudo runpodctl update`
-instead of the prompt. a command run in the background (`&`) is not prompted.
+instead of the prompt, once a day. set `RUNPOD_NO_UPDATE_CHECK=1` to stop it. a command run in the background (`&`) is not prompted.
 
 ai agents (claude code, codex, cursor, gemini cli and others, detected from the
 environment their harness sets) never get the prompt. once a day they get one

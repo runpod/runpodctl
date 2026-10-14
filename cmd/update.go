@@ -262,7 +262,7 @@ func newUpdateCheckResult(current, latest string) updateCheckResult {
 	// release counts as current, so a dev build reports an update
 	if !ok || semver.Compare(v, latest) < 0 {
 		res.UpdateAvailable = true
-		res.UpdateCommand = updateCommand()
+		res.UpdateCommand = updateCommandFor(updateNeedsRoot())
 	}
 	return res
 }
