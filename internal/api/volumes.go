@@ -45,7 +45,9 @@ func parseV2NetworkVolume(data []byte) (*NetworkVolume, error) {
 	return v.toNetworkVolume(), nil
 }
 
-// NetworkVolumeCreateRequest is the request to create a network volume
+// NetworkVolumeCreateRequest is the request to create a network volume. It is
+// not the wire shape: CreateNetworkVolume maps it to v2's body, which names the
+// data center "dataCenter".
 type NetworkVolumeCreateRequest struct {
 	Name         string `json:"name"`
 	Size         int    `json:"size"`

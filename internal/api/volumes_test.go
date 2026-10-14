@@ -8,19 +8,6 @@ import (
 	"testing"
 )
 
-// newV2TestClient points a client's rest v2 traffic at server.
-func newV2TestClient(t *testing.T, server *httptest.Server) *Client {
-	t.Helper()
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-	client, err := NewClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-	client.baseURL = "http://v1.invalid"
-	client.v2BaseURL = server.URL
-	return client
-}
-
 func TestListNetworkVolumes(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/network-volumes" {
