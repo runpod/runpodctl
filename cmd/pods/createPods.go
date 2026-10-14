@@ -122,9 +122,15 @@ func init() {
 // refusal moves on; graphql's wording is kept for the legacy message. anything
 // else (a timeout, a 5xx) may have created the pod and stops the loop.
 func noCapacity(err error) bool {
+	// an uncertain create (no reply, a 5xx) may have made a pod, whatever
+	// its message says; trying the next gpu type could buy a second one
+	var coded interface{ ErrorCode() string }
+	if errors.As(err, &coded) && coded.ErrorCode() == "create_uncertain" {
+		return false
+	}
 	var apiErr *api.APIError
-	if errors.As(err, &apiErr) && (apiErr.Status == 400 || apiErr.Status == 409) {
-		return true
+	if errors.As(err, &apiErr) {
+		return apiErr.Status == 400 || apiErr.Status == 409
 	}
 	return strings.Contains(err.Error(), "no longer any instances available")
 }
