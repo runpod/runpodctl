@@ -384,12 +384,11 @@ func LegacyCreateOutput(pod *Pod) map[string]interface{} {
 	}
 }
 
-// ParseDockerArgs converts a docker args string (--docker-args, legacy --args) into the dockerStartCmd /
-// dockerEntrypoint arrays the REST API expects (its schema has no dockerArgs
-// field and rejects it as an extra key). It mirrors the backend's decoding of
-// legacy dockerArgs strings so the flag means the same thing on the GraphQL
-// and REST paths: a JSON `{"cmd":[...],"entrypoint":[...]}` object (the
-// backend's canonical encoding, also produced by template create) is used
+// ParseDockerArgs converts a docker args string (--docker-args, legacy --args)
+// into rest v2's cmd and entrypoint arrays (v2 has no dockerArgs field). It
+// mirrors the backend's decoding of legacy dockerArgs strings, so the flag
+// means what it always did: a JSON `{"cmd":[...],"entrypoint":[...]}` object
+// (the backend's canonical encoding, also produced by template create) is used
 // as-is, anything else is shlex-split into the start cmd, falling back to a
 // whitespace split when the shell lexer fails (e.g. unbalanced quotes).
 func ParseDockerArgs(args string) (cmd, entrypoint []string) {
@@ -454,8 +453,9 @@ func (l *LegacyPodCreate) V2Request() *PodCreateV2Request {
 		StartSSH:        l.StartSSH,
 	}
 	switch {
-	case l.GpuTypeID == "":
-		// a cpu pod cannot have a pod volume, and the legacy default is 1 gb
+	case l.GpuTypeID == "" || l.NetworkVolumeID != "":
+		// a cpu pod cannot have a pod volume, and the legacy default is 1 gb;
+		// a network volume takes the pod volume's place, as it always did
 		req.VolumeInGb = 0
 	case req.VolumeInGb > 0 && req.VolumeInGb < MinPodVolumeInGb:
 		req.VolumeInGb = MinPodVolumeInGb

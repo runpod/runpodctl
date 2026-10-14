@@ -1,6 +1,7 @@
 package pods
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -78,7 +79,7 @@ var CreatePodsCmd = &cobra.Command{
 		for x := 0; x < podCount; x++ {
 			input.GpuTypeID = gpus[gpusIndex]
 			pod, _, err := client.CreatePodV2(input.V2Request())
-			if err != nil && len(gpus) > gpusIndex+1 && strings.Contains(err.Error(), "no longer any instances available") {
+			if err != nil && len(gpus) > gpusIndex+1 && noCapacity(err) {
 				gpusIndex++
 				x--
 				continue
@@ -114,4 +115,16 @@ func init() {
 	CreatePodsCmd.MarkFlagRequired("gpuType")   //nolint
 	CreatePodsCmd.MarkFlagRequired("imageName") //nolint
 	CreatePodsCmd.MarkFlagRequired("name")      //nolint
+}
+
+// noCapacity reports whether a create was refused for want of capacity, so the
+// next --gpuType is worth trying. like the cpu flavor walk, a clean 400 or 409
+// refusal moves on; graphql's wording is kept for the legacy message. anything
+// else (a timeout, a 5xx) may have created the pod and stops the loop.
+func noCapacity(err error) bool {
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) && (apiErr.Status == 400 || apiErr.Status == 409) {
+		return true
+	}
+	return strings.Contains(err.Error(), "no longer any instances available")
 }

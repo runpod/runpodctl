@@ -235,8 +235,8 @@ func (c *Client) GetPods() ([]*LegacyPod, error) {
 	return out, nil
 }
 
-// GetLegacyPods returns every pod as the legacy `get pod` command prints it: the runtime view plus the graphql machine block and
-// podType. v2 reports neither, so the gpu display name comes from the catalog
+// GetLegacyPods returns every pod as the legacy `get pod` command prints it:
+// the runtime view plus the graphql machine block and podType. v2 reports neither, so the gpu display name comes from the catalog
 // and the location from the data center id (legacyLocation). v2 cannot tell a
 // spot pod from an on-demand one, so podType is always RESERVED.
 func (c *Client) GetLegacyPods() ([]*LegacyPod, error) {

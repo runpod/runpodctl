@@ -393,6 +393,7 @@ branch on these, not on the reason text.
 | `runtimeStatusReason` | meaning |
 | --- | --- |
 | `awaiting_container` | with `initializing`: no container is being reported for a pod that should be running |
+| `runtime_unavailable` | with `unknown`: the runtime lookup could not be made, so running and initializing cannot be told apart |
 
 the api does not record why a pod stopped in any machine-readable form, so
 there is no reason token for `stopped` or `terminated`.
@@ -491,7 +492,7 @@ its errors are json with a `code` and exit 1.
 | variable | default | what it sets |
 | --- | --- | --- |
 | `RUNPOD_API_KEY` | — | api key. also settable via `runpodctl doctor` or `~/.runpod/config.toml` (see config permissions below) |
-| `RUNPOD_API_URL` | `https://rest.runpod.io/v1` | rest v1, now used only to rename serverless endpoints (config key `restApiUrl`) |
+| `RUNPOD_API_URL` | `https://rest.runpod.io/v1` | rest v1, used for serverless updates and idle-timeout reads (config key `restApiUrl`) |
 | `RUNPOD_GRAPHQL_URL` | `https://api.runpod.io/graphql` | graphql, for what rest v2 does not cover yet: account info, the model repo, hub, serverless create and model references, template readmes and port labels, community templates, spot pods and `get cloud` (config key `apiUrl`) |
 | `RUNPOD_INVOKE_URL` | `https://api.runpod.ai/v2` | base for the serverless invoke urls reported by `serverless create/get/list/update`, and the host `serverless run/status/health` call (config key `invokeUrl`) |
 | `RUNPOD_REST_V2_URL` | `https://api.runpod.io/v2` | rest v2, the main control plane: pods, serverless reads and updates, templates, volumes, registries, billing, the gpu/cpu/data center catalog, ssh keys and logs (config key `restV2ApiUrl`) |

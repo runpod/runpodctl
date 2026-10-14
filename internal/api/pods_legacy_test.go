@@ -95,6 +95,13 @@ func TestLegacyPodCreate_V2Request(t *testing.T) {
 	if cpu.GpuTypeID != "" || cpu.GpuCount != 0 || cpu.Name != "named" || cpu.VolumeInGb != 0 {
 		t.Errorf("cpu create = %+v", cpu)
 	}
+
+	// a network volume takes the pod volume's place, so the legacy default
+	// can't trip the create's refusal of a pod volume beside one
+	withNV := (&LegacyPodCreate{ImageName: "busybox", GpuTypeID: "NVIDIA A40", VolumeInGb: 1, NetworkVolumeID: "nv1"}).V2Request()
+	if withNV.VolumeInGb != 0 || withNV.NetworkVolumeID != "nv1" || checkPlacement(withNV) != nil {
+		t.Errorf("network volume create = %+v, placement %v", withNV, checkPlacement(withNV))
+	}
 }
 
 func TestLegacyPodCreate_VolumeNote(t *testing.T) {
