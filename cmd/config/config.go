@@ -98,7 +98,9 @@ func ensureSSHKeyInCloud(publicKey []byte) error {
 
 	// Check if the publicKey already exists in the cloud
 	for _, cloudKey := range cloudKeys {
-		if cloudKey.Fingerprint == localFingerprint {
+		// a copy v2 rejects doesn't count: AddPublicSSHKey then adds a clean one,
+		// or reports the conflict and how to clear it
+		if cloudKey.Fingerprint == localFingerprint && cloudKey.AcceptedByV2 {
 			fmt.Println("SSH key already exists in the cloud. No action needed.")
 			return nil
 		}

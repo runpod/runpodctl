@@ -294,3 +294,21 @@ func TestAddExistingKeyWithRemoveInvalidStillCleans(t *testing.T) {
 		t.Fatalf("err %v, puts %q; want a no-op", err, puts)
 	}
 }
+
+// listing marks which saved entries v2 accepts, so a sync doesn't count an
+// options-prefixed copy as registered.
+func TestGetPublicSSHKeysMarksAcceptedByV2(t *testing.T) {
+	var puts [][]string
+	server := sshKeyServer(t, []string{testKeyFirst, `from="10.0.0.1" ` + testKeySecond}, &puts)
+	defer server.Close()
+	keys, err := newV2TestClient(t, server).GetPublicSSHKeys()
+	if err != nil || len(keys) != 2 {
+		t.Fatalf("keys %+v, err %v", keys, err)
+	}
+	if !keys[0].AcceptedByV2 || keys[1].AcceptedByV2 {
+		t.Fatalf("AcceptedByV2 = %t, %t; want true, false", keys[0].AcceptedByV2, keys[1].AcceptedByV2)
+	}
+	if b, _ := json.Marshal(keys[1]); strings.Contains(string(b), "AcceptedByV2") || strings.Contains(string(b), "accepted") {
+		t.Fatalf("the flag must not change list-keys output: %s", b)
+	}
+}

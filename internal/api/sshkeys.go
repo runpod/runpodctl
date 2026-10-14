@@ -127,6 +127,7 @@ func (c *Client) GetPublicSSHKeys() ([]SSHKey, error) {
 	var keys []SSHKey
 	for _, line := range lines {
 		if key, ok := parseSSHKey(line); ok {
+			key.AcceptedByV2 = validV2SSHKey(strings.TrimSpace(line))
 			keys = append(keys, key)
 		}
 	}

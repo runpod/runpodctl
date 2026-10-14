@@ -111,6 +111,10 @@ type SSHKey struct {
 	Type        string `json:"type"`
 	Key         string `json:"key"`
 	Fingerprint string `json:"fingerprint"`
+	// AcceptedByV2 reports whether rest v2 accepts the saved entry as is. an
+	// options-prefixed authorized_keys line parses, but v2 rejects it, and a
+	// sync that counted it as registered would leave every key change blocked.
+	AcceptedByV2 bool `json:"-"`
 }
 
 func sshKeyMatches(key SSHKey, name, fingerprint string) bool {

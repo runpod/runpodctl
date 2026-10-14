@@ -211,7 +211,9 @@ func checkSSHKey() checkResult {
 	// check if exists in cloud
 	keyInCloud := false
 	for _, cloudKey := range cloudKeys {
-		if cloudKey.Fingerprint == localFingerprint {
+		// a copy v2 rejects doesn't count: AddPublicSSHKey then adds a clean one,
+		// or reports the conflict and how to clear it
+		if cloudKey.Fingerprint == localFingerprint && cloudKey.AcceptedByV2 {
 			keyInCloud = true
 			break
 		}
