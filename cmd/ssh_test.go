@@ -124,6 +124,12 @@ func sshStub(t *testing.T, pods string) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
+		// the account key list is a rest v2 read; without this a machine with a
+		// local runpodctl key would ask the real api, with a fake key
+		if r.URL.Path == "/account/ssh-keys" {
+			_, _ = w.Write([]byte(`{"keys":[]}`))
+			return
+		}
 		if strings.Contains(string(body), "myPods") {
 			_, _ = w.Write([]byte(`{"data":{"myself":{"pods":` + pods + `}}}`))
 			return
@@ -134,6 +140,7 @@ func sshStub(t *testing.T, pods string) {
 
 	t.Setenv("RUNPOD_API_KEY", "test-key")
 	t.Setenv("RUNPOD_GRAPHQL_URL", server.URL+"/graphql")
+	t.Setenv("RUNPOD_REST_V2_URL", server.URL)
 }
 
 func sshCaptureJSON(t *testing.T, args []string, allowAll bool) map[string]interface{} {

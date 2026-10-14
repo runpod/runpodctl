@@ -230,3 +230,27 @@ func TestRemoveInvalidInTheSameWrite(t *testing.T) {
 		t.Fatalf("puts = %v, want %v", puts, want)
 	}
 }
+
+// entries go out trimmed and without blanks: v2's per-entry pattern is anchored.
+func TestSSHKeyWritesAreTrimmed(t *testing.T) {
+	var puts [][]string
+	server := sshKeyServer(t, []string{"  " + testKeyFirst, "", "   ", "not a key"}, &puts)
+	defer server.Close()
+	n, err := newV2TestClient(t, server).RemoveInvalidSSHKeys()
+	if err != nil || n != 1 {
+		t.Fatalf("removed %d, err %v; want only the one real invalid entry counted", n, err)
+	}
+	if !reflect.DeepEqual(puts, [][]string{{testKeyFirst}}) {
+		t.Fatalf("puts = %q, want the trimmed key alone", puts)
+	}
+
+	puts = nil
+	padded := sshKeyServer(t, []string{testKeyFirst + "  ", ""}, &puts)
+	defer padded.Close()
+	if err := newV2TestClient(t, padded).AddPublicSSHKey([]byte(testKeySecond), false); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if !reflect.DeepEqual(puts, [][]string{{testKeyFirst, testKeySecond}}) {
+		t.Fatalf("puts = %q, want trimmed entries and no blanks", puts)
+	}
+}

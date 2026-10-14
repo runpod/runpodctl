@@ -88,11 +88,19 @@ func (c *Client) getSSHKeyLines() ([]string, error) {
 	return body.Keys, nil
 }
 
+// putSSHKeyLines replaces the account's key list. entries go out trimmed and
+// blank ones are dropped: v2 checks each entry against an anchored pattern
+// before it stores anything, so a stray leading space or an empty leftover
+// from the old blob would fail the whole list. v2 trims and drops them on
+// storage anyway, so nothing a user saved changes.
 func (c *Client) putSSHKeyLines(lines []string) error {
-	if lines == nil {
-		lines = []string{}
+	clean := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if line = strings.TrimSpace(line); line != "" {
+			clean = append(clean, line)
+		}
 	}
-	_, err := c.PutV2("/account/ssh-keys", &sshKeysBody{Keys: lines})
+	_, err := c.PutV2("/account/ssh-keys", &sshKeysBody{Keys: clean})
 	return err
 }
 
@@ -228,12 +236,16 @@ func (c *Client) RemoveInvalidSSHKeys() (int, error) {
 		return 0, fmt.Errorf("failed to get existing SSH keys: %w", err)
 	}
 	kept := []string{}
+	removed := 0
 	for _, line := range lines {
-		if validV2SSHKey(strings.TrimSpace(line)) {
+		switch line = strings.TrimSpace(line); {
+		case line == "": // dropped by any write, not a saved entry
+		case validV2SSHKey(line):
 			kept = append(kept, line)
+		default:
+			removed++
 		}
 	}
-	removed := len(lines) - len(kept)
 	if removed == 0 {
 		return 0, nil
 	}
