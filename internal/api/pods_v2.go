@@ -185,9 +185,9 @@ func (p *v2Pod) toLegacyPod() *LegacyPod {
 				lp.PublicPort = *port.Public
 			}
 			// reachable means a public address and a published port; a port
-			// v2 lists before it publishes one is not an endpoint yet
-			lp.IsIpPublic = port.IP != nil && port.Public != nil && *port.Public > 0 &&
-				strings.EqualFold(port.Type, "tcp") && isPublicIP(*port.IP)
+			// v2 lists before it publishes one is not an endpoint yet. any
+			// type, as graphql's isIpPublic was; ssh checks for tcp itself
+			lp.IsIpPublic = port.IP != nil && port.Public != nil && *port.Public > 0 && isPublicIP(*port.IP)
 			runtime.Ports = append(runtime.Ports, lp)
 		}
 		legacy.Runtime = runtime

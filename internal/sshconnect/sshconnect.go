@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/runpod/runpodctl/internal/api"
 	"github.com/runpod/runpodctl/internal/podstate"
@@ -88,7 +89,8 @@ func PublicSSHPort(pod *api.LegacyPod) (ip string, port int, ok bool) {
 		return "", 0, false
 	}
 	for _, p := range pod.Runtime.Ports {
-		if p.IsIpPublic && p.PrivatePort == 22 {
+		// isIpPublic covers every port type; ssh needs tcp
+		if p.IsIpPublic && p.PrivatePort == 22 && (p.PortType == "" || strings.EqualFold(p.PortType, "tcp")) {
 			return p.Ip, p.PublicPort, true
 		}
 	}

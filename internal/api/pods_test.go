@@ -325,8 +325,9 @@ func TestUpdatePodRefusesToResizeANetworkVolume(t *testing.T) {
 	}
 }
 
-// only a published tcp port on a public address is an ssh endpoint; v2 can
-// list a port before it publishes one, and may spell the type in capitals
+// a port is public once v2 publishes it on a public address, whatever its
+// type (graphql's isIpPublic, which get pod -a prints); v2 can list a port
+// before it publishes one
 func TestLegacyRuntimePortIsPublic(t *testing.T) {
 	cases := map[string]struct {
 		port string
@@ -335,7 +336,7 @@ func TestLegacyRuntimePortIsPublic(t *testing.T) {
 		"published tcp":   {`{"ip":"1.2.3.4","private":22,"public":40022,"type":"tcp"}`, true},
 		"upper-case type": {`{"ip":"1.2.3.4","private":22,"public":40022,"type":"TCP"}`, true},
 		"not published":   {`{"ip":"1.2.3.4","private":22,"public":null,"type":"tcp"}`, false},
-		"http port":       {`{"ip":"1.2.3.4","private":8888,"public":40888,"type":"http"}`, false},
+		"http port":       {`{"ip":"1.2.3.4","private":8888,"public":40888,"type":"http"}`, true},
 		"private address": {`{"ip":"100.65.17.95","private":22,"public":60476,"type":"tcp"}`, false},
 	}
 	for name, tc := range cases {
