@@ -142,7 +142,8 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	endpoint, err := client.GetEndpoint(endpointID, false, false)
 	if err != nil {
-		return fmt.Errorf("failed to get updated endpoint: %w", err)
+		// the writes above all landed; only the read-back failed
+		return fmt.Errorf("endpoint updated, but failed to read it back (run 'runpodctl serverless get %s'): %w", endpointID, err)
 	}
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())

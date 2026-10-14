@@ -50,7 +50,6 @@ func (e *v2Endpoint) toEndpoint(poolTypes map[string][]string) Endpoint {
 	out := Endpoint{
 		ID:                 e.ID,
 		Name:               e.Name,
-		IdleTimeout:        0,
 		ScalerType:         e.Scaling.Type,
 		WorkersMin:         e.Workers.Min,
 		WorkersMax:         e.Workers.Max,
@@ -58,7 +57,8 @@ func (e *v2Endpoint) toEndpoint(poolTypes map[string][]string) Endpoint {
 		URLs:               invokeURLs(e.ID),
 	}
 	if e.Workers.IdleTimeout != nil {
-		out.IdleTimeout = *e.Workers.IdleTimeout
+		idle := *e.Workers.IdleTimeout
+		out.IdleTimeout = &idle
 	}
 	switch {
 	case e.Scaling.QueueDelay != nil:
@@ -92,10 +92,17 @@ func (e *v2Endpoint) toEndpoint(poolTypes map[string][]string) Endpoint {
 				out.GpuTypeIDs = append(out.GpuTypeIDs, pool)
 				continue
 			}
+			added := 0
 			for _, t := range types {
 				if !excluded[strings.ToUpper(t)] {
 					out.GpuTypeIDs = append(out.GpuTypeIDs, t)
+					added++
 				}
+			}
+			// every type in the pool excluded: the pool id still says which
+			// hardware the endpoint asked for, where nothing reads as no gpus
+			if added == 0 {
+				out.GpuTypeIDs = append(out.GpuTypeIDs, pool)
 			}
 		}
 	}

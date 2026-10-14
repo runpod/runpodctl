@@ -13,29 +13,31 @@ import (
 // omitempty: this struct is re-marshalled to render cli output, and 0 is a real
 // value for all of them.
 type Endpoint struct {
-	ID                 string                  `json:"id"`
-	Name               string                  `json:"name"`
-	TemplateID         string                  `json:"templateId,omitempty"`
-	GpuIDs             string                  `json:"gpuIds,omitempty"`     // graphql only (read and write): pool ids with "-<type>" exclusions
-	GpuTypeIDs         []string                `json:"gpuTypeIds,omitempty"` // rest read side only: gpu type ids
-	InstanceIDs        []string                `json:"instanceIds,omitempty"`
-	NetworkVolumeID    string                  `json:"networkVolumeId,omitempty"`
-	NetworkVolumeIDs   []EndpointNetworkVolume `json:"networkVolumeIds,omitempty"`
-	Locations          string                  `json:"locations,omitempty"`
-	IdleTimeout        int                     `json:"idleTimeout"`
-	ScalerType         string                  `json:"scalerType,omitempty"`
-	ScalerValue        float64                 `json:"scalerValue"` // a queue delay is fractional (minimum 0.5)
-	WorkersMin         int                     `json:"workersMin"`
-	WorkersMax         int                     `json:"workersMax"`
-	GpuCount           int                     `json:"gpuCount"`
-	MinCudaVersion     string                  `json:"minCudaVersion,omitempty"`
-	Flashboot          *bool                   `json:"flashboot,omitempty"`
-	FlashBootType      string                  `json:"flashBootType,omitempty"`
-	ComputeType        string                  `json:"computeType,omitempty"`
-	ExecutionTimeoutMs int                     `json:"executionTimeoutMs"`
-	ModelReferences    []string                `json:"modelReferences,omitempty"`
-	Template           map[string]interface{}  `json:"template,omitempty"`
-	Workers            []interface{}           `json:"workers,omitempty"`
+	ID               string                  `json:"id"`
+	Name             string                  `json:"name"`
+	TemplateID       string                  `json:"templateId,omitempty"`
+	GpuIDs           string                  `json:"gpuIds,omitempty"`     // graphql only (read and write): pool ids with "-<type>" exclusions
+	GpuTypeIDs       []string                `json:"gpuTypeIds,omitempty"` // reads: gpu type ids, expanded from v2's pools
+	InstanceIDs      []string                `json:"instanceIds,omitempty"`
+	NetworkVolumeID  string                  `json:"networkVolumeId,omitempty"`
+	NetworkVolumeIDs []EndpointNetworkVolume `json:"networkVolumeIds,omitempty"`
+	Locations        string                  `json:"locations,omitempty"`
+	// IdleTimeout is nil only when neither v2 nor v1 reported one (an endpoint
+	// created or deleted between the two reads of a list)
+	IdleTimeout        *int                   `json:"idleTimeout,omitempty"`
+	ScalerType         string                 `json:"scalerType,omitempty"`
+	ScalerValue        float64                `json:"scalerValue"` // a queue delay is fractional (minimum 0.5)
+	WorkersMin         int                    `json:"workersMin"`
+	WorkersMax         int                    `json:"workersMax"`
+	GpuCount           int                    `json:"gpuCount"`
+	MinCudaVersion     string                 `json:"minCudaVersion,omitempty"`
+	Flashboot          *bool                  `json:"flashboot,omitempty"`
+	FlashBootType      string                 `json:"flashBootType,omitempty"`
+	ComputeType        string                 `json:"computeType,omitempty"`
+	ExecutionTimeoutMs int                    `json:"executionTimeoutMs"`
+	ModelReferences    []string               `json:"modelReferences,omitempty"`
+	Template           map[string]interface{} `json:"template,omitempty"`
+	Workers            []interface{}          `json:"workers,omitempty"`
 	// URLs are the ready-to-call invoke urls, computed client-side from the id so
 	// an agent that just created an endpoint can call it without extra lookups.
 	URLs *EndpointInvokeURLs `json:"urls,omitempty"`
@@ -121,10 +123,9 @@ func (c *Client) ListEndpoints(opts *EndpointListOptions) ([]Endpoint, error) {
 	if err != nil {
 		return nil, err
 	}
-	// without the catalog, gpuIds would print empty, which reads as "no gpus"
-	poolTypes, err := c.gpuPoolTypes()
+	poolTypes, err := c.poolTypesFor(v2Endpoints)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read the gpu catalog: %w", err)
+		return nil, err
 	}
 	workers, err := c.workerClient(opts)
 	if err != nil {
@@ -138,16 +139,34 @@ func (c *Client) ListEndpoints(opts *EndpointListOptions) ([]Endpoint, error) {
 		}
 		endpoints = append(endpoints, out)
 	}
-	if err := c.fillIdleTimeouts(endpoints, v2Endpoints); err != nil {
+	if err := c.fillIdleTimeouts(endpoints, v2Endpoints, true); err != nil {
 		return nil, err
 	}
 	return endpoints, nil
 }
 
+// poolTypesFor reads the gpu catalog, which maps v2's pools to gpu types, when
+// any endpoint has a gpu block. without it gpuIds would print empty, which
+// reads as "no gpus"; cpu endpoints don't need it.
+func (c *Client) poolTypesFor(endpoints []v2Endpoint) (map[string][]string, error) {
+	for i := range endpoints {
+		if endpoints[i].Gpu != nil {
+			poolTypes, err := c.gpuPoolTypes()
+			if err != nil {
+				return nil, fmt.Errorf("failed to read the gpu catalog: %w", err)
+			}
+			return poolTypes, nil
+		}
+	}
+	return nil, nil
+}
+
 // fillIdleTimeouts reads, over rest v1, the idle timeouts v2 leaves out (see
 // v1IdleTimeouts). out[i] is the mapping of v2[i]. a failed read is an error:
-// 0 would read as a real setting.
-func (c *Client) fillIdleTimeouts(out []Endpoint, v2 []v2Endpoint) error {
+// 0 would read as a real setting. an endpoint v1 doesn't list is an error too,
+// unless skipUnlisted: a list then leaves that row's idleTimeout out rather
+// than failing on an endpoint created or deleted between the two reads.
+func (c *Client) fillIdleTimeouts(out []Endpoint, v2 []v2Endpoint, skipUnlisted bool) error {
 	var missing []string
 	for i := range v2 {
 		if v2[i].Workers.IdleTimeout == nil {
@@ -159,15 +178,20 @@ func (c *Client) fillIdleTimeouts(out []Endpoint, v2 []v2Endpoint) error {
 	}
 	idle, err := c.v1IdleTimeouts(missing)
 	if err != nil {
-		return fmt.Errorf("failed to read the idle timeout: %w", err)
+		// %v, not %w: a v1 404 must not make an endpoint v2 just returned
+		// read as not_found
+		return fmt.Errorf("failed to read the idle timeout: %v", err)
 	}
 	for i := range out {
 		if v2[i].Workers.IdleTimeout == nil {
 			value, ok := idle[out[i].ID]
 			if !ok {
+				if skipUnlisted {
+					continue
+				}
 				return fmt.Errorf("failed to read the idle timeout: rest v1 did not report endpoint %s", out[i].ID)
 			}
-			out[i].IdleTimeout = value
+			out[i].IdleTimeout = &value
 		}
 	}
 	return nil
@@ -179,9 +203,9 @@ func (c *Client) GetEndpoint(endpointID string, includeTemplate, includeWorkers 
 	if err != nil {
 		return nil, err
 	}
-	poolTypes, err := c.gpuPoolTypes()
+	poolTypes, err := c.poolTypesFor([]v2Endpoint{*e})
 	if err != nil {
-		return nil, fmt.Errorf("failed to read the gpu catalog: %w", err)
+		return nil, err
 	}
 	opts := &EndpointListOptions{IncludeTemplate: includeTemplate, IncludeWorkers: includeWorkers}
 	workers, err := c.workerClient(opts)
@@ -193,7 +217,7 @@ func (c *Client) GetEndpoint(endpointID string, includeTemplate, includeWorkers 
 		return nil, err
 	}
 	outs := []Endpoint{out}
-	if err := c.fillIdleTimeouts(outs, []v2Endpoint{*e}); err != nil {
+	if err := c.fillIdleTimeouts(outs, []v2Endpoint{*e}, false); err != nil {
 		return nil, err
 	}
 	return &outs[0], nil
@@ -356,7 +380,7 @@ func (c *Client) gqlEndpointConfig(endpointID string) (*Endpoint, error) {
 		return nil, newGraphQLError(resp.Errors[0].Message)
 	}
 	if resp.Data.Myself == nil || resp.Data.Myself.Endpoint == nil {
-		return nil, fmt.Errorf("endpoint %s not found", endpointID)
+		return nil, NewNotFoundError("endpoint %s not found", endpointID)
 	}
 	return resp.Data.Myself.Endpoint, nil
 }

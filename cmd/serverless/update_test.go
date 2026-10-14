@@ -88,7 +88,7 @@ func resetUpdateVars(t *testing.T) {
 type updateServer struct {
 	endpoint  string                 // raw v2 endpoint json
 	patchBody map[string]interface{} // v2 patch body (must stay unused)
-	renamed   map[string]interface{} // v1 update body
+	v1Body    map[string]interface{} // v1 update body
 	gql       func(query string, body map[string]interface{}) string
 }
 
@@ -113,8 +113,8 @@ func (s *updateServer) start(t *testing.T) {
 		case r.URL.Path == "/endpoints/ep-123" && r.Method == http.MethodGet:
 			_, _ = w.Write([]byte(`{"id":"ep-123","idleTimeout":42}`))
 		case r.URL.Path == "/endpoints/ep-123" && r.Method == http.MethodPatch:
-			if err := json.NewDecoder(r.Body).Decode(&s.renamed); err != nil {
-				t.Errorf("decode rename body: %v", err)
+			if err := json.NewDecoder(r.Body).Decode(&s.v1Body); err != nil {
+				t.Errorf("decode v1 update body: %v", err)
 			}
 			_, _ = w.Write([]byte(`{}`))
 		case r.URL.Path == "/" && r.Method == http.MethodPost && s.gql != nil:
@@ -180,8 +180,8 @@ func TestRunUpdate_WarnsWhenTemplateSwapFailsAfterRESTUpdate(t *testing.T) {
 		runErr = runUpdate(jsonOutputCmd("json"), []string{"ep-123"})
 	})
 
-	if s.renamed["name"] != "patched-name" {
-		t.Fatalf("expected name patched-name, got %#v", s.renamed)
+	if s.v1Body["name"] != "patched-name" {
+		t.Fatalf("expected name patched-name, got %#v", s.v1Body)
 	}
 	if runErr == nil {
 		t.Fatal("expected error")
@@ -236,8 +236,8 @@ func TestRunUpdate_AllNumericFlagsAreWired(t *testing.T) {
 		"idleTimeout": float64(30), "scalerType": "QUEUE_DELAY", "scalerValue": float64(4),
 	}
 	for field, v := range want {
-		if got, ok := s.renamed[field]; !ok || got != v {
-			t.Errorf("%s = %#v, want %v (body %#v)", field, got, v, s.renamed)
+		if got, ok := s.v1Body[field]; !ok || got != v {
+			t.Errorf("%s = %#v, want %v (body %#v)", field, got, v, s.v1Body)
 		}
 	}
 	if s.patchBody != nil {
@@ -256,11 +256,11 @@ func TestRunUpdate_WorkersMinZeroIsSent(t *testing.T) {
 	}
 
 	// see issue #298.
-	if got, ok := s.renamed["workersMin"]; !ok || got != float64(0) {
-		t.Fatalf("expected workersMin 0, got %#v", s.renamed)
+	if got, ok := s.v1Body["workersMin"]; !ok || got != float64(0) {
+		t.Fatalf("expected workersMin 0, got %#v", s.v1Body)
 	}
-	if _, ok := s.renamed["workersMax"]; ok {
-		t.Errorf("an unset workersMax must be omitted, got %#v", s.renamed)
+	if _, ok := s.v1Body["workersMax"]; ok {
+		t.Errorf("an unset workersMax must be omitted, got %#v", s.v1Body)
 	}
 }
 
@@ -302,8 +302,8 @@ func TestRunUpdate_RejectsOutOfRangeNumericFlags(t *testing.T) {
 			if err := runUpdate(jsonOutputCmd("json"), []string{"ep-123"}); err != nil {
 				t.Fatalf("expected boundary value to be accepted, got %v", err)
 			}
-			if got := s.renamed[tc.field]; got != tc.wantValue {
-				t.Errorf("expected %s %v, got %#v", tc.field, tc.wantValue, s.renamed)
+			if got := s.v1Body[tc.field]; got != tc.wantValue {
+				t.Errorf("expected %s %v, got %#v", tc.field, tc.wantValue, s.v1Body)
 			}
 		})
 	}

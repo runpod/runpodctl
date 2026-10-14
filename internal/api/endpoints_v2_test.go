@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,6 +19,7 @@ type v2EndpointStub struct {
 	patched   map[string]interface{}
 	v1Patched map[string]interface{} // the v1 update body
 	v1Idle    map[string]int         // id -> idleTimeout, as v1 reports it
+	v1Status  int                    // non-zero: v1's single-endpoint read fails with it
 	requests  []string
 }
 
@@ -53,6 +55,11 @@ func (s *v2EndpointStub) client(t *testing.T) *Client {
 			_ = json.NewEncoder(w).Encode(items)
 		case strings.HasPrefix(r.URL.Path, "/endpoints/") && r.Method == http.MethodGet:
 			id := strings.TrimPrefix(r.URL.Path, "/endpoints/")
+			if s.v1Status != 0 {
+				w.WriteHeader(s.v1Status)
+				_, _ = w.Write([]byte(`{"error":"endpoint not found"}`))
+				return
+			}
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": id, "idleTimeout": s.v1Idle[id]})
 		case strings.HasSuffix(r.URL.Path, "/workers"):
 			_, _ = w.Write([]byte(`{"workers":[{"id":"w-1","status":"RUNNING"}]}`))
@@ -116,8 +123,8 @@ func TestGetEndpoint_MapsV2Shape(t *testing.T) {
 	if ep.ID != "ep-1" || ep.Name != "endpoint-1" {
 		t.Errorf("id/name = %q/%q", ep.ID, ep.Name)
 	}
-	if ep.WorkersMin != 0 || ep.WorkersMax != 3 || ep.IdleTimeout != 7 {
-		t.Errorf("workers = %d/%d idle %d", ep.WorkersMin, ep.WorkersMax, ep.IdleTimeout)
+	if ep.WorkersMin != 0 || ep.WorkersMax != 3 || ep.IdleTimeout == nil || *ep.IdleTimeout != 7 {
+		t.Errorf("workers = %d/%d idle %v", ep.WorkersMin, ep.WorkersMax, ep.IdleTimeout)
 	}
 	if ep.ScalerType != "REQUEST_COUNT" || ep.ScalerValue != 4 {
 		t.Errorf("scaler = %s/%v", ep.ScalerType, ep.ScalerValue)
@@ -364,6 +371,20 @@ func TestUpdateEndpointModels_ConfigReadFailureSkipsWrite(t *testing.T) {
 	}
 }
 
+// a model-only update of an endpoint that doesn't exist is not_found, as it
+// was when the first read went through GetEndpoint
+func TestUpdateEndpointModels_MissingEndpointIsNotFound(t *testing.T) {
+	stub := &updateModelsStub{config: "null"}
+	_, err := stub.client(t).UpdateEndpointModels("ep-typo", nil)
+	var coded interface{ ErrorCode() string }
+	if !errors.As(err, &coded) || coded.ErrorCode() != "not_found" {
+		t.Fatalf("err = %v, want not_found", err)
+	}
+	if stub.saveCalled {
+		t.Error("saveEndpoint must not be called for a missing endpoint")
+	}
+}
+
 // saveEndpoint rejects an empty gpuIds on anything without instanceIds, so
 // report that rather than sending a write that drops the gpu selection.
 func TestUpdateEndpointModels_EmptyGpuIDsOnGpuEndpointSkipsWrite(t *testing.T) {
@@ -484,8 +505,8 @@ func TestEndpointReads_FillIdleTimeoutFromV1(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if ep.IdleTimeout != 50 {
-		t.Errorf("get idleTimeout = %d, want 50 from v1", ep.IdleTimeout)
+	if ep.IdleTimeout == nil || *ep.IdleTimeout != 50 {
+		t.Errorf("get idleTimeout = %v, want 50 from v1", ep.IdleTimeout)
 	}
 
 	eps, err := client.ListEndpoints(nil)
@@ -494,7 +515,9 @@ func TestEndpointReads_FillIdleTimeoutFromV1(t *testing.T) {
 	}
 	got := map[string]int{}
 	for _, e := range eps {
-		got[e.ID] = e.IdleTimeout
+		if e.IdleTimeout != nil {
+			got[e.ID] = *e.IdleTimeout
+		}
 	}
 	// ep-2's v2 value stands; only the missing one comes from v1
 	if got["ep-1"] != 50 || got["ep-2"] != 60 {
@@ -534,15 +557,52 @@ func TestGetEndpoint_FractionalDelayAndUnknownPool(t *testing.T) {
 	}
 }
 
-// an endpoint v1 doesn't report is an error, not an idle timeout of 0.
-func TestEndpointReads_MissingV1IdleTimeoutIsAnError(t *testing.T) {
+// an endpoint v1's list doesn't report (created or deleted between the two
+// reads) gets no idleTimeout, never 0, and doesn't fail the whole list
+func TestListEndpoints_MissingV1IdleTimeoutIsLeftOut(t *testing.T) {
 	noIdle := strings.Replace(v2GpuEndpoint, `"workers":{"min":0,"max":3,"idleTimeout":7}`, `"workers":{"min":0,"max":3}`, 1)
 	noIdleCPU := strings.Replace(v2CpuEndpoint, `"workers":{"min":1,"max":2,"idleTimeout":60}`, `"workers":{"min":1,"max":2}`, 1)
 	// two endpoints miss it, so the fill reads v1's list, which lacks ep-1
 	stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": noIdle, "ep-2": noIdleCPU}, v1Idle: map[string]int{"ep-2": 5}}
-	client := stub.client(t)
-	if _, err := client.ListEndpoints(nil); err == nil || !strings.Contains(err.Error(), "idle timeout") {
-		t.Fatalf("list: err = %v, want an idle timeout read error", err)
+	eps, err := stub.client(t).ListEndpoints(nil)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, e := range eps {
+		switch {
+		case e.ID == "ep-1" && e.IdleTimeout != nil:
+			t.Errorf("ep-1 idleTimeout = %d, want none", *e.IdleTimeout)
+		case e.ID == "ep-2" && (e.IdleTimeout == nil || *e.IdleTimeout != 5):
+			t.Errorf("ep-2 idleTimeout = %v, want 5 from v1", e.IdleTimeout)
+		}
+	}
+}
+
+// a failed v1 read fails the get, but never as not_found: v2 just returned
+// the endpoint
+func TestGetEndpoint_V1IdleTimeoutFailureIsNotNotFound(t *testing.T) {
+	noIdle := strings.Replace(v2GpuEndpoint, `"workers":{"min":0,"max":3,"idleTimeout":7}`, `"workers":{"min":0,"max":3}`, 1)
+	stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": noIdle}, v1Status: http.StatusNotFound}
+	_, err := stub.client(t).GetEndpoint("ep-1", false, false)
+	if err == nil || !strings.Contains(err.Error(), "failed to read the idle timeout") {
+		t.Fatalf("err = %v, want an idle timeout read error", err)
+	}
+	var coded interface{ ErrorCode() string }
+	if errors.As(err, &coded) && coded.ErrorCode() == "not_found" {
+		t.Fatalf("err code = not_found; the endpoint exists")
+	}
+}
+
+// a pool whose every type is excluded prints as its pool id, not as no gpus
+func TestGetEndpoint_AllExcludedPoolKeepsPoolID(t *testing.T) {
+	raw := strings.Replace(v2GpuEndpoint, `"pools":["AMPERE_48"],"excludedTypes":["NVIDIA RTX A6000"]`, `"pools":["ADA_24"],"excludedTypes":["NVIDIA L4"]`, 1)
+	stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": raw}}
+	ep, err := stub.client(t).GetEndpoint("ep-1", false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(ep.GpuTypeIDs, ",") != "ADA_24" {
+		t.Fatalf("gpuTypeIds = %v, want [ADA_24]", ep.GpuTypeIDs)
 	}
 }
 
