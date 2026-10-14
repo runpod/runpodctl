@@ -324,3 +324,27 @@ func TestUpdatePodRefusesToResizeANetworkVolume(t *testing.T) {
 		t.Error("nothing may be patched")
 	}
 }
+
+// only a published tcp port on a public address is an ssh endpoint; v2 can
+// list a port before it publishes one, and may spell the type in capitals
+func TestLegacyRuntimePortIsPublic(t *testing.T) {
+	cases := map[string]struct {
+		port string
+		want bool
+	}{
+		"published tcp":   {`{"ip":"1.2.3.4","private":22,"public":40022,"type":"tcp"}`, true},
+		"upper-case type": {`{"ip":"1.2.3.4","private":22,"public":40022,"type":"TCP"}`, true},
+		"not published":   {`{"ip":"1.2.3.4","private":22,"public":null,"type":"tcp"}`, false},
+		"http port":       {`{"ip":"1.2.3.4","private":8888,"public":40888,"type":"http"}`, false},
+		"private address": {`{"ip":"100.65.17.95","private":22,"public":60476,"type":"tcp"}`, false},
+	}
+	for name, tc := range cases {
+		pod, err := parseV2Pod([]byte(`{"id":"p","status":"RUNNING","runtime":{"uptime":5,"ports":[` + tc.port + `]}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := pod.Legacy().Runtime.Ports[0].IsIpPublic; got != tc.want {
+			t.Errorf("%s: public = %v, want %v", name, got, tc.want)
+		}
+	}
+}

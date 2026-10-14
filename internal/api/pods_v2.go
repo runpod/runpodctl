@@ -180,11 +180,14 @@ func (p *v2Pod) toLegacyPod() *LegacyPod {
 			lp := &LegacyPort{PrivatePort: port.Private, PortType: port.Type}
 			if port.IP != nil {
 				lp.Ip = *port.IP
-				lp.IsIpPublic = port.Type == "tcp" && isPublicIP(*port.IP)
 			}
 			if port.Public != nil {
 				lp.PublicPort = *port.Public
 			}
+			// reachable means a public address and a published port; a port
+			// v2 lists before it publishes one is not an endpoint yet
+			lp.IsIpPublic = port.IP != nil && port.Public != nil && *port.Public > 0 &&
+				strings.EqualFold(port.Type, "tcp") && isPublicIP(*port.IP)
 			runtime.Ports = append(runtime.Ports, lp)
 		}
 		legacy.Runtime = runtime
