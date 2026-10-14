@@ -188,12 +188,14 @@ func (c *Client) postPod(body *v2PodCreate) (*Pod, map[string]interface{}, error
 	data, err := c.PostV2("/pods", body)
 	if err != nil {
 		var apiErr *APIError
-		if errors.As(err, &apiErr) {
+		if errors.As(err, &apiErr) && apiErr.Status < 500 {
 			return nil, nil, err
 		}
-		// no answer (a timeout, a dropped connection): the create may still
-		// have gone through, and running it again could buy a second pod
-		return nil, nil, fmt.Errorf("%w; the pod may have been created, check 'runpodctl pod list' before retrying", err)
+		// no answer (a timeout, a dropped connection) or a 5xx: the create
+		// may still have gone through, and running it again could buy a
+		// second pod. network_error and server_error both say "retry", so
+		// this gets its own code.
+		return nil, nil, &uncertainCreateError{err: fmt.Errorf("%v; the pod may have been created, check 'runpodctl pod list' before retrying", err)}
 	}
 	var raw map[string]interface{}
 	_ = json.Unmarshal(data, &raw)
@@ -209,23 +211,25 @@ func (c *Client) postPod(body *v2PodCreate) (*Pod, map[string]interface{}, error
 		if shown == "" {
 			shown = "unknown"
 		}
-		return nil, raw, &acceptedCreateError{id: id, err: fmt.Errorf("the create was accepted but its reply could not be read (%v); pod id %s; check 'runpodctl pod list' before retrying", err, shown)}
+		return nil, raw, &uncertainCreateError{id: id, err: fmt.Errorf("the create was accepted but its reply could not be read (%v); pod id %s; check 'runpodctl pod list' before retrying", err, shown)}
 	}
 	return pod, raw, nil
 }
 
-// acceptedCreateError is a create the api accepted whose reply could not be
-// used. it carries the pod id, when there is one, as the error object's id
-// field (see output.WithResourceID), so an agent can clean up without
-// parsing the message.
-type acceptedCreateError struct {
+// uncertainCreateError is a create whose outcome isn't known: no reply, a
+// 5xx, or an accepted create whose reply could not be used. its code,
+// create_uncertain, tells an agent to look before retrying, and it carries
+// the pod id, when there is one, as the error object's id field (see
+// output.WithResourceID).
+type uncertainCreateError struct {
 	id  string
 	err error
 }
 
-func (e *acceptedCreateError) Error() string           { return e.err.Error() }
-func (e *acceptedCreateError) Unwrap() error           { return e.err }
-func (e *acceptedCreateError) ErrorResourceID() string { return e.id }
+func (e *uncertainCreateError) Error() string           { return e.err.Error() }
+func (e *uncertainCreateError) Unwrap() error           { return e.err }
+func (e *uncertainCreateError) ErrorCode() string       { return "create_uncertain" }
+func (e *uncertainCreateError) ErrorResourceID() string { return e.id }
 
 func (c *Client) cpuFlavorsByStock() ([]string, error) {
 	data, err := c.GetV2("/catalog/cpus", url.Values{

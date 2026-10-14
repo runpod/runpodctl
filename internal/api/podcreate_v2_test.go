@@ -214,8 +214,10 @@ func TestCreatePodV2CpuWalkOutcomes(t *testing.T) {
 		var posts []map[string]interface{}
 		server := createServer(t, []int{http.StatusBadGateway, http.StatusCreated}, &posts)
 		defer server.Close()
-		if _, _, err := newV2TestClient(t, server).CreatePodV2(&PodCreateV2Request{Name: "n", ImageName: "img"}); err == nil || len(posts) != 1 {
-			t.Fatalf("err = %v, posts = %d; want one post and the 502", err, len(posts))
+		_, _, err := newV2TestClient(t, server).CreatePodV2(&PodCreateV2Request{Name: "n", ImageName: "img"})
+		var coded interface{ ErrorCode() string }
+		if !errors.As(err, &coded) || coded.ErrorCode() != "create_uncertain" || len(posts) != 1 {
+			t.Fatalf("err = %v, posts = %d; want one post and create_uncertain", err, len(posts))
 		}
 	})
 	t.Run("all refused", func(t *testing.T) {
@@ -275,5 +277,10 @@ func TestCreatePodV2TransportFailureWarns(t *testing.T) {
 	_, _, err := client.CreatePodV2(&PodCreateV2Request{Name: "n", ImageName: "img", GpuTypeID: "NVIDIA A40"})
 	if err == nil || !strings.Contains(err.Error(), "the pod may have been created") {
 		t.Fatalf("err = %v, want the may-have-been-created hint", err)
+	}
+	// not network_error, which tells an agent to retry
+	var coded interface{ ErrorCode() string }
+	if !errors.As(err, &coded) || coded.ErrorCode() != "create_uncertain" {
+		t.Fatalf("code = %v, want create_uncertain", err)
 	}
 }

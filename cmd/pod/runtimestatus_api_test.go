@@ -330,9 +330,12 @@ func TestRunGet_RuntimeStatus(t *testing.T) {
 // parse it, or every pod is filtered out
 func TestRunList_SinceFiltersOnV2CreatedAt(t *testing.T) {
 	recent := time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339Nano)
+	// a whole second prints with no fraction ("05:28:38 +0000 UTC")
+	whole := time.Now().Add(-20 * time.Minute).UTC().Truncate(time.Second).Format(time.RFC3339)
 	old := time.Now().Add(-3 * time.Hour).UTC().Format(time.RFC3339Nano)
 	s := &stub{pods: []map[string]interface{}{
 		v2Pod("p-new", "RUNNING", nil, map[string]interface{}{"createdAt": recent}),
+		v2Pod("p-whole", "RUNNING", nil, map[string]interface{}{"createdAt": whole}),
 		v2Pod("p-old", "RUNNING", nil, map[string]interface{}{"createdAt": old}),
 	}}
 	s.start(t)
@@ -340,11 +343,13 @@ func TestRunList_SinceFiltersOnV2CreatedAt(t *testing.T) {
 	listSince = "1h"
 
 	items := runListJSON(t)
-	if len(items) != 1 || items[0]["id"] != "p-new" {
-		t.Fatalf("--since 1h = %v, want only p-new", items)
+	if len(items) != 2 || items[0]["id"] != "p-new" || items[1]["id"] != "p-whole" {
+		t.Fatalf("--since 1h = %v, want p-new and p-whole", items)
 	}
-	if created, _ := items[0]["createdAt"].(string); created == "" {
-		t.Errorf("createdAt missing: %v", items[0])
+	for _, item := range items {
+		if created, _ := item["createdAt"].(string); created == "" {
+			t.Errorf("createdAt missing: %v", item)
+		}
 	}
 }
 

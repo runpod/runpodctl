@@ -472,6 +472,7 @@ codes the cli generates:
 | `job_failed` | a serverless job reached a terminal status other than `COMPLETED`. the job payload is still on stdout |
 | `no_credentials` | no api key configured — run `runpodctl doctor` or set `RUNPOD_API_KEY` |
 | `network_error` | the api could not be reached at all — dns, refused, tls, timeout. transient: retry |
+| `create_uncertain` | `pod create` got no usable answer — no reply, a 5xx, or an accepted create whose reply couldn't be read. the pod **may exist and bill**: check `pod list` (and `id`, when set) before retrying |
 | `wait_timeout` | `--wait` gave up before the resource was usable. the resource **was created and still bills** — the last known state is in the message and the id is in `id` |
 | `wait_interrupted` | `--wait` was cancelled (ctrl-c / SIGTERM). same as above: the resource exists, and `id` names it |
 | `cli_error` | anything else local: validation, config, bad input (including a malformed `RUNPOD_API_URL`) |
