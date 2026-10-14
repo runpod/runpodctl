@@ -122,7 +122,8 @@ func decodeErrorObject(t *testing.T, stderr string) map[string]interface{} {
 }
 
 // TestCLI_PodCreateWaitTimeout exercises the timeout path on the cheapest thing
-// that can never satisfy it: a cpu pod running an image with no sshd. Prod does
+// that cannot satisfy it: a cpu pod running alpine, which has no sshd and no
+// apt for runpod's ssh setup to install one with, under a 25s budget. Prod does
 // allocate a public port 22 for it, which is exactly the case the wait must not
 // mistake for readiness.
 func TestCLI_PodCreateWaitTimeout(t *testing.T) {
@@ -179,9 +180,6 @@ func TestCLI_PodCreateWaitTimeout(t *testing.T) {
 	}
 	deletePodOnCleanup(t, podID)
 
-	if !strings.Contains(stderr, "cpu pods are created through the rest api") {
-		t.Errorf("expected the cpu ssh caveat on stderr: %s", stderr)
-	}
 	if !strings.Contains(stderr, "waiting for ssh on pod "+podID) {
 		t.Errorf("expected progress on stderr: %s", stderr)
 	}

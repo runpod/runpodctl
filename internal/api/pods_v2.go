@@ -144,7 +144,8 @@ func (p *v2Pod) toPod() Pod {
 // on the runpod proxy's carrier-grade nat range.
 func isPublicIP(ip string) bool {
 	parsed := net.ParseIP(ip)
-	if parsed == nil || parsed.IsPrivate() || parsed.IsLoopback() || parsed.IsLinkLocalUnicast() {
+	if parsed == nil || parsed.IsPrivate() || parsed.IsLoopback() || parsed.IsLinkLocalUnicast() ||
+		parsed.IsUnspecified() || parsed.IsMulticast() {
 		return false
 	}
 	_, cgnat, _ := net.ParseCIDR("100.64.0.0/10")

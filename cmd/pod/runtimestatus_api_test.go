@@ -2,6 +2,7 @@ package pod
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -175,7 +176,7 @@ func TestRunList_RuntimeStatus(t *testing.T) {
 				v2Pod("p-start", "STARTING", nil, nil),
 				v2Pod("p-err", "ERROR", nil, nil),
 			},
-			wantStatus:  map[string]string{"p-prov": "initializing", "p-start": "initializing", "p-err": "unknown"},
+			wantStatus:  map[string]string{"p-prov": "initializing", "p-start": "initializing", "p-err": "error"},
 			wantDesired: map[string]string{"p-prov": "RUNNING", "p-start": "RUNNING", "p-err": "ERROR"},
 		},
 		{
@@ -271,6 +272,15 @@ func TestRunGet_RuntimeStatus(t *testing.T) {
 			wantUptime: float64(99),
 		},
 		{
+			name: "an error pod with stale ports does not hand back an ssh command",
+			pod: v2Pod("p", "ERROR", map[string]interface{}{
+				"uptime": 30, "ports": []interface{}{sshPort},
+			}, nil),
+			wantStatus: "error",
+			wantSSHErr: "pod not ready: pod is in an error state and won't recover on its own; check 'runpodctl pod logs p', then terminate or recreate it",
+			wantUptime: nil,
+		},
+		{
 			name: "a stopped pod with stale ports does not hand back an ssh command",
 			pod: v2Pod("p", "EXITED", map[string]interface{}{
 				"uptime": 261, "ports": []interface{}{sshPort},
@@ -335,5 +345,36 @@ func TestRunList_SinceFiltersOnV2CreatedAt(t *testing.T) {
 	}
 	if created, _ := items[0]["createdAt"].(string); created == "" {
 		t.Errorf("createdAt missing: %v", items[0])
+	}
+}
+
+// the default view is running pods plus error ones, which still exist and may
+// bill; stopped pods need --all
+func TestRunList_DefaultViewKeepsErrorPods(t *testing.T) {
+	s := &stub{pods: []map[string]interface{}{
+		v2Pod("p-up", "RUNNING", nil, nil),
+		v2Pod("p-err", "ERROR", nil, nil),
+		v2Pod("p-stop", "EXITED", nil, nil),
+	}}
+	s.start(t)
+	resetListFlags(t)
+	listAll = false
+
+	var ids []string
+	for _, item := range runListJSON(t) {
+		ids = append(ids, item["id"].(string))
+	}
+	if strings.Join(ids, ",") != "p-up,p-err" {
+		t.Fatalf("default pod list = %v, want p-up and p-err", ids)
+	}
+}
+
+func TestRunList_RefusesUnknownComputeType(t *testing.T) {
+	resetListFlags(t)
+	listComputeType = "TPU"
+	err := runList(listCmd, nil)
+	var usage interface{ ErrorCode() string }
+	if !errors.As(err, &usage) || usage.ErrorCode() != "usage_error" {
+		t.Fatalf("err = %v, want a usage_error", err)
 	}
 }

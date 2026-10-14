@@ -128,8 +128,9 @@ func ListConnections(pods []*api.LegacyPod, keyInfo KeyInfo) []map[string]interf
 	// filters more pods than it used to, so the empty case is now common.
 	connections := make([]map[string]interface{}, 0, len(pods))
 	for _, pod := range pods {
-		// nil: BuildConnection would dereference it. known-down: a stopped pod keeps reporting stale runtime ports, so it
-		// would be listed with a command that cannot connect.
+		// nil: BuildConnection would dereference it. known-down: a stopped
+		// pod keeps reporting stale runtime ports, so it would be listed with
+		// a command that cannot connect.
 		if pod == nil || PodState(pod).IsKnownDown() {
 			continue
 		}

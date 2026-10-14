@@ -132,6 +132,12 @@ func TestDerive(t *testing.T) {
 			wantReason: ReasonTerminatedByRunpod,
 		},
 
+		// --- ERROR (rest v2) ---
+		{
+			name:       "v2 error is its own known-down state",
+			signals:    Signals{DesiredStatus: "ERROR", RuntimeProbed: true, RuntimeReported: true},
+			wantStatus: StatusError,
+		},
 		// --- TERMINATED ---
 		{
 			name: "terminated by user",
@@ -208,7 +214,7 @@ func TestDerive(t *testing.T) {
 func TestDeriveVocabularyIsLowercase(t *testing.T) {
 	values := []string{
 		string(StatusRunning), string(StatusInitializing), string(StatusStopped),
-		string(StatusTerminated), string(StatusUnknown),
+		string(StatusTerminated), string(StatusUnknown), string(StatusError),
 		string(ReasonAwaitingContainer), string(ReasonStoppedByUser),
 		string(ReasonStoppedByRunpod), string(ReasonTerminatedByUser),
 		string(ReasonTerminatedByRunpod), string(ReasonRuntimeUnavailable),
@@ -259,6 +265,12 @@ func TestExplain(t *testing.T) {
 			want:  "pod is terminated",
 		},
 		{
+			name:  "error points at the logs",
+			state: State{Status: StatusError},
+			podID: "abc123",
+			want:  "pod is in an error state and won't recover on its own; check 'runpodctl pod logs abc123', then terminate or recreate it",
+		},
+		{
 			// a running pod's reachability is an ssh concern, not a pod state
 			// concern: internal/sshconnect owns that text.
 			name:  "running adds nothing",
@@ -291,6 +303,7 @@ func TestIsKnownDown(t *testing.T) {
 	}{
 		{StatusStopped, true},
 		{StatusTerminated, true},
+		{StatusError, true},
 		{StatusRunning, false},
 		{StatusInitializing, false},
 		{StatusUnknown, false},

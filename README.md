@@ -390,6 +390,7 @@ branch on these, not on the reason text.
 | `initializing` | `desiredStatus` is RUNNING and no telemetry is being reported. usually placed on a machine with the container not up yet — image pull, container create or boot, which the platform does not distinguish — but the same absence is what an upstream telemetry lookup failure looks like, so read it as "no container reported", not "the container is provably down". either way: keep polling |
 | `stopped` | `desiredStatus` is EXITED and `lastStatusChange` does not name a termination. container gone, disk kept, `pod start` will bring it back |
 | `terminated` | the pod is being destroyed: `desiredStatus` is TERMINATED, **or** it is EXITED and `lastStatusChange` says "terminated by ...". the second is the normal case — a terminate writes EXITED, not TERMINATED — and a terminated pod drops out of `pod list` shortly after, so this is a narrow window |
+| `error` | `desiredStatus` is ERROR (rest v2): the pod is in a state it won't recover from on its own. it still exists and may still bill; read `pod logs`, then terminate or recreate it. no ssh command is offered |
 | `unknown` | not derivable: either a `desiredStatus` the platform defines but does not surface in practice (CREATED, RESTARTING, PAUSED, DEAD), or the runtime lookup failed. read `desiredStatus`, which is in the same output |
 
 | `runtimeStatusReason` | meaning |

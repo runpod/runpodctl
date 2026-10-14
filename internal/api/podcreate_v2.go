@@ -71,8 +71,6 @@ type v2PodCreate struct {
 // v1DefaultCpuVcpus is the vcpu count v1 gave a cpu pod created without one.
 const v1DefaultCpuVcpus = 2
 
-var stockOrderV2 = map[string]int{"HIGH": 0, "MEDIUM": 1, "LOW": 2, "NONE": 3}
-
 // defaultPodName is the name a create sends when none was given: v2 requires
 // one, where v1 picked it server-side. the image name without its tag, as the
 // legacy create always did, or the template id for a template-only create.
@@ -179,6 +177,9 @@ func checkPlacement(req *PodCreateV2Request) error {
 		return clierr.Usagef("--country-code is only supported for gpu pods; use --data-center-ids")
 	case req.GpuTypeID == "" && req.VolumeInGb > 0 && req.NetworkVolumeID == "":
 		return clierr.Usagef("cpu pods cannot have a pod volume; use --network-volume-id")
+	case req.NetworkVolumeID != "" && req.VolumeInGb > 0:
+		// v2 mounts one or the other; the pod volume would be dropped silently
+		return clierr.Usagef("--volume-in-gb sets a pod volume, which a pod with --network-volume-id doesn't get; a network volume's size belongs to the volume ('runpodctl network-volume update')")
 	}
 	return nil
 }
@@ -186,22 +187,45 @@ func checkPlacement(req *PodCreateV2Request) error {
 func (c *Client) postPod(body *v2PodCreate) (*Pod, map[string]interface{}, error) {
 	data, err := c.PostV2("/pods", body)
 	if err != nil {
-		return nil, nil, err
+		var apiErr *APIError
+		if errors.As(err, &apiErr) {
+			return nil, nil, err
+		}
+		// no answer (a timeout, a dropped connection): the create may still
+		// have gone through, and running it again could buy a second pod
+		return nil, nil, fmt.Errorf("%w; the pod may have been created, check 'runpodctl pod list' before retrying", err)
 	}
 	var raw map[string]interface{}
 	_ = json.Unmarshal(data, &raw)
 	pod, err := parseV2Pod(data)
+	if err == nil && pod.ID == "" {
+		err = errors.New("no pod id in the reply")
+	}
 	if err != nil {
 		// the create was accepted, so a pod may exist and bill: say so, or the
 		// obvious next step (running the create again) buys a second one
 		id, _ := raw["id"].(string)
-		if id == "" {
-			id = "unknown"
+		shown := id
+		if shown == "" {
+			shown = "unknown"
 		}
-		return nil, raw, fmt.Errorf("the create was accepted but its reply could not be read (%v); pod id %s; check 'runpodctl pod list' before retrying", err, id)
+		return nil, raw, &acceptedCreateError{id: id, err: fmt.Errorf("the create was accepted but its reply could not be read (%v); pod id %s; check 'runpodctl pod list' before retrying", err, shown)}
 	}
 	return pod, raw, nil
 }
+
+// acceptedCreateError is a create the api accepted whose reply could not be
+// used. it carries the pod id, when there is one, as the error object's id
+// field (see output.WithResourceID), so an agent can clean up without
+// parsing the message.
+type acceptedCreateError struct {
+	id  string
+	err error
+}
+
+func (e *acceptedCreateError) Error() string           { return e.err.Error() }
+func (e *acceptedCreateError) Unwrap() error           { return e.err }
+func (e *acceptedCreateError) ErrorResourceID() string { return e.id }
 
 func (c *Client) cpuFlavorsByStock() ([]string, error) {
 	data, err := c.GetV2("/catalog/cpus", url.Values{
@@ -222,7 +246,7 @@ func (c *Client) cpuFlavorsByStock() ([]string, error) {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 	sort.SliceStable(resp.Cpus, func(i, j int) bool {
-		return stockOrderV2[strings.ToUpper(resp.Cpus[i].Availability)] < stockOrderV2[strings.ToUpper(resp.Cpus[j].Availability)]
+		return stockRank(resp.Cpus[i].Availability) > stockRank(resp.Cpus[j].Availability)
 	})
 	ids := make([]string, 0, len(resp.Cpus))
 	for _, cpu := range resp.Cpus {
@@ -269,7 +293,7 @@ func (c *Client) placementDataCenters(req *PodCreateV2Request) ([]string, error)
 		}
 	}
 
-	if len(req.Compliance) > 0 {
+	if len(cleanList(req.Compliance)) > 0 {
 		data, err := c.GetV2("/catalog/datacenters", url.Values{"compliance": {strings.Join(cleanList(req.Compliance), ",")}})
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve --compliance: %w", err)

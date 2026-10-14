@@ -152,11 +152,11 @@ var fatalPollCodes = map[string]bool{
 // fatalPollStatuses are the http statuses that mean the *request* is wrong, so
 // every retry is answered identically.
 //
-// Codes alone are not enough: a graphql failure is an *api.GraphQLError whose
-// ErrorCode() is the constant "graphql_error", so a caller polling graphql
-// would never hit fatalPollCodes, and a bad key would burn the whole wait budget
-// while the resource bills. the http status catches that. 404/429/5xx stay
-// transient on purpose.
+// Codes alone are not enough: an error that carries only a generic code (a
+// graphql failure's is the constant "graphql_error") never hits
+// fatalPollCodes, and a bad key would burn the whole wait budget while the
+// resource bills. the http status catches that. 404/429/5xx stay transient on
+// purpose.
 var fatalPollStatuses = map[int]bool{
 	http.StatusBadRequest:   true,
 	http.StatusUnauthorized: true,

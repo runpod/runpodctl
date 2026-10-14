@@ -112,6 +112,11 @@ const (
 	// common one — see "Which desiredStatus a terminate actually writes" above.
 	StatusTerminated Status = "terminated"
 
+	// StatusError means desiredStatus is ERROR (rest v2): the pod is in a state
+	// it will not recover from on its own. it still exists, so it may still
+	// bill; read its logs, then terminate or recreate it.
+	StatusError Status = "error"
+
 	// StatusUnknown means the state cannot be derived: either desiredStatus is
 	// one of the values the platform defines but never surfaces in practice
 	// (CREATED, RESTARTING, PAUSED, DEAD), or runtime telemetry could not be
@@ -226,6 +231,8 @@ func Derive(s Signals) State {
 			Status: StatusStopped,
 			Reason: stopReason(s.LastStatusChange, "exited by ", ReasonStoppedByUser, ReasonStoppedByRunpod, ReasonStoppedOutbid),
 		}
+	case "ERROR":
+		return State{Status: StatusError}
 	case "TERMINATED":
 		return State{
 			Status: StatusTerminated,
@@ -241,7 +248,7 @@ func Derive(s Signals) State {
 // evidence that a pod is down, so callers must not throw away information (an
 // ssh connection they already built, say) on the strength of it.
 func (st State) IsKnownDown() bool {
-	return st.Status == StatusStopped || st.Status == StatusTerminated
+	return st.Status == StatusStopped || st.Status == StatusTerminated || st.Status == StatusError
 }
 
 // Explain describes the state in one lowercase clause, or "" when the state
@@ -257,6 +264,8 @@ func (st State) Explain(podID string) string {
 		return "pod is stopped; start it with 'runpodctl pod start " + IDOrPlaceholder(podID) + "'"
 	case StatusTerminated:
 		return "pod is terminated"
+	case StatusError:
+		return "pod is in an error state and won't recover on its own; check 'runpodctl pod logs " + IDOrPlaceholder(podID) + "', then terminate or recreate it"
 	default:
 		return ""
 	}

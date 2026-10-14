@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/runpod/runpodctl/internal/api"
+	"github.com/runpod/runpodctl/internal/clierr"
 	"github.com/runpod/runpodctl/internal/duration"
 	"github.com/runpod/runpodctl/internal/output"
 	"github.com/runpod/runpodctl/internal/podstate"
@@ -20,7 +21,8 @@ var listCmd = &cobra.Command{
 	Short: "list all pods",
 	Long: `list all pods in your account.
 
-defaults to running pods only; use --all to include stopped ones.
+defaults to running pods, plus any in an error state; use --all to include
+stopped ones.
 
 runtimeStatus reports what each pod is actually doing, which desiredStatus
 cannot: running (container up and reporting), initializing (no container
@@ -62,10 +64,13 @@ func init() {
 	listCmd.Flags().StringVar(&listStatus, "status", "", "filter by desired status (e.g. RUNNING, EXITED); not runtimeStatus values like initializing")
 	listCmd.Flags().StringVar(&listSince, "since", "", "filter pods created within duration (e.g. 1h, 7d)")
 	listCmd.Flags().StringVar(&listCreatedAfter, "created-after", "", "filter pods created after date (e.g. 2025-01-15)")
-	listCmd.Flags().BoolVarP(&listAll, "all", "a", false, "show all pods including exited (default: running only)")
+	listCmd.Flags().BoolVarP(&listAll, "all", "a", false, "show all pods including exited (default: running and error only)")
 }
 
 func runList(cmd *cobra.Command, args []string) error {
+	if listComputeType != "" && !containsFold([]string{"GPU", "CPU"}, listComputeType) {
+		return clierr.Usagef("--compute-type must be GPU or CPU, got %q", listComputeType)
+	}
 	client, err := api.NewClient()
 	if err != nil {
 		return err
@@ -111,14 +116,19 @@ func runList(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	statusFilter := listStatus
-	if statusFilter == "" && !listAll {
-		statusFilter = "RUNNING"
+	// the default view is pods that are up, plus ERROR ones: before v2 those
+	// read RUNNING, and they still exist and may bill
+	statusFilter := []string{listStatus}
+	if listStatus == "" {
+		statusFilter = nil
+		if !listAll {
+			statusFilter = []string{"RUNNING", "ERROR"}
+		}
 	}
 
 	matched := make([]api.Pod, 0, len(pods))
 	for _, p := range pods {
-		if statusFilter != "" && !strings.EqualFold(p.DesiredStatus, statusFilter) {
+		if len(statusFilter) > 0 && !containsFold(statusFilter, p.DesiredStatus) {
 			continue
 		}
 		if !cutoff.IsZero() {
@@ -195,4 +205,13 @@ func parseCreatedAt(v interface{}) time.Time {
 		return time.Unix(ts, 0)
 	}
 	return time.Time{}
+}
+
+func containsFold(values []string, v string) bool {
+	for _, x := range values {
+		if strings.EqualFold(x, v) {
+			return true
+		}
+	}
+	return false
 }
