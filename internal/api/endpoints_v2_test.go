@@ -374,14 +374,16 @@ func TestUpdateEndpointModels_ConfigReadFailureSkipsWrite(t *testing.T) {
 // a model-only update of an endpoint that doesn't exist is not_found, as it
 // was when the first read went through GetEndpoint
 func TestUpdateEndpointModels_MissingEndpointIsNotFound(t *testing.T) {
-	stub := &updateModelsStub{config: "null"}
-	_, err := stub.client(t).UpdateEndpointModels("ep-typo", nil)
-	var coded interface{ ErrorCode() string }
-	if !errors.As(err, &coded) || coded.ErrorCode() != "not_found" {
-		t.Fatalf("err = %v, want not_found", err)
-	}
-	if stub.saveCalled {
-		t.Error("saveEndpoint must not be called for a missing endpoint")
+	// a null endpoint, and the error graphql actually sends for an unknown id
+	for _, stub := range []*updateModelsStub{{config: "null"}, {configErr: "Endpoint not found"}} {
+		_, err := stub.client(t).UpdateEndpointModels("ep-typo", nil)
+		var coded interface{ ErrorCode() string }
+		if !errors.As(err, &coded) || coded.ErrorCode() != "not_found" {
+			t.Fatalf("err = %v, want not_found", err)
+		}
+		if stub.saveCalled {
+			t.Error("saveEndpoint must not be called for a missing endpoint")
+		}
 	}
 }
 

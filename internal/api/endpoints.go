@@ -377,6 +377,10 @@ func (c *Client) gqlEndpointConfig(endpointID string) (*Endpoint, error) {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 	if len(resp.Errors) > 0 {
+		// graphql answers an unknown id with an error, not a null endpoint
+		if strings.Contains(strings.ToLower(resp.Errors[0].Message), "endpoint not found") {
+			return nil, NewNotFoundError("endpoint %s not found", endpointID)
+		}
 		return nil, newGraphQLError(resp.Errors[0].Message)
 	}
 	if resp.Data.Myself == nil || resp.Data.Myself.Endpoint == nil {
