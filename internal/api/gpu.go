@@ -106,6 +106,9 @@ type v2CatalogGpu struct {
 	} `json:"dataCenters"`
 }
 
+// listCatalogGpus reads the gpu catalog. the catalog routes return everything
+// in one response, with no pagination block (checked 2026-10-14), so one read
+// is the whole list.
 func (c *Client) listCatalogGpus(params url.Values) ([]v2CatalogGpu, error) {
 	data, err := c.GetV2("/catalog/gpus", params)
 	if err != nil {

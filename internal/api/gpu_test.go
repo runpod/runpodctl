@@ -72,6 +72,20 @@ func TestListGpuTypes_PricingAndPerDC(t *testing.T) {
 	if a4000 := byID["NVIDIA RTX A4000"]; a4000.StockStatus != "Low" || !a4000.Available {
 		t.Errorf("A4000 stock = %q available=%v, want Low/true from its data center", a4000.StockStatus, a4000.Available)
 	}
+
+	all, err := newV2TestClient(t, server).ListGpuTypes(true)
+	if err != nil {
+		t.Fatalf("ListGpuTypes(true): %v", err)
+	}
+	var rtx4090 *GpuTypeWithAvailability
+	for i := range all {
+		if all[i].ID == "NVIDIA GeForce RTX 4090" {
+			rtx4090 = &all[i]
+		}
+	}
+	if rtx4090 == nil || rtx4090.Available || rtx4090.StockStatus != "" {
+		t.Errorf("--include-unavailable: RTX 4090 = %+v, want listed, unavailable, no stock status", rtx4090)
+	}
 }
 
 func TestListServerlessGpuPoolsGroupsCatalogByPool(t *testing.T) {
@@ -172,5 +186,19 @@ func TestStockRank(t *testing.T) {
 	}
 	if !betterStock("Low", "Very High") {
 		t.Error("a known level should still win over an unorderable unknown (documented tradeoff)")
+	}
+}
+
+// gpu list used to fall back to gpus without stock when the stock read failed;
+// with one catalog read, its failure is the command's
+func TestListGpuTypes_CatalogFailureIsAnError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	gpus, err := newV2TestClient(t, server).ListGpuTypes(false)
+	if err == nil || gpus != nil {
+		t.Fatalf("ListGpuTypes = %v, %v; want an error and no gpus", gpus, err)
 	}
 }
