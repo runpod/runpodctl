@@ -108,16 +108,12 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	if portLabelsChanged || readmeChanged {
-		what := "port labels"
-		if portLabelsChanged && readmeChanged {
-			what = "port labels and readme"
-		}
+		what := graphqlWriteName(portLabelsChanged, readmeChanged)
 		graphqlClient, graphqlErr := api.NewGraphQLClient()
 		if graphqlErr == nil {
 			if portLabelsChanged {
 				graphqlErr = graphqlClient.UpdateTemplatePortLabels(templateID, portLabels, updatePortLabelOverrides(req))
 			} else {
-				what = "readme"
 				graphqlErr = graphqlClient.UpdateTemplateReadme(templateID, updatePortLabelOverrides(req))
 			}
 		}
@@ -133,7 +129,11 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	// update output always included.
 	template, err := client.GetTemplate(templateID)
 	if err != nil {
-		return fmt.Errorf("failed to read updated template: %w", err)
+		return fmt.Errorf("template updated, but failed to read it back (run 'runpodctl template get %s'): %w", templateID, err)
+	}
+	// a graphql read right after the save can be stale; print what was written
+	if readmeChanged {
+		template.Readme = req.Readme
 	}
 	if portLabelsChanged {
 		template.PortsConfig = portLabels

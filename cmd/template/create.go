@@ -124,16 +124,12 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		if len(req.Ports) == 0 {
 			req.Ports = template.Ports
 		}
-		what := "port labels"
-		if len(portLabels) > 0 && req.Readme != "" {
-			what = "port labels and readme"
-		}
+		what := graphqlWriteName(len(portLabels) > 0, req.Readme != "")
 		graphqlClient, gqlErr := api.NewGraphQLClient()
 		if gqlErr == nil {
 			if len(portLabels) > 0 {
 				gqlErr = graphqlClient.UpdateTemplatePortLabels(template.ID, portLabels, createPortLabelOverrides(req))
 			} else {
-				what = "readme"
 				gqlErr = graphqlClient.UpdateTemplateReadme(template.ID, createPortLabelOverrides(req))
 			}
 		}
@@ -156,6 +152,18 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
 	return output.Print(template, &output.Config{Format: format})
+}
+
+// graphqlWriteName names what the follow-up graphql save sets, for its error.
+func graphqlWriteName(labels, readme bool) string {
+	switch {
+	case labels && readme:
+		return "port labels and readme"
+	case readme:
+		return "readme"
+	default:
+		return "port labels"
+	}
 }
 
 func createPortLabelOverrides(req *api.TemplateCreateRequest) *api.TemplatePortLabelOverrides {

@@ -271,3 +271,62 @@ func TestGetTemplateFallsBackToGraphQLOnlyOnNotFound(t *testing.T) {
 		}
 	}
 }
+
+// --type all reads official from the v2 catalog, community from graphql and the
+// user's own from v2 with readmes from graphql, in that order
+func TestListAllTemplates(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/catalog/templates":
+			if got := r.URL.Query().Get("source"); got != "official" {
+				t.Errorf("catalog source = %q, want official", got)
+			}
+			_, _ = io.WriteString(w, `{"templates":[{"id":"off-1","name":"official","image":"runpod/pytorch",
+				"ports":["8888/http"],"env":{"A":"1"},"cmd":["run"],"disk":20,"public":true,"category":"NVIDIA"}]}`)
+		case "/templates":
+			_, _ = io.WriteString(w, `{"templates":[{"id":"mine-2","name":"zeta","image":"img:2"},
+				{"id":"mine-1","name":"Alpha","image":"img:1"}]}`)
+		default:
+			t.Errorf("unexpected v2 request %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	graphql := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), "myself") {
+			_, _ = io.WriteString(w, `{"data":{"myself":{"podTemplates":[{"id":"mine-1","readme":"# alpha"}]}}}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"data":{"podTemplates":[{"id":"com-1","name":"community","imageName":"c:1"}]}}`)
+	}))
+	defer graphql.Close()
+	t.Setenv("RUNPOD_GRAPHQL_URL", graphql.URL)
+	client := newV2TestClient(t, server)
+
+	all, err := client.ListAllTemplates(&TemplateListOptions{Type: TemplateTypeAll})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, tpl := range all {
+		ids = append(ids, tpl.ID)
+	}
+	if want := []string{"off-1", "com-1", "mine-1", "mine-2"}; !reflect.DeepEqual(ids, want) {
+		t.Fatalf("ids = %v, want %v", ids, want)
+	}
+	// official entries carry only the listing fields, tagged as runpod's
+	want := Template{ID: "off-1", Name: "official", ImageName: "runpod/pytorch", IsPublic: true, IsRunpod: true,
+		Category: "NVIDIA", ContainerDiskInGb: 20}
+	if !reflect.DeepEqual(all[0], want) {
+		t.Fatalf("official =\n%+v\nwant\n%+v", all[0], want)
+	}
+	if all[2].Readme != "# alpha" || all[3].Readme != "" {
+		t.Fatalf("user readmes = %q, %q; want the graphql backfill", all[2].Readme, all[3].Readme)
+	}
+
+	past, err := client.ListAllTemplates(&TemplateListOptions{Type: TemplateTypeAll, Offset: 10})
+	if err != nil || len(past) != 0 {
+		t.Fatalf("offset past the end = %v, %v; want an empty list", past, err)
+	}
+}
