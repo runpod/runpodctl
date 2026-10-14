@@ -10,6 +10,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// promptCanTimeOut is true here: waitReadable bounds the wait for an answer.
+var promptCanTimeOut = true
+
 // waitReadable reports whether f has input within d. it polls instead of
 // setting a read deadline: go opens a terminal stdin in blocking mode, where
 // SetReadDeadline returns os.ErrNoDeadline, and switching the fd to

@@ -38,11 +38,11 @@ func newUpdatePromptHarness(t *testing.T, currentVersion string) *updatePromptHa
 
 	oldVersion, oldPath, oldInteractive := version, updateStatePath, updateInteractive
 	oldFetch, oldInstall, oldNow := fetchLatestVersion, installUpdate, updateNow
-	oldAgent, oldWait, oldRoot := updateAgent, waitForInput, updateNeedsRoot
+	oldAgent, oldWait, oldRoot, oldTimeOut := updateAgent, waitForInput, updateNeedsRoot, promptCanTimeOut
 	t.Cleanup(func() {
 		version, updateStatePath, updateInteractive = oldVersion, oldPath, oldInteractive
 		fetchLatestVersion, installUpdate, updateNow = oldFetch, oldInstall, oldNow
-		updateAgent, waitForInput, updateNeedsRoot = oldAgent, oldWait, oldRoot
+		updateAgent, waitForInput, updateNeedsRoot, promptCanTimeOut = oldAgent, oldWait, oldRoot, oldTimeOut
 		pendingUpdateCheck = nil
 	})
 
@@ -61,6 +61,8 @@ func newUpdatePromptHarness(t *testing.T, currentVersion string) *updatePromptHa
 	}
 	updateNow = func() time.Time { return h.now }
 	updateNeedsRoot = func() bool { return false }
+	// the prompt tests run on every platform, windows included
+	promptCanTimeOut = true
 	return h
 }
 
@@ -160,10 +162,13 @@ func TestUpdatePromptMode(t *testing.T) {
 		env         string
 		agent       string
 		interactive bool
+		noTimeout   bool
 		want        updateMode
 	}{
 		{name: "interactive subcommand", cmd: pod, interactive: true, want: updateModePrompt},
 		{name: "not a terminal", cmd: pod, interactive: false, want: updateModeOff},
+		{name: "no bounded read (windows) gets a notice", cmd: pod, interactive: true, noTimeout: true, want: updateModeNotice},
+		{name: "no bounded read without a terminal", cmd: pod, interactive: false, noTimeout: true, want: updateModeOff},
 		{name: "agent in a terminal gets a notice, not a prompt", cmd: pod, agent: "claude-code", interactive: true, want: updateModeNotice},
 		{name: "agent without a terminal gets a notice", cmd: pod, agent: "codex", interactive: false, want: updateModeNotice},
 		{name: "opted out", cmd: pod, env: noUpdateCheckEnv, interactive: true, want: updateModeOff},
@@ -182,6 +187,7 @@ func TestUpdatePromptMode(t *testing.T) {
 			}
 			updateInteractive = func() bool { return tt.interactive }
 			updateAgent = func() string { return tt.agent }
+			promptCanTimeOut = !tt.noTimeout
 			if got := updatePromptMode(tt.cmd); got != tt.want {
 				t.Fatalf("updatePromptMode = %v, want %v", got, tt.want)
 			}

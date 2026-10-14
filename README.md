@@ -539,14 +539,15 @@ once a day, in the background. when one exists, the next command asks
   upgraded through their package manager, and so is `runpodctl update`. other
   installs download the release directly.
 - anything else, including enter, continues and asks again tomorrow. so does no
-  answer within 30 seconds (macos and linux), so an unattended terminal never
-  hangs.
+  answer within 30 seconds, so an unattended terminal never hangs.
 - `s` continues and stops asking until the next release.
 
 if runpodctl is installed in a directory you cannot write, such as `/usr/local/bin`
 from the install script, you get a one-line notice to run `sudo runpodctl update`
 instead of the prompt, once a day. set `RUNPOD_NO_UPDATE_CHECK=1` to stop it. a
-command run in the background (`&`) is not prompted.
+command run in the background (`&`) is not prompted. on windows, which cannot
+time out the prompt, you get the same one-line notice with `runpodctl update`
+instead.
 
 ai agents (claude code, codex, cursor, gemini cli and others, detected from the
 environment their harness sets) never get the prompt. once a day they get one

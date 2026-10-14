@@ -130,10 +130,14 @@ func updatePromptMode(c *cobra.Command) updateMode {
 	if updateAgent() != "" {
 		return updateModeNotice
 	}
-	if updateInteractive() {
-		return updateModePrompt
+	if !updateInteractive() {
+		return updateModeOff
 	}
-	return updateModeOff
+	// without a bounded read (windows) an unattended prompt would wait forever
+	if !promptCanTimeOut {
+		return updateModeNotice
+	}
+	return updateModePrompt
 }
 
 // maybePromptUpdate runs from the root PersistentPreRunE. it never returns an

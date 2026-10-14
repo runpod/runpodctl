@@ -7,8 +7,12 @@ import (
 	"time"
 )
 
-// waitReadable has no portable way to bound a console read here, so the prompt
-// waits for an answer as it would without a timeout.
+// promptCanTimeOut is false here: there is no portable way to bound a console
+// read, so interactive sessions get the one-line notice instead of the prompt.
+var promptCanTimeOut = false
+
+// waitReadable cannot bound the wait. it is unused while promptCanTimeOut is
+// false.
 func waitReadable(*os.File, time.Duration) bool { return true }
 
 // isForeground has no process-group check here.
