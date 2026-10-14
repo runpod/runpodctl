@@ -46,7 +46,7 @@ assert lib.assertMsg (lib.versionAtLeast go.version goModVersion)
 
   # Hash of the proxyVendor module cache (`goModules`). Any go.mod/go.sum
   # change invalidates it: run `nix run .#update-vendor-hash`.
-  vendorHash = "sha256-P+fvpS75S7CQ7o2xBatvP/2Aid873Pji0K4NvmmxAxY=";
+  vendorHash = "sha256-euC7FNi6GTu5W6DE/SPuywtnoM8an6etlcHJbQBxxeQ=";
 
   # Identical to .goreleaser.yml, minus the version, which the package adds.
   ldflags = [
