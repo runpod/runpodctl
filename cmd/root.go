@@ -306,6 +306,8 @@ func Execute(ver string) {
 	rootCmd.Version = ver
 
 	err := rootCmd.Execute()
+	// skipped when a command exits on its own (cobra.CheckErr, ctrl-c). the
+	// check result is then lost and the next run fetches again.
 	waitForUpdateCheck()
 	if err == nil {
 		return

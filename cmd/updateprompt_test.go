@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -37,11 +38,11 @@ func newUpdatePromptHarness(t *testing.T, currentVersion string) *updatePromptHa
 
 	oldVersion, oldPath, oldInteractive := version, updateStatePath, updateInteractive
 	oldFetch, oldInstall, oldNow := fetchLatestVersion, installUpdate, updateNow
-	oldAgent, oldWait := updateAgent, waitForInput
+	oldAgent, oldWait, oldCommand := updateAgent, waitForInput, updateCommand
 	t.Cleanup(func() {
 		version, updateStatePath, updateInteractive = oldVersion, oldPath, oldInteractive
 		fetchLatestVersion, installUpdate, updateNow = oldFetch, oldInstall, oldNow
-		updateAgent, waitForInput = oldAgent, oldWait
+		updateAgent, waitForInput, updateCommand = oldAgent, oldWait, oldCommand
 		pendingUpdateCheck = nil
 	})
 
@@ -59,6 +60,7 @@ func newUpdatePromptHarness(t *testing.T, currentVersion string) *updatePromptHa
 		return nil
 	}
 	updateNow = func() time.Time { return h.now }
+	updateCommand = func() string { return "runpodctl update" }
 	return h
 }
 
@@ -339,9 +341,9 @@ func TestNewUpdateCheckResult(t *testing.T) {
 		current string
 		want    updateCheckResult
 	}{
-		{name: "older release", current: "2.13.0-abc1234", want: updateCheckResult{CurrentVersion: "2.13.0-abc1234", LatestVersion: "v2.14.0", UpdateAvailable: true, UpdateCommand: "runpodctl update"}},
-		{name: "latest release with commit suffix", current: "2.14.0-dd55bcf", want: updateCheckResult{CurrentVersion: "2.14.0-dd55bcf", LatestVersion: "v2.14.0"}},
-		{name: "newer than latest", current: "2.15.0-abc1234", want: updateCheckResult{CurrentVersion: "2.15.0-abc1234", LatestVersion: "v2.14.0"}},
+		{name: "older release", current: "2.13.0-abc1234", want: updateCheckResult{CurrentVersion: "v2.13.0-abc1234", LatestVersion: "v2.14.0", UpdateAvailable: true, UpdateCommand: "runpodctl update"}},
+		{name: "latest release with commit suffix", current: "2.14.0-dd55bcf", want: updateCheckResult{CurrentVersion: "v2.14.0-dd55bcf", LatestVersion: "v2.14.0"}},
+		{name: "newer than latest", current: "2.15.0-abc1234", want: updateCheckResult{CurrentVersion: "v2.15.0-abc1234", LatestVersion: "v2.14.0"}},
 		{name: "dev build", current: "dev-abc1234", want: updateCheckResult{CurrentVersion: "dev-abc1234", LatestVersion: "v2.14.0", UpdateAvailable: true, UpdateCommand: "runpodctl update"}},
 	}
 	for _, tt := range tests {
@@ -416,6 +418,56 @@ func TestPromptAnswers(t *testing.T) {
 				t.Fatalf("re-prompted within a day: %q", out.String())
 			}
 		})
+	}
+}
+
+func TestUnwritableInstallGetsSudoNoticeInsteadOfPrompt(t *testing.T) {
+	h := newUpdatePromptHarness(t, "2.13.0-abc1234")
+	saveUpdateState(h.statePath, updateState{CheckedAt: h.now, LatestVersion: "v2.14.0"})
+	updateCommand = func() string { return "sudo runpodctl update" }
+
+	in := strings.NewReader("y\n")
+	var out bytes.Buffer
+	maybePromptUpdate(subcommand(), in, &out)
+
+	want := "runpodctl v2.14.0 is available (you have v2.13.0). to update, run: sudo runpodctl update\n"
+	if out.String() != want {
+		t.Fatalf("output = %q, want %q", out.String(), want)
+	}
+	if in.Len() != 2 || h.installs != 0 {
+		t.Fatalf("notice consumed input (%d bytes left) or installed (%d)", in.Len(), h.installs)
+	}
+}
+
+func TestRunUpdateCheck(t *testing.T) {
+	h := newUpdatePromptHarness(t, "2.13.0-abc1234")
+	updateCmd.SetContext(context.Background())
+
+	fetchLatestVersion = func(context.Context) (string, error) { return "", errors.New("bad status: 403 Forbidden") }
+	if err := runUpdateCheck(updateCmd); err == nil || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("runUpdateCheck error = %v, want the fetch failure", err)
+	}
+	if _, err := os.Stat(h.statePath); !os.IsNotExist(err) {
+		t.Fatalf("failed check wrote state: %v", err)
+	}
+
+	fetchLatestVersion = func(context.Context) (string, error) { return "v2.14.0", nil }
+	if err := runUpdateCheck(updateCmd); err != nil {
+		t.Fatal(err)
+	}
+	if state := loadUpdateState(h.statePath); state.LatestVersion != "v2.14.0" || !state.CheckedAt.Equal(h.now) {
+		t.Fatalf("state = %+v, want the check recorded", state)
+	}
+}
+
+func TestPackageManagerFailureNamesTheCommand(t *testing.T) {
+	if _, err := exec.LookPath("false"); err != nil {
+		t.Skip("no false binary")
+	}
+	var out bytes.Buffer
+	err := runPackageManagerUpdate([]string{"false", "upgrade"}, &out)
+	if err == nil || !strings.Contains(err.Error(), "run it manually: false upgrade") {
+		t.Fatalf("error = %v, want the manual command", err)
 	}
 }
 

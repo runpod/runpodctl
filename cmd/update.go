@@ -7,9 +7,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
@@ -63,25 +64,6 @@ func DownloadFile(url string, savePath string) (file *os.File, err error) {
 	}
 
 	return file, nil
-}
-func GetJson(url string) (*GithubApiResponse, error) {
-	resp, err := http.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	var result GithubApiResponse
-	err = json.Unmarshal(body, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	return &result, nil
 }
 
 // assetName returns the expected release asset name for the current platform.
@@ -271,11 +253,16 @@ type updateCheckResult struct {
 
 func newUpdateCheckResult(current, latest string) updateCheckResult {
 	res := updateCheckResult{CurrentVersion: current, LatestVersion: latest}
+	v, ok := releaseSemver(current)
+	if ok {
+		// same "v" prefix as the release tag, so the two compare as strings
+		res.CurrentVersion = "v" + strings.TrimPrefix(current, "v")
+	}
 	// matches runSelfUpdate: only a comparable version at or past the latest
 	// release counts as current, so a dev build reports an update
-	if v, ok := releaseSemver(current); !ok || semver.Compare(v, latest) < 0 {
+	if !ok || semver.Compare(v, latest) < 0 {
 		res.UpdateAvailable = true
-		res.UpdateCommand = "runpodctl update"
+		res.UpdateCommand = updateCommand()
 	}
 	return res
 }
@@ -303,9 +290,9 @@ func runUpdateCheck(c *cobra.Command) error {
 // runSelfUpdate replaces the running binary with the latest github release,
 // writing progress to out.
 func runSelfUpdate(out io.Writer) error {
-	// fetch newest github release
-	githubApiUrl := "https://api.github.com/repos/runpod/runpodctl/releases/latest"
-	apiResp, err := GetJson(githubApiUrl)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	apiResp, err := fetchLatestRelease(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to fetch latest version info for runpodctl: %w", err)
 	}
@@ -380,6 +367,9 @@ func runSelfUpdate(out io.Writer) error {
 		fmt.Fprintf(out, "move /Y \"%s\" \"%s\"\n", extractedPath, destPath)
 	} else {
 		if err := extractBinaryFromTarGz(archivePath, extractedPath); err != nil {
+			if errors.Is(err, fs.ErrPermission) {
+				return fmt.Errorf("failed to extract update: %w (run: sudo runpodctl update)", err)
+			}
 			return fmt.Errorf("failed to extract update: %w", err)
 		}
 		fmt.Fprintf(out, "installing runpodctl %s to %s\n", latestVersion, destPath)

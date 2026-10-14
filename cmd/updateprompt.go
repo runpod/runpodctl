@@ -60,7 +60,8 @@ const (
 // seams for tests
 var (
 	updateStatePath    = defaultUpdateStatePath
-	updateInteractive  = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stderr.Fd())) }
+	updateInteractive  = defaultUpdateInteractive
+	updateCommand      = defaultUpdateCommand
 	updateAgent        = agent.Detect
 	waitForInput       = waitReadable
 	fetchLatestVersion = fetchLatestReleaseTag
@@ -88,6 +89,26 @@ func topLevelCommand(c *cobra.Command) *cobra.Command {
 		c = c.Parent()
 	}
 	return c
+}
+
+// a background job (`runpodctl pod list &`) still has the terminal as stdin and
+// stderr, but reading from it stops the job with SIGTTIN, so only the
+// foreground process group counts.
+func defaultUpdateInteractive() bool {
+	in, errFd := int(os.Stdin.Fd()), int(os.Stderr.Fd())
+	return term.IsTerminal(in) && term.IsTerminal(errFd) && isForeground(in)
+}
+
+// defaultUpdateCommand is the command that installs the update for this
+// binary. a direct install in a directory the user cannot write, such as
+// /usr/local/bin from `curl ... | sudo bash`, needs sudo. package managers
+// handle their own permissions.
+func defaultUpdateCommand() string {
+	exe, err := os.Executable()
+	if err != nil || packageManagerUpdate(exe) != nil || dirWritable(filepath.Dir(selfUpdateDestPath(exe))) {
+		return "runpodctl update"
+	}
+	return "sudo runpodctl update"
 }
 
 func updatePromptMode(c *cobra.Command) updateMode {
@@ -131,8 +152,10 @@ func maybePromptUpdate(c *cobra.Command, in io.Reader, out io.Writer) {
 	}
 
 	state.PromptedAt = now
-	if mode == updateModeNotice {
-		fmt.Fprintf(out, "runpodctl %s is available (you have %s). to update, run: runpodctl update\n", state.LatestVersion, current)
+	// `y` cannot install without root, so print the command instead of offering it.
+	command := updateCommand()
+	if mode == updateModeNotice || command != "runpodctl update" {
+		fmt.Fprintf(out, "runpodctl %s is available (you have %s). to update, run: %s\n", state.LatestVersion, current, command)
 		saveUpdateState(path, state)
 		return
 	}
@@ -259,26 +282,37 @@ func waitForUpdateCheck() {
 	saveUpdateState(path, state)
 }
 
-func fetchLatestReleaseTag(ctx context.Context) (string, error) {
+// fetchLatestRelease returns the latest github release. a non-200 response
+// (e.g. a rate-limit 403) or a tag that is not semver is an error, so callers
+// never compare against an empty version.
+func fetchLatestRelease(ctx context.Context) (*GithubApiResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, latestReleaseURL, nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("bad status: %s", resp.Status)
+		return nil, fmt.Errorf("bad status: %s", resp.Status)
 	}
 	var release GithubApiResponse
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return "", err
+		return nil, err
 	}
 	if !semver.IsValid(release.Version) {
-		return "", fmt.Errorf("invalid release tag %q", release.Version)
+		return nil, fmt.Errorf("invalid release tag %q", release.Version)
+	}
+	return &release, nil
+}
+
+func fetchLatestReleaseTag(ctx context.Context) (string, error) {
+	release, err := fetchLatestRelease(ctx)
+	if err != nil {
+		return "", err
 	}
 	return release.Version, nil
 }
@@ -354,6 +388,10 @@ func installUpdateForChannel(out io.Writer) error {
 	if args == nil {
 		return runSelfUpdate(out)
 	}
+	return runPackageManagerUpdate(args, out)
+}
+
+func runPackageManagerUpdate(args []string, out io.Writer) error {
 	fmt.Fprintf(out, "running: %s\n", strings.Join(args, " "))
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Stdin = os.Stdin
