@@ -116,6 +116,15 @@ func (c *Client) requestURL(method, u string, body interface{}) ([]byte, error) 
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		// redirects are never followed (see noRedirects); name it, or the
+		// caller only sees an opaque status or an html body.
+		return nil, &APIError{
+			Status:  resp.StatusCode,
+			Code:    codeForStatus(resp.StatusCode),
+			Message: fmt.Sprintf("api redirected (status %d) to %q; redirects are not followed", resp.StatusCode, resp.Header.Get("Location")),
+		}
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, parseAPIError(respBody, resp.StatusCode)
 	}
@@ -147,9 +156,9 @@ func (c *Client) requestV2(method, endpoint string, params url.Values, body inte
 			return nil, clierr.Usagef("invalid resource id %q", seg)
 		}
 		switch {
-		case decoded == "" || strings.Contains(decoded, "/"):
+		case decoded == "":
 			return nil, clierr.Usagef("a resource id is required")
-		case decoded == "." || decoded == "..":
+		case strings.Contains(decoded, "/") || decoded == "." || decoded == "..":
 			return nil, clierr.Usagef("invalid resource id %q", decoded)
 		}
 	}
@@ -358,11 +367,13 @@ func parseAPIError(body []byte, status int) *APIError {
 	trimmed := bytes.TrimSpace(body)
 	if len(trimmed) > 0 && trimmed[0] == '{' {
 		var envelope struct {
-			Error   string   `json:"error"`
-			Message string   `json:"message"`
-			Detail  string   `json:"detail"`
-			Code    string   `json:"code"`
-			Errors  []string `json:"errors"`
+			Error   string `json:"error"`
+			Message string `json:"message"`
+			Detail  string `json:"detail"`
+			Code    string `json:"code"`
+			// raw, so an errors[] of objects (or a string) can't fail the
+			// decode and throw away the message and code with it.
+			Errors json.RawMessage `json:"errors"`
 		}
 		if err := json.Unmarshal(trimmed, &envelope); err == nil {
 			switch {
@@ -377,8 +388,9 @@ func parseAPIError(body []byte, status int) *APIError {
 				// rest v2 puts the actionable part of a 422 ("additional
 				// properties 'x' not allowed") in errors[], with only a generic
 				// "Request validation failed." in detail.
-				if len(envelope.Errors) > 0 {
-					apiErr.Message += " " + strings.Join(envelope.Errors, "; ")
+				var details []string
+				if json.Unmarshal(envelope.Errors, &details) == nil && len(details) > 0 {
+					apiErr.Message += " " + strings.Join(details, "; ")
 				}
 			}
 			// normalize an explicit api code to the lowercase vocabulary.

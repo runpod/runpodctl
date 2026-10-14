@@ -269,6 +269,8 @@ func TestParseAPIError(t *testing.T) {
 		{"empty body falls back to status message", "", 502, "api request failed with status 502", "server_error"},
 		{"rest v2 validation errors are appended to detail", `{"detail":"Request validation failed.","errors":["$: missing property 'image'","$: additional properties 'imageName' not allowed"],"status":422,"title":"Unprocessable Entity"}`, 422, "Request validation failed. $: missing property 'image'; $: additional properties 'imageName' not allowed", "bad_request"},
 		{"rest v2 detail without errors is used alone", `{"detail":"pod not found","status":404,"title":"Not Found"}`, 404, "pod not found", "not_found"},
+		{"object-shaped errors keep the message and code", `{"error":"pod not found","code":"POD_NOT_FOUND","errors":[{"message":"x"}]}`, 404, "pod not found", "pod_not_found"},
+		{"object-shaped errors next to detail are skipped", `{"detail":"Request validation failed.","errors":[{"message":"x"}]}`, 422, "Request validation failed.", "bad_request"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -461,15 +463,9 @@ func TestRequestV2RefusesEmptyIDAndRedirects(t *testing.T) {
 		_, _ = w.Write([]byte(`{"registries":[]}`))
 	}))
 	defer server.Close()
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-	client, err := NewClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-	client.baseURL = "http://v1.invalid"
-	client.v2BaseURL = server.URL
+	client := newV2TestClient(t, server)
 
-	_, err = client.DeleteV2("/registries/")
+	_, err := client.DeleteV2("/registries/")
 	var usage interface{ ErrorCode() string }
 	if !errors.As(err, &usage) || usage.ErrorCode() != "usage_error" {
 		t.Fatalf("empty id: err = %v, want a usage_error", err)
@@ -495,8 +491,12 @@ func TestRequestV2RefusesEmptyIDAndRedirects(t *testing.T) {
 		t.Fatalf("a dot-segment id must not reach the api, got %d requests", hits)
 	}
 
-	if _, err := client.DeleteV2("/old"); err == nil {
+	_, err = client.DeleteV2("/old")
+	if err == nil {
 		t.Fatal("a redirected delete must fail, not follow the redirect")
+	}
+	if !strings.Contains(err.Error(), "redirected (status 301)") || !strings.Contains(err.Error(), `"/registries"`) {
+		t.Errorf("redirect error = %q, want the status and the location named", err)
 	}
 	if hits != 1 {
 		t.Errorf("redirect was followed: %d requests", hits)
@@ -565,4 +565,18 @@ func TestGetV2AllPagesFailsOnMissingCursor(t *testing.T) {
 	if err := client.getV2AllPages("/things", nil, func([]byte) error { return nil }); err == nil {
 		t.Fatal("more pages without a cursor must be an error, not a partial list")
 	}
+}
+
+// newV2TestClient points a client's rest v2 traffic at server, and v1 at an
+// unroutable host so a missed migration fails instead of calling production.
+func newV2TestClient(t *testing.T, server *httptest.Server) *Client {
+	t.Helper()
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+	client, err := NewClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.baseURL = "http://v1.invalid"
+	client.v2BaseURL = server.URL
+	return client
 }

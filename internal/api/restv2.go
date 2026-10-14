@@ -15,7 +15,7 @@ import (
 
 // V2Client serves the v2 calls that need a per-call context: the log streams
 // (logs.go) and the worker listing. Ordinary v2 requests go through Client's
-// GetV2/PostV2/PatchV2/DeleteV2 helpers.
+// GetV2/PostV2/PatchV2/PutV2/DeleteV2 helpers.
 
 // restV2BaseURL resolves the v2 base url, falling back to prod.
 func restV2BaseURL() string {
