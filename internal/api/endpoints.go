@@ -2,7 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -178,9 +180,14 @@ func (c *Client) fillIdleTimeouts(out []Endpoint, v2 []v2Endpoint, skipUnlisted 
 	}
 	idle, err := c.v1IdleTimeouts(missing, skipUnlisted)
 	if err != nil {
-		// %v, not %w: a v1 404 must not make an endpoint v2 just returned
-		// read as not_found
-		return fmt.Errorf("failed to read the idle timeout: %v", err)
+		// a v1 404 must not make an endpoint v2 just returned read as
+		// not_found; any other failure keeps its code (rate_limited,
+		// server_error, network_error), so an agent knows to retry
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
+			return fmt.Errorf("failed to read the idle timeout: %v", err)
+		}
+		return fmt.Errorf("failed to read the idle timeout: %w", err)
 	}
 	for i := range out {
 		if v2[i].Workers.IdleTimeout == nil {

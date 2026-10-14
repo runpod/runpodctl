@@ -640,3 +640,15 @@ func TestListEndpoints_OneMissingIdleTimeoutReadsV1List(t *testing.T) {
 		}
 	}
 }
+
+// a v1 failure other than a 404 keeps its code, so a 503 still reads as
+// retryable rather than cli_error
+func TestGetEndpoint_V1IdleTimeoutFailureKeepsCode(t *testing.T) {
+	noIdle := strings.Replace(v2GpuEndpoint, `"workers":{"min":0,"max":3,"idleTimeout":7}`, `"workers":{"min":0,"max":3}`, 1)
+	stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": noIdle}, v1Status: http.StatusServiceUnavailable}
+	_, err := stub.client(t).GetEndpoint("ep-1", false, false)
+	var coded interface{ ErrorCode() string }
+	if !errors.As(err, &coded) || coded.ErrorCode() != "server_error" {
+		t.Fatalf("err = %v, want server_error kept", err)
+	}
+}
