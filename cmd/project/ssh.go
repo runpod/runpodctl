@@ -236,7 +236,28 @@ func rsyncConnectionLost(output string) bool {
 			return true
 		}
 	}
-	return false
+	return rsyncSilentDrop(output)
+}
+
+// rsyncSilentDrop reports a connection dropped before rsync got a single byte,
+// with openssh printing nothing about it. openssh logs "Connection closed by"
+// and "Connection reset by" at INFO, which LogLevel=ERROR hides, so on some
+// timings (measured: about 1 in 7 runs on ubuntu's openssh 9.6) rsync's own
+// two lines are the whole output. any other line, such as a denied key, a
+// missing remote rsync or a local rsync error, is a failure a retry won't fix.
+func rsyncSilentDrop(output string) bool {
+	sawDrop := false
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "rsync: connection unexpectedly closed (0 bytes received so far)"):
+			sawDrop = true
+		case strings.HasPrefix(line, "rsync error: error in rsync protocol data stream (code 12)"):
+		default:
+			return false
+		}
+	}
+	return sawDrop
 }
 
 // podUnreachableError explains a connection failure that is the normal result
