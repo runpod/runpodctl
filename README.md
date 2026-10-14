@@ -100,8 +100,11 @@ nix profile install github:runpod/runpodctl
 ## quick start
 
 ```bash
-# configure api key
-runpodctl config --apiKey=your_api_key
+# configure api key (prompts for it)
+runpodctl doctor
+
+# or non-interactive (ci, containers, agents)
+runpodctl doctor --api-key your_api_key
 
 # list all pods
 runpodctl pod list

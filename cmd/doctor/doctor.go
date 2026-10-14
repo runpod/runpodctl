@@ -98,7 +98,8 @@ func checkAPIKey(providedKey string) checkResult {
 	result.Error = "no api key configured"
 
 	// prefer a key passed via --api-key (non-interactive: CI, containers,
-	// agents), falling back to an interactive prompt only on a TTY.
+	// agents). without it, prompt and read stdin. there is no tty check, so
+	// a closed or empty stdin fails the read.
 	apiKey = strings.TrimSpace(providedKey)
 	if apiKey == "" {
 		fmt.Fprintln(os.Stderr, "")
