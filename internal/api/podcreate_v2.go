@@ -473,10 +473,20 @@ func (l *LegacyPodCreate) V2Request() *PodCreateV2Request {
 	return req
 }
 
-// VolumeNote is the stderr note for a gpu pod volume V2Request raises to v2's
-// minimum, or "" when none is due.
+// LegacyDefaultVolumeInGb is the legacy create commands' --volumeSize default.
+const LegacyDefaultVolumeInGb = 1
+
+// VolumeNote is the stderr note for a pod volume V2Request changes: a gpu pod
+// volume raised to v2's minimum, or a --volumeSize set beside a network
+// volume, which takes its place. "" when none is due.
 func (l *LegacyPodCreate) VolumeNote() string {
-	if l.GpuTypeID == "" || l.NetworkVolumeID != "" || l.VolumeInGb <= 0 || l.VolumeInGb >= MinPodVolumeInGb {
+	if l.NetworkVolumeID != "" {
+		if l.VolumeInGb > LegacyDefaultVolumeInGb {
+			return fmt.Sprintf("note: --volumeSize %d ignored; the network volume takes the pod volume's place", l.VolumeInGb)
+		}
+		return ""
+	}
+	if l.GpuTypeID == "" || l.VolumeInGb <= 0 || l.VolumeInGb >= MinPodVolumeInGb {
 		return ""
 	}
 	return fmt.Sprintf("note: volume raised from %d gb to the minimum of %d gb", l.VolumeInGb, MinPodVolumeInGb)

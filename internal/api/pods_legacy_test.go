@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -120,5 +121,16 @@ func TestLegacyPodCreate_VolumeNote(t *testing.T) {
 		if got := tc.in.VolumeNote(); got != tc.want {
 			t.Errorf("%s: note = %q, want %q", tc.name, got, tc.want)
 		}
+	}
+}
+
+// an explicit --volumeSize beside a network volume is still dropped, as the
+// legacy create always did, but no longer silently
+func TestLegacyPodCreate_VolumeNoteWithNetworkVolume(t *testing.T) {
+	if note := (&LegacyPodCreate{GpuTypeID: "NVIDIA A40", VolumeInGb: 50, NetworkVolumeID: "nv1"}).VolumeNote(); !strings.Contains(note, "--volumeSize 50 ignored") {
+		t.Errorf("explicit size: note = %q", note)
+	}
+	if note := (&LegacyPodCreate{GpuTypeID: "NVIDIA A40", VolumeInGb: LegacyDefaultVolumeInGb, NetworkVolumeID: "nv1"}).VolumeNote(); note != "" {
+		t.Errorf("default size: note = %q, want none", note)
 	}
 }
