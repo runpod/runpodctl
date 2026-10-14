@@ -15,7 +15,7 @@ func TestBillingUsesV2RoutesAndFilters(t *testing.T) {
 		wantPath  string
 		wantQuery string
 		body      string
-		wantJSON  string // the records as the cli prints them
+		wantJSON  string // the json fields each record carries (output.Print then sorts keys)
 	}{
 		{
 			name: "pods",
