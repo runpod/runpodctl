@@ -624,3 +624,19 @@ func TestGetEndpoint_LocationsAndStartCmd(t *testing.T) {
 		t.Errorf("template dockerStartCmd = %#v", ep.Template["dockerStartCmd"])
 	}
 }
+
+// one endpoint missing its idle timeout, deleted before the v1 read: list
+// reads v1's collection, where it is simply absent, instead of a 404
+func TestListEndpoints_OneMissingIdleTimeoutReadsV1List(t *testing.T) {
+	noIdle := strings.Replace(v2GpuEndpoint, `"workers":{"min":0,"max":3,"idleTimeout":7}`, `"workers":{"min":0,"max":3}`, 1)
+	stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": noIdle, "ep-2": v2CpuEndpoint}, v1Status: http.StatusNotFound}
+	eps, err := stub.client(t).ListEndpoints(nil)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, e := range eps {
+		if e.ID == "ep-1" && e.IdleTimeout != nil {
+			t.Errorf("ep-1 idleTimeout = %d, want none", *e.IdleTimeout)
+		}
+	}
+}

@@ -176,7 +176,7 @@ func (c *Client) fillIdleTimeouts(out []Endpoint, v2 []v2Endpoint, skipUnlisted 
 	if len(missing) == 0 {
 		return nil
 	}
-	idle, err := c.v1IdleTimeouts(missing)
+	idle, err := c.v1IdleTimeouts(missing, skipUnlisted)
 	if err != nil {
 		// %v, not %w: a v1 404 must not make an endpoint v2 just returned
 		// read as not_found
@@ -236,13 +236,16 @@ func (c *Client) UpdateEndpoint(endpointID string, req *EndpointUpdateRequest) e
 // v1IdleTimeouts reads idle timeouts over rest v1, keyed by endpoint id. v2
 // leaves workers.idleTimeout out on request-count endpoints, though the
 // endpoint still has one.
-func (c *Client) v1IdleTimeouts(endpointIDs []string) (map[string]int, error) {
+//
+// collection reads v1's list even for one id, so an endpoint deleted since the
+// v2 read is simply absent rather than a 404 that fails a whole list.
+func (c *Client) v1IdleTimeouts(endpointIDs []string, collection bool) (map[string]int, error) {
 	type v1Endpoint struct {
 		ID          string `json:"id"`
 		IdleTimeout int    `json:"idleTimeout"`
 	}
 	var endpoints []v1Endpoint
-	if len(endpointIDs) == 1 {
+	if len(endpointIDs) == 1 && !collection {
 		data, err := c.Get("/endpoints/"+url.PathEscape(endpointIDs[0]), nil)
 		if err != nil {
 			return nil, err
