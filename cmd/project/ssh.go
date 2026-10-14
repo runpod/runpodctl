@@ -247,7 +247,7 @@ func rsyncConnectionLost(output string) bool {
 // missing remote rsync or a local rsync error, is a failure a retry won't fix.
 func rsyncSilentDrop(output string) bool {
 	sawDrop := false
-	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(output), "\n") {
 		line = strings.TrimSpace(line)
 		switch {
 		case strings.HasPrefix(line, "rsync: connection unexpectedly closed (0 bytes received so far)"):
