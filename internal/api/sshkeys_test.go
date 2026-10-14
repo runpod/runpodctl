@@ -206,8 +206,9 @@ func TestAddPublicSSHKeyRefusesOptionsPrefixedKey(t *testing.T) {
 	server := sshKeyServer(t, []string{testKeyFirst}, &puts)
 	defer server.Close()
 	err := newV2TestClient(t, server).AddPublicSSHKey([]byte(`from="10.0.0.1" `+testKeySecond), false)
-	if err == nil || len(puts) != 0 {
-		t.Fatalf("err = %v, puts = %v; want a refusal and no write", err, puts)
+	var usage interface{ ErrorCode() string }
+	if !errors.As(err, &usage) || usage.ErrorCode() != "usage_error" || len(puts) != 0 {
+		t.Fatalf("err = %v, puts = %v; want a usage_error and no write", err, puts)
 	}
 }
 
@@ -310,5 +311,21 @@ func TestGetPublicSSHKeysMarksAcceptedByV2(t *testing.T) {
 	}
 	if b, _ := json.Marshal(keys[1]); strings.Contains(string(b), "AcceptedByV2") || strings.Contains(string(b), "accepted") {
 		t.Fatalf("the flag must not change list-keys output: %s", b)
+	}
+}
+
+// doctor and config have no --remove-invalid, so their error names the
+// commands that clear the entries, and keeps the conflict code
+func TestInvalidStoredSSHKeysForSync(t *testing.T) {
+	err := (&InvalidStoredSSHKeysError{Entries: []string{"bad"}}).ForSync()
+	var coded interface{ ErrorCode() string }
+	if !errors.As(err, &coded) || coded.ErrorCode() != "conflict" {
+		t.Fatalf("err = %v, want code conflict", err)
+	}
+	if strings.Contains(err.Error(), "--remove-invalid") || !strings.Contains(err.Error(), "runpodctl ssh remove-key --invalid") {
+		t.Fatalf("message = %q, want remove-key --invalid and no --remove-invalid", err)
+	}
+	if got := TruncateRunes("ééé", 2); got != "éé..." {
+		t.Fatalf("TruncateRunes = %q, want whole characters", got)
 	}
 }

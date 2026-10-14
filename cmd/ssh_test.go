@@ -408,7 +408,7 @@ func TestWithInvalidKeyPrompt(t *testing.T) {
 			if !reflect.DeepEqual(calls, tc.wantCalls) {
 				t.Errorf("writes = %v, want %v", calls, tc.wantCalls)
 			}
-			prompted := strings.Contains(out.String(), "delete them and continue?")
+			prompted := strings.Contains(out.String(), "and continue? (y/n)")
 			if prompted != tc.wantPrompt {
 				t.Errorf("prompted = %t, want %t (stderr %q)", prompted, tc.wantPrompt, out.String())
 			}

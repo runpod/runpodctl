@@ -44,10 +44,9 @@ var sshRemoveKeyCmd = &cobra.Command{
 	Short: "remove an ssh key",
 	Long:  "remove an ssh key from your account",
 	PreRunE: func(cmd *cobra.Command, args []string) error {
+		// --invalid with --name or --fingerprint is refused by cobra
+		// (MarkFlagsMutuallyExclusive), as a usage error
 		if sshKeyInvalid {
-			if sshKeyName != "" || sshKeyFingerprint != "" {
-				return fmt.Errorf("--invalid removes every invalid entry; it can't be combined with --name or --fingerprint")
-			}
 			return nil
 		}
 		if sshKeyName == "" && sshKeyFingerprint == "" {
@@ -112,6 +111,8 @@ func init() {
 	sshAddKeyCmd.Flags().BoolVar(&sshRemoveInvalid, "remove-invalid", false, "also delete saved entries that aren't valid public keys, which block every key change, without asking")
 	sshRemoveKeyCmd.Flags().BoolVar(&sshRemoveInvalid, "remove-invalid", false, "also delete saved entries that aren't valid public keys, which block every key change, without asking")
 	sshRemoveKeyCmd.Flags().BoolVar(&sshKeyInvalid, "invalid", false, "remove every saved entry that isn't a valid public key (they block all key changes)")
+	sshRemoveKeyCmd.MarkFlagsMutuallyExclusive("invalid", "name")
+	sshRemoveKeyCmd.MarkFlagsMutuallyExclusive("invalid", "fingerprint")
 
 	sshInfoCmd.Flags().BoolVarP(&sshVerbose, "verbose", "v", false, "include pod id and name in output")
 	sshConnectCmd.Flags().BoolVarP(&sshVerbose, "verbose", "v", false, "include pod id and name in output")
@@ -321,19 +322,13 @@ func withInvalidKeyPrompt(removeInvalid bool, write func(removeInvalid bool) err
 	if removeInvalid || !errors.As(err, &invalid) || !invalidKeyPromptIsInteractive() {
 		return err
 	}
-	entries, verb := "entries", "are"
-	if len(invalid.Entries) == 1 {
-		entries, verb = "entry", "is"
-	}
+	n := len(invalid.Entries)
 	fmt.Fprintf(invalidKeyPromptOut, "your account's ssh key list has %d saved %s that %s not a valid public key, which blocks every key change:\n",
-		len(invalid.Entries), entries, verb)
+		n, api.Plural(n, "entry", "entries"), api.Plural(n, "is", "are"))
 	for _, entry := range invalid.Entries {
-		if len(entry) > 60 {
-			entry = entry[:60] + "..."
-		}
-		fmt.Fprintf(invalidKeyPromptOut, "  %s\n", entry)
+		fmt.Fprintf(invalidKeyPromptOut, "  %s\n", api.TruncateRunes(entry, 60))
 	}
-	fmt.Fprint(invalidKeyPromptOut, "delete them and continue? (y/n) ")
+	fmt.Fprintf(invalidKeyPromptOut, "delete %s and continue? (y/n) ", api.Plural(n, "it", "them"))
 	scanner := bufio.NewScanner(invalidKeyPromptIn)
 	scanner.Scan()
 	if strings.ToLower(strings.TrimSpace(scanner.Text())) != "y" {

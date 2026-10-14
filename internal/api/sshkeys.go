@@ -228,10 +228,39 @@ func (c *Client) RemovePublicSSHKey(name, fingerprint string, removeInvalid bool
 // truncateForError shortens a line for an error message, so a pasted private
 // key or a long blob isn't echoed back in full.
 func truncateForError(s string) string {
-	if len(s) > 40 {
-		return s[:40] + "..."
+	return TruncateRunes(s, 40)
+}
+
+// TruncateRunes cuts s to at most n characters plus "...", never splitting a
+// multi-byte character.
+func TruncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
 	}
-	return s
+	return string(r[:n]) + "..."
+}
+
+// Plural picks one or many by n.
+func Plural(n int, one, many string) string {
+	return plural(n, one, many)
+}
+
+// ForSync is the error for a caller with no --remove-invalid flag (doctor,
+// config): same code, but it names the commands that clear the entries.
+func (e *InvalidStoredSSHKeysError) ForSync() error {
+	return &invalidSSHKeysSyncError{e}
+}
+
+type invalidSSHKeysSyncError struct{ e *InvalidStoredSSHKeysError }
+
+func (s *invalidSSHKeysSyncError) ErrorCode() string { return s.e.ErrorCode() }
+func (s *invalidSSHKeysSyncError) Unwrap() error     { return s.e }
+func (s *invalidSSHKeysSyncError) Error() string {
+	e := s.e
+	return fmt.Sprintf("your account's ssh key list has %d saved entr%s that %s not a valid public key, which blocks adding this key. "+
+		"run 'runpodctl ssh remove-key --invalid' (or remove %s in the console under settings, ssh public keys), then re-run",
+		len(e.Entries), plural(len(e.Entries), "y", "ies"), plural(len(e.Entries), "is", "are"), plural(len(e.Entries), "it", "them"))
 }
 
 // RemoveInvalidSSHKeys deletes the key list entries v2 rejects (see

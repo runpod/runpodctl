@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -211,8 +212,8 @@ func checkSSHKey() checkResult {
 	// check if exists in cloud
 	keyInCloud := false
 	for _, cloudKey := range cloudKeys {
-		// a copy v2 rejects doesn't count: AddPublicSSHKey then adds a clean one,
-		// or reports the conflict and how to clear it
+		// a copy v2 rejects doesn't count: AddPublicSSHKey then reports the
+		// conflict, and the error says how to clear it
 		if cloudKey.Fingerprint == localFingerprint && cloudKey.AcceptedByV2 {
 			keyInCloud = true
 			break
@@ -224,6 +225,10 @@ func checkSSHKey() checkResult {
 		fmt.Fprintln(os.Stderr, "adding ssh key to runpod...")
 		if err := client.AddPublicSSHKey(publicKey, false); err != nil {
 			result.Status = "fail"
+			var invalid *internalapi.InvalidStoredSSHKeysError
+			if errors.As(err, &invalid) {
+				err = invalid.ForSync()
+			}
 			result.Error = fmt.Sprintf("failed to add ssh key: %v", err)
 			return result
 		}

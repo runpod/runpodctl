@@ -48,14 +48,15 @@ func (s *stub) start(t *testing.T) {
 				})
 				return
 			}
-			// ssh key lookup
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"data": map[string]interface{}{"myself": map[string]interface{}{"pubKey": ""}},
-			})
+			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 
 		switch {
+		// the account key list is a rest v2 read; without this a machine with a
+		// local runpodctl key would ask the real api, with a fake key
+		case r.URL.Path == "/v2/account/ssh-keys":
+			_, _ = w.Write([]byte(`{"keys":[]}`))
 		case r.URL.Path == "/pods":
 			_ = json.NewEncoder(w).Encode(s.restPods)
 		case strings.HasPrefix(r.URL.Path, "/pods/"):
@@ -77,6 +78,7 @@ func (s *stub) start(t *testing.T) {
 	t.Setenv("RUNPOD_API_KEY", "test-key")
 	t.Setenv("RUNPOD_API_URL", server.URL)
 	t.Setenv("RUNPOD_GRAPHQL_URL", server.URL+"/graphql")
+	t.Setenv("RUNPOD_REST_V2_URL", server.URL+"/v2")
 }
 
 func restPod(id, status string, extra map[string]interface{}) map[string]interface{} {

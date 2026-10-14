@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/runpod/runpodctl/cmd/ssh"
@@ -98,8 +99,8 @@ func ensureSSHKeyInCloud(publicKey []byte) error {
 
 	// Check if the publicKey already exists in the cloud
 	for _, cloudKey := range cloudKeys {
-		// a copy v2 rejects doesn't count: AddPublicSSHKey then adds a clean one,
-		// or reports the conflict and how to clear it
+		// a copy v2 rejects doesn't count: AddPublicSSHKey then reports the
+		// conflict, and the error says how to clear it
 		if cloudKey.Fingerprint == localFingerprint && cloudKey.AcceptedByV2 {
 			fmt.Println("SSH key already exists in the cloud. No action needed.")
 			return nil
@@ -108,6 +109,10 @@ func ensureSSHKeyInCloud(publicKey []byte) error {
 
 	// If the key doesn't exist, add it
 	if err := client.AddPublicSSHKey(publicKey, false); err != nil {
+		var invalid *internalapi.InvalidStoredSSHKeysError
+		if errors.As(err, &invalid) {
+			err = invalid.ForSync()
+		}
 		return fmt.Errorf("failed to add the SSH key: %w", err)
 	}
 
