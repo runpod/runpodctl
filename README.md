@@ -139,8 +139,7 @@ runpodctl serverless status <id> <job-id>  # check a job submitted earlier
 
 #### reading logs
 
-`pod logs` and `serverless logs` stream from rest v2 (`api.runpod.io/v2`), which
-is a different host from the rest v1 control plane the crud commands use. output
+`pod logs` and `serverless logs` stream from rest v2 (`api.runpod.io/v2`). output
 is json lines — one `{source,line,ts}` object per line, plus `workerId` on
 serverless — so it pipes into `jq` or an agent without further parsing.
 
@@ -287,23 +286,16 @@ what each one waits for, precisely:
   does fill a standby pool at 0 min workers whenever `--workers-max` is above 1,
   and `/health` counts those cached workers as `ready` — it is just slower and less
   certain than `--workers-min 1`, which starts (and bills for) a worker right away.
-- `pod create --wait` needs ssh, so it cannot be combined with `--ssh=false`. two
-  combinations warn on stderr instead of failing, because they are satisfiable but
-  often are not:
-  - `--compute-type CPU` — cpu pods are created over rest, which cannot request
-    runpod-managed ssh, so only an image that starts its own sshd becomes
-    reachable.
-  - `--cloud-type COMMUNITY` without `--public-ip` — community cloud only maps a
-    public ssh port on a machine that has a public ip, and `--public-ip` is what
-    asks the scheduler for one.
+- `pod create --wait` needs ssh, so it cannot be combined with `--ssh=false`.
+  `--cloud-type COMMUNITY` warns on stderr instead of failing: community cloud only
+  maps a public ssh port on a machine that has a public ip, which the api cannot
+  ask for, so the wait may time out.
 - a transient api failure during a wait does **not** end it: the poll error is
   reported as the current state and polling continues to the deadline, because the
   resource already exists and bills. only a failure that cannot resolve stops the
   wait early:
   - bad credentials or a rejected request — http `400`/`401`/`403`, or the codes
-    `unauthorized` / `forbidden` / `no_credentials` / `bad_request`. the pod wait
-    reads graphql, whose failures all carry the code `graphql_error`, so there the
-    decision is made on the http status and the emitted code stays `graphql_error`.
+    `unauthorized` / `forbidden` / `no_credentials` / `bad_request`.
   - a pod in a terminal state (`conflict`), or a resource that two consecutive
     reads no longer list (`not_found` — one missing read is treated as an unknown
     state, not a deletion).
@@ -393,29 +385,23 @@ branch on these, not on the reason text.
 | --- | --- |
 | `running` | `desiredStatus` is RUNNING and the platform reports runtime telemetry: the container is up. does **not** imply any port is reachable |
 | `initializing` | `desiredStatus` is RUNNING and no telemetry is being reported. usually placed on a machine with the container not up yet — image pull, container create or boot, which the platform does not distinguish — but the same absence is what an upstream telemetry lookup failure looks like, so read it as "no container reported", not "the container is provably down". either way: keep polling |
-| `stopped` | `desiredStatus` is EXITED and `lastStatusChange` does not name a termination. container gone, disk kept, `pod start` will bring it back |
-| `terminated` | the pod is being destroyed: `desiredStatus` is TERMINATED, **or** it is EXITED and `lastStatusChange` says "terminated by ...". the second is the normal case — a terminate writes EXITED, not TERMINATED — and a terminated pod drops out of `pod list` shortly after, so this is a narrow window |
-| `unknown` | not derivable: either a `desiredStatus` the platform defines but does not surface in practice (CREATED, RESTARTING, PAUSED, DEAD), or the runtime lookup failed. read `desiredStatus`, which is in the same output |
+| `stopped` | `desiredStatus` is EXITED. container gone, disk kept, `pod start` will bring it back |
+| `terminated` | `desiredStatus` is TERMINATED. a terminated pod drops out of `pod list` shortly after, so this is a narrow window |
+| `error` | `desiredStatus` is ERROR (rest v2): the pod is in a state it won't recover from on its own. it still exists and may still bill; read `pod logs`, then terminate or recreate it. no ssh command is offered |
+| `unknown` | not derivable: a `desiredStatus` the platform defines but does not surface in practice. read `desiredStatus`, which is in the same output |
 
 | `runtimeStatusReason` | meaning |
 | --- | --- |
 | `awaiting_container` | with `initializing`: no container is being reported for a pod that should be running |
-| `stopped_by_user` / `terminated_by_user` | you did it |
-| `stopped_by_runpod` / `terminated_by_runpod` | runpod did it. the platform records no machine-readable cause; in practice this is insufficient credit, a fatal image-pull failure, or host action |
-| `stopped_outbid` / `terminated_outbid` | a spot/community pod lost its machine to a higher bid. the only involuntary stop with a real recorded cause; retry elsewhere or at on-demand pricing |
 | `runtime_unavailable` | with `unknown`: the runtime lookup could not be made, so running and initializing cannot be told apart |
 
-the token is a lossy read of the backend's free-text `lastStatusChange`, which
-`pod get` and `pod list` both also publish — so a phrasing this cli does not
-recognise leaves `runtimeStatusReason` absent rather than wrong, and the raw text
-is still there.
+the api does not record why a pod stopped in any machine-readable form, so
+there is no reason token for `stopped` or `terminated`.
 
-`runtimeStatus` is derived from the graphql snapshot the runtime telemetry came
-from, while `desiredStatus` is rest's. the two surfaces can briefly disagree, so
-a single `pod get` can show `desiredStatus: RUNNING` next to
-`runtimeStatus: stopped`. that is deliberate: gating telemetry on the *other*
-surface's status is how a stopped pod's stale ports get handed back as a working
-ssh command. when they disagree, trust `runtimeStatus`.
+`desiredStatus` and `runtimeStatus` come from the same read, so they always
+agree on the pod's state. the api's own `status` (PROVISIONING, STARTING,
+RUNNING, ERROR) is folded into `desiredStatus: RUNNING`, which is what it has
+always reported for a pod you asked to run.
 
 there is deliberately no `pulling` value. the api exposes no pull state (see
 `internal/podstate` for the full trace of what it does expose), so `pulling`
@@ -438,11 +424,8 @@ port list** rather than adding to it (unlike `--env`, which merges). changing th
 port list also bumps the pod's version, which can restart the container, so
 processes and container-local state outside the volume may not survive it.
 
-`pod list` gets its telemetry from one bulk graphql call regardless of pod count,
-never one per pod. it is skipped entirely when no listed pod is `RUNNING` (a
-stopped pod's telemetry is stale and never consulted anyway). that call is
-best-effort and capped at 5s: if it fails, every pod comes back `unknown` /
-`runtime_unavailable` and the list still succeeds.
+`pod list` reads telemetry in the same request as the pod list itself, so it
+costs no extra call however many pods you have.
 
 ### error format
 
@@ -461,8 +444,9 @@ exit code is non-zero. branch on `code`, never on the message text:
 | `id` | id of a resource the failure left behind, **only** when one exists — a `pod create --wait` that timed out has already bought a pod, and this is how you find it without parsing the message |
 
 `status` is deliberately absent when the api answered 200 with an empty result
-(graphql reports a missing resource that way), so `code` is the field to branch
-on — `if status == 404` misses every graphql not-found.
+(graphql, which a few commands still use, reports a missing resource that way),
+so `code` is the field to branch on — `if status == 404` misses every graphql
+not-found.
 
 codes the cli generates:
 
@@ -476,6 +460,7 @@ codes the cli generates:
 | `job_failed` | a serverless job reached a terminal status other than `COMPLETED`. the job payload is still on stdout |
 | `no_credentials` | no api key configured — run `runpodctl doctor` or set `RUNPOD_API_KEY` |
 | `network_error` | the api could not be reached at all — dns, refused, tls, timeout. transient: retry |
+| `create_uncertain` | `pod create` got no usable answer — no reply, a 5xx, or an accepted create whose reply couldn't be read. the pod **may exist and bill**: check `pod list` (and `id`, when set) before retrying |
 | `wait_timeout` | `--wait` gave up before the resource was usable. the resource **was created and still bills** — the last known state is in the message and the id is in `id` |
 | `wait_interrupted` | `--wait` was cancelled (ctrl-c / SIGTERM). same as above: the resource exists, and `id` names it |
 | `cli_error` | anything else local: validation, config, bad input (including a malformed `RUNPOD_API_URL`) |
@@ -507,17 +492,16 @@ its errors are json with a `code` and exit 1.
 | variable | default | what it sets |
 | --- | --- | --- |
 | `RUNPOD_API_KEY` | — | api key. also settable via `runpodctl doctor` or `~/.runpod/config.toml` (see config permissions below) |
-| `RUNPOD_API_URL` | `https://rest.runpod.io/v1` | rest control plane (config key `restApiUrl`) |
-| `RUNPOD_GRAPHQL_URL` | `https://api.runpod.io/graphql` | graphql control plane (config key `apiUrl`) |
+| `RUNPOD_API_URL` | `https://rest.runpod.io/v1` | rest v1, used for serverless updates and idle-timeout reads (config key `restApiUrl`) |
+| `RUNPOD_GRAPHQL_URL` | `https://api.runpod.io/graphql` | graphql, for what rest v2 does not cover yet: account info, the model repo, hub, serverless create and model references, template readmes and port labels, community templates, spot pods and `get cloud` (config key `apiUrl`) |
 | `RUNPOD_INVOKE_URL` | `https://api.runpod.ai/v2` | base for the serverless invoke urls reported by `serverless create/get/list/update`, and the host `serverless run/status/health` call (config key `invokeUrl`) |
-| `RUNPOD_REST_V2_URL` | `https://api.runpod.io/v2` | rest v2, which serves `pod logs`, `serverless logs` and the worker listing behind them (config key `restV2ApiUrl`) |
+| `RUNPOD_REST_V2_URL` | `https://api.runpod.io/v2` | rest v2, the main control plane: pods, serverless reads and updates, templates, volumes, registries, billing, the gpu/cpu/data center catalog, ssh keys and logs (config key `restV2ApiUrl`) |
 | `RUNPOD_NO_UPDATE_CHECK` | — | any value turns off the update check and prompt |
 
 invoke is a separate service from the control plane: pointing `RUNPOD_API_URL`
 or `RUNPOD_GRAPHQL_URL` at a non-prod host does **not** move the invoke urls.
-override `RUNPOD_INVOKE_URL` explicitly when you need that. rest v2 is separate
-again — the crud commands are still on rest v1, so moving one does not move the
-other.
+override `RUNPOD_INVOKE_URL` explicitly when you need that. the three control
+planes are separate too: moving one does not move the others.
 
 ### config permissions
 

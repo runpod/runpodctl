@@ -151,7 +151,7 @@ func TestPodSSHPollerReturnsListErrors(t *testing.T) {
 // A pod that has exited will never become reachable, so the wait must end at
 // once instead of billing out the full --wait-timeout.
 func TestPodSSHPollerFailsFastOnTerminalStatus(t *testing.T) {
-	for _, status := range []string{"EXITED", "TERMINATED", "DEAD", "exited"} {
+	for _, status := range []string{"EXITED", "TERMINATED", "DEAD", "ERROR", "exited"} {
 		t.Run(status, func(t *testing.T) {
 			lister := &fakePodLister{pods: []*api.LegacyPod{podWithSSHPort("pod-1", status, 22, 51227, true)}}
 			_, err := PodSSHPoller(lister, "pod-1", nil, nil)(context.Background())
