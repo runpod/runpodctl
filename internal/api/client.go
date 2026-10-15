@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/runpod/runpodctl/internal/agent"
+	"github.com/runpod/runpodctl/internal/clierr"
 	"github.com/runpod/runpodctl/internal/configenv"
 	"github.com/spf13/viper"
 )
@@ -35,6 +36,9 @@ type Client struct {
 	apiKey     string
 	httpClient *http.Client
 	userAgent  string
+	// v2BaseURL overrides the configured rest v2 base url (tests only); empty
+	// means resolve it per request, see v2URL.
+	v2BaseURL string
 }
 
 // NewClient creates a new REST API client
@@ -57,9 +61,16 @@ func NewClient() (*Client, error) {
 	return &Client{
 		baseURL:    baseURL,
 		apiKey:     apiKey,
-		httpClient: &http.Client{Timeout: timeout},
+		httpClient: &http.Client{Timeout: timeout, CheckRedirect: noRedirects},
 		userAgent:  buildUserAgent(),
 	}, nil
+}
+
+// noRedirects stops the client following redirects. go replays a redirected
+// delete, patch or post as a get, so following one turns a write into a read of
+// whatever the api pointed at and reports it as success.
+func noRedirects(*http.Request, []*http.Request) error {
+	return http.ErrUseLastResponse
 }
 
 // request makes an HTTP request to the API
@@ -105,11 +116,126 @@ func (c *Client) requestURL(method, u string, body interface{}) ([]byte, error) 
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		// redirects are never followed (see noRedirects); name it, or the
+		// caller only sees an opaque status or an html body.
+		return nil, &APIError{
+			Status:  resp.StatusCode,
+			Code:    codeForStatus(resp.StatusCode),
+			Message: fmt.Sprintf("api redirected (status %d) to %q; redirects are not followed", resp.StatusCode, resp.Header.Get("Location")),
+		}
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, parseAPIError(respBody, resp.StatusCode)
 	}
 
 	return respBody, nil
+}
+
+// v2URL is the rest v2 base url: the client's override when set, otherwise the
+// configured one (RUNPOD_REST_V2_URL / restV2ApiUrl), resolved per request.
+func (c *Client) v2URL() string {
+	if c.v2BaseURL != "" {
+		return strings.TrimSuffix(c.v2BaseURL, "/")
+	}
+	return restV2BaseURL()
+}
+
+// requestV2 is request against the rest v2 api.
+func (c *Client) requestV2(method, endpoint string, params url.Values, body interface{}) ([]byte, error) {
+	// an empty id leaves an empty path segment ("/registries/"), which v2
+	// redirects to the collection: a get would print an empty object and a
+	// delete would report success without deleting anything. an id of "." or
+	// ".." is the same hazard once anything on the way resolves dot segments.
+	// segments are checked decoded, so a caller that forgets url.PathEscape
+	// can't slip "%2e" or "%2f" past the check.
+	segs := strings.Split(strings.TrimPrefix(endpoint, "/"), "/")
+	for _, seg := range segs {
+		decoded, err := url.PathUnescape(seg)
+		if err != nil {
+			return nil, clierr.Usagef("invalid resource id %q", seg)
+		}
+		switch {
+		case decoded == "":
+			return nil, clierr.Usagef("a resource id is required")
+		case strings.Contains(decoded, "/") || decoded == "." || decoded == "..":
+			return nil, clierr.Usagef("invalid resource id %q", decoded)
+		}
+	}
+	u := c.v2URL() + endpoint
+	if len(params) > 0 {
+		u += "?" + params.Encode()
+	}
+	return c.requestURL(method, u, body)
+}
+
+// GetV2 makes a GET request against the rest v2 api
+func (c *Client) GetV2(endpoint string, params url.Values) ([]byte, error) {
+	return c.requestV2(http.MethodGet, endpoint, params, nil)
+}
+
+// PostV2 makes a POST request against the rest v2 api
+func (c *Client) PostV2(endpoint string, body interface{}) ([]byte, error) {
+	return c.requestV2(http.MethodPost, endpoint, nil, body)
+}
+
+// PatchV2 makes a PATCH request against the rest v2 api
+func (c *Client) PatchV2(endpoint string, body interface{}) ([]byte, error) {
+	return c.requestV2(http.MethodPatch, endpoint, nil, body)
+}
+
+// PutV2 makes a PUT request against the rest v2 api
+func (c *Client) PutV2(endpoint string, body interface{}) ([]byte, error) {
+	return c.requestV2(http.MethodPut, endpoint, nil, body)
+}
+
+// DeleteV2 makes a DELETE request against the rest v2 api
+func (c *Client) DeleteV2(endpoint string) ([]byte, error) {
+	return c.requestV2(http.MethodDelete, endpoint, nil, nil)
+}
+
+// getV2AllPages walks a cursor-paginated rest v2 list, handing each page body to
+// decode. v2 list routes cap a page (1000 by default), so reading only the first
+// page silently truncates a large account.
+func (c *Client) getV2AllPages(endpoint string, params url.Values, decode func([]byte) error) error {
+	query := url.Values{}
+	for k, v := range params {
+		query[k] = v
+	}
+	seen := map[string]bool{}
+	for {
+		data, err := c.GetV2(endpoint, query)
+		if err != nil {
+			return err
+		}
+		if err := decode(data); err != nil {
+			return err
+		}
+		var page struct {
+			Pagination struct {
+				NextCursor  *string `json:"nextCursor"`
+				HasNextPage bool    `json:"hasNextPage"`
+			} `json:"pagination"`
+		}
+		if err := json.Unmarshal(data, &page); err != nil {
+			return fmt.Errorf("failed to parse response: %w", err)
+		}
+		if !page.Pagination.HasNextPage {
+			return nil
+		}
+		next := page.Pagination.NextCursor
+		// more pages but no way to ask for them: stopping here would hand back
+		// a partial list as if it were the whole thing
+		if next == nil || *next == "" {
+			return fmt.Errorf("the api reported more pages of %s but no cursor to fetch them", endpoint)
+		}
+		// a cursor the api already handed out would loop forever
+		if seen[*next] {
+			return fmt.Errorf("the api repeated page cursor %q while listing %s", *next, endpoint)
+		}
+		seen[*next] = true
+		query.Set("cursor", *next)
+	}
 }
 
 // Get makes a GET request
@@ -206,7 +332,9 @@ func NewNotFoundError(format string, args ...interface{}) *APIError {
 // codeForStatus maps an HTTP status to a stable, lowercase error code.
 func codeForStatus(status int) string {
 	switch status {
-	case http.StatusBadRequest:
+	// rest v2 answers a schema-invalid body with 422 where v1 used 400; both are
+	// the caller's input, so they share a code.
+	case http.StatusBadRequest, http.StatusUnprocessableEntity:
 		return "bad_request"
 	case http.StatusUnauthorized:
 		return "unauthorized"
@@ -243,6 +371,9 @@ func parseAPIError(body []byte, status int) *APIError {
 			Message string `json:"message"`
 			Detail  string `json:"detail"`
 			Code    string `json:"code"`
+			// raw, so an errors[] of objects (or a string) can't fail the
+			// decode and throw away the message and code with it.
+			Errors json.RawMessage `json:"errors"`
 		}
 		if err := json.Unmarshal(trimmed, &envelope); err == nil {
 			switch {
@@ -254,6 +385,13 @@ func parseAPIError(body []byte, status int) *APIError {
 				// fastapi-style bodies use "detail"; without this the whole blob
 				// used to become the message.
 				apiErr.Message = envelope.Detail
+				// rest v2 puts the actionable part of a 422 ("additional
+				// properties 'x' not allowed") in errors[], with only a generic
+				// "Request validation failed." in detail.
+				var details []string
+				if json.Unmarshal(envelope.Errors, &details) == nil && len(details) > 0 {
+					apiErr.Message += " " + strings.Join(details, "; ")
+				}
 			}
 			// normalize an explicit api code to the lowercase vocabulary.
 			apiErr.Code = strings.ToLower(envelope.Code)
