@@ -161,7 +161,7 @@ The current branch keeps the binary as `runpodctl` and reorganizes commands into
 
 ### Pod workflow improvements
 
-- Unified `runpodctl pod` group with `list/get/create/update/start/stop/restart/reset/delete`
+- Unified `runpodctl pod` group with `list/get/create/update/start/stop/restart/delete`
 - Template-first pod creation with explicit flags for data centers, ports, and mount paths
 - Standardized output formatting (`--output json|yaml`)
 
