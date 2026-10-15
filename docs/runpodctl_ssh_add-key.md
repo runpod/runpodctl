@@ -16,6 +16,7 @@ runpodctl ssh add-key [flags]
   -h, --help              help for add-key
       --key string        the public key to add
       --key-file string   file containing the public key
+      --remove-invalid    also delete saved entries that aren't valid public keys, which block every key change, without asking
 ```
 
 ### Options inherited from parent commands

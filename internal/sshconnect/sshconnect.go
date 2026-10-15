@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/runpod/runpodctl/internal/api"
 	"github.com/runpod/runpodctl/internal/podstate"
@@ -24,9 +25,15 @@ type KeyInfo struct {
 	InAccount   *bool  `json:"in_account,omitempty"`
 }
 
+// SSHKeyLister reads the account's registered ssh keys.
+type SSHKeyLister interface {
+	GetPublicSSHKeys() ([]api.SSHKey, error)
+}
+
 // ResolveKeyInfo returns local key info and whether it exists in the account.
-// This never returns an error; missing data is simply omitted.
-func ResolveKeyInfo(client *api.GraphQLClient) KeyInfo {
+// This never returns an error; missing data is simply omitted. A nil client
+// skips the account check.
+func ResolveKeyInfo(client SSHKeyLister) KeyInfo {
 	keyPath, exists := defaultKeyPath()
 	info := KeyInfo{
 		Path:   keyPath,
@@ -46,7 +53,7 @@ func ResolveKeyInfo(client *api.GraphQLClient) KeyInfo {
 	if client == nil {
 		return info
 	}
-	_, keys, err := client.GetPublicSSHKeys()
+	keys, err := client.GetPublicSSHKeys()
 	if err != nil {
 		return info
 	}
@@ -82,7 +89,8 @@ func PublicSSHPort(pod *api.LegacyPod) (ip string, port int, ok bool) {
 		return "", 0, false
 	}
 	for _, p := range pod.Runtime.Ports {
-		if p.IsIpPublic && p.PrivatePort == 22 {
+		// isIpPublic covers every port type; ssh needs tcp
+		if p.IsIpPublic && p.PrivatePort == 22 && (p.PortType == "" || strings.EqualFold(p.PortType, "tcp")) {
 			return p.Ip, p.PublicPort, true
 		}
 	}
@@ -122,9 +130,9 @@ func ListConnections(pods []*api.LegacyPod, keyInfo KeyInfo) []map[string]interf
 	// filters more pods than it used to, so the empty case is now common.
 	connections := make([]map[string]interface{}, 0, len(pods))
 	for _, pod := range pods {
-		// nil: graphql lists are nullable, and BuildConnection would dereference
-		// it. known-down: a stopped pod keeps reporting stale runtime ports, so it
-		// would be listed with a command that cannot connect.
+		// nil: BuildConnection would dereference it. known-down: a stopped
+		// pod keeps reporting stale runtime ports, so it would be listed with
+		// a command that cannot connect.
 		if pod == nil || PodState(pod).IsKnownDown() {
 			continue
 		}
@@ -136,7 +144,7 @@ func ListConnections(pods []*api.LegacyPod, keyInfo KeyInfo) []map[string]interf
 	return connections
 }
 
-// PodState derives the runtime state of a graphql pod. It lives here so every
+// PodState derives the runtime state of a pod. It lives here so every
 // ssh path uses one derivation with one set of signals, instead of each caller
 // assembling podstate.Signals slightly differently.
 func PodState(pod *api.LegacyPod) podstate.State {
@@ -144,17 +152,16 @@ func PodState(pod *api.LegacyPod) podstate.State {
 		return podstate.State{Status: podstate.StatusUnknown, Reason: podstate.ReasonRuntimeUnavailable}
 	}
 	return podstate.Derive(podstate.Signals{
-		DesiredStatus:    pod.DesiredStatus,
-		LastStatusChange: pod.LastStatusChange,
-		RuntimeProbed:    true,
-		RuntimeReported:  pod.Runtime != nil,
+		DesiredStatus:   pod.DesiredStatus,
+		RuntimeProbed:   true,
+		RuntimeReported: pod.Runtime != nil,
 	})
 }
 
 // FindPodConnection finds a pod by id or name and returns its connection.
 //
-// A nil entry in the list is skipped rather than dereferenced: graphql lists are
-// nullable, and `pod create --wait` re-reads this list right after telling the
+// A nil entry in the list is skipped rather than dereferenced: `pod create
+// --wait` re-reads this list right after telling the
 // user the pod is ready, where a panic would replace the single json error object
 // with a go stack trace on stderr and exit 2.
 func FindPodConnection(pods []*api.LegacyPod, nameOrID string, keyInfo KeyInfo) (*api.LegacyPod, map[string]interface{}) {

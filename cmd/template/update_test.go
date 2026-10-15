@@ -20,3 +20,17 @@ func TestCreateCmd_HasRegistryAuthFlag(t *testing.T) {
 		t.Fatal("expected registry-auth-id flag")
 	}
 }
+
+// a readme-only write must not be reported as a port label failure
+func TestGraphqlWriteName(t *testing.T) {
+	cases := map[[2]bool]string{
+		{true, false}: "port labels",
+		{false, true}: "readme",
+		{true, true}:  "port labels and readme",
+	}
+	for in, want := range cases {
+		if got := graphqlWriteName(in[0], in[1]); got != want {
+			t.Errorf("graphqlWriteName(%v, %v) = %q, want %q", in[0], in[1], got, want)
+		}
+	}
+}

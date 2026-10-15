@@ -16,10 +16,10 @@ func TestCreateTemplateIncludesRegistryAuthID(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if got := payload["containerRegistryAuthId"]; got != "registry-123" {
-			t.Fatalf("containerRegistryAuthId = %#v, want registry-123", got)
+		if got := payload["registry"]; got != "registry-123" {
+			t.Fatalf("registry = %#v, want registry-123", got)
 		}
-		_ = json.NewEncoder(w).Encode(Template{ID: "tpl-123"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"id": "tpl-123"})
 	}))
 	defer server.Close()
 
@@ -28,7 +28,7 @@ func TestCreateTemplateIncludesRegistryAuthID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
-	client.baseURL = server.URL
+	client.v2BaseURL = server.URL
 
 	_, err = client.CreateTemplate(&TemplateCreateRequest{
 		Name:                    "private-template",
@@ -49,14 +49,15 @@ func TestUpdateTemplateCanClearRegistryAuthID(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		value, exists := payload["containerRegistryAuthId"]
+		// v2 clears the registry with an empty string; it ignores null
+		value, exists := payload["registry"]
 		if !exists {
-			t.Fatal("expected containerRegistryAuthId to be present")
+			t.Fatal("expected registry to be present")
 		}
 		if value != "" {
-			t.Fatalf("containerRegistryAuthId = %#v, want empty string", value)
+			t.Fatalf("registry = %#v, want empty string", value)
 		}
-		_ = json.NewEncoder(w).Encode(Template{ID: "tpl-123"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"id": "tpl-123"})
 	}))
 	defer server.Close()
 
@@ -65,7 +66,7 @@ func TestUpdateTemplateCanClearRegistryAuthID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
-	client.baseURL = server.URL
+	client.v2BaseURL = server.URL
 
 	empty := ""
 	_, err = client.UpdateTemplate("tpl-123", &TemplateUpdateRequest{

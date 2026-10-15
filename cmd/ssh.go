@@ -2,17 +2,21 @@ package cmd
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	"github.com/runpod/runpodctl/cmd/project"
 	"github.com/runpod/runpodctl/cmd/ssh"
+	"github.com/runpod/runpodctl/internal/agent"
 	"github.com/runpod/runpodctl/internal/api"
 	"github.com/runpod/runpodctl/internal/output"
 	"github.com/runpod/runpodctl/internal/sshconnect"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var sshCmd = &cobra.Command{
@@ -40,8 +44,13 @@ var sshRemoveKeyCmd = &cobra.Command{
 	Short: "remove an ssh key",
 	Long:  "remove an ssh key from your account",
 	PreRunE: func(cmd *cobra.Command, args []string) error {
+		// --invalid with --name or --fingerprint is refused by cobra
+		// (MarkFlagsMutuallyExclusive), as a usage error
+		if sshKeyInvalid {
+			return nil
+		}
 		if sshKeyName == "" && sshKeyFingerprint == "" {
-			return fmt.Errorf("either --fingerprint or --name must be provided")
+			return fmt.Errorf("either --fingerprint, --name or --invalid must be provided")
 		}
 		return nil
 	},
@@ -82,6 +91,8 @@ var (
 	sshKey            string
 	sshKeyName        string
 	sshKeyFingerprint string
+	sshKeyInvalid     bool
+	sshRemoveInvalid  bool
 	sshVerbose        bool
 )
 
@@ -97,18 +108,23 @@ func init() {
 	sshAddKeyCmd.Flags().StringVar(&sshKeyFile, "key-file", "", "file containing the public key")
 	sshRemoveKeyCmd.Flags().StringVar(&sshKeyFingerprint, "fingerprint", "", "fingerprint of the key to remove")
 	sshRemoveKeyCmd.Flags().StringVar(&sshKeyName, "name", "", "name of the key to remove")
+	sshAddKeyCmd.Flags().BoolVar(&sshRemoveInvalid, "remove-invalid", false, "also delete saved entries that aren't valid public keys, which block every key change, without asking")
+	sshRemoveKeyCmd.Flags().BoolVar(&sshRemoveInvalid, "remove-invalid", false, "also delete saved entries that aren't valid public keys, which block every key change, without asking")
+	sshRemoveKeyCmd.Flags().BoolVar(&sshKeyInvalid, "invalid", false, "remove every saved entry that isn't a valid public key (they block all key changes)")
+	sshRemoveKeyCmd.MarkFlagsMutuallyExclusive("invalid", "name")
+	sshRemoveKeyCmd.MarkFlagsMutuallyExclusive("invalid", "fingerprint")
 
 	sshInfoCmd.Flags().BoolVarP(&sshVerbose, "verbose", "v", false, "include pod id and name in output")
 	sshConnectCmd.Flags().BoolVarP(&sshVerbose, "verbose", "v", false, "include pod id and name in output")
 }
 
 func runSSHListKeys(cmd *cobra.Command, args []string) error {
-	client, err := api.NewGraphQLClient()
+	client, err := api.NewClient()
 	if err != nil {
 		return err
 	}
 
-	_, keys, err := client.GetPublicSSHKeys()
+	keys, err := client.GetPublicSSHKeys()
 	if err != nil {
 		return fmt.Errorf("failed to get ssh keys: %w", err)
 	}
@@ -141,12 +157,15 @@ func runSSHAddKey(cmd *cobra.Command, args []string) error {
 		publicKey = []byte(sshKey)
 	}
 
-	client, err := api.NewGraphQLClient()
+	client, err := api.NewClient()
 	if err != nil {
 		return err
 	}
 
-	if err := client.AddPublicSSHKey(publicKey); err != nil {
+	err = withInvalidKeyPrompt(sshRemoveInvalid, func(removeInvalid bool) error {
+		return client.AddPublicSSHKey(publicKey, removeInvalid)
+	})
+	if err != nil {
 		return fmt.Errorf("failed to add ssh key: %w", err)
 	}
 
@@ -155,16 +174,26 @@ func runSSHAddKey(cmd *cobra.Command, args []string) error {
 }
 
 func runSSHRemoveKey(cmd *cobra.Command, args []string) error {
-	client, err := api.NewGraphQLClient()
+	client, err := api.NewClient()
 	if err != nil {
 		return err
 	}
 
-	if err := client.RemovePublicSSHKey(sshKeyName, sshKeyFingerprint); err != nil {
-		return fmt.Errorf("failed to remove ssh key: %w", err)
+	format := output.ParseFormat(cmd.Flag("output").Value.String())
+	if sshKeyInvalid {
+		n, err := client.RemoveInvalidSSHKeys()
+		if err != nil {
+			return fmt.Errorf("failed to remove invalid ssh key entries: %w", err)
+		}
+		return output.Print(map[string]interface{}{"removed": n > 0, "removedCount": n}, &output.Config{Format: format})
 	}
 
-	format := output.ParseFormat(cmd.Flag("output").Value.String())
+	err = withInvalidKeyPrompt(sshRemoveInvalid, func(removeInvalid bool) error {
+		return client.RemovePublicSSHKey(sshKeyName, sshKeyFingerprint, removeInvalid)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to remove ssh key: %w", err)
+	}
 	return output.Print(map[string]interface{}{"removed": true}, &output.Config{Format: format})
 }
 
@@ -177,7 +206,7 @@ func runSSHConnectLegacy(cmd *cobra.Command, args []string) error {
 }
 
 func runSSHInfoWithArgs(cmd *cobra.Command, args []string, allowAll bool) error {
-	client, err := api.NewGraphQLClient()
+	client, err := api.NewClient()
 	if err != nil {
 		return err
 	}
@@ -262,4 +291,44 @@ func promptKeyName() string {
 		return ssh.DefaultKeyName
 	}
 	return strings.ReplaceAll(keyName, " ", "-")
+}
+
+// invalidKeyPromptIsInteractive reports whether the prompt can be seen and
+// answered by a person: stdin and stderr are terminals, and no ai agent is
+// driving the cli (agents often run in a pseudo-terminal, and a prompt would
+// hang them). otherwise the error names --remove-invalid instead.
+var invalidKeyPromptIsInteractive = func() bool {
+	return agent.Detect() == "" && term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stderr.Fd()))
+}
+
+// invalidKeyPromptIn and invalidKeyPromptOut are the prompt's ends; it goes to
+// stderr so stdout stays the command's json.
+var (
+	invalidKeyPromptIn  io.Reader = os.Stdin
+	invalidKeyPromptOut io.Writer = os.Stderr
+)
+
+// withInvalidKeyPrompt runs write, and when the account's key list holds saved
+// entries v2 rejects, asks a person whether to delete them and retries. with
+// removeInvalid set it deletes them without asking; non-interactive, the
+// error is returned as is and names --remove-invalid.
+func withInvalidKeyPrompt(removeInvalid bool, write func(removeInvalid bool) error) error {
+	err := write(removeInvalid)
+	var invalid *api.InvalidStoredSSHKeysError
+	if removeInvalid || !errors.As(err, &invalid) || !invalidKeyPromptIsInteractive() {
+		return err
+	}
+	n := len(invalid.Entries)
+	fmt.Fprintf(invalidKeyPromptOut, "your account's ssh key list has %d saved %s that %s not a valid public key, which blocks every key change:\n",
+		n, api.Plural(n, "entry", "entries"), api.Plural(n, "is", "are"))
+	for _, entry := range invalid.Entries {
+		fmt.Fprintf(invalidKeyPromptOut, "  %s\n", api.TruncateRunes(entry, 60))
+	}
+	fmt.Fprintf(invalidKeyPromptOut, "delete %s and continue? (y/n) ", api.Plural(n, "it", "them"))
+	scanner := bufio.NewScanner(invalidKeyPromptIn)
+	scanner.Scan()
+	if strings.ToLower(strings.TrimSpace(scanner.Text())) != "y" {
+		return err
+	}
+	return write(true)
 }
