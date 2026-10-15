@@ -21,7 +21,7 @@ var (
 )
 
 func init() {
-	listCmd.Flags().BoolVar(&listIncludeTemplate, "include-template", false, "include template info")
+	listCmd.Flags().BoolVar(&listIncludeTemplate, "include-template", false, "include the container config (image, disk, args, env, ports); env values may contain secrets")
 	listCmd.Flags().BoolVar(&listIncludeWorkers, "include-workers", false, "include workers info")
 }
 

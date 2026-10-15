@@ -1,10 +1,12 @@
 package pods
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 
-	"github.com/runpod/runpodctl/api"
+	"github.com/runpod/runpodctl/internal/api"
 
 	"github.com/spf13/cobra"
 )
@@ -12,14 +14,11 @@ import (
 var (
 	communityCloud    bool
 	containerDiskInGb int
-	deployCost        float32
 	dockerArgs        string
 	env               []string
 	gpuCount          int
 	gpuTypeId         string
 	imageName         string
-	minMemoryInGb     int
-	minVcpuCount      int
 	name              string
 	podCount          int
 	ports             []string
@@ -36,30 +35,33 @@ var CreatePodsCmd = &cobra.Command{
 	Long:  "create a group of pods on runpod.io",
 	Run: func(cmd *cobra.Command, args []string) {
 		gpus := strings.Split(gpuTypeId, ",")
+		// an empty gpu type would make the v2 create a cpu pod
+		for _, g := range gpus {
+			if strings.TrimSpace(g) == "" {
+				cobra.CheckErr(fmt.Errorf("gpuType must name a gpu type, e.g. 'NVIDIA GeForce RTX 3090'"))
+			}
+		}
 		gpusIndex := 0
-		input := &api.CreatePodInput{
+		input := &api.LegacyPodCreate{
 			ContainerDiskInGb: containerDiskInGb,
-			DeployCost:        deployCost,
 			DockerArgs:        dockerArgs,
 			GpuCount:          gpuCount,
 			ImageName:         imageName,
-			MinMemoryInGb:     minMemoryInGb,
-			MinVcpuCount:      minVcpuCount,
 			Name:              name,
-			TemplateId:        templateId,
+			TemplateID:        templateId,
 			VolumeInGb:        volumeInGb,
 			VolumeMountPath:   volumeMountPath,
 		}
 		if len(ports) > 0 {
-			input.Ports = strings.Join(ports, ",")
+			input.Ports = ports
 		}
-		input.Env = make([]*api.PodEnv, len(env))
-		for i, v := range env {
+		input.Env = make(map[string]string, len(env))
+		for _, v := range env {
 			e := strings.Split(v, "=")
 			if len(e) != 2 {
 				cobra.CheckErr(fmt.Errorf("wrong env value: %s", e))
 			}
-			input.Env[i] = &api.PodEnv{Key: e[0], Value: e[1]}
+			input.Env[e[0]] = e[1]
 		}
 		if secureCloud {
 			input.CloudType = "SECURE"
@@ -67,21 +69,28 @@ var CreatePodsCmd = &cobra.Command{
 			input.CloudType = "COMMUNITY"
 		}
 
+		input.GpuTypeID = gpus[0]
+		if note := input.VolumeNote(); note != "" {
+			fmt.Fprintln(os.Stderr, note)
+		}
+
+		client, err := api.NewClient()
+		cobra.CheckErr(err)
 		for x := 0; x < podCount; x++ {
-			input.GpuTypeId = gpus[gpusIndex]
-			pod, err := api.CreatePod(input)
-			if err != nil && len(gpus) > gpusIndex+1 && strings.Contains(err.Error(), "no longer any instances available") {
+			input.GpuTypeID = gpus[gpusIndex]
+			pod, _, err := client.CreatePodV2(input.V2Request())
+			if err != nil && len(gpus) > gpusIndex+1 && noCapacity(err) {
 				gpusIndex++
 				x--
 				continue
 			}
 			cobra.CheckErr(err)
 
-			if pod["desiredStatus"] == "RUNNING" {
-				fmt.Printf(`pod "%s" created for $%.3f / hr`, pod["id"], pod["costPerHr"])
+			if pod.DesiredStatus == "RUNNING" {
+				fmt.Printf(`pod "%s" created for $%.3f / hr`, pod.ID, pod.CostPerHr)
 				fmt.Println()
 			} else {
-				cobra.CheckErr(fmt.Errorf(`pod %v start failed; status is %v`, pod["id"], pod["desiredStatus"]))
+				cobra.CheckErr(fmt.Errorf(`pod %v start failed; status is %v`, pod.ID, pod.DesiredStatus))
 			}
 		}
 	},
@@ -90,13 +99,10 @@ var CreatePodsCmd = &cobra.Command{
 func init() {
 	CreatePodsCmd.Flags().BoolVar(&communityCloud, "communityCloud", false, "create in community cloud")
 	CreatePodsCmd.Flags().BoolVar(&secureCloud, "secureCloud", false, "create in secure cloud")
-	CreatePodsCmd.Flags().Float32Var(&deployCost, "cost", 0, "$/hr price ceiling, if not defined, pod will be created with lowest price available")
 	CreatePodsCmd.Flags().IntVar(&containerDiskInGb, "containerDiskSize", 20, "container disk size in GB")
 	CreatePodsCmd.Flags().IntVar(&gpuCount, "gpuCount", 1, "number of GPUs for the pod")
-	CreatePodsCmd.Flags().IntVar(&minMemoryInGb, "mem", 20, "minimum system memory needed")
-	CreatePodsCmd.Flags().IntVar(&minVcpuCount, "vcpu", 1, "minimum vCPUs needed")
 	CreatePodsCmd.Flags().IntVar(&podCount, "podCount", 1, "number of pods to create with the same name")
-	CreatePodsCmd.Flags().IntVar(&volumeInGb, "volumeSize", 1, "persistent volume disk size in GB")
+	CreatePodsCmd.Flags().IntVar(&volumeInGb, "volumeSize", api.LegacyDefaultVolumeInGb, "persistent volume disk size in GB")
 	CreatePodsCmd.Flags().StringSliceVar(&env, "env", nil, "container arguments")
 	CreatePodsCmd.Flags().StringSliceVar(&ports, "ports", nil, "ports to expose; max only 1 http and 1 tcp allowed; e.g. '8888/http'")
 	CreatePodsCmd.Flags().StringVar(&dockerArgs, "args", "", "container arguments")
@@ -109,4 +115,22 @@ func init() {
 	CreatePodsCmd.MarkFlagRequired("gpuType")   //nolint
 	CreatePodsCmd.MarkFlagRequired("imageName") //nolint
 	CreatePodsCmd.MarkFlagRequired("name")      //nolint
+}
+
+// noCapacity reports whether a create was refused for want of capacity, so the
+// next --gpuType is worth trying. like the cpu flavor walk, a clean 400 or 409
+// refusal moves on; graphql's wording is kept for the legacy message. anything
+// else (a timeout, a 5xx) may have created the pod and stops the loop.
+func noCapacity(err error) bool {
+	// an uncertain create (no reply, a 5xx) may have made a pod, whatever
+	// its message says; trying the next gpu type could buy a second one
+	var coded interface{ ErrorCode() string }
+	if errors.As(err, &coded) && coded.ErrorCode() == "create_uncertain" {
+		return false
+	}
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.Status == 400 || apiErr.Status == 409
+	}
+	return strings.Contains(err.Error(), "no longer any instances available")
 }

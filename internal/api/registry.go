@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 )
 
 // ContainerRegistryAuth represents a container registry authentication
@@ -12,9 +13,9 @@ type ContainerRegistryAuth struct {
 	Username string `json:"username,omitempty"`
 }
 
-// ContainerRegistryAuthListResponse is the response from listing container registry auths
-type ContainerRegistryAuthListResponse struct {
-	ContainerRegistryAuths []ContainerRegistryAuth `json:"containerRegistryAuths"`
+// registryListResponse is the rest v2 registry listing envelope
+type registryListResponse struct {
+	Registries []ContainerRegistryAuth `json:"registries"`
 }
 
 // ContainerRegistryAuthCreateRequest is the request to create a container registry auth
@@ -24,24 +25,28 @@ type ContainerRegistryAuthCreateRequest struct {
 	Password string `json:"password"`
 }
 
-// ListContainerRegistryAuths returns all container registry auths
+// ListContainerRegistryAuths returns all container registry auths. v2 returns
+// the whole list in one page today; walking pages keeps a large account whole
+// if that changes.
 func (c *Client) ListContainerRegistryAuths() ([]ContainerRegistryAuth, error) {
-	data, err := c.Get("/containerregistryauth", nil)
+	auths := []ContainerRegistryAuth{}
+	err := c.getV2AllPages("/registries", nil, func(data []byte) error {
+		var resp registryListResponse
+		if err := json.Unmarshal(data, &resp); err != nil {
+			return fmt.Errorf("failed to parse response: %w", err)
+		}
+		auths = append(auths, resp.Registries...)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	var auths []ContainerRegistryAuth
-	if err := json.Unmarshal(data, &auths); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
 	return auths, nil
 }
 
 // GetContainerRegistryAuth returns a single container registry auth by ID
 func (c *Client) GetContainerRegistryAuth(authID string) (*ContainerRegistryAuth, error) {
-	data, err := c.Get("/containerregistryauth/"+authID, nil)
+	data, err := c.GetV2("/registries/"+url.PathEscape(authID), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +61,7 @@ func (c *Client) GetContainerRegistryAuth(authID string) (*ContainerRegistryAuth
 
 // CreateContainerRegistryAuth creates a new container registry auth
 func (c *Client) CreateContainerRegistryAuth(req *ContainerRegistryAuthCreateRequest) (*ContainerRegistryAuth, error) {
-	data, err := c.Post("/containerregistryauth", req)
+	data, err := c.PostV2("/registries", req)
 	if err != nil {
 		return nil, err
 	}
@@ -71,6 +76,6 @@ func (c *Client) CreateContainerRegistryAuth(req *ContainerRegistryAuthCreateReq
 
 // DeleteContainerRegistryAuth deletes a container registry auth
 func (c *Client) DeleteContainerRegistryAuth(authID string) error {
-	_, err := c.Delete("/containerregistryauth/" + authID)
+	_, err := c.DeleteV2("/registries/" + url.PathEscape(authID))
 	return err
 }

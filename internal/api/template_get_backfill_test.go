@@ -14,12 +14,11 @@ import (
 func TestGetTemplateBackfillsPortsConfigFromGraphQL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
-			// REST: ports present, portsConfig absent (not in the REST schema).
-			_ = json.NewEncoder(w).Encode(Template{
-				ID:    "tpl-1",
-				Name:  "t",
-				Ports: []string{"22/tcp", "8888/http"},
-			})
+			if r.URL.Path != "/templates/tpl-1" {
+				t.Errorf("unexpected rest v2 path %s", r.URL.Path)
+			}
+			// rest v2: ports present, port labels absent (not in its schema).
+			_, _ = w.Write([]byte(`{"id":"tpl-1","name":"t","image":"img","ports":["22/tcp","8888/http"]}`))
 			return
 		}
 		// GraphQL: returns the labels.
@@ -44,7 +43,8 @@ func TestGetTemplateBackfillsPortsConfigFromGraphQL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
-	client.baseURL = server.URL
+	client.baseURL = "http://v1.invalid"
+	client.v2BaseURL = server.URL
 
 	tmpl, err := client.GetTemplate("tpl-1")
 	if err != nil {
