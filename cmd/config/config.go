@@ -1,10 +1,11 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 
-	"github.com/runpod/runpodctl/api"
 	"github.com/runpod/runpodctl/cmd/ssh"
+	internalapi "github.com/runpod/runpodctl/internal/api"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -79,7 +80,11 @@ func getOrCreateSSHKey() ([]byte, error) {
 
 // ensureSSHKeyInCloud checks if the SSH key exists in the cloud and adds it if necessary
 func ensureSSHKeyInCloud(publicKey []byte) error {
-	_, cloudKeys, err := api.GetPublicSSHKeys()
+	client, err := internalapi.NewClient()
+	if err != nil {
+		return fmt.Errorf("failed to get SSH keys from the cloud: %w", err)
+	}
+	cloudKeys, err := client.GetPublicSSHKeys()
 	if err != nil {
 		return fmt.Errorf("failed to get SSH keys from the cloud: %w", err)
 	}
@@ -94,14 +99,20 @@ func ensureSSHKeyInCloud(publicKey []byte) error {
 
 	// Check if the publicKey already exists in the cloud
 	for _, cloudKey := range cloudKeys {
-		if cloudKey.Fingerprint == localFingerprint {
+		// a copy v2 rejects doesn't count: AddPublicSSHKey then reports the
+		// conflict, and the error says how to clear it
+		if cloudKey.Fingerprint == localFingerprint && cloudKey.AcceptedByV2 {
 			fmt.Println("SSH key already exists in the cloud. No action needed.")
 			return nil
 		}
 	}
 
 	// If the key doesn't exist, add it
-	if err := api.AddPublicSSHKey(publicKey); err != nil {
+	if err := client.AddPublicSSHKey(publicKey, false); err != nil {
+		var invalid *internalapi.InvalidStoredSSHKeysError
+		if errors.As(err, &invalid) {
+			err = invalid.ForSync()
+		}
 		return fmt.Errorf("failed to add the SSH key: %w", err)
 	}
 

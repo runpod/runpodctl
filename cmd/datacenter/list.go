@@ -9,8 +9,8 @@ import (
 
 var listCmd = &cobra.Command{
 	Use:   "list",
-	Short: "list all datacenters",
-	Long:  "list all datacenters with gpu availability",
+	Short: "list deployable datacenters",
+	Long:  "list the datacenters you can deploy to, with gpu availability",
 	Args:  cobra.NoArgs,
 	RunE:  runList,
 }

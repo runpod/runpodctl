@@ -11,7 +11,7 @@ var networkVolumeCmd = &cobra.Command{
 	Use:     "network-volume",
 	Aliases: []string{"nv"},
 	Short:   "view network volume billing history",
-	Long:    "view billing history for network volumes",
+	Long:    "view billing history for network volumes, one record per volume per time bucket, split into standard and high-performance storage cost",
 	Args:    cobra.NoArgs,
 	RunE:    runNetworkVolumeBilling,
 }

@@ -46,7 +46,7 @@ func TestRuntimeUptime(t *testing.T) {
 		{
 			// observed live: an EXITED pod keeps reporting its last uptime.
 			name:    "stale uptime on a stopped pod is dropped",
-			state:   podstate.State{Status: podstate.StatusStopped, Reason: podstate.ReasonStoppedByUser},
+			state:   podstate.State{Status: podstate.StatusStopped},
 			runtime: &api.LegacyRuntime{UptimeInSeconds: intPtr(18)},
 			want:    nil,
 		},
