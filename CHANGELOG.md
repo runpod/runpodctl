@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.x and 3.0.0
+
+these releases were cut without release-please. their notes are on the [github releases page](https://github.com/runpod/runpodctl/releases).
+
 ## [1.15.0](https://github.com/runpod/runpodctl/compare/v1.14.1...v1.15.0) (2024-02-29)
 
 
