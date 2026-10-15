@@ -3,10 +3,8 @@ package pod
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
-	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -16,79 +14,6 @@ import (
 	"github.com/runpod/runpodctl/internal/waitfor"
 	"github.com/spf13/cobra"
 )
-
-func TestParseDockerArgs(t *testing.T) {
-	cases := []struct {
-		name           string
-		in             string
-		wantCmd        []string
-		wantEntrypoint []string
-	}{
-		{
-			name:    "simple command",
-			in:      "sleep infinity",
-			wantCmd: []string{"sleep", "infinity"},
-		},
-		{
-			name:    "single token",
-			in:      "nginx",
-			wantCmd: []string{"nginx"},
-		},
-		{
-			name:    "quoted argument stays one token",
-			in:      `bash -c "sleep infinity"`,
-			wantCmd: []string{"bash", "-c", "sleep infinity"},
-		},
-		{
-			name:    "single quotes",
-			in:      `sh -c 'while true; do date; sleep 60; done'`,
-			wantCmd: []string{"sh", "-c", "while true; do date; sleep 60; done"},
-		},
-		{
-			name:    "extra whitespace",
-			in:      "  sleep   infinity  ",
-			wantCmd: []string{"sleep", "infinity"},
-		},
-		{
-			name:    "unbalanced quote falls back to whitespace split",
-			in:      `sleep "infinity`,
-			wantCmd: []string{"sleep", `"infinity`},
-		},
-		{
-			name: "whitespace-only input yields no tokens",
-			in:   "   ",
-		},
-		{
-			name:           "canonical json object form",
-			in:             `{"cmd":["sleep","infinity"],"entrypoint":["/bin/sh","-c"]}`,
-			wantCmd:        []string{"sleep", "infinity"},
-			wantEntrypoint: []string{"/bin/sh", "-c"},
-		},
-		{
-			name:    "json object with cmd only",
-			in:      `{"cmd":["python -u app.py"]}`,
-			wantCmd: []string{"python -u app.py"},
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			cmd, entrypoint := parseDockerArgs(tc.in)
-			assertTokens(t, "cmd", cmd, tc.wantCmd)
-			assertTokens(t, "entrypoint", entrypoint, tc.wantEntrypoint)
-		})
-	}
-}
-
-func assertTokens(t *testing.T, field string, got, want []string) {
-	t.Helper()
-	if len(want) == 0 && len(got) == 0 {
-		return
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("%s = %#v, want %#v", field, got, want)
-	}
-}
 
 func TestCreateCmd_WaitFlags(t *testing.T) {
 	flags := createCmd.Flags()
@@ -134,7 +59,6 @@ func TestResolveWaitTimeout(t *testing.T) {
 		setup        func()
 		computeType  string
 		cloudType    string
-		publicIP     bool
 		changedFlags []string
 		want         time.Duration
 		wantErr      string
@@ -178,32 +102,21 @@ func TestResolveWaitTimeout(t *testing.T) {
 			wantErr:     "--wait waits for ssh, so it cannot be combined with --ssh=false",
 		},
 		{
-			// cpu pods go through rest, which cannot request runpod-managed ssh;
-			// prod still allocates a public port 22, so this warns instead of
-			// refusing outright.
-			name:        "cpu warns that ssh depends on the image",
+			// v2 sets up ssh on cpu pods too, so a cpu wait needs no caveat
+			name:        "cpu waits like gpu",
 			setup:       func() { createWait = true },
 			computeType: "CPU",
 			want:        10 * time.Minute,
-			wantStderr:  "cpu pods are created through the rest api",
 		},
 		{
-			// no public ip means no publicly mapped port 22 to probe, so this wait
-			// can time out for a reason the flags do not make obvious.
-			name:        "community cloud without a public ip is called out",
+			// the api cannot ask for a community machine with a public ip, and
+			// without one there is no public port 22 to probe
+			name:        "community cloud is called out",
 			setup:       func() { createWait = true },
 			computeType: "GPU",
 			cloudType:   "COMMUNITY",
 			want:        10 * time.Minute,
 			wantStderr:  "community cloud only maps a public ssh port",
-		},
-		{
-			name:        "community cloud with a public ip is fine",
-			setup:       func() { createWait = true },
-			computeType: "GPU",
-			cloudType:   "COMMUNITY",
-			publicIP:    true,
-			want:        10 * time.Minute,
 		},
 		{
 			name:        "secure cloud says nothing about public ips",
@@ -226,7 +139,7 @@ func TestResolveWaitTimeout(t *testing.T) {
 			if cloudType == "" {
 				cloudType = "SECURE"
 			}
-			got, err := resolveWaitTimeout(cmd, tc.computeType, cloudType, tc.publicIP)
+			got, err := resolveWaitTimeout(cmd, cloudType)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("error = %v, want it to contain %q", err, tc.wantErr)
@@ -690,24 +603,19 @@ func TestPodDetailsWithSSH(t *testing.T) {
 	})
 }
 
-// The CON-842 regression was the wire format: the rest POST /pods schema has
-// no dockerArgs field and 400s on it, so the request must serialize the start
-// command as dockerStartCmd and never as dockerArgs.
-func TestPodCreateRequestDockerArgsWireFormat(t *testing.T) {
-	cmd, entrypoint := parseDockerArgs("sleep infinity")
-	body, err := json.Marshal(&api.PodCreateRequest{
-		ImageName:        "ubuntu:22.04",
-		ComputeType:      "CPU",
-		DockerStartCmd:   cmd,
-		DockerEntrypoint: entrypoint,
+// a gpu create with no gpu id must be refused before any request: the v2 create
+// would otherwise fall through to a cpu pod.
+func TestRunCreate_GPUWithoutGpuIDIsRefused(t *testing.T) {
+	saved := []string{createImageName, createComputeType, createGpuTypeID, createTemplateID}
+	t.Cleanup(func() {
+		createImageName, createComputeType, createGpuTypeID, createTemplateID = saved[0], saved[1], saved[2], saved[3]
 	})
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
-	if strings.Contains(string(body), "dockerArgs") {
-		t.Fatalf("request body must not contain dockerArgs: %s", body)
-	}
-	if !strings.Contains(string(body), `"dockerStartCmd":["sleep","infinity"]`) {
-		t.Fatalf("request body missing dockerStartCmd tokens: %s", body)
+	t.Setenv("RUNPOD_API_KEY", "")
+	createImageName, createComputeType, createGpuTypeID, createTemplateID = "alpine", "GPU", "", ""
+
+	err := runCreate(&cobra.Command{}, nil)
+	var usage interface{ ErrorCode() string }
+	if !errors.As(err, &usage) || usage.ErrorCode() != "usage_error" || !strings.Contains(err.Error(), "--gpu-id is required") {
+		t.Fatalf("err = %v, want a usage_error asking for --gpu-id", err)
 	}
 }

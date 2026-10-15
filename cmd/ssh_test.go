@@ -1,17 +1,21 @@
 package cmd
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/runpod/runpodctl/internal/api"
 	"github.com/spf13/cobra"
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -116,20 +120,23 @@ func TestSSHRemoveKey_RequiresIdentifier(t *testing.T) {
 
 func sshStub(t *testing.T, pods string) {
 	t.Helper()
-
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
-		if strings.Contains(string(body), "myPods") {
-			_, _ = w.Write([]byte(`{"data":{"myself":{"pods":` + pods + `}}}`))
-			return
+		switch r.URL.Path {
+		case "/pods":
+			_, _ = w.Write([]byte(`{"pods":` + pods + `,"pagination":{"hasNextPage":false,"nextCursor":null}}`))
+		case "/account/ssh-keys":
+			_, _ = w.Write([]byte(`{"keys":[]}`))
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
 		}
-		_, _ = w.Write([]byte(`{"data":{"myself":{"pubKey":""}}}`))
 	}))
 	t.Cleanup(server.Close)
 
 	t.Setenv("RUNPOD_API_KEY", "test-key")
-	t.Setenv("RUNPOD_GRAPHQL_URL", server.URL+"/graphql")
+	t.Setenv("RUNPOD_REST_V2_URL", server.URL)
+	t.Setenv("RUNPOD_GRAPHQL_URL", "http://graphql.invalid")
 }
 
 func sshCaptureJSON(t *testing.T, args []string, allowAll bool) map[string]interface{} {
@@ -162,7 +169,7 @@ func sshCaptureJSON(t *testing.T, args []string, allowAll bool) map[string]inter
 	return got
 }
 
-const sshPortJSON = `{"ip":"1.2.3.4","isIpPublic":true,"privatePort":22,"publicPort":40022,"type":"tcp"}`
+const sshPortJSON = `{"ip":"1.2.3.4","private":22,"public":40022,"type":"tcp"}`
 
 func TestSSHInfo_RuntimeState(t *testing.T) {
 	tests := []struct {
@@ -173,36 +180,30 @@ func TestSSHInfo_RuntimeState(t *testing.T) {
 	}{
 		{
 			name: "running pod yields a connection",
-			pods: `[{"id":"p","name":"p","desiredStatus":"RUNNING","ports":"22/tcp","runtime":{"uptimeInSeconds":5,"ports":[` + sshPortJSON + `]}}]`,
+			pods: `[{"id":"p","name":"p","status":"RUNNING","ports":["22/tcp"],"runtime":{"uptime":5,"ports":[` + sshPortJSON + `]}}]`,
 		},
 		{
 			name:       "stopped pod with stale ports is refused with a reason",
-			pods:       `[{"id":"p","name":"p","desiredStatus":"EXITED","lastStatusChange":"Exited by user: x","ports":"22/tcp","runtime":{"uptimeInSeconds":261,"ports":[` + sshPortJSON + `]}}]`,
+			pods:       `[{"id":"p","name":"p","status":"EXITED","ports":["22/tcp"],"runtime":{"uptime":261,"ports":[` + sshPortJSON + `]}}]`,
 			wantErr:    "pod not ready: pod is stopped; start it with 'runpodctl pod start p'",
 			wantStatus: "stopped",
 		},
 		{
 			name:       "terminated pod with stale ports is refused",
-			pods:       `[{"id":"p","name":"p","desiredStatus":"TERMINATED","lastStatusChange":"Outbid: x","ports":"22/tcp","runtime":{"ports":[` + sshPortJSON + `]}}]`,
+			pods:       `[{"id":"p","name":"p","status":"TERMINATED","ports":["22/tcp"],"runtime":{"ports":[` + sshPortJSON + `]}}]`,
 			wantErr:    "pod not ready: pod is terminated",
 			wantStatus: "terminated",
 		},
 		{
-			// unknown is not evidence the pod is down: a connection built from
-			// live ports must not be thrown away on the strength of it.
-			name: "a state this cli does not model keeps its live connection",
-			pods: `[{"id":"p","name":"p","desiredStatus":"RESTARTING","ports":"22/tcp","runtime":{"ports":[` + sshPortJSON + `]}}]`,
-		},
-		{
 			name:       "initializing pod says why",
-			pods:       `[{"id":"p","name":"p","desiredStatus":"RUNNING","ports":"22/tcp","runtime":null}]`,
+			pods:       `[{"id":"p","name":"p","status":"STARTING","ports":["22/tcp"],"runtime":null}]`,
 			wantErr:    "pod not ready: no container reported yet (image pull, container create or boot)",
 			wantStatus: "initializing",
 		},
 		{
 			// the suggested command keeps 8888/http: --ports replaces the list.
 			name:       "running pod that never asked for 22 is pointed at pod update, keeping its ports",
-			pods:       `[{"id":"p","name":"p","desiredStatus":"RUNNING","ports":"8888/http","runtime":{"ports":[{"ip":"1.2.3.4","isIpPublic":true,"privatePort":8888,"publicPort":40088,"type":"tcp"}]}}]`,
+			pods:       `[{"id":"p","name":"p","status":"RUNNING","ports":["8888/http"],"runtime":{"ports":[{"ip":"1.2.3.4","private":8888,"public":40088,"type":"tcp"}]}}]`,
 			wantErr:    "pod not ready: pod does not publish 22/tcp; add it with 'runpodctl pod update p --ports 8888/http,22/tcp' (--ports replaces the whole list, and changing it may restart the container)",
 			wantStatus: "running",
 		},
@@ -237,8 +238,8 @@ func TestSSHInfo_RuntimeState(t *testing.T) {
 // connections through ListConnections rather than FindPodConnection.
 func TestSSHConnect_ListSkipsDeadPods(t *testing.T) {
 	sshStub(t, `[
-		{"id":"up","name":"up","desiredStatus":"RUNNING","ports":"22/tcp","runtime":{"ports":[`+sshPortJSON+`]}},
-		{"id":"down","name":"down","desiredStatus":"EXITED","lastStatusChange":"Exited by user: x","ports":"22/tcp","runtime":{"ports":[`+sshPortJSON+`]}}
+		{"id":"up","name":"up","status":"RUNNING","ports":["22/tcp"],"runtime":{"ports":[`+sshPortJSON+`]}},
+		{"id":"down","name":"down","status":"EXITED","ports":["22/tcp"],"runtime":{"ports":[`+sshPortJSON+`]}}
 	]`)
 
 	got := sshCaptureJSON(t, nil, true)
@@ -349,5 +350,61 @@ func TestSSHForget_RemovesOnlyThatPod(t *testing.T) {
 	again := sshForgetJSON(t, "pod123")
 	if again["forgotten"] != false {
 		t.Errorf("second forget reported a removal: %v", again)
+	}
+}
+
+// the invalid-entry prompt: asked only of a person, never of a pipe or an
+// agent, and --remove-invalid skips it.
+func TestWithInvalidKeyPrompt(t *testing.T) {
+	invalidErr := &api.InvalidStoredSSHKeysError{Entries: []string{"my laptop key, see notes"}}
+	cases := []struct {
+		name        string
+		flag        bool
+		interactive bool
+		answer      string
+		firstErr    error
+		wantCalls   []bool // the removeInvalid value of each write
+		wantErr     bool
+		wantPrompt  bool
+	}{
+		{name: "flag skips the prompt", flag: true, interactive: true, wantCalls: []bool{true}},
+		{name: "person answers yes", interactive: true, answer: "y\n", firstErr: invalidErr, wantCalls: []bool{false, true}, wantPrompt: true},
+		{name: "person answers no", interactive: true, answer: "n\n", firstErr: invalidErr, wantCalls: []bool{false}, wantErr: true, wantPrompt: true},
+		{name: "agent or pipe gets the error", interactive: false, firstErr: invalidErr, wantCalls: []bool{false}, wantErr: true},
+		{name: "other errors pass through", interactive: true, firstErr: errors.New("boom"), wantCalls: []bool{false}, wantErr: true},
+		{name: "no invalid entries, no prompt", interactive: true, wantCalls: []bool{false}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			savedInteractive, savedIn, savedOut := invalidKeyPromptIsInteractive, invalidKeyPromptIn, invalidKeyPromptOut
+			t.Cleanup(func() {
+				invalidKeyPromptIsInteractive, invalidKeyPromptIn, invalidKeyPromptOut = savedInteractive, savedIn, savedOut
+			})
+			var out bytes.Buffer
+			invalidKeyPromptIsInteractive = func() bool { return tc.interactive }
+			invalidKeyPromptIn, invalidKeyPromptOut = strings.NewReader(tc.answer), &out
+
+			var calls []bool
+			err := withInvalidKeyPrompt(tc.flag, func(removeInvalid bool) error {
+				calls = append(calls, removeInvalid)
+				if !removeInvalid {
+					return tc.firstErr
+				}
+				return nil
+			})
+			if (err != nil) != tc.wantErr {
+				t.Errorf("err = %v, wantErr %t", err, tc.wantErr)
+			}
+			if !reflect.DeepEqual(calls, tc.wantCalls) {
+				t.Errorf("writes = %v, want %v", calls, tc.wantCalls)
+			}
+			prompted := strings.Contains(out.String(), "and continue? (y/n)")
+			if prompted != tc.wantPrompt {
+				t.Errorf("prompted = %t, want %t (stderr %q)", prompted, tc.wantPrompt, out.String())
+			}
+			if tc.wantPrompt && !strings.Contains(out.String(), "my laptop key, see notes") {
+				t.Errorf("the prompt must show the entries it would delete: %q", out.String())
+			}
+		})
 	}
 }

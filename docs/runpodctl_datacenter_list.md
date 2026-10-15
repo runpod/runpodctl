@@ -1,10 +1,10 @@
 ## runpodctl datacenter list
 
-list all datacenters
+list deployable datacenters
 
 ### Synopsis
 
-list all datacenters with gpu availability
+list the datacenters you can deploy to, with gpu availability
 
 ```
 runpodctl datacenter list [flags]

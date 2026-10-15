@@ -2,11 +2,11 @@ package doctor
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 
-	"github.com/runpod/runpodctl/api"
 	"github.com/runpod/runpodctl/cmd/ssh"
 	internalapi "github.com/runpod/runpodctl/internal/api"
 	"github.com/runpod/runpodctl/internal/configenv"
@@ -187,7 +187,13 @@ func checkSSHKey() checkResult {
 	}
 
 	// check if key exists in cloud
-	_, cloudKeys, err := api.GetPublicSSHKeys()
+	client, err := internalapi.NewClient()
+	if err != nil {
+		result.Status = "fail"
+		result.Error = fmt.Sprintf("failed to get cloud ssh keys: %v", err)
+		return result
+	}
+	cloudKeys, err := client.GetPublicSSHKeys()
 	if err != nil {
 		result.Status = "fail"
 		result.Error = fmt.Sprintf("failed to get cloud ssh keys: %v", err)
@@ -206,7 +212,9 @@ func checkSSHKey() checkResult {
 	// check if exists in cloud
 	keyInCloud := false
 	for _, cloudKey := range cloudKeys {
-		if cloudKey.Fingerprint == localFingerprint {
+		// a copy v2 rejects doesn't count: AddPublicSSHKey then reports the
+		// conflict, and the error says how to clear it
+		if cloudKey.Fingerprint == localFingerprint && cloudKey.AcceptedByV2 {
 			keyInCloud = true
 			break
 		}
@@ -215,8 +223,12 @@ func checkSSHKey() checkResult {
 	// add if not in cloud
 	if !keyInCloud {
 		fmt.Fprintln(os.Stderr, "adding ssh key to runpod...")
-		if err := api.AddPublicSSHKey(publicKey); err != nil {
+		if err := client.AddPublicSSHKey(publicKey, false); err != nil {
 			result.Status = "fail"
+			var invalid *internalapi.InvalidStoredSSHKeysError
+			if errors.As(err, &invalid) {
+				err = invalid.ForSync()
+			}
 			result.Error = fmt.Sprintf("failed to add ssh key: %v", err)
 			return result
 		}

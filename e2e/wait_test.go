@@ -122,7 +122,8 @@ func decodeErrorObject(t *testing.T, stderr string) map[string]interface{} {
 }
 
 // TestCLI_PodCreateWaitTimeout exercises the timeout path on the cheapest thing
-// that can never satisfy it: a cpu pod running an image with no sshd. Prod does
+// that cannot satisfy it: a cpu pod running alpine, which has no sshd and no
+// apt for runpod's ssh setup to install one with, under a 25s budget. Prod does
 // allocate a public port 22 for it, which is exactly the case the wait must not
 // mistake for readiness.
 func TestCLI_PodCreateWaitTimeout(t *testing.T) {
@@ -179,9 +180,6 @@ func TestCLI_PodCreateWaitTimeout(t *testing.T) {
 	}
 	deletePodOnCleanup(t, podID)
 
-	if !strings.Contains(stderr, "cpu pods are created through the rest api") {
-		t.Errorf("expected the cpu ssh caveat on stderr: %s", stderr)
-	}
 	if !strings.Contains(stderr, "waiting for ssh on pod "+podID) {
 		t.Errorf("expected progress on stderr: %s", stderr)
 	}
@@ -245,8 +243,8 @@ func TestCLI_PodCreateWaitInterrupted(t *testing.T) {
 
 // TestCLI_PodCreateWait proves the success path: --wait blocks until ssh really
 // answers and then prints one json object carrying the live ssh command.
-// Secure cloud on purpose — a community pod without --public-ip never gets a
-// publicly mapped port 22, so there would be nothing to connect to.
+// Secure cloud on purpose — a community pod is not guaranteed a publicly mapped
+// port 22, so there may be nothing to connect to.
 func TestCLI_PodCreateWait(t *testing.T) {
 	name := "e2e-wait-ssh-" + time.Now().Format("20060102150405")
 	sweepPodsByName(t, name)
