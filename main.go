@@ -12,6 +12,7 @@ import (
 // in step with the latest release, which is what the nix build stamps.
 // x-release-please-start-version
 var Version = "v3.0.0"
+
 // x-release-please-end
 
 func main() {
