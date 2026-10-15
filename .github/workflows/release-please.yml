@@ -1,0 +1,28 @@
+name: release-please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    name: release-please
+    runs-on: ubuntu-latest
+    steps:
+      # the app token, not GITHUB_TOKEN: a tag pushed with GITHUB_TOKEN does not
+      # trigger other workflows, so release.yml (goreleaser, signing, the brew
+      # tap pr) would never run for the tag release-please creates.
+      - name: Generate release token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Run release-please
+        uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ steps.app-token.outputs.token }}

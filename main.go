@@ -8,8 +8,11 @@ import (
 	_ "golang.org/x/crypto/x509roots/fallback"
 )
 
-// Version is set at build time via ldflags
-var Version = "v2.0.0-beta.1"
+// Version is set at build time via ldflags. release-please keeps this default
+// in step with the latest release, which is what the nix build stamps.
+// x-release-please-start-version
+var Version = "v3.0.0"
+// x-release-please-end
 
 func main() {
 	cmd.Execute(Version)
