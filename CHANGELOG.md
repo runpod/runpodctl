@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.0.1](https://github.com/runpod/runpodctl/compare/v3.0.0...v3.0.1) (2026-10-15)
+
+
+### Documentation
+
+* **nix:** update the version examples to v3.0.0 ([#375](https://github.com/runpod/runpodctl/issues/375)) ([9d8c9b8](https://github.com/runpod/runpodctl/commit/9d8c9b83efb66657913e4e98ef253af99f58c584))
+
 ## 2.x and 3.0.0
 
 these releases were cut without release-please. their notes are on the [github releases page](https://github.com/runpod/runpodctl/releases).
