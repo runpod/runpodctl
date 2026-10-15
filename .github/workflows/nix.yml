@@ -1,0 +1,101 @@
+#
+# .github/workflows/nix.yml — runpodctl
+#
+# The Nix flake on every supported system (nix/design.md §10): hermetic
+# checks, the packaged binary, the OCI images, the static analysis report and
+# fuzzing. Non-blocking by design: every job sets continue-on-error and none
+# is a required check, so a red run never blocks a merge while the lint
+# baseline is non-empty and vendorHash updates are manual.
+#
+name: nix
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  flake:
+    name: flake (${{ matrix.system }})
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            system: x86_64-linux
+          - runner: ubuntu-24.04-arm
+            system: aarch64-linux
+          - runner: macos-latest
+            system: aarch64-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: flake check
+        run: nix flake check -L
+
+      - name: build and run the binary
+        run: |
+          nix build .#runpodctl -L
+          ./result/bin/runpodctl --version
+
+      - name: images
+        if: runner.os == 'Linux'
+        run: |
+          for image in oci-runpodctl oci-runpodctl-full; do
+            nix build ".#$image" -L -o "result-$image"
+            ref="$("./result-$image" | docker load | sed -n 's/^Loaded image: //p')"
+            docker run --rm "$ref" --version
+          done
+          nix run .#oci-size-report >> "$GITHUB_STEP_SUMMARY"
+
+      - name: static analysis report
+        run: |
+          nix run .#static-analysis-report-full
+          cat static-analysis-report/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: upload the report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: static-analysis-report-${{ matrix.system }}
+          path: static-analysis-report/
+          if-no-files-found: ignore
+
+  fuzz:
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: fuzz
+        env:
+          BUDGET: ${{ github.event_name == 'schedule' && 'nightly' || 'ci' }}
+        run: nix run .#fuzz -- --budget "$BUDGET"
+
+      - name: upload crashers
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-crashers
+          path: "**/testdata/fuzz/"

@@ -30,6 +30,8 @@ func TestParse(t *testing.T) {
 		{input: "106752d", wantErr: true},
 		{input: "200000d", wantErr: true},
 		{input: "9999999999d", wantErr: true},
+		// from 213504d the product wraps past zero back to a positive value.
+		{input: "213504d", wantErr: true},
 		{input: "-1d", wantErr: true},
 		{input: "0h", wantErr: true},
 		{input: "0d", wantErr: true},

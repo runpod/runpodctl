@@ -956,10 +956,13 @@ func validateChunkRanges(ranges []int64, size int64) error {
 		if count < 0 {
 			return fmt.Errorf("peer sent a negative resume length (%d)", count)
 		}
-		total += count
-		if total > limit {
-			return fmt.Errorf("peer sent a resume request covering %d chunks of a file with %d", total, limit)
+		// compared before adding: total never exceeds limit here, so
+		// limit-total cannot overflow, while total+count can wrap negative
+		// and slip under any limit.
+		if count > limit-total {
+			return fmt.Errorf("peer sent a resume request covering more than the %d chunks of the file", limit)
 		}
+		total += count
 	}
 	return nil
 }

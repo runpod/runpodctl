@@ -1,0 +1,46 @@
+# .golangci-quick.yml — runpodctl
+#
+# Tier 0 — quick lint: correctness only, seconds on a warm cache.
+#
+# Run:
+#   lint-quick                       (inside nix develop)
+#   nix build .#static-analysis-report   (all tiers, hermetic)
+#
+# The three tiers are supersets: quick ⊂ .golangci.yml ⊂ .golangci-comprehensive.yml.
+# `linters.default: none` with explicit lists, so a golangci-lint upgrade can't
+# silently add or drop a linter. Every exclusion states why; when a linter
+# fires, the default is to fix the code. Existing findings are recorded in the
+# ratchet (nix/checks/lint-baseline.txt) and fixed in follow-up PRs.
+#
+# Never pass --timeout on the command line: it silently overrides run.timeout.
+
+version: "2"
+
+run:
+  timeout: 5m
+  modules-download-mode: mod
+  # e2e/ is behind //go:build e2e; lint it too, it is never run in the sandbox.
+  build-tags:
+    - e2e
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  # keep every issue on a line: with the default (true) golangci-lint keeps
+  # one of several same-line issues, and which one varies between runs,
+  # which the per-finding baseline reads as one new and one fixed.
+  uniq-by-line: false
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+linters:
+  default: none
+  enable:
+    - govet
+    - errcheck
+    - ineffassign
+    - unused
+    - staticcheck

@@ -19,3 +19,8 @@ vendor/
 
 ## auto generated file during make and release
 version
+
+# nix build outputs and the static analysis report app
+result
+result-*
+/static-analysis-report/
