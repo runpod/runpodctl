@@ -107,7 +107,7 @@ nix/
 
 ### Version
 
-- runpodctl has a single version variable: `var Version = "v2.0.0-beta.1"` in `main.go`, set through `-X main.Version`.
+- runpodctl has a single version variable: `var Version = "v3.0.0"` (kept current by release-please) in `main.go`, set through `-X main.Version`.
 - The flake parses that default with `builtins.match` and appends the commit: `"<base>-${self.shortRev or self.dirtyShortRev}"`. This mirrors goreleaser's `{{ .Version }}-{{ .ShortCommit }}`.
 - If the parse fails (say, the line is reformatted), evaluation fails with a message naming `main.go`, instead of silently stamping `unknown`.
 - The `version-stamp` check asserts that the built binary reports the flake rev.

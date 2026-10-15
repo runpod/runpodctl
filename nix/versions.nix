@@ -28,7 +28,7 @@ let
   # go.mod's `go` directive, e.g. "1.26.6".
   goModVersion = readMatch ../go.mod ".*\ngo ([0-9.]+)\n.*" "the go directive";
 
-  # main.go's default version, e.g. "v2.0.0-beta.1"; -X main.Version overrides it.
+  # main.go's default version, e.g. "v3.0.0"; -X main.Version overrides it.
   baseVersion = readMatch ../main.go ".*\nvar Version = \"([^\"]+)\"\n.*" "var Version";
 
   go = pkgs.go_1_26.overrideAttrs (_old: rec {
