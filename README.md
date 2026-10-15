@@ -574,17 +574,12 @@ legacy commands are still supported but deprecated. please update your scripts:
 
 ## release process
 
-releases are fully automated by [goreleaser](https://goreleaser.com/) via the `release` github action ([.github/workflows/release.yml](.github/workflows/release.yml)). to cut a release:
+releases are cut by [release-please](https://github.com/googleapis/release-please) ([.github/workflows/release-please.yml](.github/workflows/release-please.yml)) and built by [goreleaser](https://goreleaser.com/) via the `release` github action ([.github/workflows/release.yml](.github/workflows/release.yml)). to cut a release:
 
-1. make sure `main` is green and holds everything you want to ship.
-2. create and push a `v*` semver tag on the commit to release:
+1. release-please keeps a `chore: release x.y.z` pull request open, built from the conventional commits merged to `main` since the last release. it bumps the version, `CHANGELOG.md` and the default `Version` in `main.go`.
+2. merge that pull request. release-please then tags the merge commit and creates the github release. do not push a `v*` tag by hand: release-please would not see it, and its next release pull request would be computed from the wrong version.
 
-   ```bash
-   git tag v2.7.0
-   git push origin v2.7.0
-   ```
-
-3. the tag push triggers the `release` workflow, which runs `goreleaser release --clean` and:
+3. the tag triggers the `release` workflow, which runs `goreleaser release --clean` and:
    - builds binaries for darwin/linux/windows (amd64/arm64), incl. raw `runpodctl-{os}-{arch}` binaries for the legacy self-update command and a upx-compressed linux/amd64 build.
    - signs and notarizes the darwin universal binary with [quill](https://github.com/anchore/quill), after the per-arch builds are merged into the fat binary and before archiving, so the release checksums and the homebrew formula/cask hashes all cover the signed artifact. the raw per-arch `runpodctl-darwin-{arch}` binaries are **not** signed; only pre-signing runpodctl versions fetch those.
    - creates the github release with archives + checksums (prereleases are auto-detected from the tag).
