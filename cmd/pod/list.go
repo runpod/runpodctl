@@ -26,10 +26,10 @@ stopped ones.
 
 runtimeStatus reports what each pod is actually doing, which desiredStatus
 cannot: running (container up and reporting), initializing (no container
-reported yet - image pull, create or boot), stopped, terminated, or unknown
-(not derivable, read desiredStatus). runtimeStatusReason carries a stable
-token when there is more to say, and lastStatusChange carries the backend's
-raw text.`,
+reported yet - image pull, create or boot), stopped, terminated, error (the
+pod won't recover on its own), or unknown (not derivable, read
+desiredStatus). runtimeStatusReason carries a stable token when there is
+more to say.`,
 	Args: cobra.NoArgs,
 	RunE: runList,
 }

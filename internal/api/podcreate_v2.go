@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/shlex"
 	"github.com/runpod/runpodctl/internal/clierr"
 )
 
@@ -381,4 +382,112 @@ func LegacyCreateOutput(pod *Pod) map[string]interface{} {
 		"ports":             strings.Join(pod.Ports, ","),
 		"env":               env,
 	}
+}
+
+// ParseDockerArgs converts a docker args string (--docker-args, legacy --args)
+// into rest v2's cmd and entrypoint arrays (v2 has no dockerArgs field). It
+// mirrors the backend's decoding of legacy dockerArgs strings, so the flag
+// means what it always did: a JSON `{"cmd":[...],"entrypoint":[...]}` object
+// (the backend's canonical encoding, also produced by template create) is used
+// as-is, anything else is shlex-split into the start cmd, falling back to a
+// whitespace split when the shell lexer fails (e.g. unbalanced quotes).
+func ParseDockerArgs(args string) (cmd, entrypoint []string) {
+	var parsed struct {
+		Cmd        []string `json:"cmd"`
+		Entrypoint []string `json:"entrypoint"`
+	}
+	if err := json.Unmarshal([]byte(args), &parsed); err == nil {
+		return parsed.Cmd, parsed.Entrypoint
+	}
+	tokens, err := shlex.Split(args)
+	if err != nil {
+		return strings.Fields(args), nil
+	}
+	return tokens, nil
+}
+
+// LegacyPodCreate holds the flags of the deprecated `create pod` and `create
+// pods` commands, which graphql's podFindAndDeployOnDemand took.
+type LegacyPodCreate struct {
+	CloudType         string
+	ContainerDiskInGb int
+	DockerArgs        string
+	DataCenterID      string
+	Env               map[string]string
+	GpuCount          int
+	GpuTypeID         string
+	ImageName         string
+	Name              string
+	NetworkVolumeID   string
+	Ports             []string
+	StartSSH          bool
+	TemplateID        string
+	VolumeInGb        int
+	VolumeMountPath   string
+}
+
+// MinPodVolumeInGb is the smallest persistent volume rest v2 creates; graphql
+// took any size, and the legacy commands default to 1.
+const MinPodVolumeInGb = 10
+
+// V2Request maps the legacy create onto a v2 create. an empty name defaults to
+// the image name without its tag, as the legacy create always did; a gpu pod's
+// volume below v2's minimum is raised to it so the legacy mount still exists,
+// and a cpu pod gets none.
+func (l *LegacyPodCreate) V2Request() *PodCreateV2Request {
+	name := l.Name
+	if name == "" {
+		name = strings.Split(l.ImageName, ":")[0]
+	}
+	req := &PodCreateV2Request{
+		Name:            name,
+		ImageName:       l.ImageName,
+		TemplateID:      l.TemplateID,
+		CloudType:       l.CloudType,
+		ContainerDisk:   l.ContainerDiskInGb,
+		VolumeInGb:      l.VolumeInGb,
+		VolumeMountPath: l.VolumeMountPath,
+		NetworkVolumeID: l.NetworkVolumeID,
+		Ports:           l.Ports,
+		Env:             l.Env,
+		StartSSH:        l.StartSSH,
+	}
+	switch {
+	case l.GpuTypeID == "" || l.NetworkVolumeID != "":
+		// a cpu pod cannot have a pod volume, and the legacy default is 1 gb;
+		// a network volume takes the pod volume's place, as it always did
+		req.VolumeInGb = 0
+	case req.VolumeInGb > 0 && req.VolumeInGb < MinPodVolumeInGb:
+		req.VolumeInGb = MinPodVolumeInGb
+	}
+	if l.GpuTypeID != "" {
+		req.GpuTypeID = l.GpuTypeID
+		req.GpuCount = l.GpuCount
+	}
+	if l.DataCenterID != "" {
+		req.DataCenterIDs = []string{l.DataCenterID}
+	}
+	if l.DockerArgs != "" {
+		req.Cmd, req.Entrypoint = ParseDockerArgs(l.DockerArgs)
+	}
+	return req
+}
+
+// LegacyDefaultVolumeInGb is the legacy create commands' --volumeSize default.
+const LegacyDefaultVolumeInGb = 1
+
+// VolumeNote is the stderr note for a pod volume V2Request changes: a gpu pod
+// volume raised to v2's minimum, or a --volumeSize set beside a network
+// volume, which takes its place. "" when none is due.
+func (l *LegacyPodCreate) VolumeNote() string {
+	if l.NetworkVolumeID != "" {
+		if l.VolumeInGb > LegacyDefaultVolumeInGb {
+			return fmt.Sprintf("note: --volumeSize %d ignored; the network volume takes the pod volume's place", l.VolumeInGb)
+		}
+		return ""
+	}
+	if l.GpuTypeID == "" || l.VolumeInGb <= 0 || l.VolumeInGb >= MinPodVolumeInGb {
+		return ""
+	}
+	return fmt.Sprintf("note: volume raised from %d gb to the minimum of %d gb", l.VolumeInGb, MinPodVolumeInGb)
 }
