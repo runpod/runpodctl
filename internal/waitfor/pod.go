@@ -39,17 +39,19 @@ type podFinder struct {
 }
 
 // locate does one list+find with the shared miss/terminal accounting. It returns
-// the running-desired, non-terminal pod (found == true), or a State/error the
-// poller must return verbatim (found == false). A returned error is either a
-// transient read error or a *FatalError that ends the wait.
-func (f *podFinder) locate() (pod *api.LegacyPod, st State, err error, found bool) {
+// the listed, non-terminal pod (found == true) in any non-terminal desired state,
+// including ones that are not running yet (e.g. created); each poller still does
+// its own readiness check on the result. When found == false the State and error
+// are what the poller must return verbatim: the error is either a transient read
+// error or a *FatalError that ends the wait.
+func (f *podFinder) locate() (pod *api.LegacyPod, st State, found bool, err error) {
 	pods, listErr := f.lister.GetPods()
 	if listErr != nil {
 		// a failed read is an unknown state, not an absence, and it breaks the
 		// run of consecutive misses -- otherwise a short list, a graphql blip and
 		// a second short list would add up to a not_found for a live pod.
 		f.missed = 0
-		return nil, State{}, listErr, false
+		return nil, State{}, false, listErr
 	}
 
 	for _, candidate := range pods {
@@ -66,15 +68,15 @@ func (f *podFinder) locate() (pod *api.LegacyPod, st State, err error, found boo
 				// anomaly here (5xx, malformed json, a network blip) is tolerated to
 				// the deadline because the pod exists and bills, and declaring it
 				// deleted on a single read would state that as fact.
-				return nil, State{Detail: "pod not listed in the last read"}, nil, false
+				return nil, State{Detail: "pod not listed in the last read"}, false, nil
 			}
 			// gone from two reads in a row: terminated out of band, or the account
 			// ran out of credit. waiting for it is pointless, and claiming it is
 			// still billing would be a lie.
-			return nil, State{}, &FatalError{
+			return nil, State{}, false, &FatalError{
 				Code: "not_found",
 				Err:  fmt.Errorf("pod %s is no longer listed, so it was terminated or deleted while waiting", f.podID),
-			}, false
+			}
 		}
 		// a just-created pod can lag the list query, so an absence here starts
 		// out benign -- but not indefinitely. a pod terminated before it was
@@ -84,27 +86,27 @@ func (f *podFinder) locate() (pod *api.LegacyPod, st State, err error, found boo
 		// will. same bound and same reasoning as the endpoint wait.
 		f.missed++
 		if f.missed >= missesBeforeKnown {
-			return nil, State{}, &FatalError{
+			return nil, State{}, false, &FatalError{
 				Code: "not_found",
 				// not "it was never created": the id came from a create that
 				// succeeded, and saying otherwise invites a retry that buys a
 				// second pod.
 				Err: fmt.Errorf("pod %s has not appeared in %d consecutive reads, so it was terminated before it was ever listed, or it is not visible to this api key", f.podID, f.missed),
-			}, false
+			}
 		}
-		return nil, State{Detail: "pod not listed yet"}, nil, false
+		return nil, State{Detail: "pod not listed yet"}, false, nil
 	}
 	f.seen = true
 	f.missed = 0
 
 	if terminalPodStatuses[strings.ToUpper(pod.DesiredStatus)] {
-		return nil, State{}, &FatalError{
+		return nil, State{}, false, &FatalError{
 			Code: "conflict",
 			Err:  fmt.Errorf("pod %s is %s, so the wait cannot succeed", f.podID, strings.ToLower(pod.DesiredStatus)),
-		}, false
+		}
 	}
 
-	return pod, State{}, nil, true
+	return pod, State{}, true, nil
 }
 
 // PodSSHPoller polls until pod podID is running, has a public ssh port, and that
@@ -118,7 +120,7 @@ func PodSSHPoller(lister PodLister, podID string, probe Prober, addr *string) Po
 	}
 	finder := &podFinder{lister: lister, podID: podID}
 	return func(ctx context.Context) (State, error) {
-		pod, st, err, found := finder.locate()
+		pod, st, found, err := finder.locate()
 		if !found {
 			return st, err
 		}
@@ -144,14 +146,13 @@ func PodSSHPoller(lister PodLister, podID string, probe Prober, addr *string) Po
 
 // PodRunningPoller polls until pod podID's container is actually up (desiredStatus
 // RUNNING and runtime telemetry reported), never probing ssh. It exists for
-// `--wait-for running`: a cpu pod is created over rest with no runpod-managed ssh,
-// so an image without its own sshd can never satisfy PodSSHPoller and only ever
-// times out. Readiness reuses the same running/initializing distinction as
+// `--wait-for running`: an image whose sshd never starts (or a pod created with
+// --ssh=false) can never satisfy PodSSHPoller and only ever times out. Readiness reuses the same running/initializing distinction as
 // `pod get` (see internal/podstate), so it means the same thing everywhere.
 func PodRunningPoller(lister PodLister, podID string) PollFunc {
 	finder := &podFinder{lister: lister, podID: podID}
-	return func(ctx context.Context) (State, error) {
-		pod, st, err, found := finder.locate()
+	return func(_ context.Context) (State, error) {
+		pod, st, found, err := finder.locate()
 		if !found {
 			return st, err
 		}

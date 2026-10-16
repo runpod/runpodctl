@@ -55,6 +55,8 @@ func TestResolveWaitMode(t *testing.T) {
 		{name: "--wait-for ssh explicit", waitFor: "ssh", forChanged: true, want: "ssh"},
 		{name: "--wait-for is case-insensitive", waitFor: "RUNNING", forChanged: true, want: "running"},
 		{name: "invalid --wait-for is rejected", waitFor: "banner", forChanged: true, wantErr: `invalid --wait-for "banner"`},
+		{name: "explicit empty --wait-for is rejected", waitFor: "", forChanged: true, wantErr: `invalid --wait-for ""`},
+		{name: "explicit blank --wait-for with --wait is rejected", wait: true, waitFor: "  ", forChanged: true, wantErr: `invalid --wait-for "  "`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -153,14 +155,14 @@ func TestResolveWaitTimeout(t *testing.T) {
 			wantErr:     "--wait waits for ssh, so it cannot be combined with --ssh=false",
 		},
 		{
-			// cpu pods go through rest, which cannot request runpod-managed ssh;
-			// prod still allocates a public port 22, so this warns instead of
-			// refusing outright.
+			// the rest create sends startSsh for cpu pods too, but an image whose
+			// sshd never starts still cannot satisfy the ssh wait, so this warns
+			// instead of refusing outright.
 			name:        "cpu ssh wait warns that ssh depends on the image",
 			waitMode:    "ssh",
 			computeType: "CPU",
 			want:        10 * time.Minute,
-			wantStderr:  "cpu pods are created through the rest api",
+			wantStderr:  "--wait only succeeds if the image runs sshd",
 		},
 		{
 			// community cloud only maps a public port 22 on machines with a public
