@@ -8,8 +8,8 @@ check runpod connectivity and fix configuration issues
 
 when no api key is configured, doctor prompts on stderr and reads one from
 stdin. --api-key always validates the given key and saves it, replacing
-any saved key. a key is only saved after the api accepts it, and a run that
-sets up a key exits non-zero if doctor ends unhealthy.
+any saved key. a key is only saved after the api accepts it. doctor exits
+non-zero whenever it ends unhealthy; the report is still printed on stdout.
 
 ```
 runpodctl doctor [flags]

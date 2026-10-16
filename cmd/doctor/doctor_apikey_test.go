@@ -207,7 +207,12 @@ func TestCheckAPIKey_EmptyStdinFails(t *testing.T) {
 // runs the command through cobra flag parsing, the way the binary does.
 func executeDoctor(t *testing.T, args ...string) (string, error) {
 	t.Helper()
-	t.Cleanup(func() { apiKeyFlag = "" })
+	// Cmd is a package global, so clear the flag value and its Changed bit
+	// or one test's --api-key leaks into the next.
+	t.Cleanup(func() {
+		apiKeyFlag = ""
+		Cmd.Flags().Lookup(keyFlagName).Changed = false
+	})
 	root := &cobra.Command{Use: "runpodctl", SilenceErrors: true, SilenceUsage: true}
 	root.PersistentFlags().StringP("output", "o", "json", "output format")
 	root.AddCommand(Cmd)
@@ -240,7 +245,7 @@ func TestDoctor_RejectedFlagKeyExitsNonZero(t *testing.T) {
 		t.Fatal("want an error (non-zero exit) when the supplied key is rejected")
 	}
 	if !strings.Contains(out, `"healthy": false`) {
-		t.Errorf("report should still be printed with healthy false, got:\n%s", out)
+		t.Errorf("report should still be printed with healthy false (err %v), got:\n%s", err, out)
 	}
 }
 
@@ -252,5 +257,21 @@ func TestDoctor_EmptyFlagIsAnError(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), "--api-key is empty") {
 		t.Fatalf("want an empty --api-key error, got %v", err)
+	}
+}
+
+// a plain run with a key already saved must also fail loudly when unhealthy,
+// so scripts and agents can gate on `runpodctl doctor` alone.
+func TestDoctor_UnhealthyWithSavedKeyExitsNonZero(t *testing.T) {
+	home := isolatedHome(t)
+	saveExistingKey(t, home, oldKey)
+
+	out, err := executeDoctor(t)
+
+	if err == nil {
+		t.Fatal("want an error (non-zero exit) when doctor is unhealthy with a saved key")
+	}
+	if !strings.Contains(out, `"healthy": false`) {
+		t.Errorf("report should still be printed with healthy false (err %v), got:\n%s", err, out)
 	}
 }

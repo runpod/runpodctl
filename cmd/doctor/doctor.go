@@ -54,8 +54,8 @@ var Cmd = &cobra.Command{
 
 when no api key is configured, doctor prompts on stderr and reads one from
 stdin. --api-key always validates the given key and saves it, replacing
-any saved key. a key is only saved after the api accepts it, and a run that
-sets up a key exits non-zero if doctor ends unhealthy.`,
+any saved key. a key is only saved after the api accepts it. doctor exits
+non-zero whenever it ends unhealthy; the report is still printed on stdout.`,
 	Example: `  # interactive: prompts for the api key and saves it
   runpodctl doctor
 
@@ -92,10 +92,6 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	if cmd.Flags().Changed(keyFlagName) && providedKey == "" {
 		return fmt.Errorf("--%s is empty", keyFlagName)
 	}
-	// a run that sets up a key (flag, or the stdin read when none is configured)
-	// is how ci and agents onboard, so it must fail loudly when it did not work.
-	settingUpKey := providedKey != "" || configenv.APIKey() == ""
-
 	report := &doctorReport{
 		Checks:  []checkResult{},
 		Healthy: true,
@@ -136,7 +132,8 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	if err := output.Print(report, &output.Config{Format: format}); err != nil {
 		return err
 	}
-	if settingUpKey && !report.Healthy {
+	// ci, scripts and agents gate on the exit code, so any unhealthy run fails.
+	if !report.Healthy {
 		return unhealthyError(report)
 	}
 	return nil
