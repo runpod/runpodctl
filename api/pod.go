@@ -179,11 +179,7 @@ func CreatePod(podInput *CreatePodInput) (pod map[string]interface{}, err error)
 		`,
 		Variables: map[string]interface{}{"input": podInput},
 	}
-	res, err := Query(input)
-	if err != nil {
-		return
-	}
-	gqldata, rawData, err := parseGraphQLData(res)
+	gqldata, rawData, err := queryGraphQLData(input)
 	if err != nil {
 		return
 	}
@@ -210,11 +206,7 @@ func StartSpotPod(id string, bidPerGpu float32, gpuCount int) (podBidResume map[
 		`,
 		Variables: map[string]interface{}{"podId": id, "bidPerGpu": bidPerGpu, "gpuCount": gpuCount},
 	}
-	res, err := Query(input)
-	if err != nil {
-		return
-	}
-	gqldata, rawData, err := parseGraphQLData(res)
+	gqldata, rawData, err := queryGraphQLData(input)
 	if err != nil {
 		return
 	}

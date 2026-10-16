@@ -32,11 +32,7 @@ func GetCloud(in *GetCloudInput) (gpuTypes []interface{}, err error) {
 		`,
 		Variables: map[string]interface{}{"input": in},
 	}
-	res, err := Query(input)
-	if err != nil {
-		return
-	}
-	gqldata, rawData, err := parseGraphQLData(res)
+	gqldata, rawData, err := queryGraphQLData(input)
 	if err != nil {
 		return
 	}

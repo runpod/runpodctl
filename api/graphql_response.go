@@ -1,3 +1,4 @@
+// Package api wraps the RunPod GraphQL and REST endpoints used by the CLI.
 package api
 
 import (
@@ -8,15 +9,19 @@ import (
 	"net/http"
 )
 
+// maxGraphQLBodyBytes bounds how much of a response is read, so a misbehaving
+// server cannot make the CLI buffer an unbounded body.
+const maxGraphQLBodyBytes = 64 << 10
+
 // firstGraphQLErrorMessage safely extracts the message of the first graphql
 // error, tolerating a missing or non-string message rather than panicking on an
 // unchecked type assertion.
-func firstGraphQLErrorMessage(gqlErrors []interface{}) string {
+func firstGraphQLErrorMessage(gqlErrors []any) string {
 	const fallback = "unknown graphql error"
 	if len(gqlErrors) == 0 {
 		return fallback
 	}
-	first, ok := gqlErrors[0].(map[string]interface{})
+	first, ok := gqlErrors[0].(map[string]any)
 	if !ok {
 		return fallback
 	}
@@ -26,32 +31,47 @@ func firstGraphQLErrorMessage(gqlErrors []interface{}) string {
 	return fallback
 }
 
-// parseGraphQLData reads a graphql HTTP response and returns its "data" object.
-// It returns an error carrying the first graphql error message when the payload
-// reports errors, and the raw body so callers can include it in "<field> is nil"
-// diagnostics. It always closes the response body.
-func parseGraphQLData(res *http.Response) (map[string]interface{}, []byte, error) {
-	defer res.Body.Close()
-
-	if res.StatusCode != 200 {
-		return nil, nil, fmt.Errorf("statuscode %d", res.StatusCode)
+// queryGraphQLData sends input and returns the response's "data" object. It owns
+// the response lifecycle so callers never hold an open body.
+func queryGraphQLData(input Input) (gqldata map[string]any, rawData []byte, err error) {
+	res, err := Query(input)
+	if err != nil {
+		return nil, nil, err
 	}
+	defer func() {
+		closeErr := res.Body.Close()
+		if err == nil && closeErr != nil {
+			gqldata, err = nil, fmt.Errorf("close graphql response body: %w", closeErr)
+		}
+	}()
+	return parseGraphQLData(res.StatusCode, res.Body)
+}
 
-	rawData, err := io.ReadAll(res.Body)
+// parseGraphQLData decodes a graphql HTTP response and returns its "data" object.
+// It returns an error carrying the first graphql error message when the payload
+// reports errors, or the status code and body for non-200 responses. The raw
+// body (bounded by maxGraphQLBodyBytes) is returned so callers can include it in
+// "<field> is nil" diagnostics.
+func parseGraphQLData(status int, body io.Reader) (gqldata map[string]any, rawData []byte, err error) {
+	rawData, err = io.ReadAll(io.LimitReader(body, maxGraphQLBodyBytes))
 	if err != nil {
 		return nil, nil, err
 	}
 
-	data := make(map[string]interface{})
+	if status != http.StatusOK {
+		return nil, rawData, fmt.Errorf("statuscode %d: %s", status, string(rawData))
+	}
+
+	data := make(map[string]any)
 	if err := json.Unmarshal(rawData, &data); err != nil {
 		return nil, rawData, err
 	}
 
-	if gqlErrors, ok := data["errors"].([]interface{}); ok && len(gqlErrors) > 0 {
+	if gqlErrors, ok := data["errors"].([]any); ok && len(gqlErrors) > 0 {
 		return nil, rawData, errors.New(firstGraphQLErrorMessage(gqlErrors))
 	}
 
-	gqldata, ok := data["data"].(map[string]interface{})
+	gqldata, ok := data["data"].(map[string]any)
 	if !ok || gqldata == nil {
 		return nil, rawData, fmt.Errorf("data is nil: %s", string(rawData))
 	}
