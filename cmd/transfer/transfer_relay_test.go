@@ -1,8 +1,10 @@
 package transfer
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 )
@@ -10,26 +12,29 @@ import (
 // TestRelayFetchDefaultTimeoutIsShort guards against regressing to the old
 // 2-minute timeout: getRelays runs on every send/receive, so a slow or blocked
 // GitHub must not stall the command for minutes before any transfer starts.
+// Zero is rejected too, since http.Client treats it as "no timeout".
 func TestRelayFetchDefaultTimeoutIsShort(t *testing.T) {
-	if relayFetchTimeout > 15*time.Second {
-		t.Fatalf("relay fetch timeout is %s; keep it short (<=15s) so a blocked GitHub does not stall transfers", relayFetchTimeout)
+	if relayFetchTimeout <= 0 || relayFetchTimeout > 15*time.Second {
+		t.Fatalf("relay fetch timeout is %s; want 0 < timeout <= 15s so a blocked GitHub does not stall transfers", relayFetchTimeout)
 	}
 }
 
-// TestGetRelaysFailsFastWhenServerHangs proves the timeout is actually applied:
-// against a server that never responds, getRelays returns an error promptly
-// rather than blocking for the full timeout budget of a real transfer.
-func TestGetRelaysFailsFastWhenServerHangs(t *testing.T) {
-	// respond far later than the (tiny) timeout below, so getRelays must give up
-	// first. A finite delay avoids blocking server.Close at teardown.
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(400 * time.Millisecond)
+// TestGetRelaysTimesOutOnBlockedServer proves the client timeout is applied:
+// the handler stays pending until the request is canceled, so only the
+// client-side timeout can produce a prompt *url.Error.
+func TestGetRelaysTimesOutOnBlockedServer(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
 	}))
-	t.Cleanup(server.Close)
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) }) // runs before srv.Close
 
 	origURL, origTimeout := relayURL, relayFetchTimeout
-	relayURL = server.URL
-	relayFetchTimeout = 50 * time.Millisecond
+	relayURL, relayFetchTimeout = srv.URL, 50*time.Millisecond
 	t.Cleanup(func() { relayURL, relayFetchTimeout = origURL, origTimeout })
 
 	done := make(chan error, 1)
@@ -37,10 +42,11 @@ func TestGetRelaysFailsFastWhenServerHangs(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if err == nil {
-			t.Fatal("expected an error when the relay server hangs")
+		var uerr *url.Error
+		if !errors.As(err, &uerr) || !uerr.Timeout() {
+			t.Fatalf("want client timeout error, got %v", err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("getRelays did not honor its timeout (still blocked after 2s)")
+		t.Fatal("getRelays ignored relayFetchTimeout")
 	}
 }
