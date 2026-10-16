@@ -3,18 +3,19 @@ package transfer
 // These tests lock the croc wire format that `runpodctl send`/`receive` speak.
 // Both ends of a transfer must agree on it, including the runpodctl copy the
 // platform mounts into the container, so a silent change here breaks transfers
-// in the field. We cannot golden the actual on-wire bytes (croc encrypts with a
-// random nonce), so we lock the three deterministic things that decide
-// compatibility: the pinned upstream croc version, the fork's own JSON wire
-// structs, and the message envelope/vocabulary. See E-3968 for the longer-term
+// in the field. We cannot golden freshly encrypted bytes (croc encrypts with a
+// random nonce), so we lock what decides compatibility: the croc module the
+// build resolves to (version and no replace), the fork's raw handshake strings
+// and JSON wire structs, the message envelope/vocabulary, and that a message
+// captured from a v9.6.16 peer still decodes. See E-3968 for the longer-term
 // version-negotiation fix.
 
 import (
+	"bytes"
+	"encoding/hex"
 	"encoding/json"
-	"os"
-	"path/filepath"
-	"runtime"
-	"strings"
+	"errors"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -33,44 +34,74 @@ const (
 )
 
 func TestCrocDependencyVersionPinned(t *testing.T) {
-	got := crocVersionFromGoMod(t)
-	if got != crocPinnedVersion {
+	mod := crocModuleInfo(t)
+	if mod.Replace != nil {
+		t.Fatalf("go.mod replaces %s with %s %s.\n"+
+			"A replace swaps the croc wire format underneath the pinned require line. "+
+			"Both transfer ends must speak the same croc, including the runpodctl copy "+
+			"mounted into the container. Coordinate a version/wire-format handshake first "+
+			"(E-3968) and drop the replace.",
+			crocModule, mod.Replace.Path, mod.Replace.Version)
+	}
+	if mod.Version != crocPinnedVersion {
 		t.Fatalf("croc is %s in go.mod, want %s.\n"+
 			"The croc wire format is tied to this version. Both transfer ends must match, "+
 			"including the runpodctl copy mounted into the container. Bumping can break "+
 			"interop, and the fork has diverged from upstream's security fix. Coordinate a "+
 			"version/wire-format handshake first (E-3968) before changing this.",
-			got, crocPinnedVersion)
+			mod.Version, crocPinnedVersion)
 	}
 }
 
-// crocVersionFromGoMod walks up from this test file to the module go.mod and
-// returns the required version of crocModule. go.mod is the source of truth and
-// is always present in the module, unlike debug.ReadBuildInfo().Deps under
-// `go test`.
-func crocVersionFromGoMod(t *testing.T) string {
-	t.Helper()
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate test file path")
+// goListModule is the subset of `go list -m -json` output the version lock
+// reads.
+type goListModule struct {
+	Version string
+	Replace *struct {
+		Path    string
+		Version string
 	}
-	dir := filepath.Dir(thisFile)
-	for {
-		gomod := filepath.Join(dir, "go.mod")
-		if data, err := os.ReadFile(gomod); err == nil {
-			for _, line := range strings.Split(string(data), "\n") {
-				f := strings.Fields(line)
-				if len(f) >= 2 && f[0] == crocModule {
-					return f[1]
-				}
+}
+
+// crocModuleInfo asks the go command which croc the module actually builds
+// against. Unlike parsing the require line, this sees replace directives, and
+// unlike debug.ReadBuildInfo it works under `go test` (test binaries carry no
+// dependency list). `go test` puts its own go on PATH; -m on a module already
+// in go.mod reads the module graph and needs no network.
+func crocModuleInfo(t *testing.T) goListModule {
+	t.Helper()
+	out, err := exec.CommandContext(t.Context(), "go", "list", "-m", "-json", crocModule).Output()
+	if err != nil {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
+			t.Fatalf("go list -m %s: %v\n%s", crocModule, err, exitErr.Stderr)
+		}
+		t.Fatalf("go list -m %s: %v", crocModule, err)
+	}
+	var mod goListModule
+	if err := json.Unmarshal(out, &mod); err != nil {
+		t.Fatalf("parse go list -m output %q: %v", out, err)
+	}
+	return mod
+}
+
+// TestForkHandshakeStrings locks the raw request strings the fork exchanges
+// with the relay and peer before any croc message. They are compared byte for
+// byte on the other end, so changing one breaks the handshake.
+func TestForkHandshakeStrings(t *testing.T) {
+	tests := []struct {
+		name string
+		got  []byte
+		want string
+	}{
+		{name: "ipRequest", got: ipRequest, want: "ips?"},
+		{name: "handshakeRequest", got: handshakeRequest, want: "handshake"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if string(tt.got) != tt.want {
+				t.Errorf("%s = %q, want %q", tt.name, tt.got, tt.want)
 			}
-			t.Fatalf("%s not required in %s", crocModule, gomod)
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("go.mod not found walking up from test file")
-		}
-		dir = parent
+		})
 	}
 }
 
@@ -187,24 +218,38 @@ func TestRemoteFileRequestWireGolden(t *testing.T) {
 	}
 }
 
-// TestMessageRoundTrip locks that the pinned message+crypt libraries interoperate:
-// a message encoded with a key decodes back to the same message. Catches an
-// incompatible library change even when the version string still looks right.
-func TestMessageRoundTrip(t *testing.T) {
-	key, _, err := crypt.New([]byte("passphrase"), []byte("fixed-salt-123456"))
+// Fixed inputs for TestMessageDecodesPinnedCiphertext. capturedMessageHex is
+// message.Encode output captured once from croc v9.6.16 with the key derived
+// from fixturePassphrase and fixtureSalt (see TestMessageDecodesPinnedCiphertext
+// for the message it holds). Never regenerate it to make the test pass: a
+// mismatch means this binary can no longer read what a v9.6.16 peer sends.
+const (
+	fixturePassphrase  = "passphrase"
+	fixtureSalt        = "fixed-salt-123456"
+	capturedMessageHex = "718d28e22bac367d36f503f1346cc56100779b906a7a28ab3ef9b5dddd0e4764619218e414d015f02c970934bc0fd7160c6fc8b66c0ee500ee4c369256928362e04dab739d93128fab3222b09a4dc0d94ea3de4a16a6b5d6b6fd"
+)
+
+// TestMessageDecodesPinnedCiphertext decodes a message encrypted by croc
+// v9.6.16, so it fails if this build's key derivation (pbkdf2 parameters),
+// cipher (AES-GCM, 12-byte nonce prefix), compression (flate) or JSON envelope
+// stops matching what a v9.6.16 peer puts on the wire. A same-binary
+// encode/decode round trip cannot catch that, since a change applies to both
+// sides at once.
+func TestMessageDecodesPinnedCiphertext(t *testing.T) {
+	key, _, err := crypt.New([]byte(fixturePassphrase), []byte(fixtureSalt))
 	if err != nil {
 		t.Fatal(err)
 	}
-	orig := message.Message{Type: message.TypeFileInfo, Message: "meta", Bytes: []byte("payload"), Num: 7}
-	enc, err := message.Encode(key, orig)
+	enc, err := hex.DecodeString(capturedMessageHex)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got, err := message.Decode(key, enc)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("decode v9.6.16 ciphertext: %v", err)
 	}
-	if got.Type != orig.Type || got.Message != orig.Message || string(got.Bytes) != string(orig.Bytes) || got.Num != orig.Num {
-		t.Errorf("round-trip mismatch: got %+v want %+v", got, orig)
+	want := message.Message{Type: message.TypeFileInfo, Message: "meta", Bytes: []byte("payload"), Num: 7}
+	if got.Type != want.Type || got.Message != want.Message || !bytes.Equal(got.Bytes, want.Bytes) || got.Bytes2 != nil || got.Num != want.Num {
+		t.Errorf("decoded %+v, want %+v", got, want)
 	}
 }

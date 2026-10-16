@@ -43,6 +43,9 @@ import (
 	"github.com/schollz/croc/v9/src/utils"
 )
 
+// WIRE FORMAT: these raw requests are exchanged before any croc message and
+// compared byte for byte by the peer. Changing one breaks the handshake.
+// Locked by TestForkHandshakeStrings.
 var (
 	ipRequest        = []byte("ips?")
 	handshakeRequest = []byte("handshake")
