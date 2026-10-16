@@ -84,32 +84,8 @@ func CreateTemplate(templateInput *CreateTemplateInput) (templateId string, err 
 		`,
 		Variables: map[string]interface{}{"input": templateInput},
 	}
-	res, err := Query(input)
+	gqldata, rawData, err := queryGraphQLData(input)
 	if err != nil {
-		return
-	}
-	defer res.Body.Close()
-	rawData, err := io.ReadAll(res.Body)
-	if err != nil {
-		return
-	}
-	if res.StatusCode != 200 {
-		err = fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
-		return
-	}
-	data := make(map[string]interface{})
-	if err = json.Unmarshal(rawData, &data); err != nil {
-		return
-	}
-	gqlErrors, ok := data["errors"].([]interface{})
-	if ok && len(gqlErrors) > 0 {
-		firstErr, _ := gqlErrors[0].(map[string]interface{})
-		err = errors.New(firstErr["message"].(string))
-		return
-	}
-	gqldata, ok := data["data"].(map[string]interface{})
-	if !ok || gqldata == nil {
-		err = fmt.Errorf("data is nil: %s", string(rawData))
 		return
 	}
 	template, ok := gqldata["saveTemplate"].(map[string]interface{})
@@ -117,7 +93,10 @@ func CreateTemplate(templateInput *CreateTemplateInput) (templateId string, err 
 		err = fmt.Errorf("template is nil: %s", string(rawData))
 		return
 	}
-	templateId = template["id"].(string)
+	templateId, ok = template["id"].(string)
+	if !ok {
+		err = fmt.Errorf("template id is not a string: %s", string(rawData))
+	}
 	return
 }
 
@@ -143,32 +122,8 @@ func CreateEndpoint(endpointInput *CreateEndpointInput) (endpointId string, err 
 		`,
 		Variables: map[string]interface{}{"input": endpointInput},
 	}
-	res, err := Query(input)
+	gqldata, rawData, err := queryGraphQLData(input)
 	if err != nil {
-		return
-	}
-	defer res.Body.Close()
-	rawData, err := io.ReadAll(res.Body)
-	if err != nil {
-		return
-	}
-	if res.StatusCode != 200 {
-		err = fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
-		return
-	}
-	data := make(map[string]interface{})
-	if err = json.Unmarshal(rawData, &data); err != nil {
-		return
-	}
-	gqlErrors, ok := data["errors"].([]interface{})
-	if ok && len(gqlErrors) > 0 {
-		firstErr, _ := gqlErrors[0].(map[string]interface{})
-		err = errors.New(firstErr["message"].(string))
-		return
-	}
-	gqldata, ok := data["data"].(map[string]interface{})
-	if !ok || gqldata == nil {
-		err = fmt.Errorf("data is nil: %s", string(rawData))
 		return
 	}
 	endpoint, ok := gqldata["saveEndpoint"].(map[string]interface{})
@@ -176,7 +131,10 @@ func CreateEndpoint(endpointInput *CreateEndpointInput) (endpointId string, err 
 		err = fmt.Errorf("endpoint is nil: %s", string(rawData))
 		return
 	}
-	endpointId = endpoint["id"].(string)
+	endpointId, ok = endpoint["id"].(string)
+	if !ok {
+		err = fmt.Errorf("endpoint id is not a string: %s", string(rawData))
+	}
 	return
 }
 
@@ -195,32 +153,8 @@ func UpdateEndpointTemplate(endpointId string, templateId string) (err error) {
 			TemplateId: templateId,
 		}},
 	}
-	res, err := Query(input)
+	_, _, err = queryGraphQLData(input)
 	if err != nil {
-		return
-	}
-	defer res.Body.Close()
-	rawData, err := io.ReadAll(res.Body)
-	if err != nil {
-		return
-	}
-	if res.StatusCode != 200 {
-		err = fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
-		return
-	}
-	data := make(map[string]interface{})
-	if err = json.Unmarshal(rawData, &data); err != nil {
-		return
-	}
-	gqlErrors, ok := data["errors"].([]interface{})
-	if ok && len(gqlErrors) > 0 {
-		firstErr, _ := gqlErrors[0].(map[string]interface{})
-		err = errors.New(firstErr["message"].(string))
-		return
-	}
-	gqldata, ok := data["data"].(map[string]interface{})
-	if !ok || gqldata == nil {
-		err = fmt.Errorf("data is nil: %s", string(rawData))
 		return
 	}
 	return
