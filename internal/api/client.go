@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -87,20 +88,84 @@ func (c *Client) request(method, endpoint string, params url.Values, body interf
 // service, see InvokeClient.EndpointHealth) but must still share auth, user agent and the
 // structured APIError handling.
 func (c *Client) requestURL(method, u string, body interface{}) ([]byte, error) {
-	var reqBody io.Reader
+	var jsonBody []byte
 	if body != nil {
-		jsonBody, err := json.Marshal(body)
+		var err error
+		jsonBody, err = json.Marshal(body)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal request body: %w", err)
 		}
-		reqBody = bytes.NewBuffer(jsonBody)
 	}
 
-	req, err := http.NewRequest(method, u, reqBody)
+	// one deadline for the whole logical call: retries and the waits between
+	// them share the configured timeout instead of each getting a fresh one.
+	ctx, cancel := c.callContext()
+	defer cancel()
+
+	for attempt := 1; ; attempt++ {
+		resp, err := c.send(ctx, method, u, jsonBody)
+		if resp == nil {
+			// a network error may or may not have reached the server; only
+			// retry idempotent reads.
+			if idempotentMethod(method) && waitToRetry(ctx, nil, attempt) {
+				continue
+			}
+			return nil, err
+		}
+		// checked before the read error, so a known 429 or 5xx whose body was
+		// cut short still follows the retry policy.
+		if retryableStatus(method, resp.status) && waitToRetry(ctx, resp.header, attempt) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		if resp.status >= 300 && resp.status < 400 {
+			// redirects are never followed (see noRedirects); name it, or the
+			// caller only sees an opaque status or an html body.
+			return nil, &APIError{
+				Status:  resp.status,
+				Code:    codeForStatus(resp.status),
+				Message: fmt.Sprintf("api redirected (status %d) to %q; redirects are not followed", resp.status, resp.header.Get("Location")),
+			}
+		}
+		if resp.status < 200 || resp.status >= 300 {
+			return nil, parseAPIError(resp.body, resp.status)
+		}
+
+		return resp.body, nil
+	}
+}
+
+// callContext bounds one logical api call, retries included, by the client's
+// configured timeout (none when it is unset).
+func (c *Client) callContext() (context.Context, context.CancelFunc) {
+	if c.httpClient.Timeout <= 0 {
+		return context.WithCancel(context.Background())
+	}
+	return context.WithTimeout(context.Background(), c.httpClient.Timeout)
+}
+
+// response is what one attempt got back, with the body already read and closed.
+type response struct {
+	status int
+	header http.Header
+	body   []byte
+}
+
+// send makes one attempt. The response is nil when none arrived; with a
+// response, err reports that its body could not be read.
+func (c *Client) send(ctx context.Context, method, u string, jsonBody []byte) (*response, error) {
+	var reqBody io.Reader
+	if jsonBody != nil {
+		reqBody = bytes.NewReader(jsonBody) // fresh reader each attempt
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, u, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", c.userAgent)
@@ -111,25 +176,12 @@ func (c *Client) requestURL(method, u string, body interface{}) ([]byte, error) 
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	got := &response{status: resp.StatusCode, header: resp.Header}
+	got.body, err = io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return got, fmt.Errorf("failed to read response: %w", err)
 	}
-
-	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
-		// redirects are never followed (see noRedirects); name it, or the
-		// caller only sees an opaque status or an html body.
-		return nil, &APIError{
-			Status:  resp.StatusCode,
-			Code:    codeForStatus(resp.StatusCode),
-			Message: fmt.Sprintf("api redirected (status %d) to %q; redirects are not followed", resp.StatusCode, resp.Header.Get("Location")),
-		}
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, parseAPIError(respBody, resp.StatusCode)
-	}
-
-	return respBody, nil
+	return got, nil
 }
 
 // v2URL is the rest v2 base url: the client's override when set, otherwise the
