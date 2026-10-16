@@ -15,6 +15,16 @@ import (
 
 // fastUploadBackoff shortens the retry backoff so retry tests don't sleep for
 // the production default. Restores the original on cleanup.
+// drainRequestBody consumes a request body in a test handler so the client's
+// write completes, reporting (not failing on) a read error from the handler
+// goroutine.
+func drainRequestBody(t *testing.T, r *http.Request) {
+	t.Helper()
+	if _, err := io.Copy(io.Discard, r.Body); err != nil {
+		t.Errorf("drain request body: %v", err)
+	}
+}
+
 func fastUploadBackoff(t *testing.T) {
 	t.Helper()
 	orig := modelUploadRetryBackoff
@@ -28,20 +38,20 @@ func fastUploadBackoff(t *testing.T) {
 func TestCompleteModelUpload_RetriesTransientPartFailure(t *testing.T) {
 	fastUploadBackoff(t)
 	artifactPath := filepath.Join(t.TempDir(), "model.bin")
-	if err := os.WriteFile(artifactPath, []byte("abcdef"), 0600); err != nil {
+	if err := os.WriteFile(artifactPath, []byte("abcdef"), 0o600); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
 
-	var putAttempts int32
+	var putAttempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPut:
-			if atomic.AddInt32(&putAttempts, 1) == 1 {
+			if putAttempts.Add(1) == 1 {
 				// first attempt: transient server error
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
-			_, _ = io.ReadAll(r.Body)
+			drainRequestBody(t, r)
 			w.Header().Set("ETag", `"etag"`)
 			w.WriteHeader(http.StatusOK)
 		case http.MethodPost:
@@ -60,7 +70,7 @@ func TestCompleteModelUpload_RetriesTransientPartFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected upload to succeed after retrying a transient failure, got %v", err)
 	}
-	if got := atomic.LoadInt32(&putAttempts); got < 2 {
+	if got := putAttempts.Load(); got < 2 {
 		t.Fatalf("expected the part PUT to be retried (>=2 attempts), got %d", got)
 	}
 }
@@ -69,14 +79,14 @@ func TestCompleteModelUpload_RetriesTransientPartFailure(t *testing.T) {
 // client/permission error) fails fast instead of burning retries.
 func TestCompleteModelUpload_DoesNotRetryClientError(t *testing.T) {
 	artifactPath := filepath.Join(t.TempDir(), "model.bin")
-	if err := os.WriteFile(artifactPath, []byte("abcdef"), 0600); err != nil {
+	if err := os.WriteFile(artifactPath, []byte("abcdef"), 0o600); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
 
-	var putAttempts int32
+	var putAttempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPut {
-			atomic.AddInt32(&putAttempts, 1)
+			putAttempts.Add(1)
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
@@ -92,7 +102,7 @@ func TestCompleteModelUpload_DoesNotRetryClientError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected a 403 to fail the upload")
 	}
-	if got := atomic.LoadInt32(&putAttempts); got != 1 {
+	if got := putAttempts.Load(); got != 1 {
 		t.Fatalf("expected exactly 1 attempt on a 4xx (no retry), got %d", got)
 	}
 }
@@ -123,17 +133,21 @@ func stallingServer(t *testing.T, fn func(w http.ResponseWriter, r *http.Request
 	return server
 }
 
+// uploadTestDeadline is how long runUploadWithin lets an upload run before
+// treating it as hung; far above any stall timeout the tests configure.
+const uploadTestDeadline = 10 * time.Second
+
 // runUploadWithin runs a single-part upload of artifactPath and fails the test
-// if it does not return within limit.
-func runUploadWithin(t *testing.T, limit time.Duration, upload *api.ModelRepoUpload, artifactPath string) error {
+// if it does not return within uploadTestDeadline.
+func runUploadWithin(t *testing.T, upload *api.ModelRepoUpload, artifactPath string) error {
 	t.Helper()
 	done := make(chan error, 1)
 	go func() { done <- completeModelUploadWithProgress(upload, artifactPath, nil) }()
 	select {
 	case err := <-done:
 		return err
-	case <-time.After(limit):
-		t.Fatalf("upload still blocked after %s", limit)
+	case <-time.After(uploadTestDeadline):
+		t.Fatalf("upload still blocked after %s", uploadTestDeadline)
 		return nil
 	}
 }
@@ -141,7 +155,7 @@ func runUploadWithin(t *testing.T, limit time.Duration, upload *api.ModelRepoUpl
 func writeArtifact(t *testing.T, size int64) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "model.bin")
-	f, err := os.Create(path)
+	f, err := os.Create(filepath.Clean(path))
 	if err != nil {
 		t.Fatalf("create artifact: %v", err)
 	}
@@ -164,11 +178,13 @@ func TestCompleteModelUpload_StalledPartWriteTimesOut(t *testing.T) {
 	const partSize = 64 << 20 // large enough to fill socket buffers
 	artifactPath := writeArtifact(t, partSize)
 
-	server := stallingServer(t, func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.ReadFull(r.Body, make([]byte, 8<<10))
+	server := stallingServer(t, func(_ http.ResponseWriter, r *http.Request) {
+		if _, err := io.ReadFull(r.Body, make([]byte, 8<<10)); err != nil {
+			t.Errorf("read first bytes of part: %v", err)
+		}
 	})
 
-	err := runUploadWithin(t, 10*time.Second, &api.ModelRepoUpload{
+	err := runUploadWithin(t, &api.ModelRepoUpload{
 		PartSizeBytes: partSize,
 		CompleteURL:   server.URL,
 		Parts:         []*api.ModelRepoUploadPart{{PartNumber: 1, URL: server.URL}},
@@ -196,14 +212,21 @@ func TestCompleteModelUpload_StalledErrorBodyTimesOut(t *testing.T) {
 			artifactPath := writeArtifact(t, 6)
 
 			server := stallingServer(t, func(w http.ResponseWriter, r *http.Request) {
-				_, _ = io.ReadAll(r.Body)
+				drainRequestBody(t, r)
 				w.Header().Set("Content-Length", "1000")
 				w.WriteHeader(tt.status)
-				_, _ = w.Write([]byte("0123456789"))
-				w.(http.Flusher).Flush()
+				if _, err := w.Write([]byte("0123456789")); err != nil {
+					t.Errorf("write partial error body: %v", err)
+				}
+				flusher, ok := w.(http.Flusher)
+				if !ok {
+					t.Error("response writer does not support flushing")
+					return
+				}
+				flusher.Flush()
 			})
 
-			err := runUploadWithin(t, 10*time.Second, &api.ModelRepoUpload{
+			err := runUploadWithin(t, &api.ModelRepoUpload{
 				PartSizeBytes: 6,
 				CompleteURL:   server.URL,
 				Parts:         []*api.ModelRepoUploadPart{{PartNumber: 1, URL: server.URL}},
@@ -225,14 +248,14 @@ func TestCompleteModelUpload_SlowResponseHeadersStillSucceed(t *testing.T) {
 	artifactPath := writeArtifact(t, 6)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.ReadAll(r.Body)
+		drainRequestBody(t, r)
 		time.Sleep(3 * stall)
 		w.Header().Set("ETag", `"etag"`)
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(server.Close)
 
-	err := runUploadWithin(t, 10*time.Second, &api.ModelRepoUpload{
+	err := runUploadWithin(t, &api.ModelRepoUpload{
 		PartSizeBytes: 6,
 		CompleteURL:   server.URL,
 		Parts:         []*api.ModelRepoUploadPart{{PartNumber: 1, URL: server.URL}},
@@ -249,15 +272,15 @@ func TestCompleteModelUpload_HonorsRetryAfter(t *testing.T) {
 	fastUploadBackoff(t)
 	artifactPath := writeArtifact(t, 6)
 
-	var putAttempts int32
+	var putAttempts atomic.Int32
 	var firstAt, retryAt time.Time
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPut {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		_, _ = io.ReadAll(r.Body)
-		if atomic.AddInt32(&putAttempts, 1) == 1 {
+		drainRequestBody(t, r)
+		if putAttempts.Add(1) == 1 {
 			firstAt = time.Now()
 			w.Header().Set("Retry-After", "1")
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -269,7 +292,7 @@ func TestCompleteModelUpload_HonorsRetryAfter(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	err := runUploadWithin(t, 10*time.Second, &api.ModelRepoUpload{
+	err := runUploadWithin(t, &api.ModelRepoUpload{
 		PartSizeBytes: 6,
 		CompleteURL:   server.URL,
 		Parts:         []*api.ModelRepoUploadPart{{PartNumber: 1, URL: server.URL}},

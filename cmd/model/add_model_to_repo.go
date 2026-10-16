@@ -1217,9 +1217,10 @@ func doModelUploadRequest(what string, newReq func() (*http.Request, error)) (*h
 			lastErr = fmt.Errorf("%s: %w", what, err)
 		case isRetryableUploadStatus(resp.StatusCode):
 			retryAfter = resp.Header.Get("Retry-After")
-			snippet, _ := io.ReadAll(io.LimitReader(resp.Body, modelUploadErrorBodyLimit))
-			resp.Body.Close()
-			lastErr = fmt.Errorf("%s failed: status %d: %s", what, resp.StatusCode, strings.TrimSpace(string(snippet)))
+			lastErr = fmt.Errorf("%s failed: status %d: %s", what, resp.StatusCode, modelUploadErrorSnippet(resp.Body))
+			if closeErr := resp.Body.Close(); closeErr != nil {
+				lastErr = fmt.Errorf("%w (close response body: %w)", lastErr, closeErr)
+			}
 		default:
 			return resp, nil
 		}
@@ -1229,6 +1230,19 @@ func doModelUploadRequest(what string, newReq func() (*http.Request, error)) (*h
 		}
 	}
 	return nil, lastErr
+}
+
+// modelUploadErrorSnippet reads at most modelUploadErrorBodyLimit bytes of an
+// error response body for the returned error message. The body is stall
+// guarded, so a server that stops sending mid-body cannot block this. A read
+// failure is reported inline since the status code is the actionable part.
+func modelUploadErrorSnippet(body io.Reader) string {
+	snippet, err := io.ReadAll(io.LimitReader(body, modelUploadErrorBodyLimit))
+	text := strings.TrimSpace(string(snippet))
+	if err != nil {
+		return fmt.Sprintf("%s (reading error body: %v)", text, err)
+	}
+	return text
 }
 
 // modelUploadRetryDelay returns how long to wait before the attempt after
@@ -1360,8 +1374,7 @@ func completeModelUploadWithProgress(upload *api.ModelRepoUpload, artifactPath s
 			defer resp.Body.Close()
 			// a non-retryable status reaches here (2xx handled below, 4xx errors out).
 			if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-				body, _ := io.ReadAll(io.LimitReader(resp.Body, modelUploadErrorBodyLimit))
-				err = fmt.Errorf("upload part %d failed: status %d: %s", part.PartNumber, resp.StatusCode, strings.TrimSpace(string(body)))
+				err = fmt.Errorf("upload part %d failed: status %d: %s", part.PartNumber, resp.StatusCode, modelUploadErrorSnippet(resp.Body))
 				return
 			}
 			etag := strings.Trim(resp.Header.Get("ETag"), "\"")
@@ -1378,7 +1391,7 @@ func completeModelUploadWithProgress(upload *api.ModelRepoUpload, artifactPath s
 		// account for the part once it succeeds, so a retried part is not
 		// double-counted (coarser than per-byte, but correct under retry).
 		if progress != nil {
-			_ = progress.Add64(chunkSize)
+			_ = progress.Add64(chunkSize) //nolint:errcheck // progress is cosmetic; a failed redraw must not fail the upload
 		}
 
 		offset += chunkSize
@@ -1414,8 +1427,7 @@ func completeModelUploadWithProgress(upload *api.ModelRepoUpload, artifactPath s
 	defer resp.Body.Close()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, modelUploadErrorBodyLimit))
-		return fmt.Errorf("completion request failed: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return fmt.Errorf("completion request failed: status %d: %s", resp.StatusCode, modelUploadErrorSnippet(resp.Body))
 	}
 
 	return nil
