@@ -967,14 +967,24 @@ func TestUploadModelFileChunkReturnsFirstErrorInChunkOrder(t *testing.T) {
 }
 
 type recordingModelUploadProgress struct {
+	mu       sync.Mutex
 	bytes    int64
 	finished bool
 	cleared  bool
 }
 
 func (p *recordingModelUploadProgress) Add64(n int64) error {
+	p.mu.Lock()
 	p.bytes += n
+	p.mu.Unlock()
 	return nil
+}
+
+// total returns the accumulated byte count, safe for concurrent callers.
+func (p *recordingModelUploadProgress) total() int64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.bytes
 }
 
 func (p *recordingModelUploadProgress) Finish() error {
@@ -1377,7 +1387,7 @@ func TestCompleteModelUploadWithProgressTracksMultipartBytes(t *testing.T) {
 		t.Fatalf("write artifact: %v", err)
 	}
 
-	var uploadedBytes int64
+	var uploadedBytes atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPut:
@@ -1385,7 +1395,7 @@ func TestCompleteModelUploadWithProgressTracksMultipartBytes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read upload body: %v", err)
 			}
-			uploadedBytes += int64(len(body))
+			uploadedBytes.Add(int64(len(body))) // parts upload concurrently
 			w.Header().Set("ETag", `"etag"`)
 			w.WriteHeader(http.StatusOK)
 		case http.MethodPost:
@@ -1408,11 +1418,11 @@ func TestCompleteModelUploadWithProgressTracksMultipartBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("complete upload: %v", err)
 	}
-	if uploadedBytes != 6 {
-		t.Fatalf("expected server to receive 6 bytes, got %d", uploadedBytes)
+	if got := uploadedBytes.Load(); got != 6 {
+		t.Fatalf("expected server to receive 6 bytes, got %d", got)
 	}
-	if progress.bytes != 6 {
-		t.Fatalf("expected progress to receive 6 bytes, got %d", progress.bytes)
+	if got := progress.total(); got != 6 {
+		t.Fatalf("expected progress to receive 6 bytes, got %d", got)
 	}
 }
 
