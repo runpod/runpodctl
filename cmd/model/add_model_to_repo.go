@@ -1117,6 +1117,15 @@ const modelUploadMaxAttempts = 3
 // retries of a transient S3 request. It is a var so tests can shorten it.
 var modelUploadRetryBackoff = 500 * time.Millisecond
 
+// modelUploadStallTimeout bounds how long a request body write or response
+// body read may go without moving a byte before the attempt is aborted. It is
+// a var so tests can shorten it.
+var modelUploadStallTimeout = 60 * time.Second
+
+// modelUploadErrorBodyLimit caps how much of an error response body is read
+// into the returned error message.
+const modelUploadErrorBodyLimit = 4096
+
 // modelUploadHTTPClient talks straight to object storage for the part/complete
 // requests (not the control plane), so it gets its own transport. The
 // ResponseHeaderTimeout guards a stalled server once the body has been sent
@@ -1141,25 +1150,68 @@ func isRetryableUploadStatus(code int) bool {
 	return code == http.StatusTooManyRequests || code >= http.StatusInternalServerError
 }
 
+// stallGuard cancels an upload attempt when its request or response body goes
+// modelUploadStallTimeout without moving a byte. ResponseHeaderTimeout covers
+// the wait for headers; this covers the two phases it does not: a server that
+// stops consuming the request body, and one that sends headers then stalls the
+// response body. Slow transfers that keep making progress are never cut off.
+type stallGuard struct {
+	timer  *time.Timer
+	cancel context.CancelFunc
+}
+
+func newStallGuard(cancel context.CancelFunc) *stallGuard {
+	return &stallGuard{timer: time.AfterFunc(modelUploadStallTimeout, cancel), cancel: cancel}
+}
+
+func (g *stallGuard) arm()    { g.timer.Reset(modelUploadStallTimeout) }
+func (g *stallGuard) disarm() { g.timer.Stop() }
+
+// stallReader re-arms the guard on every read that moves bytes. On EOF it
+// disarms, so the guard is idle while waiting for response headers.
+// cancelOnClose is set only for response bodies: the transport closes the
+// request body itself once written, which must not end the attempt.
+type stallReader struct {
+	r             io.ReadCloser
+	guard         *stallGuard
+	cancelOnClose bool
+}
+
+func (s *stallReader) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	if n > 0 {
+		s.guard.arm()
+	}
+	if err == io.EOF {
+		s.guard.disarm()
+	}
+	return n, err
+}
+
+func (s *stallReader) Close() error {
+	err := s.r.Close()
+	if s.cancelOnClose {
+		s.guard.disarm()
+		s.guard.cancel()
+	}
+	return err
+}
+
 // doModelUploadRequest issues the request built by newReq and retries transient
-// failures (network errors, 429, 5xx) with exponential backoff. newReq is called
-// once per attempt so the request body can be re-read on retry. On success or a
-// non-retryable status it returns the response for the caller to validate; if
-// every attempt fails transiently it returns the last error.
+// failures (network errors, stalls, 429, 5xx) with exponential backoff. newReq
+// is called once per attempt so the request body can be re-read on retry. On
+// success or a non-retryable status it returns the response for the caller to
+// validate and close; its body stays stall-guarded. If every attempt fails
+// transiently it returns the last error.
 func doModelUploadRequest(what string, newReq func() (*http.Request, error)) (*http.Response, error) {
 	var lastErr error
 	for attempt := 1; attempt <= modelUploadMaxAttempts; attempt++ {
-		req, err := newReq()
-		if err != nil {
-			return nil, err
-		}
-
-		resp, err := modelUploadHTTPClient.Do(req)
+		resp, err := doGuardedModelUploadAttempt(newReq)
 		switch {
 		case err != nil:
 			lastErr = fmt.Errorf("%s: %w", what, err)
 		case isRetryableUploadStatus(resp.StatusCode):
-			snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			snippet, _ := io.ReadAll(io.LimitReader(resp.Body, modelUploadErrorBodyLimit))
 			resp.Body.Close()
 			lastErr = fmt.Errorf("%s failed: status %d: %s", what, resp.StatusCode, strings.TrimSpace(string(snippet)))
 		default:
@@ -1171,6 +1223,37 @@ func doModelUploadRequest(what string, newReq func() (*http.Request, error)) (*h
 		}
 	}
 	return nil, lastErr
+}
+
+// doGuardedModelUploadAttempt runs one attempt under a stallGuard. The returned
+// response body re-arms the guard on read and cancels the attempt on Close.
+func doGuardedModelUploadAttempt(newReq func() (*http.Request, error)) (*http.Response, error) {
+	req, err := newReq()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(req.Context())
+	guard := newStallGuard(cancel)
+	req = req.WithContext(ctx)
+	if req.Body != nil {
+		req.Body = &stallReader{r: req.Body, guard: guard}
+		// GetBody would hand the transport an unguarded copy on a redirect
+		// or HTTP/2 replay; retries go through newReq instead.
+		req.GetBody = nil
+	}
+
+	resp, err := modelUploadHTTPClient.Do(req)
+	if err != nil {
+		guard.disarm()
+		cancel()
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("no progress for %s: %w", modelUploadStallTimeout, err)
+		}
+		return nil, err
+	}
+	guard.arm()
+	resp.Body = &stallReader{r: resp.Body, guard: guard, cancelOnClose: true}
+	return resp, nil
 }
 
 func completeModelUploadWithProgress(upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
@@ -1242,7 +1325,7 @@ func completeModelUploadWithProgress(upload *api.ModelRepoUpload, artifactPath s
 			defer resp.Body.Close()
 			// a non-retryable status reaches here (2xx handled below, 4xx errors out).
 			if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-				body, _ := io.ReadAll(resp.Body)
+				body, _ := io.ReadAll(io.LimitReader(resp.Body, modelUploadErrorBodyLimit))
 				err = fmt.Errorf("upload part %d failed: status %d: %s", part.PartNumber, resp.StatusCode, strings.TrimSpace(string(body)))
 				return
 			}
@@ -1296,7 +1379,7 @@ func completeModelUploadWithProgress(upload *api.ModelRepoUpload, artifactPath s
 	defer resp.Body.Close()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, modelUploadErrorBodyLimit))
 		return fmt.Errorf("completion request failed: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
