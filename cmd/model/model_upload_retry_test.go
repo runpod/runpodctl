@@ -241,3 +241,72 @@ func TestCompleteModelUpload_SlowResponseHeadersStillSucceed(t *testing.T) {
 		t.Fatalf("expected slow-but-progressing upload to succeed, got %v", err)
 	}
 }
+
+// TestCompleteModelUpload_HonorsRetryAfter pins that a throttled part PUT waits
+// for the server's Retry-After before retrying instead of the short fixed
+// backoff, which would just get throttled again under S3 SlowDown.
+func TestCompleteModelUpload_HonorsRetryAfter(t *testing.T) {
+	fastUploadBackoff(t)
+	artifactPath := writeArtifact(t, 6)
+
+	var putAttempts int32
+	var firstAt, retryAt time.Time
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		_, _ = io.ReadAll(r.Body)
+		if atomic.AddInt32(&putAttempts, 1) == 1 {
+			firstAt = time.Now()
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		retryAt = time.Now()
+		w.Header().Set("ETag", `"etag"`)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	err := runUploadWithin(t, 10*time.Second, &api.ModelRepoUpload{
+		PartSizeBytes: 6,
+		CompleteURL:   server.URL,
+		Parts:         []*api.ModelRepoUploadPart{{PartNumber: 1, URL: server.URL}},
+	}, artifactPath)
+	if err != nil {
+		t.Fatalf("expected upload to succeed after the throttle, got %v", err)
+	}
+	if gap := retryAt.Sub(firstAt); gap < 900*time.Millisecond {
+		t.Fatalf("expected retry to wait ~1s for Retry-After, waited %s", gap)
+	}
+}
+
+// TestModelUploadRetryDelay pins Retry-After parsing (delta-seconds and
+// HTTP-date), the fallback to exponential backoff, and the upper cap.
+func TestModelUploadRetryDelay(t *testing.T) {
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	backoff2 := 2 * modelUploadRetryBackoff // attempt 2 => base << 1
+	tests := []struct {
+		name       string
+		retryAfter string
+		want       time.Duration
+	}{
+		{name: "no header uses backoff", retryAfter: "", want: backoff2},
+		{name: "delta seconds", retryAfter: "7", want: 7 * time.Second},
+		{name: "zero seconds retries now", retryAfter: "0", want: 0},
+		{name: "http date", retryAfter: now.Add(12 * time.Second).Format(http.TimeFormat), want: 12 * time.Second},
+		{name: "past http date retries now", retryAfter: now.Add(-time.Minute).Format(http.TimeFormat), want: 0},
+		{name: "garbage uses backoff", retryAfter: "soon", want: backoff2},
+		{name: "negative uses backoff", retryAfter: "-5", want: backoff2},
+		{name: "huge delta is capped", retryAfter: "3600", want: modelUploadMaxRetryAfter},
+		{name: "far http date is capped", retryAfter: now.Add(time.Hour).Format(http.TimeFormat), want: modelUploadMaxRetryAfter},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := modelUploadRetryDelay(2, tt.retryAfter, now); got != tt.want {
+				t.Fatalf("modelUploadRetryDelay(2, %q) = %s, want %s", tt.retryAfter, got, tt.want)
+			}
+		})
+	}
+}

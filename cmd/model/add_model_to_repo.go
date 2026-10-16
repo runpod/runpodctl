@@ -1122,6 +1122,10 @@ var modelUploadRetryBackoff = 500 * time.Millisecond
 // a var so tests can shorten it.
 var modelUploadStallTimeout = 60 * time.Second
 
+// modelUploadMaxRetryAfter caps a server-requested Retry-After wait so a
+// misbehaving or hostile endpoint cannot park the upload for hours.
+const modelUploadMaxRetryAfter = 30 * time.Second
+
 // modelUploadErrorBodyLimit caps how much of an error response body is read
 // into the returned error message.
 const modelUploadErrorBodyLimit = 4096
@@ -1207,10 +1211,12 @@ func doModelUploadRequest(what string, newReq func() (*http.Request, error)) (*h
 	var lastErr error
 	for attempt := 1; attempt <= modelUploadMaxAttempts; attempt++ {
 		resp, err := doGuardedModelUploadAttempt(newReq)
+		retryAfter := ""
 		switch {
 		case err != nil:
 			lastErr = fmt.Errorf("%s: %w", what, err)
 		case isRetryableUploadStatus(resp.StatusCode):
+			retryAfter = resp.Header.Get("Retry-After")
 			snippet, _ := io.ReadAll(io.LimitReader(resp.Body, modelUploadErrorBodyLimit))
 			resp.Body.Close()
 			lastErr = fmt.Errorf("%s failed: status %d: %s", what, resp.StatusCode, strings.TrimSpace(string(snippet)))
@@ -1219,10 +1225,39 @@ func doModelUploadRequest(what string, newReq func() (*http.Request, error)) (*h
 		}
 
 		if attempt < modelUploadMaxAttempts {
-			time.Sleep(modelUploadRetryBackoff * time.Duration(1<<(attempt-1)))
+			time.Sleep(modelUploadRetryDelay(attempt, retryAfter, time.Now()))
 		}
 	}
 	return nil, lastErr
+}
+
+// modelUploadRetryDelay returns how long to wait before the attempt after
+// `attempt`. A valid Retry-After (delta-seconds or HTTP-date, RFC 9110 10.2.3)
+// wins over exponential backoff, capped at modelUploadMaxRetryAfter; an empty
+// or unparseable value falls back to backoff.
+func modelUploadRetryDelay(attempt int, retryAfter string, now time.Time) time.Duration {
+	backoff := modelUploadRetryBackoff * time.Duration(1<<(attempt-1))
+	retryAfter = strings.TrimSpace(retryAfter)
+	if retryAfter == "" {
+		return backoff
+	}
+
+	var wait time.Duration
+	if secs, err := strconv.ParseInt(retryAfter, 10, 64); err == nil {
+		if secs < 0 {
+			return backoff
+		}
+		// compare in seconds first so a huge value cannot overflow Duration.
+		if secs > int64(modelUploadMaxRetryAfter/time.Second) {
+			return modelUploadMaxRetryAfter
+		}
+		wait = time.Duration(secs) * time.Second
+	} else if at, err := http.ParseTime(retryAfter); err == nil {
+		wait = max(at.Sub(now), 0)
+	} else {
+		return backoff
+	}
+	return min(wait, modelUploadMaxRetryAfter)
 }
 
 // doGuardedModelUploadAttempt runs one attempt under a stallGuard. The returned
