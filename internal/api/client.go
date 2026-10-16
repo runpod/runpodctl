@@ -43,7 +43,12 @@ type Client struct {
 
 // NewClient creates a new REST API client
 func NewClient() (*Client, error) {
-	apiKey := configenv.APIKey()
+	return NewClientWithAPIKey(configenv.APIKey())
+}
+
+// NewClientWithAPIKey is NewClient for a key that is not (yet) the configured
+// one, e.g. so `doctor --api-key` can validate a key before saving it.
+func NewClientWithAPIKey(apiKey string) (*Client, error) {
 	if apiKey == "" {
 		return nil, ErrNoCredentials
 	}
