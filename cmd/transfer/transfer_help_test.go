@@ -20,3 +20,37 @@ func TestSendReceiveHelpShowsPairedWorkflow(t *testing.T) {
 		t.Errorf("receive help should mention the --code flag; got example:\n%s", ReceiveCmd.Example)
 	}
 }
+
+// TestHelpExamplesUseRealisticCodes pins that example codes end in a numeric
+// relay index, the shape runReceive requires.
+func TestHelpExamplesUseRealisticCodes(t *testing.T) {
+	for _, cmd := range []string{SendCmd.Example, ReceiveCmd.Example} {
+		if strings.Contains(cmd, "1234-word-word-word") {
+			t.Errorf("example uses a code without a relay index, receive rejects it:\n%s", cmd)
+		}
+		if !strings.Contains(cmd, "5254-respect-amen-emotion-14") {
+			t.Errorf("example should use a code ending in a relay index:\n%s", cmd)
+		}
+	}
+}
+
+func TestValidateSendCode(t *testing.T) {
+	tests := []struct {
+		name    string
+		code    string
+		wantErr bool
+	}{
+		{"empty uses random code", "", false},
+		{"too short", "abc", true},
+		{"five chars", "abcde", true},
+		{"six chars", "abcdef", false},
+		{"typical", "my-secret", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := validateSendCode(tt.code); (err != nil) != tt.wantErr {
+				t.Errorf("validateSendCode(%q) err = %v, wantErr %v", tt.code, err, tt.wantErr)
+			}
+		})
+	}
+}
