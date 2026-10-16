@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/runpod/runpodctl/cmd/ssh"
@@ -17,23 +19,58 @@ import (
 	sshcrypto "golang.org/x/crypto/ssh"
 )
 
+const (
+	statusPass = "pass"
+	statusFail = "fail"
+
+	keyFlagName = "api-key"
+
+	// the saved config holds the api key, so it stays private to the user. root
+	// initConfig applies the same modes; doctor reasserts them on its own write
+	// rather than relying on that having run.
+	configDirPerm  = 0o700
+	configFilePerm = 0o600
+)
+
+// setupPrompt is shown before the stdin read, on stderr so stdout stays the
+// report.
+const setupPrompt = `
+no api key found.
+
+to get your api key:
+  1. go to https://www.runpod.io/console/user/settings
+  2. click 'api keys' and create a new key
+  3. copy the key and paste it below
+
+enter your runpod api key: `
+
 var apiKeyFlag string
 
 // Cmd is the doctor command
 var Cmd = &cobra.Command{
 	Use:   "doctor",
 	Short: "diagnose and fix cli issues",
-	Long:  "check runpod connectivity and fix configuration issues",
+	Long: `check runpod connectivity and fix configuration issues
+
+when no api key is configured, doctor prompts on stderr and reads one from
+stdin. --api-key always validates the given key and saves it, replacing
+any saved key. a key is only saved after the api accepts it, and a run that
+sets up a key exits non-zero if doctor ends unhealthy.`,
 	Example: `  # interactive: prompts for the api key and saves it
   runpodctl doctor
 
-  # non-interactive (ci, containers, agents): pass the key
-  runpodctl doctor --api-key "$RUNPOD_API_KEY"`,
+  # non-interactive (ci, containers, agents): pipe the key on stdin, which
+  # keeps it out of shell history and ps. read only when no key is configured
+  printf %s "$MY_RUNPOD_KEY" | runpodctl doctor
+
+  # or pass it as a flag, which also replaces an already saved key
+  runpodctl doctor --api-key rpa_yourkey`,
 	RunE: runDoctor,
 }
 
 func init() {
-	Cmd.Flags().StringVar(&apiKeyFlag, "api-key", "", "api key to save (skips the interactive prompt)")
+	Cmd.Flags().StringVar(&apiKeyFlag, keyFlagName, "",
+		"api key to validate and save, replacing any saved key (visible in shell history and ps; prefer stdin)")
 }
 
 type checkResult struct {
@@ -41,6 +78,7 @@ type checkResult struct {
 	Status  string `json:"status"`
 	Details string `json:"details,omitempty"`
 	Error   string `json:"error,omitempty"`
+	Warning string `json:"warning,omitempty"`
 	Fixed   bool   `json:"fixed,omitempty"`
 }
 
@@ -50,104 +88,180 @@ type doctorReport struct {
 }
 
 func runDoctor(cmd *cobra.Command, args []string) error {
+	providedKey := strings.TrimSpace(apiKeyFlag)
+	if cmd.Flags().Changed(keyFlagName) && providedKey == "" {
+		return fmt.Errorf("--%s is empty", keyFlagName)
+	}
+	// a run that sets up a key (flag, or the stdin read when none is configured)
+	// is how ci and agents onboard, so it must fail loudly when it did not work.
+	settingUpKey := providedKey != "" || configenv.APIKey() == ""
+
 	report := &doctorReport{
 		Checks:  []checkResult{},
 		Healthy: true,
 	}
 
 	// check 1: api key configured
-	apiKeyCheck := checkAPIKey(apiKeyFlag)
+	apiKeyCheck := checkAPIKey(providedKey, os.Stdin, os.Stderr)
 	report.Checks = append(report.Checks, apiKeyCheck)
-	if apiKeyCheck.Status == "fail" && !apiKeyCheck.Fixed {
+	if apiKeyCheck.Status == statusFail {
 		report.Healthy = false
+	}
+	if apiKeyCheck.Fixed {
+		fmt.Fprintf(os.Stderr, "\napi key %s\n\n", apiKeyCheck.Details)
+	}
+	if apiKeyCheck.Warning != "" {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", apiKeyCheck.Warning)
 	}
 
 	// check 2: api connectivity (only if we have an api key)
-	if apiKeyCheck.Status == "pass" || apiKeyCheck.Fixed {
+	if apiKeyCheck.Status == statusPass {
 		connectCheck := checkAPIConnectivity()
 		report.Checks = append(report.Checks, connectCheck)
-		if connectCheck.Status == "fail" {
+		if connectCheck.Status == statusFail {
 			report.Healthy = false
 		}
 
 		// check 3: ssh key setup (only if api works)
-		if connectCheck.Status == "pass" {
+		if connectCheck.Status == statusPass {
 			sshCheck := checkSSHKey()
 			report.Checks = append(report.Checks, sshCheck)
-			if sshCheck.Status == "fail" && !sshCheck.Fixed {
+			if sshCheck.Status == statusFail {
 				report.Healthy = false
 			}
 		}
 	}
 
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
-	return output.Print(report, &output.Config{Format: format})
+	if err := output.Print(report, &output.Config{Format: format}); err != nil {
+		return err
+	}
+	if settingUpKey && !report.Healthy {
+		return unhealthyError(report)
+	}
+	return nil
 }
 
-func checkAPIKey(providedKey string) checkResult {
+// unhealthyError names the first failing check, so the stderr error is
+// actionable on its own while the full report stays on stdout.
+func unhealthyError(report *doctorReport) error {
+	for _, check := range report.Checks {
+		if check.Status == statusFail {
+			return fmt.Errorf("doctor: %s check failed: %s", check.Name, check.Error)
+		}
+	}
+	return errors.New("doctor: unhealthy, see the report on stdout")
+}
+
+// checkAPIKey passes when a key is already configured and none was provided.
+// A provided key (--api-key), or one read from in when nothing is configured,
+// is validated against the api and saved only if it is accepted. The prompt
+// goes to promptOut; what was saved or replaced is reported in the result.
+func checkAPIKey(providedKey string, in io.Reader, promptOut io.Writer) checkResult {
 	result := checkResult{Name: "api_key"}
 
-	apiKey := configenv.APIKey()
-
-	if apiKey != "" {
-		result.Status = "pass"
-		return result
-	}
-
-	result.Status = "fail"
-	result.Error = "no api key configured"
-
-	// prefer a key passed via --api-key (non-interactive: CI, containers,
-	// agents). without it, prompt and read stdin. there is no tty check, so
-	// a closed or empty stdin fails the read.
-	apiKey = strings.TrimSpace(providedKey)
+	apiKey := strings.TrimSpace(providedKey)
 	if apiKey == "" {
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "no api key found.")
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "to get your api key:")
-		fmt.Fprintln(os.Stderr, "  1. go to https://www.runpod.io/console/user/settings")
-		fmt.Fprintln(os.Stderr, "  2. click 'api keys' and create a new key")
-		fmt.Fprintln(os.Stderr, "  3. copy the key and paste it below")
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprint(os.Stderr, "enter your runpod api key: ")
-
-		reader := bufio.NewReader(os.Stdin)
-		input, err := reader.ReadString('\n')
+		if configenv.APIKey() != "" {
+			result.Status = statusPass
+			return result
+		}
+		key, err := promptAPIKey(in, promptOut)
 		if err != nil {
-			result.Error = "failed to read input (use --api-key for non-interactive use)"
+			result.Status = statusFail
+			result.Error = err.Error()
 			return result
 		}
-		apiKey = strings.TrimSpace(input)
+		apiKey = key
 	}
 
-	if apiKey == "" {
-		result.Error = "no api key provided"
+	if err := validateAPIKey(apiKey); err != nil {
+		result.Status = statusFail
+		result.Error = fmt.Sprintf("api key not saved: %v", err)
 		return result
 	}
 
-	// save to config
-	viper.Set("apiKey", apiKey)
-	home, _ := os.UserHomeDir()
-	configPath := home + "/.runpod"
-	os.MkdirAll(configPath, 0700)
-
-	if err := viper.WriteConfig(); err != nil {
-		if err := viper.WriteConfigAs(configPath + "/config.toml"); err != nil {
-			result.Error = fmt.Sprintf("failed to save config: %v", err)
-			return result
-		}
+	saved := viper.GetString("apiKey")
+	replaced := saved != "" && saved != apiKey
+	path, err := saveAPIKey(apiKey)
+	if err != nil {
+		result.Status = statusFail
+		result.Error = fmt.Sprintf("failed to save config: %v", err)
+		return result
+	}
+	result.Details = "saved to " + path
+	if replaced {
+		result.Details = "saved to " + path + ", replacing the key saved there before"
+	}
+	if env := os.Getenv(configenv.APIKeyEnv); env != "" && env != apiKey {
+		result.Warning = configenv.APIKeyEnv + " is set and takes precedence over the saved key; unset it to use the key just saved"
 	}
 
-	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintf(os.Stderr, "api key saved to %s/config.toml\n", configPath)
-	fmt.Fprintln(os.Stderr, "")
-
-	// the initial "no api key configured" no longer applies now that we fixed it
-	result.Error = ""
+	result.Status = statusPass
 	result.Fixed = true
-	result.Status = "pass"
 	return result
+}
+
+// promptAPIKey reads one key from in. There is no tty check: the instructions
+// go to out either way, and a pipe works as long as it carries a key, with
+// or without a trailing newline (printf %s "$KEY" | runpodctl doctor).
+func promptAPIKey(in io.Reader, out io.Writer) (string, error) {
+	if _, err := fmt.Fprint(out, setupPrompt); err != nil {
+		return "", fmt.Errorf("failed to write the api key prompt: %w", err)
+	}
+
+	input, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", fmt.Errorf("failed to read input (pipe the key on stdin or use --%s): %w", keyFlagName, err)
+	}
+	key := strings.TrimSpace(input)
+	if key == "" {
+		return "", fmt.Errorf("no api key provided (pipe the key on stdin or use --%s)", keyFlagName)
+	}
+	return key, nil
+}
+
+// validateAPIKey asks the api who the key belongs to, so a mistyped or revoked
+// key is reported instead of saved.
+func validateAPIKey(apiKey string) error {
+	client, err := internalapi.NewClientWithAPIKey(apiKey)
+	if err != nil {
+		return fmt.Errorf("failed to create client: %w", err)
+	}
+	user, err := client.GetUser()
+	if err != nil {
+		return fmt.Errorf("the api did not accept it: %w", err)
+	}
+	if user == nil || user.ID == "" {
+		return errors.New("the api returned no account for it")
+	}
+	return nil
+}
+
+// saveAPIKey writes apiKey to the config file and returns the file's path.
+func saveAPIKey(apiKey string) (string, error) {
+	path := viper.ConfigFileUsed()
+	if path == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("could not locate home directory: %w", err)
+		}
+		path = filepath.Join(home, ".runpod", "config.toml")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), configDirPerm); err != nil {
+		return "", fmt.Errorf("could not create config directory: %w", err)
+	}
+
+	viper.Set("apiKey", apiKey)
+	viper.SetConfigPermissions(configFilePerm)
+	if err := viper.WriteConfigAs(path); err != nil {
+		return "", err
+	}
+	// viper applies the mode only to files it creates
+	if err := os.Chmod(path, configFilePerm); err != nil {
+		return "", fmt.Errorf("could not restrict permissions on %s: %w", path, err)
+	}
+	return path, nil
 }
 
 func checkAPIConnectivity() checkResult {
@@ -155,7 +269,7 @@ func checkAPIConnectivity() checkResult {
 
 	client, err := internalapi.NewClient()
 	if err != nil {
-		result.Status = "fail"
+		result.Status = statusFail
 		result.Error = fmt.Sprintf("failed to create client: %v", err)
 		return result
 	}
@@ -163,18 +277,18 @@ func checkAPIConnectivity() checkResult {
 	// try to get user info to verify connectivity
 	user, err := client.GetUser()
 	if err != nil {
-		result.Status = "fail"
+		result.Status = statusFail
 		result.Error = fmt.Sprintf("api request failed: %v", err)
 		return result
 	}
 
 	if user == nil || user.ID == "" {
-		result.Status = "fail"
+		result.Status = statusFail
 		result.Error = "invalid response from api"
 		return result
 	}
 
-	result.Status = "pass"
+	result.Status = statusPass
 	result.Details = fmt.Sprintf("user: %s", user.Email)
 	return result
 }
@@ -185,7 +299,7 @@ func checkSSHKey() checkResult {
 	// check for local ssh key
 	publicKey, err := ssh.GetLocalSSHKey()
 	if err != nil {
-		result.Status = "fail"
+		result.Status = statusFail
 		result.Error = fmt.Sprintf("failed to check local ssh key: %v", err)
 		return result
 	}
@@ -197,7 +311,7 @@ func checkSSHKey() checkResult {
 		fmt.Fprintln(os.Stderr, "generating ssh key...")
 		publicKey, err = ssh.GenerateSSHKeyPair(ssh.DefaultKeyName)
 		if err != nil {
-			result.Status = "fail"
+			result.Status = statusFail
 			result.Error = fmt.Sprintf("failed to generate ssh key: %v", err)
 			return result
 		}
@@ -207,13 +321,13 @@ func checkSSHKey() checkResult {
 	// check if key exists in cloud
 	client, err := internalapi.NewClient()
 	if err != nil {
-		result.Status = "fail"
+		result.Status = statusFail
 		result.Error = fmt.Sprintf("failed to get cloud ssh keys: %v", err)
 		return result
 	}
 	cloudKeys, err := client.GetPublicSSHKeys()
 	if err != nil {
-		result.Status = "fail"
+		result.Status = statusFail
 		result.Error = fmt.Sprintf("failed to get cloud ssh keys: %v", err)
 		return result
 	}
@@ -221,7 +335,7 @@ func checkSSHKey() checkResult {
 	// parse local key
 	localPubKey, _, _, _, err := sshcrypto.ParseAuthorizedKey(publicKey)
 	if err != nil {
-		result.Status = "fail"
+		result.Status = statusFail
 		result.Error = fmt.Sprintf("failed to parse local key: %v", err)
 		return result
 	}
@@ -242,7 +356,7 @@ func checkSSHKey() checkResult {
 	if !keyInCloud {
 		fmt.Fprintln(os.Stderr, "adding ssh key to runpod...")
 		if err := client.AddPublicSSHKey(publicKey, false); err != nil {
-			result.Status = "fail"
+			result.Status = statusFail
 			var invalid *internalapi.InvalidStoredSSHKeysError
 			if errors.As(err, &invalid) {
 				err = invalid.ForSync()
@@ -253,7 +367,7 @@ func checkSSHKey() checkResult {
 		result.Fixed = true
 	}
 
-	result.Status = "pass"
+	result.Status = statusPass
 	result.Details = fmt.Sprintf("local_key: %t, synced_to_cloud: %t", localKeyExists, keyInCloud || result.Fixed)
 	return result
 }

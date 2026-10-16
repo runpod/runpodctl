@@ -1,51 +1,256 @@
 package doctor
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
-// TestCheckAPIKey_NonInteractive pins that a key supplied via --api-key is
-// persisted without reading stdin, so CI/containers/agents can use the blessed
-// `runpodctl doctor` onboarding path non-interactively. Before this, doctor read
-// the key only from an interactive os.Stdin prompt.
-func TestCheckAPIKey_NonInteractive(t *testing.T) {
+const (
+	goodKey = "rpa_GOOD_1234567890"
+	oldKey  = "rpa_OLD_1234567890"
+	badKey  = "rpa_FAKE"
+)
+
+// fakeAPI answers the graphql `myself` query used to validate a key: goodKey
+// authenticates, anything else gets the 401 prod returns for an unknown key.
+func fakeAPI(t *testing.T) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+goodKey {
+			w.WriteHeader(http.StatusUnauthorized)
+			if _, err := w.Write([]byte(`{"error":"unauthorized"}`)); err != nil {
+				t.Error(err)
+			}
+			return
+		}
+		if _, err := w.Write([]byte(`{"data":{"myself":{"id":"user-1","email":"dev@example.test"}}}`)); err != nil {
+			t.Error(err)
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("RUNPOD_GRAPHQL_URL", server.URL)
+}
+
+// isolatedHome points HOME at a temp dir with no env key and a fresh viper, so
+// nothing reads or writes the developer's real config. viper.Reset is safe in
+// this package: unlike cmd, it binds no pflags in init.
+func isolatedHome(t *testing.T) string {
+	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	t.Setenv("RUNPOD_API_KEY", "") // force the fix path, not env auth
-
+	t.Setenv("RUNPOD_API_KEY", "")
 	viper.Reset()
 	t.Cleanup(viper.Reset)
+	fakeAPI(t)
+	return home
+}
 
-	// Redirect stdin to a closed pipe: if the code tries to prompt, it reads
-	// EOF and fails, which would make this test fail — proving no prompt path.
-	origStdin := os.Stdin
-	r, w, _ := os.Pipe()
-	w.Close()
-	os.Stdin = r
-	t.Cleanup(func() { os.Stdin = origStdin; r.Close() })
-
-	const key = "rpa_TESTKEY_1234567890"
-	result := checkAPIKey(key)
-
-	if result.Error != "" {
-		t.Fatalf("unexpected error: %s", result.Error)
+// saveExistingKey writes a config holding key and loads it the way root's
+// initConfig does, so the saved-key paths exercise the real WriteConfig target.
+func saveExistingKey(t *testing.T, home, key string) {
+	t.Helper()
+	dir := filepath.Join(home, ".runpod")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
 	}
-	if !result.Fixed || result.Status != "pass" {
-		t.Fatalf("expected fixed/pass, got fixed=%v status=%q", result.Fixed, result.Status)
+	file := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(file, []byte("apikey = '"+key+"'\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
+	viper.SetConfigFile(file)
+	viper.SetConfigType("toml")
+	if err := viper.ReadInConfig(); err != nil {
+		t.Fatal(err)
+	}
+}
 
-	// the key must be persisted to the secure config file
-	data, err := os.ReadFile(filepath.Join(home, ".runpod", "config.toml"))
+func configPath(home string) string {
+	return filepath.Join(home, ".runpod", "config.toml")
+}
+
+func readConfig(t *testing.T, home string) string {
+	t.Helper()
+	data, err := os.ReadFile(configPath(home))
 	if err != nil {
 		t.Fatalf("config not written: %v", err)
 	}
-	if !strings.Contains(string(data), key) {
-		t.Errorf("config.toml does not contain the provided key; got:\n%s", data)
+	return string(data)
+}
+
+func TestCheckAPIKey_FlagSavesValidatedKeyPrivately(t *testing.T) {
+	home := isolatedHome(t)
+	// an empty stdin: if the flag path prompted, the read would fail the check
+	result := checkAPIKey(goodKey, strings.NewReader(""), io.Discard)
+
+	if result.Error != "" || !result.Fixed || result.Status != statusPass {
+		t.Fatalf("want fixed pass, got %+v", result)
+	}
+	if !strings.Contains(readConfig(t, home), goodKey) {
+		t.Error("config.toml does not contain the provided key")
+	}
+	info, err := os.Stat(configPath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("config.toml mode = %o, want 600", got)
+	}
+}
+
+func TestCheckAPIKey_FlagRejectedKeyIsNotSaved(t *testing.T) {
+	home := isolatedHome(t)
+	result := checkAPIKey(badKey, strings.NewReader(""), io.Discard)
+
+	if result.Status != statusFail || result.Fixed {
+		t.Fatalf("want fail, got %+v", result)
+	}
+	if !strings.Contains(result.Error, "not saved") {
+		t.Errorf("error should say the key was not saved, got %q", result.Error)
+	}
+	data, err := os.ReadFile(configPath(home))
+	if err == nil && strings.Contains(string(data), badKey) {
+		t.Errorf("rejected key was persisted:\n%s", data)
+	}
+}
+
+func TestCheckAPIKey_FlagHonoredWhenEnvKeySet(t *testing.T) {
+	home := isolatedHome(t)
+	t.Setenv("RUNPOD_API_KEY", oldKey)
+	result := checkAPIKey(goodKey, strings.NewReader(""), io.Discard)
+
+	if !result.Fixed || result.Status != statusPass {
+		t.Fatalf("want fixed pass, got %+v", result)
+	}
+	if !strings.Contains(readConfig(t, home), goodKey) {
+		t.Error("--api-key was ignored because RUNPOD_API_KEY is set")
+	}
+	if !strings.Contains(result.Warning, "RUNPOD_API_KEY") {
+		t.Errorf("want a warning that RUNPOD_API_KEY still takes precedence, got %q", result.Warning)
+	}
+}
+
+func TestCheckAPIKey_FlagReplacesSavedKey(t *testing.T) {
+	home := isolatedHome(t)
+	saveExistingKey(t, home, oldKey)
+	result := checkAPIKey(goodKey, strings.NewReader(""), io.Discard)
+
+	if !result.Fixed || result.Status != statusPass {
+		t.Fatalf("want fixed pass, got %+v", result)
+	}
+	config := readConfig(t, home)
+	if !strings.Contains(config, goodKey) || strings.Contains(config, oldKey) {
+		t.Errorf("saved key not replaced:\n%s", config)
+	}
+	if !strings.Contains(result.Details, "replacing") {
+		t.Errorf("want a notice that the saved key was replaced, got %q", result.Details)
+	}
+}
+
+func TestCheckAPIKey_SavedKeyPassesWithoutFlag(t *testing.T) {
+	home := isolatedHome(t)
+	saveExistingKey(t, home, oldKey)
+
+	result := checkAPIKey("", strings.NewReader(""), io.Discard)
+
+	if result.Status != statusPass || result.Fixed {
+		t.Fatalf("want plain pass, got %+v", result)
+	}
+}
+
+// `printf %s "$KEY" | runpodctl doctor` sends no trailing newline.
+func TestCheckAPIKey_StdinWithoutTrailingNewline(t *testing.T) {
+	home := isolatedHome(t)
+
+	result := checkAPIKey("", strings.NewReader(goodKey), io.Discard)
+
+	if result.Error != "" || !result.Fixed {
+		t.Fatalf("want fixed, got %+v", result)
+	}
+	if !strings.Contains(readConfig(t, home), goodKey) {
+		t.Error("key read from stdin was not saved")
+	}
+}
+
+func TestCheckAPIKey_StdinRejectedKeyIsNotSaved(t *testing.T) {
+	home := isolatedHome(t)
+
+	result := checkAPIKey("", strings.NewReader(badKey+"\n"), io.Discard)
+
+	if result.Status != statusFail || result.Fixed {
+		t.Fatalf("want fail, got %+v", result)
+	}
+	data, err := os.ReadFile(configPath(home))
+	if err == nil && strings.Contains(string(data), badKey) {
+		t.Errorf("rejected key was persisted:\n%s", data)
+	}
+}
+
+func TestCheckAPIKey_EmptyStdinFails(t *testing.T) {
+	isolatedHome(t)
+
+	result := checkAPIKey("", strings.NewReader(""), io.Discard)
+
+	if result.Status != statusFail || result.Error == "" {
+		t.Fatalf("want fail with an error, got %+v", result)
+	}
+}
+
+// runs the command through cobra flag parsing, the way the binary does.
+func executeDoctor(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	t.Cleanup(func() { apiKeyFlag = "" })
+	root := &cobra.Command{Use: "runpodctl", SilenceErrors: true, SilenceUsage: true}
+	root.PersistentFlags().StringP("output", "o", "json", "output format")
+	root.AddCommand(Cmd)
+	root.SetArgs(append([]string{"doctor"}, args...))
+
+	origStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	runErr := root.Execute()
+	os.Stdout = origStdout
+	if err = w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out), runErr
+}
+
+func TestDoctor_RejectedFlagKeyExitsNonZero(t *testing.T) {
+	isolatedHome(t)
+
+	out, err := executeDoctor(t, "--api-key", badKey)
+
+	if err == nil {
+		t.Fatal("want an error (non-zero exit) when the supplied key is rejected")
+	}
+	if !strings.Contains(out, `"healthy": false`) {
+		t.Errorf("report should still be printed with healthy false, got:\n%s", out)
+	}
+}
+
+// `--api-key "$UNSET_VAR"` must not fall through to the stdin read.
+func TestDoctor_EmptyFlagIsAnError(t *testing.T) {
+	isolatedHome(t)
+
+	_, err := executeDoctor(t, "--api-key", "  ")
+
+	if err == nil || !strings.Contains(err.Error(), "--api-key is empty") {
+		t.Fatalf("want an empty --api-key error, got %v", err)
 	}
 }
