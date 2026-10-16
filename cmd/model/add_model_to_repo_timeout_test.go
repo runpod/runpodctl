@@ -1387,7 +1387,7 @@ func TestCompleteModelUploadWithProgressTracksMultipartBytes(t *testing.T) {
 		t.Fatalf("write artifact: %v", err)
 	}
 
-	var uploadedBytes int64
+	var uploadedBytes atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPut:
@@ -1395,7 +1395,7 @@ func TestCompleteModelUploadWithProgressTracksMultipartBytes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read upload body: %v", err)
 			}
-			atomic.AddInt64(&uploadedBytes, int64(len(body))) // parts upload concurrently
+			uploadedBytes.Add(int64(len(body))) // parts upload concurrently
 			w.Header().Set("ETag", `"etag"`)
 			w.WriteHeader(http.StatusOK)
 		case http.MethodPost:
@@ -1418,7 +1418,7 @@ func TestCompleteModelUploadWithProgressTracksMultipartBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("complete upload: %v", err)
 	}
-	if got := atomic.LoadInt64(&uploadedBytes); got != 6 {
+	if got := uploadedBytes.Load(); got != 6 {
 		t.Fatalf("expected server to receive 6 bytes, got %d", got)
 	}
 	if got := progress.total(); got != 6 {
