@@ -1293,9 +1293,11 @@ func doGuardedModelUploadAttempt(newReq func() (*http.Request, error)) (*http.Re
 
 	resp, err := modelUploadHTTPClient.Do(req)
 	if err != nil {
+		// read before cancel: afterwards ctx.Err() is always set.
+		stalled := ctx.Err() != nil
 		guard.disarm()
 		cancel()
-		if ctx.Err() != nil {
+		if stalled {
 			return nil, fmt.Errorf("no progress for %s: %w", modelUploadStallTimeout, err)
 		}
 		return nil, err

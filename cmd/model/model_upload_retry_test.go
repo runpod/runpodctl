@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -331,5 +332,28 @@ func TestModelUploadRetryDelay(t *testing.T) {
 				t.Fatalf("modelUploadRetryDelay(2, %q) = %s, want %s", tt.retryAfter, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestCompleteModelUpload_TransportErrorIsNotReportedAsStall pins that a plain
+// network failure keeps its own error instead of being mislabeled as a
+// no-progress stall, which would send someone debugging the wrong timeout.
+func TestCompleteModelUpload_TransportErrorIsNotReportedAsStall(t *testing.T) {
+	fastUploadBackoff(t)
+	artifactPath := writeArtifact(t, 6)
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := server.URL
+	server.Close() // nothing listens here now: connection refused
+
+	err := runUploadWithin(t, &api.ModelRepoUpload{
+		PartSizeBytes: 6,
+		CompleteURL:   url,
+		Parts:         []*api.ModelRepoUploadPart{{PartNumber: 1, URL: url}},
+	}, artifactPath)
+	if err == nil {
+		t.Fatal("expected an unreachable server to fail the upload")
+	}
+	if strings.Contains(err.Error(), "no progress") {
+		t.Fatalf("expected a transport error, got it reported as a stall: %v", err)
 	}
 }
