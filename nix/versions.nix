@@ -11,7 +11,7 @@
 # nixos-unstable this flake was written against carried 1.26.8, which has ten
 # advisories fixed in 1.26.9). The `go` directive in go.mod is a *minimum*, so
 # the assertion below only requires the flake's Go to be at least that; it
-# fails evaluation, naming the file to edit, when go.mod moves past it.
+# fails evaluation of anything that uses Go when go.mod moves past it.
 #
 { pkgs, lib }:
 let
@@ -31,16 +31,21 @@ let
   # main.go's default version, e.g. "v3.0.0"; -X main.Version overrides it.
   baseVersion = readMatch ../main.go ".*\nvar Version = \"([^\"]+)\"\n.*" "var Version";
 
-  go = pkgs.go_1_26.overrideAttrs (_old: rec {
+  pinnedGo = pkgs.go_1_26.overrideAttrs (_old: rec {
     version = "1.26.9";
     src = pkgs.fetchurl {
       url = "https://go.dev/dl/go${version}.src.tar.gz";
       hash = "sha256-lzXX3Ntls10/pXfwQGRzfAO4nPGitx5uaf4vPG+f1Mo=";
     };
   });
+  # The assertion guards `go` alone, not the whole set: `nix run .#update-pins`
+  # must still evaluate when go.mod has moved past the pin, since that is what
+  # rewrites it.
+  go =
+    assert lib.assertMsg (lib.versionAtLeast pinnedGo.version goModVersion)
+      "go.mod requires go ${goModVersion} but nix/versions.nix pins ${pinnedGo.version}; run `nix run .#update-pins`";
+    pinnedGo;
 in
-assert lib.assertMsg (lib.versionAtLeast go.version goModVersion)
-  "go.mod requires go ${goModVersion} but nix/versions.nix pins ${go.version}; bump the go override in nix/versions.nix";
 {
   inherit go goModVersion baseVersion;
 

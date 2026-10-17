@@ -3,9 +3,12 @@
 #
 # The Nix flake on every supported system (nix/design.md §10): hermetic
 # checks, the packaged binary, the OCI images, the static analysis report and
-# fuzzing. Non-blocking by design: every job sets continue-on-error and none
-# is a required check, so a red run never blocks a merge while the lint
-# baseline is non-empty and vendorHash updates are manual.
+# fuzzing. Non-blocking by design: no job is a required check, and on pull
+# requests the jobs set continue-on-error, so a contributor who doesn't use nix
+# never has to act on it. On main and the nightly run they report honestly and
+# `report` opens a `nix-red` issue for the owner (.github/CODEOWNERS), closing
+# it on the next green run. Pins and the lint baseline are kept current by
+# nix-maintenance.yml.
 #
 name: nix
 
@@ -26,7 +29,7 @@ concurrency:
 jobs:
   flake:
     name: flake (${{ matrix.system }})
-    continue-on-error: true
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
     strategy:
       fail-fast: false
       matrix:
@@ -69,6 +72,11 @@ jobs:
           nix run .#static-analysis-report-full
           cat static-analysis-report/report.md >> "$GITHUB_STEP_SUMMARY"
 
+      - name: note that this is non-blocking
+        if: failure() && github.event_name == 'pull_request'
+        run: |
+          echo "nix is non-blocking: nothing to do here, the nix owner tracks failures on main." >> "$GITHUB_STEP_SUMMARY"
+
       - name: upload the report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -78,7 +86,7 @@ jobs:
           if-no-files-found: ignore
 
   fuzz:
-    continue-on-error: true
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -99,3 +107,36 @@ jobs:
         with:
           name: fuzz-crashers
           path: "**/testdata/fuzz/"
+
+  # One rolling issue for the owner: opened (or commented on) when main or the
+  # nightly run is red, closed by the next green run. Never on pull requests.
+  report:
+    needs: [flake, fuzz]
+    if: always() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      OWNER: daveseddon-runpod
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      FAILED: ${{ contains(needs.*.result, 'failure') }}
+    steps:
+      - name: open, update or close the nix-red issue
+        run: |
+          open="$(gh issue list --label nix-red --state open --json number --jq '.[0].number // empty')"
+          if [ "$FAILED" = true ]; then
+            msg="nix is red on \`${GITHUB_REF_NAME}\` (${GITHUB_EVENT_NAME}): $RUN_URL"
+            if [ -n "$open" ]; then
+              gh issue comment "$open" --body "$msg"
+            else
+              gh label create nix-red --color B60205 --description "nix.yml is failing on main" 2>/dev/null || true
+              gh issue create --title "nix is red on main" --label nix-red --assignee "$OWNER" \
+                --body "$msg
+
+          non-blocking: this only needs the nix owner. it closes itself on the next green run."
+            fi
+          elif [ -n "$open" ]; then
+            gh issue close "$open" --comment "green again: $RUN_URL"
+          fi

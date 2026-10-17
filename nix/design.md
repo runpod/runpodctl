@@ -93,7 +93,7 @@ nix/
 
 | Setting | Value | Why |
 | --- | --- | --- |
-| `env.CGO_ENABLED` | `"0"` | matches goreleaser and the makefile; a static binary |
+| `env.CGO_ENABLED` | `"0"` | matches goreleaser and the Makefile; a static binary |
 | `subPackages` | `[ "." ]` | the CLI is `main.go` at the root |
 | `ldflags` | `-s -w -X main.Version=<version>` | identical to `.goreleaser.yml` |
 | `GOFLAGS` | `-trimpath` | no build paths in the binary |
@@ -242,7 +242,7 @@ Rules for the golangci-lint configs (the same ones xtcp2 follows):
 **The lint ratchet.** Turning the tiers on will report findings in existing code. Rather than block on fixing them all at once:
 
 - `nix/checks/lint-baseline.txt` is committed with one line per finding, `<tool>\t<path> | <message> (<rule>)`: no line or column, and digits in messages read as `N`, so unrelated edits don't move a finding. Counts were the first idea, but they can't satisfy the next rule.
-- The `lint-baseline` check compares the findings as a multiset. A new finding fails even if an old one was fixed in the same PR, and a fixed finding that is still listed fails too, so the file only ever shrinks through review.
+- The `lint-baseline` check compares the findings as a multiset. A new finding fails even if an old one was fixed in the same PR. A fixed finding that is still listed is reported but does not fail, so a contributor fixing lint never turns nix red; the nix-maintenance pr prunes it, and the file only ever shrinks through review.
 - `nix run .#update-lint-baseline` rewrites the file. Review sees the diff.
 - One measure derivation (`static-analysis-measure`) runs every tool once; the check and the report (`nix build .#static-analysis-report`) both read it.
 - Findings are fixed in small per-package PRs. A fix is a code change. A `//nolint` is allowed only with a linter name and a written reason (enforced by golangci-lint's `nolintlint`).
@@ -293,7 +293,7 @@ Today the only benchmarks are in `cmd/serverless/randomstring_bench_test.go`. Ne
 
 A new workflow, `.github/workflows/nix.yml`. `ci.yml` is not changed.
 
-> **Non-blocking by design.** The job sets `continue-on-error: true` and is not a required status check, so a red Nix run never blocks a merge while the lint ratchet is non-zero and `vendorHash` updates are manual.
+> **Non-blocking by design.** No job is a required status check. On pull requests the jobs set `continue-on-error`, so a contributor never sees the workflow fail; on main and nightly they report honestly and a `report` job opens a `nix-red` issue for the owner. Pins and the baseline are kept current by `nix-maintenance.yml` (`nix run .#update-pins`).
 
 | Setting | Value |
 | --- | --- |
