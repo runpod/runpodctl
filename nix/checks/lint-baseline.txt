@@ -5,9 +5,9 @@
 # are deliberately absent, and digits in messages read as N, so a finding an
 # unrelated edit merely moved does not read as new.
 #
-# Checked by the lint-baseline flake check: a finding not listed here fails it,
-# and so does a listed finding that no longer exists, so the file only shrinks.
-# Never edit by hand; after fixing findings run:
+# Checked by the lint-baseline flake check: a finding not listed here fails it.
+# A listed finding that no longer exists is only reported; the nix-maintenance
+# pr prunes it, so the file only shrinks. Never edit by hand; to prune, run:
 #
 #   nix run .#update-lint-baseline
 #

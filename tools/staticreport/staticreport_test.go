@@ -343,6 +343,7 @@ func TestRunBaselineExitCodes(t *testing.T) {
 	one := write("one.json", `{"Issues":[{"FromLinter":"errcheck","Text":"x","Pos":{"Filename":"a.go","Line":1}}]}`)
 	two := write("two.json", `{"Issues":[{"FromLinter":"errcheck","Text":"x","Pos":{"Filename":"a.go","Line":1}},{"FromLinter":"unused","Text":"y","Pos":{"Filename":"b.go","Line":2}}]}`)
 	none := write("none.json", `{"Issues":[]}`)
+	onlyNew := write("only-new.json", `{"Issues":[{"FromLinter":"unused","Text":"y","Pos":{"Filename":"b.go","Line":2}}]}`)
 	baseline := write("baseline.txt", baselineHeader+"tier0\ta.go | x (errcheck)\n")
 	other := write("other.txt", "gosec\ta.go | x (G1)\n")
 
@@ -353,7 +354,8 @@ func TestRunBaselineExitCodes(t *testing.T) {
 	}{
 		{"matches", []string{"-baseline", baseline, "-in", "tier0=golangci:" + one, "-exit", "tier0=1"}, exitOK},
 		{"new finding", []string{"-baseline", baseline, "-in", "tier0=golangci:" + two, "-exit", "tier0=1"}, exitFindings},
-		{"fixed but baseline not shrunk", []string{"-baseline", baseline, "-in", "tier0=golangci:" + none, "-exit", "tier0=0"}, exitFindings},
+		{"fixed but baseline not shrunk passes", []string{"-baseline", baseline, "-in", "tier0=golangci:" + none, "-exit", "tier0=0"}, exitOK},
+		{"fix one and add one still fails", []string{"-baseline", baseline, "-in", "tier0=golangci:" + onlyNew, "-exit", "tier0=1"}, exitFindings},
 		{"tool crashed", []string{"-baseline", baseline, "-in", "tier0=golangci:" + one, "-exit", "tier0=3"}, exitToolFail},
 		{"exit 1 with no findings is a lost report", []string{"-baseline", baseline, "-in", "tier0=golangci:" + none, "-exit", "tier0=1"}, exitToolFail},
 		{"missing exit status", []string{"-baseline", baseline, "-in", "tier0=golangci:" + one}, exitUsage},

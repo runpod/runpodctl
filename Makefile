@@ -1,4 +1,4 @@
-.PHONY: proto
+.PHONY: local release buildall compress strip nix android-arm64 linux-amd64 darwin-arm64 darwin-amd64 windows-amd64 windows-arm64
 
 # Git version and commit
 VERSION = git describe --tags --exact-match HEAD 2>/dev/null || git describe --tags 2>/dev/null || echo "unknown"
@@ -9,6 +9,12 @@ local:
 	go build -mod=mod -ldflags "-s -w -X main.Version=dev-$$COMMIT" -o bin/runpodctl .
 
 release: buildall strip compress
+
+# Optional: the Nix flake (flake.nix, nix/README.md) runs the hermetic checks,
+# static analysis and fuzzing. Nothing else in this Makefile needs nix.
+nix:
+	@command -v nix >/dev/null 2>&1 || { echo "nix is not installed; see nix/README.md (optional, nothing else here needs it)"; exit 1; }
+	nix flake check -L
 
 buildall: android-arm64 linux-amd64 darwin-arm64 windows-amd64 windows-arm64 darwin-amd64
 
