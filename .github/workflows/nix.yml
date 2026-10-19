@@ -110,9 +110,11 @@ jobs:
 
   # One rolling issue for the owner: opened (or commented on) when main or the
   # nightly run is red, closed by the next green run. Never on pull requests.
+  # A cancelled run (cancel-in-progress, a newer push) says nothing either way:
+  # it is skipped, and only a run where every job succeeded closes the issue.
   report:
     needs: [flake, fuzz]
-    if: always() && github.event_name != 'pull_request'
+    if: ${{ !cancelled() && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -122,6 +124,7 @@ jobs:
       OWNER: daveseddon-runpod
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       FAILED: ${{ contains(needs.*.result, 'failure') }}
+      PASSED: ${{ needs.flake.result == 'success' && needs.fuzz.result == 'success' }}
     steps:
       - name: open, update or close the nix-red issue
         run: |
@@ -137,6 +140,6 @@ jobs:
 
           non-blocking: this only needs the nix owner. it closes itself on the next green run."
             fi
-          elif [ -n "$open" ]; then
+          elif [ "$PASSED" = true ] && [ -n "$open" ]; then
             gh issue close "$open" --comment "green again: $RUN_URL"
           fi
