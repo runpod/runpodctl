@@ -223,8 +223,8 @@ func TestCLI_ProjectCreateLegacy(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	tmpDir := t.TempDir()
 	const notice = "The \"project\" command has been removed.\n\n" +
-		"Use Flash for serverless development workflows:\n" +
-		"  https://github.com/runpod/flash\n"
+		"Use the Runpod SDK for serverless development workflows:\n" +
+		"  https://github.com/runpod/runpod-python\n"
 
 	for _, args := range [][]string{
 		{"project"},

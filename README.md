@@ -488,10 +488,10 @@ stderr and carry no `code`:
 | surface | shape |
 | --- | --- |
 | legacy `get/create/remove/start/stop pod`, `create/remove pods`, `get cloud` | `Error: <msg>` via cobra, exit 1 |
-| `project` | plain-text notice on **stderr** pointing to [Flash](https://github.com/runpod/flash), exit 1; stdout is empty |
+| `project` | plain-text notice on **stderr** pointing to [Runpod SDK](https://github.com/runpod/runpod-python), exit 1; stdout is empty |
 
 so a parser should tolerate a non-json line on stderr from those and treat a
-non-zero exit as failure. use Flash for serverless development workflows.
+non-zero exit as failure. use the Runpod SDK for serverless development workflows.
 
 `exec` still keeps its progress output (`Running remote Python shell...`,
 `Waiting for Pod to come online... `) on **stdout** for backwards compatibility,

@@ -39,8 +39,8 @@ var errProjectRemoved = errors.New("project command removed")
 
 const projectRemovalNotice = `The "project" command has been removed.
 
-Use Flash for serverless development workflows:
-  https://github.com/runpod/flash`
+Use the Runpod SDK for serverless development workflows:
+  https://github.com/runpod/runpod-python`
 
 // rootCmd is the base command
 var rootCmd = &cobra.Command{
@@ -156,7 +156,7 @@ func registerCommands() {
 
 	rootCmd.AddCommand(&cobra.Command{
 		Use:                "project",
-		Short:              "use flash for serverless development",
+		Short:              "use the runpod sdk for serverless development",
 		Hidden:             true,
 		DisableFlagParsing: true,
 		RunE: func(_ *cobra.Command, _ []string) error {
