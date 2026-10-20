@@ -103,7 +103,7 @@ nix/
 
 **`proxyVendor = true`.** With it, `goModules` is a GOPROXY-format module cache rather than a `vendor/` tree. The repo has no `vendor/` directory and every build uses `-mod=mod`, so this matches how runpodctl is built today. It also lets `go mod verify` and `go mod tidy -diff` run inside the sandbox with `GOPROXY=file://<goModules>`, which a vendor tree can't support. *To confirm in phase 2:* that `tidy -diff` finds every module it needs in that cache.
 
-**Embedded files.** `cmd/project/functions.go` embeds `starter_examples/*`, `starter_examples/*/.*` (dotfiles) and `exampleDockerfile`. `nix/source.nix` must keep all of them, and the `go-test` check fails loudly if one is missing, because the embed won't compile.
+**Runtime assets.** `nix/source.nix` includes `cmd/croc/relays.json` alongside the Go sources and test data.
 
 ### Version
 
@@ -270,7 +270,7 @@ runpodctl had no fuzz targets. The fuzzing layer is built so that adding one is 
 
 | Target | Invariant |
 | --- | --- |
-| `rsyncConnectionLost` (`cmd/project/ssh.go`) | a refused host key is never classified as a restarting pod |
+| `rsyncConnectionLost` (`internal/podssh/ssh.go`) | a refused host key is never classified as a restarting pod |
 | `rsyncRemoteShell` / `quoteSSHConfigValue` | rsync's and openssh's parsers split the result back into the original arguments |
 | receive manifest validation, `foldKey` (`cmd/transfer/confine.go`) | no accepted manifest resolves outside the destination; case-fold/NFC aliases collide |
 | `validateChunkRanges` (`cmd/transfer/croc.go`) | an accepted resume request is well-formed and its true sum (no overflow) is within the file's chunks |

@@ -5,6 +5,7 @@ package e2e
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -216,38 +217,48 @@ func TestCLI_HelpTextConsistency(t *testing.T) {
 }
 
 func TestCLI_ProjectCreateLegacy(t *testing.T) {
+	t.Setenv("RUNPODCTL_BIN", cliBinary())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	tmpDir := t.TempDir()
-	projectName := "e2e-project-" + time.Now().Format("20060102150405")
-	input := "11.8.0\n3.10\n"
+	const notice = "The \"project\" command has been removed.\n\n" +
+		"Use Flash for serverless development workflows:\n" +
+		"  https://github.com/runpod/flash\n"
 
-	stdout, stderr, err := runCLIWithInput(tmpDir, input,
-		"project", "create",
-		"--name", projectName,
-		"--type", "Hello_World",
-	)
+	for _, args := range [][]string{
+		{"project"},
+		{"project", "new"},
+		{"project", "start"},
+		{"project", "deploy"},
+		{"project", "build"},
+		{"project", "create", "--name", "example", "--type", "Hello_World"},
+		{"project", "dev", "--select-volume"},
+		{"project", "start", "--prefix-pod-logs=false"},
+		{"project", "--help"},
+		{"project", "deploy", "--help"},
+		{"project", "unknown", "--unknown-flag"},
+		{"--output=yaml", "project", "build"},
+		{"--output=invalid", "project", "deploy"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			stdout, stderr, err := runCLIWithInput(tmpDir, "", args...)
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+				t.Fatalf("expected exit 1, got %v; stderr: %s", err, stderr)
+			}
+			if stdout != "" || stderr != notice {
+				t.Fatalf("stdout = %q, stderr = %q; want empty stdout and %q", stdout, stderr, notice)
+			}
+		})
+	}
+
+	entries, err := os.ReadDir(tmpDir)
 	if err != nil {
-		t.Fatalf("failed to run project create: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+		t.Fatal(err)
 	}
-
-	projectDir := filepath.Join(tmpDir, projectName)
-	tomlPath := filepath.Join(projectDir, "runpod.toml")
-	if _, err := os.Stat(tomlPath); err != nil {
-		t.Fatalf("expected runpod.toml to be created: %v", err)
-	}
-
-	handlerPath := filepath.Join(projectDir, "src", "handler.py")
-	if _, err := os.Stat(handlerPath); err != nil {
-		t.Fatalf("expected handler.py to be created: %v", err)
-	}
-
-	_, stderr, err = runCLIWithInput(projectDir, "", "project", "build")
-	if err != nil {
-		t.Fatalf("failed to run project build: %v\nstderr: %s", err, stderr)
-	}
-
-	dockerfilePath := filepath.Join(projectDir, "Dockerfile")
-	if _, err := os.Stat(dockerfilePath); err != nil {
-		t.Fatalf("expected Dockerfile to be created: %v", err)
+	if len(entries) != 0 {
+		t.Fatalf("project invocation created files: %v", entries)
 	}
 }
 
@@ -1938,9 +1949,6 @@ func TestCLI_HelpCoverage(t *testing.T) {
 		{"exec"},
 		{"exec", "python"},
 		{"ssh", "add-key"},
-		{"project", "dev"},
-		{"project", "build"},
-		{"project", "deploy"},
 		{"hub", "list"},
 		{"hub", "search"},
 		{"hub", "get"},

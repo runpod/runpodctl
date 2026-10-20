@@ -6,12 +6,8 @@ require (
 	github.com/cespare/xxhash v1.1.0
 	github.com/denisbrodbeck/machineid v1.0.1
 	github.com/fatih/color v1.16.0
-	github.com/gobwas/glob v0.2.3
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
-	github.com/google/uuid v1.6.0
-	github.com/manifoldco/promptui v0.9.0
 	github.com/olekukonko/tablewriter v0.0.5
-	github.com/pelletier/go-toml v1.9.5
 	github.com/schollz/croc/v9 v9.6.16
 	github.com/schollz/logger v1.2.0
 	github.com/schollz/pake/v3 v3.0.5
@@ -30,7 +26,6 @@ require (
 )
 
 require (
-	github.com/chzyer/readline v1.5.1 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect

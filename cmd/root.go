@@ -18,7 +18,6 @@ import (
 	"github.com/runpod/runpodctl/cmd/legacy"
 	"github.com/runpod/runpodctl/cmd/model"
 	"github.com/runpod/runpodctl/cmd/pod"
-	"github.com/runpod/runpodctl/cmd/project"
 	"github.com/runpod/runpodctl/cmd/registry"
 	"github.com/runpod/runpodctl/cmd/serverless"
 	"github.com/runpod/runpodctl/cmd/template"
@@ -35,6 +34,13 @@ import (
 var version string
 var outputFormat string
 var configInitErr error
+
+var errProjectRemoved = errors.New("project command removed")
+
+const projectRemovalNotice = `The "project" command has been removed.
+
+Use Flash for serverless development workflows:
+  https://github.com/runpod/flash`
 
 // rootCmd is the base command
 var rootCmd = &cobra.Command{
@@ -107,7 +113,7 @@ func init() {
 		// hooks for --help. rejecting only this one spelling would mean a bad
 		// --output somewhere in your history stops you from reading the help that
 		// tells you which values are valid.
-		if c.Name() == "help" {
+		if c.Name() == "help" || c.Name() == "project" {
 			return nil
 		}
 		if err := output.ValidateFormat(outputFormat); err != nil {
@@ -148,18 +154,15 @@ func registerCommands() {
 	rootCmd.AddCommand(transfer.ReceiveCmd)
 	rootCmd.AddCommand(execCmd)
 
-	// Project commands (hidden - deprecated, will be replaced)
-	projectCmd := &cobra.Command{
-		Use:    "project",
-		Short:  "manage serverless projects (deprecated)",
-		Long:   "create, develop, build, and deploy serverless projects",
-		Hidden: true,
-	}
-	projectCmd.AddCommand(project.NewProjectCmd)
-	projectCmd.AddCommand(project.StartProjectCmd)
-	projectCmd.AddCommand(project.DeployProjectCmd)
-	projectCmd.AddCommand(project.BuildProjectCmd)
-	rootCmd.AddCommand(projectCmd)
+	rootCmd.AddCommand(&cobra.Command{
+		Use:                "project",
+		Short:              "use flash for serverless development",
+		Hidden:             true,
+		DisableFlagParsing: true,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return errProjectRemoved
+		},
+	})
 
 	// Version command
 	rootCmd.AddCommand(versionCmd)
@@ -322,7 +325,9 @@ func Execute(ver string) {
 		}
 	}
 
-	if ue, ok := asUsageError(invoked, err); ok {
+	if errors.Is(err, errProjectRemoved) {
+		fmt.Fprintln(os.Stderr, projectRemovalNotice)
+	} else if ue, ok := asUsageError(invoked, err); ok {
 		// emit the flat JSON error (with a stable "usage_error" code) then the
 		// usage text, so agents get the machine-readable object and humans get help.
 		output.Error(ue)
@@ -369,8 +374,8 @@ func loadConfig() error {
 	}
 	tightenConfigPermissions(configDir, configFile, legacyFile)
 
-	// SetConfigPermissions applies to every viper write, so the `config`,
-	// `doctor` and `project` commands inherit 0600 without their own calls.
+	// viper applies these permissions to every write, so the `config` and
+	// `doctor` commands inherit 0600 without their own calls.
 	viper.SetConfigPermissions(configFilePerm)
 	// SetConfigFile, not AddConfigPath + SetConfigName: viper 1.19 does not
 	// update ConfigFileUsed after WriteConfigAs, so with a *searched* path every

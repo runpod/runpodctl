@@ -1,4 +1,4 @@
-package project
+package podssh
 
 import (
 	"bufio"
@@ -292,63 +292,6 @@ func looksLikeUnreachablePod(err error) bool {
 	return false
 }
 
-// hasChanges checks if there are any modified files in localDir since lastSyncTime.
-func hasChanges(localDir string, lastSyncTime time.Time) (bool, string) {
-	var firstModifiedFile string = ""
-
-	err := filepath.Walk(localDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			if os.IsNotExist(err) {
-				// Handle the case where a file has been removed
-				fmt.Printf("Detected a removed file at: %s\n", path)
-				return errors.New("change detected") // Stop walking
-			}
-			return err
-		}
-
-		// Check if the file was modified after the last sync time
-		if info.ModTime().After(lastSyncTime) {
-			firstModifiedFile = path
-			return filepath.SkipDir // Skip the rest of the directory if a change is found
-		}
-
-		return nil
-	})
-	if err != nil {
-		fmt.Printf("Error walking through directory: %v\n", err)
-		return false, ""
-	}
-
-	return firstModifiedFile != "", firstModifiedFile
-}
-
-func (sshConn *SSHConnection) SyncDir(localDir string, remoteDir string) {
-	syncFiles := func() {
-		// fmt.Println("Syncing files...")
-		err := sshConn.Rsync(localDir, remoteDir, true)
-		if err != nil {
-			fmt.Printf(" error: %v\n", err)
-			return
-		}
-	}
-
-	// Start listening for events in a separate goroutine.
-	go func() {
-		lastSyncTime := time.Now()
-		for {
-			time.Sleep(100 * time.Millisecond)
-			hasChanged, firstModifiedFile := hasChanges(localDir, lastSyncTime)
-			if hasChanged {
-				fmt.Printf("Local changes detected in %s\n", firstModifiedFile)
-				syncFiles()
-				lastSyncTime = time.Now()
-			}
-		}
-	}()
-
-	<-make(chan struct{})
-}
-
 // RunCommand runs a command on the remote pod.
 func (conn *SSHConnection) RunCommand(command string) error {
 	return conn.RunCommands([]string{command})
@@ -370,13 +313,13 @@ func (sshConn *SSHConnection) RunCommands(commands []string) error {
 		if err != nil {
 			return fmt.Errorf("failed to get stdout pipe: %w", err)
 		}
-		go scanAndPrint(stdout, stdoutColor, sshConn.podId, showPrefixInPodLogs)
+		go scanAndPrint(stdout, stdoutColor, sshConn.podId, true)
 
 		stderr, err := session.StderrPipe()
 		if err != nil {
 			return fmt.Errorf("failed to get stderr pipe: %w", err)
 		}
-		go scanAndPrint(stderr, stderrColor, sshConn.podId, showPrefixInPodLogs)
+		go scanAndPrint(stderr, stderrColor, sshConn.podId, true)
 
 		// Run the command
 		fullCommand := strings.Join([]string{
@@ -486,7 +429,7 @@ func confirmHostKeyChange(mismatch *hostKeyMismatchError) bool {
 	return answer == "y" || answer == "yes"
 }
 
-func PodSSHConnection(podId string) (*SSHConnection, error) {
+func Connect(podId string) (*SSHConnection, error) {
 	sshKeyPath, err := sshpkg.ResolvePrivateKeyPath()
 	if err != nil {
 		return nil, fmt.Errorf("resolving ssh key path: %w", err)
