@@ -112,6 +112,8 @@ jobs:
   # nightly run is red, closed by the next green run. Never on pull requests.
   # A cancelled run (cancel-in-progress, a newer push) says nothing either way:
   # it is skipped, and only a run where every job succeeded closes the issue.
+  # A single job that hits timeout-minutes reports `cancelled` without
+  # cancelling the run, so FAILED counts it as red.
   report:
     needs: [flake, fuzz]
     if: ${{ !cancelled() && github.event_name != 'pull_request' }}
@@ -123,7 +125,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
       OWNER: daveseddon-runpod
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      FAILED: ${{ contains(needs.*.result, 'failure') }}
+      FAILED: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
       PASSED: ${{ needs.flake.result == 'success' && needs.fuzz.result == 'success' }}
     steps:
       - name: open, update or close the nix-red issue
