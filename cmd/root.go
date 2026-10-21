@@ -219,24 +219,26 @@ func newHelpCmd(root *cobra.Command) *cobra.Command {
 		Use:   "help [command]",
 		Short: "help about any command",
 		Long:  "help about any command",
-		Args:  cobra.ArbitraryArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Args: func(_ *cobra.Command, args []string) error {
+			c, _, err := root.Find(args)
+			if err == nil && c != nil && c.Name() == projectCommandName {
+				return errProjectRemoved
+			}
+			return nil
+		},
+		Run: func(cmd *cobra.Command, args []string) {
 			target := root
 			if len(args) == 0 {
 				_ = target.Help()
-				return nil
+				return
 			}
 			c, _, err := target.Find(args)
 			if err != nil || c == nil {
 				fmt.Fprintf(os.Stderr, "unknown help topic %q\n", args)
 				_ = target.Help()
-				return nil
-			}
-			if c.Name() == projectCommandName {
-				return errProjectRemoved
+				return
 			}
 			_ = c.Help()
-			return nil
 		},
 	}
 }
