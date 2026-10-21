@@ -37,6 +37,8 @@ var configInitErr error
 
 var errProjectRemoved = errors.New("project command removed")
 
+const projectCommandName = "project"
+
 const projectRemovalNotice = `The "project" command has been removed.
 
 Use the Runpod SDK for serverless development workflows:
@@ -117,7 +119,7 @@ func init() {
 		// hooks for --help. rejecting only this one spelling would mean a bad
 		// --output somewhere in your history stops you from reading the help that
 		// tells you which values are valid.
-		if c.Name() == "help" || c.Name() == "project" {
+		if c.Name() == "help" || c.Name() == projectCommandName {
 			return nil
 		}
 		if err := output.ValidateFormat(outputFormat); err != nil {
@@ -161,7 +163,7 @@ func registerCommands() {
 	rootCmd.AddCommand(execCmd)
 
 	rootCmd.AddCommand(&cobra.Command{
-		Use:                "project",
+		Use:                projectCommandName,
 		Short:              "use the runpod sdk for serverless development",
 		Hidden:             true,
 		DisableFlagParsing: true,
@@ -221,17 +223,20 @@ func newHelpCmd(root *cobra.Command) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target := root
 			if len(args) == 0 {
-				return target.Help()
+				_ = target.Help()
+				return nil
 			}
 			c, _, err := target.Find(args)
 			if err != nil || c == nil {
 				fmt.Fprintf(os.Stderr, "unknown help topic %q\n", args)
-				return target.Help()
+				_ = target.Help()
+				return nil
 			}
-			if c.Name() == "project" {
+			if c.Name() == projectCommandName {
 				return errProjectRemoved
 			}
-			return c.Help()
+			_ = c.Help()
+			return nil
 		},
 	}
 }
