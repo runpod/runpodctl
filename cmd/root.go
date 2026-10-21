@@ -74,7 +74,11 @@ utilities:
   send/receive   transfer files to/from pods
 
 deprecated
-  get, create, remove, start, stop, exec, project, config, get models`,
+  get, create, remove, start, stop, exec, config, get models
+
+serverless development:
+  use the runpod sdk: https://github.com/runpod/runpod-python
+  project commands exit 1 with an sdk notice on stderr`,
 }
 
 // GetRootCmd returns the root command
@@ -129,6 +133,8 @@ func init() {
 }
 
 func registerCommands() {
+	rootCmd.InitDefaultHelpFlag()
+
 	// Global flags
 	rootCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "json", "output format (json, yaml)")
 
@@ -212,19 +218,20 @@ func newHelpCmd(root *cobra.Command) *cobra.Command {
 		Short: "help about any command",
 		Long:  "help about any command",
 		Args:  cobra.ArbitraryArgs,
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			target := root
 			if len(args) == 0 {
-				_ = target.Help()
-				return
+				return target.Help()
 			}
 			c, _, err := target.Find(args)
 			if err != nil || c == nil {
 				fmt.Fprintf(os.Stderr, "unknown help topic %q\n", args)
-				_ = target.Help()
-				return
+				return target.Help()
 			}
-			_ = c.Help()
+			if c.Name() == "project" {
+				return errProjectRemoved
+			}
+			return c.Help()
 		},
 	}
 }
