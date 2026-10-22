@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.0.2](https://github.com/runpod/runpodctl/compare/v3.0.1...v3.0.2) (2026-10-22)
+
+
+### Bug Fixes
+
+* direct project commands to the Runpod SDK (CON-874) ([#382](https://github.com/runpod/runpodctl/issues/382)) ([416403f](https://github.com/runpod/runpodctl/commit/416403f44d2c5b81b3b30b9aadddb37fa8bd3294))
+* **model:** timeout + retry on multipart upload requests (STO-807) ([#350](https://github.com/runpod/runpodctl/issues/350)) ([fa1d9c6](https://github.com/runpod/runpodctl/commit/fa1d9c606d55acfac99e227ed2bf152c8b1d32a6))
+
+
+### Code Refactoring
+
+* **api:** shared GraphQL response parsing (CON-1717) ([#353](https://github.com/runpod/runpodctl/issues/353)) ([e123973](https://github.com/runpod/runpodctl/commit/e12397351fa126394ad04910ec6551351d164f01))
+
 ## [3.0.1](https://github.com/runpod/runpodctl/compare/v3.0.0...v3.0.1) (2026-10-15)
 
 
