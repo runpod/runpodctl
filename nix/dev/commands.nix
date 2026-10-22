@@ -269,6 +269,70 @@ let
         nix build --no-link .#runpodctl.goModules
       '';
     };
+    # Every step below shells out to a fresh `nix build`/`nix run` instead of
+    # interpolating a derivation: the pins it rewrites (the Go override,
+    # vendorHash) are inputs to those derivations, so building this app must
+    # not depend on them being right already.
+    update-pins = {
+      group = "nix";
+      description = "sync the go pin, vendorHash and lint baseline (what the nix-maintenance pr runs)";
+      runtimeInputs = [
+        pkgs.curl
+        pkgs.jq
+        pkgs.gnused
+        pkgs.git
+      ];
+      text = ''
+        system="$(nix eval --impure --raw --expr builtins.currentSystem)"
+        summary=()
+
+        # 1. Go: the newest stable point release of go.mod's minor series.
+        minor="$(sed -n 's/^go \([0-9]*\.[0-9]*\).*/\1/p' go.mod)"
+        pinned="$(sed -n 's/^ *version = "\([0-9.]*\)";/\1/p' nix/versions.nix | head -n1)"
+        latest="$(curl -fsSL 'https://go.dev/dl/?mode=json' | jq -r --arg m "go$minor" '
+          [.[] | select(.stable and (.version == $m or (.version | startswith($m + "."))))][0]
+          | .version + " " + ([.files[] | select(.kind == "source")][0].sha256)')"
+        version="''${latest%% *}" sha="''${latest##* }"
+        version="''${version#go}"
+        if [ -z "$version" ] || [ "$version" = null ] || [ -z "$sha" ] || [ "$sha" = null ]; then
+          echo "update-pins: no stable go$minor release on go.dev" >&2
+          exit 1
+        fi
+        if [ "$version" != "$pinned" ] && [ "$(printf '%s\n%s\n' "$pinned" "$version" | sort -V | tail -n1)" = "$version" ]; then
+          sri="$(nix hash convert --hash-algo sha256 --to sri "$sha")"
+          sed -i \
+            -e "s|^\( *version = \)\"$pinned\";|\1\"$version\";|" \
+            -e "/go.dev\/dl/,/hash =/s|hash = \"sha256-[A-Za-z0-9+/=]*\"|hash = \"$sri\"|" \
+            nix/versions.nix
+          summary+=("go $pinned -> $version")
+        fi
+
+        # 2. vendorHash.
+        vendorHash() { sed -n 's/^ *vendorHash = "\(.*\)";/\1/p' nix/versions.nix; }
+        old="$(vendorHash)"
+        nix run .#update-vendor-hash
+        if [ "$(vendorHash)" != "$old" ]; then
+          summary+=("vendorHash refreshed")
+        fi
+
+        # 3. Lint baseline: prune fixed findings, only when the check is green, so
+        # the rewrite can only shrink it.
+        if nix build --no-link -L ".#checks.$system.lint-baseline"; then
+          nix run .#update-lint-baseline
+          if ! git diff --quiet -- nix/checks/lint-baseline.txt; then
+            summary+=("lint baseline: $(git diff --numstat -- nix/checks/lint-baseline.txt | cut -f2) fixed finding(s) pruned")
+          fi
+        else
+          echo "update-pins: lint-baseline is not green (new findings or a tool failure); leaving the baseline alone" >&2
+        fi
+
+        if [ "''${#summary[@]}" -eq 0 ]; then
+          echo "update-pins: everything is current"
+        else
+          printf -- '- %s\n' "''${summary[@]}"
+        fi
+      '';
+    };
     test-integration = {
       group = "nix";
       description = "exercise every flake target (nix/tests/integration.sh)";

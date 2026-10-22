@@ -9,7 +9,7 @@
 
 This explains how to use **[Nix](https://nixos.org)** with **runpodctl**: run the CLI from GitHub with one command, get a reproducible dev environment, and run the same checks, static analysis and fuzzing that CI runs.
 
-> **The Nix path is optional.** `go build`, the `makefile`, `ci.yml` and the goreleaser release are unchanged. Nix is here for those who want it.
+> **The Nix path is optional.** `go build`, the `Makefile`, `ci.yml` and the goreleaser release are unchanged. Nix is here for those who want it.
 
 **Platforms:** `x86_64-linux`, `aarch64-linux` and `aarch64-darwin` (Apple Silicon). The OCI images are linux only.
 
@@ -99,7 +99,7 @@ The API key is passed at run time and never baked into a layer.
 | `fuzz-seeds` | every `Fuzz*` target's seeds and committed `testdata/fuzz/` crashers |
 | `cli-help-smoke` | `--help` for every command the binary lists; no error object on stdout |
 | `version-stamp` | the binary reports the flake's commit |
-| `lint-baseline` | no new static analysis finding, and no fixed one still listed |
+| `lint-baseline` | no new static analysis finding (fixed ones are reported, not failed) |
 | `nixfmt` `deadnix` `statix` | the Nix files |
 | `shellcheck` | every `*.sh`, and no `# shellcheck disable` anywhere |
 | `actionlint` | every workflow |
@@ -128,11 +128,13 @@ nix run .#static-analysis-report-full     # + govulncheck (needs the network) ->
 
 It has a summary per tool, a security section (govulncheck, gosec by rule and severity, staticcheck's SA checks), findings by package, the findings that are new against the baseline, and the details per tool. `report.json` holds the same data.
 
-**The ratchet.** `nix/checks/lint-baseline.txt` lists every finding that existed when the tools were turned on, one per line, without line numbers, so unrelated edits don't move them. The `lint-baseline` check fails on a new finding *and* on a fixed finding that is still listed. After fixing findings:
+**The ratchet.** `nix/checks/lint-baseline.txt` lists every finding that existed when the tools were turned on, one per line, without line numbers, so unrelated edits don't move them. The `lint-baseline` check fails on a new finding. A fixed finding that is still listed is only reported, so fixing one never turns anything red; the nix-maintenance pr prunes it (§8). To prune by hand:
 
 ```bash
 nix run .#update-lint-baseline     # rewrites the file; commit the shrinking diff
 ```
+
+Never regenerate it to absorb new findings.
 
 Findings are fixed in code. A `//nolint` needs the linter's name and a written reason (`nolintlint` enforces it).
 
@@ -154,13 +156,17 @@ A failure leaves the input under the package's `testdata/fuzz/<target>/`. Commit
 
 ## 8. Maintenance
 
-**`vendorHash`.** After any change to `go.mod` or `go.sum`, the build fails with a hash mismatch until you run:
+**Ownership.** Nix is owned by @daveseddon-runpod (`.github/CODEOWNERS`). Contributors who don't use nix never need to touch `nix/`, `flake.*` or the lint baseline, even when they change `go.mod`/`go.sum` or fix lint findings: the bot below catches up after the merge.
 
-```bash
-nix run .#update-vendor-hash
-```
+**The nix-maintenance pr.** `.github/workflows/nix-maintenance.yml` runs after merges that touch Go code or `go.mod`/`go.sum`, daily, and on demand. It runs `nix run .#update-pins` and opens (or updates) one `nix/maintenance` pr assigned to the owner. `update-pins` does three things:
 
-**Go version.** `nix/versions.nix` pins Go and asserts it is at least `go.mod`'s `go` directive. Raising `go.mod` past it fails evaluation with a message naming the file to edit.
+- **Go version.** `nix/versions.nix` pins Go (nixpkgs lags point releases) and asserts it is at least `go.mod`'s `go` directive. `update-pins` moves the pin to the newest stable point release of `go.mod`'s minor series, from `go.dev/dl/?mode=json`, built on nixpkgs' matching `go_1_<minor>`. The flake follows `go.mod`, never leads it: moving to a new minor (1.27) is a `go.mod`/`ci.yml`/`release.yml` change, and the bot picks it up after the merge. The static-analysis tools must also read the new minor's export data, or `lint-baseline` fails as a tool failure (not new findings) until nixpkgs ships releases that do (`nix flake update nixpkgs`).
+- **`vendorHash`.** Any `go.mod`/`go.sum` change invalidates it; `update-pins` runs `nix run .#update-vendor-hash`, which rebuilds with the old hash and takes the `got:` line.
+- **Lint baseline.** If `lint-baseline` passes (nothing new), it runs `update-lint-baseline`, which can then only shrink the file.
+
+**Red on main.** `nix.yml` is never a required check and on pull requests it can't fail the workflow. On pushes to main and the nightly run it reports honestly, and a failure opens (or comments on) one issue labelled `nix-red`, assigned to the owner; the next green run closes it.
+
+**`gitTracked`.** The flake builds from `lib.fileset.gitTracked`, so a new file is invisible to every `nix build`/`nix flake check` until it is `git add`ed: an untracked `_test.go` silently does not run, and an untracked `.go` file the package needs fails as a missing symbol.
 
 **Integration test.** `nix run .#test-integration` builds every package and check the flake exposes on this system, and runs the negative checks (a gofmt error, a vet error, a new lint finding and a planted fuzz crasher must each fail). It also runs the apps, the dev shell and the images under docker or podman. With `RUNPOD_API_KEY` set it adds read-only API calls (`gpu list`, `pod list`, `user`). It prints a PASS/FAIL/SKIP table.
 
