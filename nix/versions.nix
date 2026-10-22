@@ -32,10 +32,10 @@ let
   baseVersion = readMatch ../main.go ".*\nvar Version = \"([^\"]+)\"\n.*" "var Version";
 
   go = pkgs.go_1_26.overrideAttrs (_old: rec {
-    version = "1.26.9";
+    version = "1.26.10";
     src = pkgs.fetchurl {
       url = "https://go.dev/dl/go${version}.src.tar.gz";
-      hash = "sha256-lzXX3Ntls10/pXfwQGRzfAO4nPGitx5uaf4vPG+f1Mo=";
+      hash = "sha256-/WPog7ovK/ypPBZGsx6+9j4rHk0rMXyXidl2po2B828=";
     };
   });
 in
@@ -46,7 +46,7 @@ assert lib.assertMsg (lib.versionAtLeast go.version goModVersion)
 
   # Hash of the proxyVendor module cache (`goModules`). Any go.mod/go.sum
   # change invalidates it: run `nix run .#update-vendor-hash`.
-  vendorHash = "sha256-euC7FNi6GTu5W6DE/SPuywtnoM8an6etlcHJbQBxxeQ=";
+  vendorHash = "sha256-0xRsyNToZJWpT8MTdXstQXewWTLJNGxrknGUot6SdAg=";
 
   # Identical to .goreleaser.yml, minus the version, which the package adds.
   ldflags = [
@@ -57,7 +57,7 @@ assert lib.assertMsg (lib.versionAtLeast go.version goModVersion)
   # Analysis tools come straight from nixpkgs (and so from cache.nixos.org).
   # They only need the same Go *language* version (1.26) as the module; the
   # pinned `go` above is first on PATH in every check, so package loading and
-  # govulncheck's standard-library check both see 1.26.9.
+  # govulncheck's standard-library check both see 1.26.10.
   inherit (pkgs)
     golangci-lint
     gosec

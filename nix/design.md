@@ -103,7 +103,7 @@ nix/
 
 **`proxyVendor = true`.** With it, `goModules` is a GOPROXY-format module cache rather than a `vendor/` tree. The repo has no `vendor/` directory and every build uses `-mod=mod`, so this matches how runpodctl is built today. It also lets `go mod verify` and `go mod tidy -diff` run inside the sandbox with `GOPROXY=file://<goModules>`, which a vendor tree can't support. *To confirm in phase 2:* that `tidy -diff` finds every module it needs in that cache.
 
-**Embedded files.** `cmd/project/functions.go` embeds `starter_examples/*`, `starter_examples/*/.*` (dotfiles) and `exampleDockerfile`. `nix/source.nix` must keep all of them, and the `go-test` check fails loudly if one is missing, because the embed won't compile.
+**Runtime assets.** `nix/source.nix` includes `cmd/croc/relays.json` alongside the Go sources and test data.
 
 ### Version
 
@@ -125,11 +125,11 @@ nix/
 
 The Go version is pinned in three places today (`go.mod`, `ci.yml`, `release.yml`). The flake must not become a fourth that drifts.
 
-- **nixpkgs lags Go point releases.** The locked `nixos-unstable` ships Go **1.26.8**, which carries the ten `net/http`, `crypto/tls`, `net/textproto` and `os` advisories fixed in 1.26.9 (see PR #371). So `versions.nix` overrides `go_1_26` to 1.26.9, fetched from `go.dev/dl` by hash, as xtcp2 does:
+- **nixpkgs lags Go point releases.** `versions.nix` pins `go_1_26` to **1.26.10**, including the `crypto/x509` fix for [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809). The source archive is fetched from `go.dev/dl` by hash:
 
   ```nix
   go = pkgs.go_1_26.overrideAttrs (_old: rec {
-    version = "1.26.9";
+    version = "1.26.10";
     src = pkgs.fetchurl {
       url = "https://go.dev/dl/go${version}.src.tar.gz";
       hash = "sha256-…";
@@ -137,7 +137,7 @@ The Go version is pinned in three places today (`go.mod`, `ci.yml`, `release.yml
   });
   ```
 
-- **Enforced at evaluation time.** `versions.nix` reads the `go` directive from `go.mod` and `assert`s `lib.versionAtLeast go.version goModVersion`. The directive is a minimum, so this is Go's own semantics, and it lets the flake build with 1.26.9 while `go.mod` on main still says 1.26.6 (#371 bumps it; the two are then equal). A `go.mod` bump past the flake's Go fails `nix flake check` immediately, with a message saying which file to edit.
+- **Enforced at evaluation time.** `versions.nix` reads the `go` directive from `go.mod` and `assert`s `lib.versionAtLeast go.version goModVersion`. The directive is a minimum, matching Go's own semantics. A `go.mod` bump past the flake's Go fails `nix flake check` immediately, with a message saying which file to edit.
 - **`GOTOOLCHAIN=local`** in every check and build, so Go never tries to download a toolchain in the sandbox.
 - **Recommendation for the workflows:** `actions/setup-go` with `go-version-file: go.mod`, so `go.mod` becomes the one hand-edited source and the flake asserts against it.
 
@@ -270,7 +270,7 @@ runpodctl had no fuzz targets. The fuzzing layer is built so that adding one is 
 
 | Target | Invariant |
 | --- | --- |
-| `rsyncConnectionLost` (`cmd/project/ssh.go`) | a refused host key is never classified as a restarting pod |
+| `rsyncConnectionLost` (`internal/podssh/ssh.go`) | a refused host key is never classified as a restarting pod |
 | `rsyncRemoteShell` / `quoteSSHConfigValue` | rsync's and openssh's parsers split the result back into the original arguments |
 | receive manifest validation, `foldKey` (`cmd/transfer/confine.go`) | no accepted manifest resolves outside the destination; case-fold/NFC aliases collide |
 | `validateChunkRanges` (`cmd/transfer/croc.go`) | an accepted resume request is well-formed and its true sum (no overflow) is within the file's chunks |
@@ -354,7 +354,7 @@ Each phase is one PR, small enough to review on its own:
 ## 13. Open questions and risks
 
 - **`vendorHash` ownership.** Who updates it, and do we automate it on Dependabot PRs? This is the main ongoing cost.
-- **Binary cache.** Cachix (shared with users, needs a token) or magic-nix-cache (CI only, no secrets)? Without one, every CI run rebuilds Go itself, because the 1.26.9 override isn't in `cache.nixos.org`.
+- **Binary cache.** Cachix (shared with users, needs a token) or magic-nix-cache (CI only, no secrets)? Without one, every CI run rebuilds Go itself, because the 1.26.10 override isn't in `cache.nixos.org`.
 - **Image publishing.** GHCR under `runpod/`, signing (cosign) and tags. Out of scope until someone needs the image.
 - **Darwin sandbox.** Loopback tests need `__darwinAllowLocalNetworking`. If the darwin sandbox still rejects them, the affected checks become linux-only, and the reason is written in the check file.
 - **`tools/upx`.** The committed 561 KB executable stays out of the Nix path. Nix images aren't upx-compressed, because stripping already gives most of the gain, and a compressed binary is slower to start and harder to scan.

@@ -1,6 +1,6 @@
 //go:build unix
 
-package project
+package podssh
 
 import (
 	"errors"
