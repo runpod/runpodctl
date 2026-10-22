@@ -160,7 +160,7 @@ A failure leaves the input under the package's `testdata/fuzz/<target>/`. Commit
 
 **The nix-maintenance pr.** `.github/workflows/nix-maintenance.yml` runs after merges that touch Go code or `go.mod`/`go.sum`, daily, and on demand. It runs `nix run .#update-pins` and opens (or updates) one `nix/maintenance` pr assigned to the owner. `update-pins` does three things:
 
-- **Go version.** `nix/versions.nix` pins Go (nixpkgs lags point releases) and asserts it is at least `go.mod`'s `go` directive. `update-pins` moves the pin to the newest stable point release of `go.mod`'s minor series, from `go.dev/dl/?mode=json`.
+- **Go version.** `nix/versions.nix` pins Go (nixpkgs lags point releases) and asserts it is at least `go.mod`'s `go` directive. `update-pins` moves the pin to the newest stable point release of `go.mod`'s minor series, from `go.dev/dl/?mode=json`, built on nixpkgs' matching `go_1_<minor>`. The flake follows `go.mod`, never leads it: moving to a new minor (1.27) is a `go.mod`/`ci.yml`/`release.yml` change, and the bot picks it up after the merge. The static-analysis tools must also read the new minor's export data, or `lint-baseline` fails as a tool failure (not new findings) until nixpkgs ships releases that do (`nix flake update nixpkgs`).
 - **`vendorHash`.** Any `go.mod`/`go.sum` change invalidates it; `update-pins` runs `nix run .#update-vendor-hash`, which rebuilds with the old hash and takes the `got:` line.
 - **Lint baseline.** If `lint-baseline` passes (nothing new), it runs `update-lint-baseline`, which can then only shrink the file.
 

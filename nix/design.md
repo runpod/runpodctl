@@ -125,10 +125,10 @@ nix/
 
 The Go version is pinned in three places today (`go.mod`, `ci.yml`, `release.yml`). The flake must not become a fourth that drifts.
 
-- **nixpkgs lags Go point releases.** `versions.nix` pins `go_1_26` to **1.26.10**, including the `crypto/x509` fix for [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809). The source archive is fetched from `go.dev/dl` by hash:
+- **nixpkgs lags Go point releases.** `versions.nix` takes nixpkgs' derivation for `go.mod`'s minor series (`go_1_26` for 1.26.x, so a minor bump moves it too) and pins it to **1.26.10**, including the `crypto/x509` fix for [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809). The source archive is fetched from `go.dev/dl` by hash:
 
   ```nix
-  go = pkgs.go_1_26.overrideAttrs (_old: rec {
+  pinnedGo = goBase.overrideAttrs (_old: rec {  # goBase = pkgs.go_1_26
     version = "1.26.10";
     src = pkgs.fetchurl {
       url = "https://go.dev/dl/go${version}.src.tar.gz";

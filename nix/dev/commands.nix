@@ -315,7 +315,7 @@ let
           summary+=("vendorHash refreshed")
         fi
 
-        # 3. Lint baseline: prune fixed findings, only when nothing is new, so
+        # 3. Lint baseline: prune fixed findings, only when the check is green, so
         # the rewrite can only shrink it.
         if nix build --no-link -L ".#checks.$system.lint-baseline"; then
           nix run .#update-lint-baseline
@@ -323,7 +323,7 @@ let
             summary+=("lint baseline: $(git diff --numstat -- nix/checks/lint-baseline.txt | cut -f2) fixed finding(s) pruned")
           fi
         else
-          echo "update-pins: lint-baseline reports new findings; leaving the baseline alone" >&2
+          echo "update-pins: lint-baseline is not green (new findings or a tool failure); leaving the baseline alone" >&2
         fi
 
         if [ "''${#summary[@]}" -eq 0 ]; then
