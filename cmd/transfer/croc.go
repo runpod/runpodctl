@@ -43,6 +43,9 @@ import (
 	"github.com/schollz/croc/v9/src/utils"
 )
 
+// WIRE FORMAT: these raw requests are exchanged before any croc message and
+// compared byte for byte by the peer. Changing one breaks the handshake.
+// Locked by TestForkHandshakeStrings.
 var (
 	ipRequest        = []byte("ips?")
 	handshakeRequest = []byte("handshake")
@@ -152,7 +155,13 @@ type Client struct {
 	numberOfTransferredFiles int
 }
 
-// FileInfo registers the information about the file
+// FileInfo registers the information about the file.
+//
+// WIRE FORMAT: this is serialized to JSON and sent to the peer, so the json tags
+// below are part of the croc wire contract. Both ends must agree, including the
+// runpodctl copy the platform mounts into the container. Renaming a field or
+// changing a tag breaks transfers and must be a deliberate, versioned change.
+// See cmd/croc/croc.go and E-3968; locked by cmd/transfer/wireformat_test.go.
 type FileInfo struct {
 	Name         string      `json:"n,omitempty"`
 	FolderRemote string      `json:"fr,omitempty"`
@@ -167,14 +176,23 @@ type FileInfo struct {
 	TempFile     bool        `json:"tf,omitempty"`
 }
 
-// RemoteFileRequest requests specific bytes
+// RemoteFileRequest requests specific bytes.
+//
+// WIRE FORMAT: this is sent to the peer as JSON inside a TypeRecipientReady
+// message. It has no struct tags, so its wire keys are the Go field names;
+// renaming a field silently changes the wire and breaks the chunk request.
+// Locked by TestRemoteFileRequestWireGolden.
 type RemoteFileRequest struct {
 	CurrentFileChunkRanges    []int64
 	FilesToTransferCurrentNum int
 	MachineID                 string
 }
 
-// SenderInfo lists the files to be transferred
+// SenderInfo lists the files to be transferred.
+//
+// WIRE FORMAT: this is sent to the peer as JSON. It has no struct tags, so its
+// Go field names are the wire keys and renaming a field changes the wire. Keep
+// both ends in sync; locked by cmd/transfer/wireformat_test.go. See E-3968.
 type SenderInfo struct {
 	FilesToTransfer        []FileInfo
 	EmptyFoldersToTransfer []FileInfo
