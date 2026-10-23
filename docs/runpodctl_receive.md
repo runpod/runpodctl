@@ -4,10 +4,24 @@ receive files or folders
 
 ### Synopsis
 
-receive files or folders from a pod or any computer using croc
+receive files or folders from a pod or any computer using croc.
+
+use the exact code printed by 'runpodctl send' on the sending machine, including
+the trailing relay index. if the sender used --code, type the printed
+<codephrase>-<relay index>, not the bare codephrase.
 
 ```
 runpodctl receive <code> [flags]
+```
+
+### Examples
+
+```
+  # receive using the exact code printed by 'runpodctl send'
+  runpodctl receive 5254-respect-amen-emotion-14
+
+  # sender used --code my-secret and send printed my-secret-14
+  runpodctl receive my-secret-14
 ```
 
 ### Options
