@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path"
@@ -60,10 +61,7 @@ func (v Volume) Download(ctx context.Context, remotePath, localPath string) (*Su
 	if err != nil {
 		return nil, err
 	}
-
-	var listed map[string]remoteObject
-	isDir := key == "" || strings.HasSuffix(key, "/")
-	if !isDir {
+	if key != "" && !strings.HasSuffix(key, "/") {
 		obj, err := r.headObject(ctx, key)
 		// runpod answers a head on a directory with 400, not 404
 		if err != nil && HTTPStatus(err) != http.StatusBadRequest {
@@ -72,24 +70,31 @@ func (v Volume) Download(ctx context.Context, remotePath, localPath string) (*Su
 		if obj != nil {
 			return r.downloadOne(ctx, key, *obj, localPath)
 		}
-		listed, err = r.listPrefix(ctx, key+"/")
-		if err != nil {
-			return nil, err
-		}
 		key += "/"
-	} else if listed, err = r.listPrefix(ctx, key); err != nil {
+	}
+	return r.downloadFolder(ctx, key, localPath)
+}
+
+// downloadFolder downloads every object under prefix into localPath, which
+// defaults to the folder's name (the volume id for the whole volume).
+func (r *run) downloadFolder(ctx context.Context, prefix, localPath string) (*Summary, error) {
+	listed, err := r.listPrefix(ctx, prefix)
+	if err != nil {
 		return nil, err
 	}
 	// a typo must not look like an empty folder; the whole volume may be empty
-	if len(listed) == 0 && key != "" {
-		return nil, fmt.Errorf("%q on volume %s: %w", strings.TrimSuffix(key, "/"), r.ID, ErrNotFound)
+	if len(listed) == 0 && prefix != "" {
+		return nil, fmt.Errorf("%q on volume %s: %w", strings.TrimSuffix(prefix, "/"), r.ID, ErrNotFound)
 	}
-
 	if localPath == "" {
 		localPath = r.ID
-		if key != "" {
-			localPath = path.Base(strings.TrimSuffix(key, "/"))
+		if prefix != "" {
+			localPath = path.Base(strings.TrimSuffix(prefix, "/"))
 		}
+	}
+	files, err := localTargets(listed, prefix, localPath)
+	if err != nil {
+		return nil, err
 	}
 	if err := os.MkdirAll(localPath, 0o755); err != nil {
 		return nil, err
@@ -99,20 +104,22 @@ func (v Volume) Download(ctx context.Context, remotePath, localPath string) (*Su
 		return nil, err
 	}
 	defer root.Close()
+	return r.downloadAll(ctx, root, files)
+}
 
+// localTargets maps listed objects to paths under the download folder,
+// sorted by key, refusing any that would land outside it or collide.
+func localTargets(listed map[string]remoteObject, prefix, localPath string) ([]remoteFile, error) {
 	var files []remoteFile
 	for k, obj := range listed {
-		rel := filepath.FromSlash(strings.TrimPrefix(k, key))
+		rel := filepath.FromSlash(strings.TrimPrefix(k, prefix))
 		if !filepath.IsLocal(rel) {
 			return nil, refusef("remote file %q would be written outside %s", k, localPath)
 		}
 		files = append(files, remoteFile{key: k, name: rel, obj: obj})
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].key < files[j].key })
-	if err := checkLocalNames(files); err != nil {
-		return nil, err
-	}
-	return r.downloadAll(ctx, root, files)
+	return files, checkLocalNames(files)
 }
 
 // checkLocalNames refuses a listing whose files would share a path on disk:
@@ -140,8 +147,17 @@ func checkLocalNames(files []remoteFile) error {
 			return refusef("cannot download both %q and %q: the first would have to be a file and a folder", name, other)
 		}
 	}
+	return checkWorkNames(files, targets, dirs)
+}
+
+// workSuffixes name the files a download writes beside its target.
+var workSuffixes = []string{partialSuffix, sidecarSuffix, sidecarSuffix + ".tmp"}
+
+// checkWorkNames refuses a file whose partial, sidecar, or sidecar temp name
+// is another target or a folder one lives in.
+func checkWorkNames(files []remoteFile, targets, dirs map[string]string) error {
 	for _, f := range files {
-		for _, suffix := range []string{partialSuffix, sidecarSuffix} {
+		for _, suffix := range workSuffixes {
 			k := namefold.Key(f.name + suffix)
 			other, ok := targets[k]
 			if !ok {
@@ -208,88 +224,141 @@ func (r *run) downloadFile(ctx context.Context, root *os.Root, f remoteFile) err
 		}
 	}
 	partial := f.name + partialSuffix
-	sidecar := f.name + sidecarSuffix
-	size := f.obj.size
-
-	if size <= chunkSize {
-		file, err := root.OpenFile(partial, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
-		if err != nil {
-			return err
-		}
-		err = r.getRange(ctx, file, f.key, 0, size, size, f.obj.etag)
-		if err == nil {
-			err = file.Sync()
-		}
-		if cerr := file.Close(); err == nil {
-			err = cerr
-		}
-		if err != nil {
-			return err
-		}
-		return finish(root, partial, f, "")
+	if err := refuseNonRegular(root, partial); err != nil {
+		return err
 	}
-
-	chunks := int((size + chunkSize - 1) / chunkSize)
-	done := map[int]bool{}
-	var st downloadState
-	if data, err := root.ReadFile(sidecar); err == nil && json.Unmarshal(data, &st) == nil &&
-		st.Key == f.key && st.Size == size && st.ETag == f.obj.etag && st.ChunkSize == chunkSize {
-		if info, err := root.Stat(partial); err == nil && info.Size() == size {
-			for _, c := range st.Done {
-				done[c] = true
-			}
-		}
+	if f.obj.size <= chunkSize {
+		return r.downloadWhole(ctx, root, f, partial)
 	}
+	d := &chunkedDownload{run: r, root: root, f: f, partial: partial, sidecar: f.name + sidecarSuffix}
+	return d.fetch(ctx)
+}
 
-	file, err := root.OpenFile(partial, os.O_RDWR|os.O_CREATE, 0o644)
+// refuseNonRegular refuses a partial download path that exists as anything
+// but a regular file: a symlink there would point the write at another file.
+func refuseNonRegular(root *os.Root, name string) error {
+	info, err := root.Lstat(name)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	defer file.Close()
-	if len(done) == 0 {
+	if !info.Mode().IsRegular() {
+		return refusef("%q exists and is not a regular file; remove it and rerun", name)
+	}
+	return nil
+}
+
+// downloadWhole fetches a file that fits in one chunk.
+func (r *run) downloadWhole(ctx context.Context, root *os.Root, f remoteFile, partial string) error {
+	file, err := root.OpenFile(partial, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	err = r.getRange(ctx, file, f.key, 0, f.obj.size, f.obj.size, f.obj.etag)
+	if err == nil {
+		err = file.Sync()
+	}
+	if cerr := file.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	return finishDownload(root, partial, f, "")
+}
+
+// chunkedDownload fetches a large file in chunks into its partial file,
+// recording finished chunks in the sidecar so a rerun fetches only the rest.
+type chunkedDownload struct {
+	*run
+	root    *os.Root
+	f       remoteFile
+	partial string
+	sidecar string
+	file    *os.File
+	state   downloadState
+	mu      sync.Mutex // guards state and the sidecar
+}
+
+func (d *chunkedDownload) fetch(ctx context.Context) error {
+	done := d.completedChunks()
+	if err := d.openPartial(len(done) > 0); err != nil {
+		return err
+	}
+	defer d.file.Close()
+
+	d.state = downloadState{Key: d.f.key, Size: d.f.obj.size, ETag: d.f.obj.etag, ChunkSize: chunkSize}
+	var missing []int
+	for c := range int((d.f.obj.size + chunkSize - 1) / chunkSize) {
+		if done[c] {
+			d.state.Done = append(d.state.Done, c)
+			d.Reporter.Reused(chunkLen(c, d.f.obj.size))
+			continue
+		}
+		missing = append(missing, c)
+	}
+	if err := forEach(ctx, d.Concurrency, missing, d.fetchChunk); err != nil {
+		return err
+	}
+	if err := d.file.Close(); err != nil {
+		return err
+	}
+	return finishDownload(d.root, d.partial, d.f, d.sidecar)
+}
+
+// completedChunks reads the chunks an earlier run finished, if the sidecar
+// describes this version of the object and the partial file is intact.
+func (d *chunkedDownload) completedChunks() map[int]bool {
+	var st downloadState
+	data, err := d.root.ReadFile(d.sidecar)
+	if err != nil || json.Unmarshal(data, &st) != nil {
+		return nil
+	}
+	if st.Key != d.f.key || st.Size != d.f.obj.size || st.ETag != d.f.obj.etag || st.ChunkSize != chunkSize {
+		return nil
+	}
+	if info, err := d.root.Stat(d.partial); err != nil || info.Size() != d.f.obj.size {
+		return nil
+	}
+	done := map[int]bool{}
+	for _, c := range st.Done {
+		done[c] = true
+	}
+	return done
+}
+
+// openPartial opens the partial file at the object's size, emptying it
+// first unless finished chunks are kept.
+func (d *chunkedDownload) openPartial(keep bool) error {
+	file, err := d.root.OpenFile(d.partial, os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		return err
+	}
+	d.file = file
+	if !keep {
 		if err := file.Truncate(0); err != nil {
 			return err
 		}
 	}
-	if err := file.Truncate(size); err != nil {
-		return err
-	}
+	return file.Truncate(d.f.obj.size)
+}
 
-	st = downloadState{Key: f.key, Size: size, ETag: f.obj.etag, ChunkSize: chunkSize}
-	var missing []int
-	for c := 0; c < chunks; c++ {
-		if done[c] {
-			st.Done = append(st.Done, c)
-			r.Reporter.Reused(chunkLen(c, size))
-		} else {
-			missing = append(missing, c)
-		}
-	}
-
-	var mu sync.Mutex
-	err = forEach(ctx, r.Concurrency, missing, func(ctx context.Context, c int) error {
-		off := int64(c) * chunkSize
-		length := chunkLen(c, size)
-		if err := r.getRange(ctx, file, f.key, off, length, size, f.obj.etag); err != nil {
-			return err
-		}
-		mu.Lock()
-		defer mu.Unlock()
-		// data reaches disk before the sidecar claims it
-		if err := file.Sync(); err != nil {
-			return err
-		}
-		st.Done = append(st.Done, c)
-		slices.Sort(st.Done)
-		return writeJSONIn(root, sidecar, st, 0o644)
-	})
-	if err != nil {
+func (d *chunkedDownload) fetchChunk(ctx context.Context, c int) error {
+	off := int64(c) * chunkSize
+	if err := d.getRange(ctx, d.file, d.f.key, off, chunkLen(c, d.f.obj.size), d.f.obj.size, d.f.obj.etag); err != nil {
 		return err
 	}
-	if err := file.Close(); err != nil {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	// data reaches disk before the sidecar claims it
+	if err := d.file.Sync(); err != nil {
 		return err
 	}
-	return finish(root, partial, f, sidecar)
+	d.state.Done = append(d.state.Done, c)
+	slices.Sort(d.state.Done)
+	return writeJSONIn(d.root, d.sidecar, d.state, 0o644)
 }
 
 func chunkLen(c int, size int64) int64 {
@@ -297,9 +366,9 @@ func chunkLen(c int, size int64) int64 {
 	return min(chunkSize, size-off)
 }
 
-// finish moves the completed partial file into place and stamps it with the
+// finishDownload moves the completed partial file into place and stamps it with the
 // remote modification time, so uploading it back is recognized as unchanged.
-func finish(root *os.Root, partial string, f remoteFile, sidecar string) error {
+func finishDownload(root *os.Root, partial string, f remoteFile, sidecar string) error {
 	info, err := root.Stat(partial)
 	if err != nil {
 		return err
@@ -349,7 +418,7 @@ func (r *run) getRange(ctx context.Context, file *os.File, key string, off, leng
 		case n != length:
 			return transientError{fmt.Errorf("short read: got %d of %d bytes", n, length)}
 		}
-		r.sentBytes(n)
+		r.addBytes(n)
 		return nil
 	})
 }

@@ -67,6 +67,12 @@ func retryable(err error) bool {
 	if status := HTTPStatus(err); status != 0 {
 		return status == http.StatusTooManyRequests || status == http.StatusRequestTimeout || status >= 500
 	}
+	return transportFailed(err)
+}
+
+// transportFailed reports an error with no http status that a retry can
+// get past: a dropped or reset connection, not a local or sdk failure.
+func transportFailed(err error) bool {
 	// a local filesystem failure (a full disk, permissions) does not pass on
 	// its own; checked before net.Error, which syscall.Errno also satisfies
 	var pathErr *fs.PathError

@@ -149,8 +149,8 @@ func (r *run) transferred(name string) {
 	r.Reporter.FileDone(name)
 }
 
-// sentBytes counts bytes this run moved; reused ones are not counted.
-func (r *run) sentBytes(n int64) {
+// addBytes counts bytes this run moved; reused ones are not counted.
+func (r *run) addBytes(n int64) {
 	r.mu.Lock()
 	r.summary.BytesTransferred += n
 	r.mu.Unlock()
@@ -173,6 +173,18 @@ func (r *run) skipped() {
 	r.mu.Lock()
 	r.summary.FilesSkipped++
 	r.mu.Unlock()
+}
+
+// feed sends items to work until they run out or ctx is done, then closes it.
+func feed[T any](ctx context.Context, work chan<- T, items []T) {
+	defer close(work)
+	for _, item := range items {
+		select {
+		case work <- item:
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 // forEach runs fn over items with up to n at once and returns the first error,
@@ -202,15 +214,7 @@ func forEach[T any](ctx context.Context, n int, items []T, fn func(ctx context.C
 			}
 		}()
 	}
-feed:
-	for _, item := range items {
-		select {
-		case work <- item:
-		case <-ctx.Done():
-			break feed
-		}
-	}
-	close(work)
+	feed(ctx, work, items)
 	wg.Wait()
 	if firstErr == nil && ctx.Err() != nil {
 		// the parent was canceled
@@ -263,6 +267,22 @@ type remoteObject struct {
 
 // listPrefix lists every object under prefix (which ends in "/" or is "").
 // Directory markers and in-progress multipart data are left out.
+// addFiles adds the listed files to objects, leaving out folder markers and
+// in-progress multipart parts.
+func addFiles(objects map[string]remoteObject, listed []types.Object) {
+	for _, obj := range listed {
+		key := aws.ToString(obj.Key)
+		if strings.HasSuffix(key, "/") || strings.HasPrefix(key, uploadsDir) || strings.Contains(key, "/"+uploadsDir) {
+			continue
+		}
+		objects[key] = remoteObject{
+			size:     aws.ToInt64(obj.Size),
+			modified: aws.ToTime(obj.LastModified),
+			etag:     trimETag(aws.ToString(obj.ETag)),
+		}
+	}
+}
+
 func (r *run) listPrefix(ctx context.Context, prefix string) (map[string]remoteObject, error) {
 	objects := map[string]remoteObject{}
 	var token *string
@@ -280,17 +300,7 @@ func (r *run) listPrefix(ctx context.Context, prefix string) (map[string]remoteO
 		if err != nil {
 			return nil, fmt.Errorf("list %q: %w", prefix, err)
 		}
-		for _, obj := range out.Contents {
-			key := aws.ToString(obj.Key)
-			if strings.HasSuffix(key, "/") || strings.HasPrefix(key, uploadsDir) || strings.Contains(key, "/"+uploadsDir) {
-				continue
-			}
-			objects[key] = remoteObject{
-				size:     aws.ToInt64(obj.Size),
-				modified: aws.ToTime(obj.LastModified),
-				etag:     trimETag(aws.ToString(obj.ETag)),
-			}
-		}
+		addFiles(objects, out.Contents)
 		if !aws.ToBool(out.IsTruncated) || out.NextContinuationToken == nil {
 			return objects, nil
 		}

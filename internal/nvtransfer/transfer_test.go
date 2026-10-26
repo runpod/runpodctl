@@ -19,7 +19,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
@@ -400,6 +402,43 @@ type headHook struct {
 
 func (h headHook) HeadObject(context.Context, *s3.HeadObjectInput, ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
 	return nil, h.err
+}
+
+// stuckPartsHook pages ListParts forever with the same marker.
+type stuckPartsHook struct{ *fakeS3 }
+
+func (stuckPartsHook) ListParts(context.Context, *s3.ListPartsInput, ...func(*s3.Options)) (*s3.ListPartsOutput, error) {
+	return &s3.ListPartsOutput{
+		Parts:                []types.Part{{PartNumber: aws.Int32(1)}},
+		IsTruncated:          aws.Bool(true),
+		NextPartNumberMarker: aws.String("1"),
+	}, nil
+}
+
+func TestListPartsStopsOnARepeatedMarker(t *testing.T) {
+	fake, vol := setup(t)
+	vol.Client = stuckPartsHook{fake}
+	if _, err := newRun(vol).listParts(context.Background(), "k", "u"); err == nil || !strings.Contains(err.Error(), "same page marker") {
+		t.Fatalf("expected a repeated-marker error, got %v", err)
+	}
+}
+
+func TestDownloadRefusesASymlinkedPartial(t *testing.T) {
+	fake, vol := setup(t)
+	fake.put("x", []byte("remote"))
+	dir := t.TempDir()
+	other := filepath.Join(dir, "other")
+	writeFile(t, other, []byte("keep me"))
+	if err := os.Symlink("other", filepath.Join(dir, "x"+partialSuffix)); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	_, err := vol.Download(context.Background(), "x", filepath.Join(dir, "x"))
+	if !errors.As(err, new(*RefusedError)) {
+		t.Fatalf("expected a refusal, got %v", err)
+	}
+	if got, _ := os.ReadFile(other); string(got) != "keep me" {
+		t.Fatalf("the symlink target was overwritten: %q", got)
+	}
 }
 
 func TestDownloadRefusesFileThatIsAlsoAFolder(t *testing.T) {
@@ -840,6 +879,7 @@ func TestDownloadRefusesPartialNameCollision(t *testing.T) {
 	for name, other := range map[string]string{
 		"file":             "d/x.rpdownload",
 		"sidecar":          "d/x.rpdownload.json",
+		"sidecar temp":     "d/x.rpdownload.json.tmp",
 		"directory":        "d/x.rpdownload/y",
 		"case-insensitive": "d/X.RPDOWNLOAD",
 	} {
