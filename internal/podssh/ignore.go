@@ -1,12 +1,10 @@
-package project
+package podssh
 
 import (
 	"bufio"
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/gobwas/glob"
 )
 
 var EXCLUDE_PATTERNS = []string{
@@ -48,45 +46,4 @@ func GetIgnoreList() ([]string, error) {
 	}
 
 	return ignoreList, nil
-}
-
-func ShouldIgnore(filePath string, ignoreList []string) (bool, error) {
-	if ignoreList == nil {
-		var err error
-		ignoreList, err = GetIgnoreList()
-		if err != nil {
-			return false, err
-		}
-	}
-
-	cwd, err := os.Getwd()
-	if err != nil {
-		return false, err
-	}
-
-	relativePath, err := filepath.Rel(cwd, filePath)
-	if err != nil {
-		return false, err
-	}
-
-	for _, pattern := range ignoreList {
-		if strings.HasPrefix(pattern, "/") {
-			pattern = pattern[1:]
-		}
-
-		if strings.HasSuffix(pattern, "/") {
-			pattern += "*"
-		}
-
-		glober, err := glob.Compile(pattern)
-		if err != nil {
-			return false, err
-		}
-
-		if glober.Match(relativePath) {
-			return true, nil
-		}
-	}
-
-	return false, nil
 }

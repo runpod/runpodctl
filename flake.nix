@@ -72,6 +72,8 @@
 #             bench                benchmarks, -count 6, into bench.txt
 #             bench-compare        benchstat: working tree vs origin/main
 #   nix       update-vendor-hash   refresh vendorHash after go.mod/go.sum edits
+#             update-pins          sync the go pin, vendorHash and lint baseline
+#                                  (what the nix-maintenance pr runs)
 #             test-integration     exercise every flake target
 #                                  (nix/tests/integration.sh)
 #   oci       oci-size-report      (linux) size of each image, as markdown
