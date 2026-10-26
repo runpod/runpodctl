@@ -237,6 +237,10 @@ func validateAPIKey(apiKey string) error {
 }
 
 // saveAPIKey writes apiKey to the config file and returns the file's path.
+// It rewrites only what the file already holds plus the key: the global viper
+// also carries env and flag values, which must not leak into the file. The new
+// file is written beside the old one and renamed over it, so a failed write
+// leaves the old config intact.
 func saveAPIKey(apiKey string) (string, error) {
 	path := viper.ConfigFileUsed()
 	if path == "" {
@@ -246,40 +250,46 @@ func saveAPIKey(apiKey string) (string, error) {
 		}
 		path = filepath.Join(home, ".runpod", "config.toml")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), configDirPerm); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, configDirPerm); err != nil {
 		return "", fmt.Errorf("could not create config directory: %w", err)
 	}
-	// viper writes back everything it holds in memory. if the file exists but
-	// did not parse at startup, that is nothing, so writing would drop the
-	// tables it still has (e.g. the sdk's [default] key). leave it to the user.
-	if err := checkConfigReadable(path); err != nil {
+
+	file := viper.New()
+	file.SetConfigFile(path)
+	file.SetConfigType("toml")
+	if _, err := os.Stat(path); err == nil {
+		// a file that did not parse at startup must not be replaced with just
+		// the key; that would drop whatever else it holds (e.g. the sdk's
+		// [default] key). leave it to the user.
+		if err := file.ReadInConfig(); err != nil {
+			return "", fmt.Errorf("could not read %s, not overwriting it (fix or remove the file, then retry): %w", path, err)
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("could not check %s: %w", path, err)
+	}
+	file.Set("apiKey", apiKey)
+
+	tmp, err := os.CreateTemp(dir, ".config-*.toml")
+	if err != nil {
+		return "", fmt.Errorf("could not create a temporary config file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath) // no-op once renamed
+	if err := tmp.Close(); err != nil {
 		return "", err
 	}
-
+	if err := os.Chmod(tmpPath, configFilePerm); err != nil {
+		return "", fmt.Errorf("could not restrict permissions on %s: %w", tmpPath, err)
+	}
+	if err := file.WriteConfigAs(tmpPath); err != nil {
+		return "", err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return "", fmt.Errorf("could not replace %s: %w", path, err)
+	}
 	viper.Set("apiKey", apiKey)
-	viper.SetConfigPermissions(configFilePerm)
-	if err := viper.WriteConfigAs(path); err != nil {
-		return "", err
-	}
-	// viper applies the mode only to files it creates
-	if err := os.Chmod(path, configFilePerm); err != nil {
-		return "", fmt.Errorf("could not restrict permissions on %s: %w", path, err)
-	}
 	return path, nil
-}
-
-// checkConfigReadable fails when path exists but is not valid config, so
-// saveAPIKey never overwrites a file it could not read.
-func checkConfigReadable(path string) error {
-	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	probe := viper.New()
-	probe.SetConfigFile(path)
-	if err := probe.ReadInConfig(); err != nil {
-		return fmt.Errorf("could not read %s, not overwriting it (fix or remove the file, then retry): %w", path, err)
-	}
-	return nil
 }
 
 func checkAPIConnectivity() checkResult {

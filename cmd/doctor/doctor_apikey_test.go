@@ -301,3 +301,50 @@ func TestCheckAPIKey_RefusesToOverwriteUnreadableConfig(t *testing.T) {
 		t.Fatalf("config was modified:\n%s", data)
 	}
 }
+
+// Saving the key rewrites only what the file holds: a value that exists only
+// in memory (an env or flag override) must not be persisted.
+func TestSaveAPIKey_KeepsFileValuesNotInMemoryOverrides(t *testing.T) {
+	home := isolatedHome(t)
+	path := filepath.Join(home, ".runpod", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("apiurl = 'https://saved.example'\n[default]\napi_key = 'rpa_SDK'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	viper.SetConfigFile(path)
+	if err := viper.ReadInConfig(); err != nil {
+		t.Fatal(err)
+	}
+	viper.Set("apiUrl", "https://override.example")
+
+	if _, err := saveAPIKey(goodKey); err != nil {
+		t.Fatal(err)
+	}
+	written := viper.New()
+	written.SetConfigFile(path)
+	if err := written.ReadInConfig(); err != nil {
+		t.Fatal(err)
+	}
+	if got := written.GetString("apiurl"); got != "https://saved.example" {
+		t.Errorf("apiurl = %q, want the saved value", got)
+	}
+	if got := written.GetString("default.api_key"); got != "rpa_SDK" {
+		t.Errorf("[default].api_key = %q, want it kept", got)
+	}
+	if got := written.GetString("apikey"); got != goodKey {
+		t.Errorf("apikey = %q, want %q", got, goodKey)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("config mode = %o, want 600", perm)
+	}
+	entries, _ := os.ReadDir(filepath.Dir(path))
+	if len(entries) != 1 {
+		t.Errorf("expected only config.toml left behind, got %d entries", len(entries))
+	}
+}
