@@ -18,8 +18,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"golang.org/x/text/cases"
-	"golang.org/x/text/unicode/norm"
+	"github.com/runpod/runpodctl/internal/namefold"
 )
 
 const (
@@ -32,7 +31,7 @@ var ErrNotFound = errors.New("not found")
 
 // errRemoteChanged ends a download whose object was replaced mid-transfer.
 // It is not retried: the finished chunks belong to the old version.
-var errRemoteChanged = errors.New("remote file changed during download; run the command again to restart it")
+var errRemoteChanged = errors.New("remote file changed during download")
 
 // transientError marks a failure worth retrying that the sdk does not type,
 // such as a connection dropped while reading a response body.
@@ -105,7 +104,7 @@ func Download(ctx context.Context, opts Options, remotePath, localPath string) (
 	for k, obj := range listed {
 		rel := filepath.FromSlash(strings.TrimPrefix(k, key))
 		if !filepath.IsLocal(rel) {
-			return nil, fmt.Errorf("remote file %q would be written outside %s: %w", k, localPath, ErrRefused)
+			return nil, refusef("remote file %q would be written outside %s", k, localPath)
 		}
 		files = append(files, remoteFile{key: k, name: rel, obj: obj})
 	}
@@ -118,48 +117,42 @@ func Download(ctx context.Context, opts Options, remotePath, localPath string) (
 
 // checkLocalNames refuses a listing whose files would share a path on disk:
 // two targets that are one name on a case-insensitive or normalizing
-// filesystem ("Model.bin" and "model.bin"), or a file whose partial or
-// sidecar name is also a target or a directory a target lives in ("x" beside
-// "x.rpdownload" or "x.rpdownload/y"). Names are compared under foldKey; that
-// can refuse a listing a case-sensitive filesystem would take, which is the
-// safe direction.
+// filesystem ("Model.bin" and "model.bin"), a file whose name is also a
+// folder another file lives in ("a" beside "A/b"), or a file whose partial or
+// sidecar name is taken ("x" beside "x.rpdownload" or "x.rpdownload/y").
+// Names are compared under namefold.Key; that can refuse a listing a
+// case-sensitive filesystem would take, which is the safe direction.
 func checkLocalNames(files []remoteFile) error {
 	targets := map[string]string{}
 	dirs := map[string]string{}
 	for _, f := range files {
-		k := foldKey(f.name)
+		k := namefold.Key(f.name)
 		if other, ok := targets[k]; ok {
-			return fmt.Errorf("cannot download both %q and %q: they are the same file on a case-insensitive filesystem: %w", other, f.name, ErrRefused)
+			return refusef("cannot download both %q and %q: they would be one file on a case-insensitive or normalizing filesystem", other, f.name)
 		}
 		targets[k] = f.name
 		for p := filepath.Dir(f.name); p != "." && p != string(filepath.Separator); p = filepath.Dir(p) {
-			dirs[foldKey(p)] = f.name
+			dirs[namefold.Key(p)] = f.name
+		}
+	}
+	for k, name := range targets {
+		if other, ok := dirs[k]; ok {
+			return refusef("cannot download both %q and %q: the first would have to be a file and a folder", name, other)
 		}
 	}
 	for _, f := range files {
 		for _, suffix := range []string{partialSuffix, sidecarSuffix} {
-			k := foldKey(f.name + suffix)
+			k := namefold.Key(f.name + suffix)
 			other, ok := targets[k]
 			if !ok {
 				other, ok = dirs[k]
 			}
 			if ok {
-				return fmt.Errorf("cannot download both %q and %q: %q is used for the first's partial download: %w", f.name, other, f.name+suffix, ErrRefused)
+				return refusef("cannot download both %q and %q: %q is used for the first's partial download", f.name, other, f.name+suffix)
 			}
 		}
 	}
 	return nil
-}
-
-// folder is unicode case folding, which strings.ToLower is not (it leaves ſ
-// and ς alone while case-insensitive filesystems read them as s and σ).
-var folder = cases.Fold()
-
-// foldKey is the key under which two spellings a filesystem may treat as one
-// name collide: nfc first, since folding does not normalize and apfs compares
-// names normalization-insensitively. same rule as cmd/transfer's foldKey.
-func foldKey(name string) string {
-	return folder.String(norm.NFC.String(name))
 }
 
 func (r *run) downloadOne(ctx context.Context, key string, obj remoteObject, localPath string) (*Summary, error) {
@@ -328,7 +321,7 @@ func finish(root *os.Root, partial string, f remoteFile, sidecar string) error {
 
 // getRange writes bytes [off, off+length) of the object into file at off.
 func (r *run) getRange(ctx context.Context, file *os.File, key string, off, length, size int64, etag string) error {
-	return r.call(ctx, transferTimeout(length), func(ctx context.Context) error {
+	return r.call(ctx, requestTimeout, func(ctx context.Context) error {
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
 		in := &s3.GetObjectInput{Bucket: aws.String(r.VolumeID), Key: aws.String(key)}
@@ -376,9 +369,12 @@ func (o *offsetWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// idleReader cancels a response whose body stops delivering bytes for the
-// idle window, so a stalled connection is retried in minutes rather than at
-// the end of the attempt's deadline.
+// idleReader cancels a request whose body stops moving for the idle window,
+// so a stalled connection is retried in minutes rather than at the end of the
+// attempt's deadline. On a download it wraps the response body; on an upload
+// the request body, which the transport reads only as fast as the connection
+// sends, and the watch ends at eof so a slow server reply is left to the
+// transport's response header timeout.
 type idleReader struct {
 	r     io.Reader
 	idle  time.Duration
@@ -394,7 +390,26 @@ func (i *idleReader) Read(p []byte) (int, error) {
 	if n > 0 {
 		i.timer.Reset(i.idle)
 	}
+	if err == io.EOF {
+		i.timer.Stop()
+	}
 	return n, err
 }
 
 func (i *idleReader) stop() { i.timer.Stop() }
+
+// idleSectionReader is an idleReader over a seekable section, as the sdk
+// needs to sign a request body and rewind it.
+type idleSectionReader struct {
+	*idleReader
+	s *io.SectionReader
+}
+
+func newIdleSectionReader(s *io.SectionReader, idle time.Duration, cancel context.CancelFunc) *idleSectionReader {
+	return &idleSectionReader{idleReader: newIdleReader(s, idle, cancel), s: s}
+}
+
+func (i *idleSectionReader) Seek(offset int64, whence int) (int64, error) {
+	i.timer.Reset(i.idle)
+	return i.s.Seek(offset, whence)
+}

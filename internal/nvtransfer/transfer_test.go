@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"math/rand"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -323,16 +324,15 @@ func TestSingleRequestUploadDetectsChangeBetweenRetries(t *testing.T) {
 	old := time.Now().Add(-time.Hour)
 	os.Chtimes(src, old, old)
 	var calls atomic.Int32
-	opts.Client = putHook{fakeS3: fake, before: func() error {
+	opts.Client = putHook{fakeS3: fake, after: func() {
 		if calls.Add(1) == 1 {
-			// a same-size edit whose mtime is older than the object the
-			// retry writes, so the skip rule alone would keep the object
+			// a same-size edit right after the object was written, with an
+			// mtime older than the object, so the skip rule alone would keep
+			// the stale "original" on the volume
 			os.WriteFile(src, []byte("CHANGED!"), 0o644)
 			past := time.Now().Add(-30 * time.Minute)
 			os.Chtimes(src, past, past)
-			return statusError(503)
 		}
-		return nil
 	}}
 	_, err := Upload(context.Background(), opts, src, "small.txt")
 	if !errors.Is(err, errLocalChanged) {
@@ -347,6 +347,97 @@ func TestSingleRequestUploadDetectsChangeBetweenRetries(t *testing.T) {
 	}
 	if got, _ := fake.get("small.txt"); string(got) != "CHANGED!" {
 		t.Fatalf("rerun left %q on the volume", got)
+	}
+}
+
+func TestFailedDeleteAfterLocalChangeAsksForForce(t *testing.T) {
+	fake, opts := setup(t)
+	src := filepath.Join(t.TempDir(), "small.txt")
+	writeFile(t, src, []byte("original"))
+	opts.Client = putHook{fakeS3: fake, deleteErr: errForbidden, after: func() {
+		future := time.Now().Add(time.Hour)
+		os.WriteFile(src, []byte("CHANGED!"), 0o644)
+		os.Chtimes(src, future, future)
+	}}
+	_, err := Upload(context.Background(), opts, src, "small.txt")
+	if !errors.As(err, new(*RefusedError)) || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("expected a refusal naming --force, got %v", err)
+	}
+}
+
+func TestVanishedLocalFileKeepsTheUploadedObject(t *testing.T) {
+	fake, opts := setup(t)
+	src := filepath.Join(t.TempDir(), "small.txt")
+	writeFile(t, src, []byte("original"))
+	opts.Client = putHook{fakeS3: fake, after: func() { os.Remove(src) }}
+	if _, err := Upload(context.Background(), opts, src, "small.txt"); err == nil {
+		t.Fatal("expected an error for the vanished file")
+	}
+	if got, ok := fake.get("small.txt"); !ok || string(got) != "original" {
+		t.Fatal("a complete upload of a file that then vanished must be kept")
+	}
+	if fake.count("DeleteObject") != 0 {
+		t.Fatal("nothing should be deleted")
+	}
+}
+
+func TestHead400ThatIsNotAFolderKeepsItsStatus(t *testing.T) {
+	fake, opts := setup(t)
+	src := filepath.Join(t.TempDir(), "w.bin")
+	writeFile(t, src, []byte("w"))
+	opts.Client = headHook{fakeS3: fake, err: statusError(http.StatusBadRequest)}
+	_, err := Upload(context.Background(), opts, src, "w.bin")
+	if errors.As(err, new(*RefusedError)) || HTTPStatus(err) != http.StatusBadRequest {
+		t.Fatalf("expected the 400 itself, got %v", err)
+	}
+}
+
+// headHook fails every HeadObject with err.
+type headHook struct {
+	*fakeS3
+	err error
+}
+
+func (h headHook) HeadObject(context.Context, *s3.HeadObjectInput, ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
+	return nil, h.err
+}
+
+func TestDownloadRefusesFileThatIsAlsoAFolder(t *testing.T) {
+	fake, opts := setup(t)
+	fake.put("d/a", []byte("file"))
+	fake.put("d/A/b", []byte("nested"))
+	_, err := Download(context.Background(), opts, "d/", t.TempDir())
+	if !errors.As(err, new(*RefusedError)) || !strings.Contains(err.Error(), "file and a folder") {
+		t.Fatalf("expected a refusal, got %v", err)
+	}
+}
+
+func TestUploadBodyIdleWatchCancelsAndSeekResets(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	r := newIdleSectionReader(io.NewSectionReader(strings.NewReader("abc"), 0, 3), 30*time.Millisecond, cancel)
+	defer r.stop()
+	time.Sleep(15 * time.Millisecond)
+	if _, err := r.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if ctx.Err() != nil {
+		t.Fatal("seek must reset the idle window")
+	}
+	if b, _ := io.ReadAll(r); string(b) != "abc" {
+		t.Fatalf("read %q", b)
+	}
+	// eof ends the watch: a slow server reply is not a stalled body
+	time.Sleep(50 * time.Millisecond)
+	if ctx.Err() != nil {
+		t.Fatal("the watch must end at eof")
+	}
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	stalled := newIdleSectionReader(io.NewSectionReader(strings.NewReader("abc"), 0, 3), 10*time.Millisecond, cancel2)
+	defer stalled.stop()
+	time.Sleep(40 * time.Millisecond)
+	if ctx2.Err() == nil {
+		t.Fatal("a body nobody reads must be canceled")
 	}
 }
 
@@ -394,7 +485,7 @@ func TestUploadOntoRemoteFolderIsRefused(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "w.bin")
 	writeFile(t, src, []byte("w"))
 	_, err := Upload(context.Background(), opts, src, "models")
-	if !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), `"models/"`) {
+	if !errors.As(err, new(*RefusedError)) || !strings.Contains(err.Error(), `"models/"`) {
 		t.Fatalf("expected a refusal naming models/, got %v", err)
 	}
 }
@@ -519,17 +610,32 @@ func TestIdleReaderCancelsStalledBody(t *testing.T) {
 	}
 }
 
-// putHook fails or mutates before a PutObject reaches the fake.
+// putHook runs hooks around a PutObject, and can fail DeleteObject.
 type putHook struct {
 	*fakeS3
-	before func() error
+	before    func() error
+	after     func()
+	deleteErr error
 }
 
 func (h putHook) PutObject(ctx context.Context, in *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
-	if err := h.before(); err != nil {
-		return nil, err
+	if h.before != nil {
+		if err := h.before(); err != nil {
+			return nil, err
+		}
 	}
-	return h.fakeS3.PutObject(ctx, in, opts...)
+	out, err := h.fakeS3.PutObject(ctx, in, opts...)
+	if err == nil && h.after != nil {
+		h.after()
+	}
+	return out, err
+}
+
+func (h putHook) DeleteObject(ctx context.Context, in *s3.DeleteObjectInput, opts ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
+	if h.deleteErr != nil {
+		return nil, h.deleteErr
+	}
+	return h.fakeS3.DeleteObject(ctx, in, opts...)
 }
 
 func TestRequestsInFlightNeverExceedConcurrency(t *testing.T) {
@@ -760,7 +866,7 @@ func TestDownloadRefusesTargetsThatShareALocalName(t *testing.T) {
 			fake.put(pair[0], []byte("a"))
 			fake.put(pair[1], []byte("b"))
 			_, err := Download(context.Background(), opts, "d/", t.TempDir())
-			if !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "same file") {
+			if !errors.As(err, new(*RefusedError)) || !strings.Contains(err.Error(), "one file") {
 				t.Fatalf("expected a refusal, got %v", err)
 			}
 		})
@@ -904,7 +1010,9 @@ func TestRetryable(t *testing.T) {
 		{errRemoteChanged, false},
 		{&smithy.OperationError{Err: &smithyhttp.RequestSendError{Err: errors.New("connection refused")}}, true},
 		{&smithy.OperationError{Err: errors.New("invalid parameter")}, false},
-		{&smithy.OperationError{Err: &net.DNSError{Name: "s3api-xx-1.runpod.io", IsNotFound: true}}, false},
+		// a lookup that fails mid-transfer is a network drop (a wrong data
+		// center is caught before the transfer starts)
+		{&smithy.OperationError{Err: &net.DNSError{Name: "s3api-eu-ro-1.runpod.io", IsNotFound: true}}, true},
 		{&fs.PathError{Op: "write", Path: "f", Err: syscall.ENOSPC}, false},
 	}
 	for _, c := range cases {

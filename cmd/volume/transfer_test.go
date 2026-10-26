@@ -7,11 +7,13 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"syscall"
 	"testing"
 
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/runpod/runpodctl/internal/nvtransfer"
 )
@@ -21,6 +23,25 @@ func s3Status(code int) error {
 		Response: &smithyhttp.Response{Response: &http.Response{StatusCode: code}},
 		Err:      fmt.Errorf("http %d", code),
 	}})
+}
+
+func s3Code(code string, status int) error {
+	return fmt.Errorf("operation failed: %w", &awshttp.ResponseError{ResponseError: &smithyhttp.ResponseError{
+		Response: &smithyhttp.Response{Response: &http.Response{StatusCode: status}},
+		Err:      &smithy.GenericAPIError{Code: code},
+	}})
+}
+
+// a data center whose endpoint does not resolve fails before any transfer.
+func TestCheckEndpointResolves(t *testing.T) {
+	err := checkEndpointResolves("https://s3api-nope.invalid/")
+	var coder interface{ ErrorCode() string }
+	if !errors.As(err, &coder) || coder.ErrorCode() != "usage_error" || !strings.Contains(err.Error(), "--data-center-id") {
+		t.Fatalf("expected usage_error naming --data-center-id, got %v", err)
+	}
+	if err := checkEndpointResolves("http://127.0.0.1:9/"); err != nil {
+		t.Fatalf("an ip endpoint must pass: %v", err)
+	}
 }
 
 // transferError is the contract agents branch on: only a failure a rerun can
@@ -39,8 +60,11 @@ func TestTransferErrorCodes(t *testing.T) {
 		{"interrupted", canceled, errors.New("boom"), "transfer_incomplete", 0, true},
 		{"invalid path", nil, fmt.Errorf("bad: %w", nvtransfer.ErrInvalidPath), "usage_error", 0, false},
 		{"missing path", nil, fmt.Errorf("x: %w", nvtransfer.ErrNotFound), "not_found", 0, false},
-		{"refused", nil, fmt.Errorf("too large: %w", nvtransfer.ErrRefused), "cli_error", 0, false},
-		{"bad data center", nil, &net.DNSError{Name: "s3api-xx-9.runpod.io", IsNotFound: true}, "usage_error", 0, false},
+		{"refused", nil, fmt.Errorf("upload x: %w", &nvtransfer.RefusedError{Err: errors.New("too large")}), "cli_error", 0, false},
+		{"dns drop mid-transfer", nil, &net.DNSError{Name: "s3api-eu-ro-1.runpod.io", IsNotFound: true}, "transfer_incomplete", 0, true},
+		{"upload vanished", nil, s3Code("NoSuchUpload", 404), "transfer_incomplete", 0, true},
+		{"range no longer fits", nil, s3Status(416), "transfer_incomplete", 0, true},
+		{"rename blocked", nil, &os.LinkError{Op: "rename", Old: "a", New: "b", Err: syscall.EISDIR}, "cli_error", 0, false},
 		{"unauthorized", nil, s3Status(401), "unauthorized", 401, false},
 		{"forbidden", nil, s3Status(403), "forbidden", 403, false},
 		{"no such bucket", nil, s3Status(404), "not_found", 404, false},

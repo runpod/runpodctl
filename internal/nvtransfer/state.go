@@ -100,5 +100,14 @@ func writeJSONIn(root *os.Root, name string, v any, perm os.FileMode) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return root.Rename(tmp, name)
+	if err := root.Rename(tmp, name); err != nil {
+		return err
+	}
+	// sync the directory too, so the rename itself survives a power loss.
+	// best effort: windows cannot sync a directory handle
+	if dir, err := root.Open(filepath.Dir(name)); err == nil {
+		_ = dir.Sync()
+		dir.Close()
+	}
+	return nil
 }

@@ -28,15 +28,12 @@ var retryPolicy = struct {
 }{defaultMaxAttempts, defaultBaseDelay}
 
 // withRetry runs fn until it succeeds, fails with a non-retryable error, or
-// runs out of attempts. Each attempt gets its own timeout so a stalled
-// connection is abandoned instead of hanging the transfer.
-func withRetry(ctx context.Context, attemptTimeout time.Duration, fn func(ctx context.Context) error) error {
+// runs out of attempts. fn bounds each attempt itself (see run.call).
+func withRetry(ctx context.Context, fn func(ctx context.Context) error) error {
 	var err error
 	delay := retryPolicy.baseDelay
 	for attempt := 1; attempt <= retryPolicy.attempts; attempt++ {
-		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
-		err = fn(attemptCtx)
-		cancel()
+		err = fn(ctx)
 		if err == nil || ctx.Err() != nil || !retryable(err) || attempt == retryPolicy.attempts {
 			return err
 		}
@@ -76,11 +73,6 @@ func retryable(err error) bool {
 	if errors.As(err, &pathErr) {
 		return false
 	}
-	// a host that does not resolve is a wrong data center, not a blip
-	var dnsErr *net.DNSError
-	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
-		return false
-	}
 	var netErr net.Error
 	if errors.As(err, &netErr) {
 		return true
@@ -89,6 +81,18 @@ func retryable(err error) bool {
 	// build (bad parameters, endpoint resolution), which never succeeds
 	var sendErr *smithyhttp.RequestSendError
 	return errors.As(err, &sendErr) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET)
+}
+
+// Resumable reports a final-looking s3 error that a rerun gets past: the
+// multipart upload vanished (NoSuchUpload, e.g. after a complete whose 524
+// hid that it finished), or a range that no longer fits an object that
+// changed mid-download (416).
+func Resumable(err error) bool {
+	if HTTPStatus(err) == http.StatusRequestedRangeNotSatisfiable {
+		return true
+	}
+	var apiErr smithy.APIError
+	return errors.As(err, &apiErr) && apiErr.ErrorCode() == "NoSuchUpload"
 }
 
 // HTTPStatus is the s3 response status behind err, or 0 when it never got one.

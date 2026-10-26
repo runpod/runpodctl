@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"sync"
@@ -178,6 +179,9 @@ func runTransfer(cmd *cobra.Command, volumeID, src, dst string, upload bool) err
 	if region == "" {
 		region = "us-east-1"
 	}
+	if err := checkEndpointResolves(endpoint); err != nil {
+		return err
+	}
 
 	// the first ctrl-c stops the transfer and keeps its resume state; a second
 	// one exits at once, even during a long abort or complete
@@ -219,6 +223,25 @@ func runTransfer(cmd *cobra.Command, volumeID, src, dst string, upload bool) err
 	}, &output.Config{Format: format})
 }
 
+// checkEndpointResolves fails fast on a data center whose s3 endpoint does
+// not resolve, before any transfer starts. Once a transfer is running, a
+// failed lookup is a network drop and is retried like any other.
+func checkEndpointResolves(endpoint string) error {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Hostname() == "" {
+		return clierr.Usagef("invalid s3 endpoint %q", endpoint)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, err = net.DefaultResolver.LookupHost(ctx, u.Hostname())
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+		return clierr.Usagef("the s3 endpoint %s does not resolve: check --data-center-id (only data centers with the s3 api are supported) or your network connection", u.Hostname())
+	}
+	// any other lookup failure is left to the transfer's retries
+	return nil
+}
+
 // transferError codes a failed transfer. Only a transfer that stopped for a
 // reason that can pass (interrupted, a network failure or 5xx that outlasted
 // the retries, a file changed mid-transfer) is transfer_incomplete with the
@@ -233,12 +256,10 @@ func transferError(ctx context.Context, err error, summary *nvtransfer.Summary) 
 		return &clierr.UsageError{Err: err}
 	case errors.Is(err, nvtransfer.ErrNotFound):
 		return api.NewNotFoundError("%s", err.Error())
-	case errors.Is(err, nvtransfer.ErrRefused):
+	case errors.As(err, new(*nvtransfer.RefusedError)):
 		return &waitfor.FatalError{Code: "cli_error", Err: err}
-	}
-	var dnsErr *net.DNSError
-	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
-		return &clierr.UsageError{Err: fmt.Errorf("%w (the s3 endpoint does not resolve: check --data-center-id)", err)}
+	case nvtransfer.Resumable(err):
+		return &incompleteError{err: err, summary: summary}
 	}
 	if status := nvtransfer.HTTPStatus(err); status >= 400 && status < 500 && status != http.StatusRequestTimeout && status != http.StatusTooManyRequests {
 		msg := err.Error()
@@ -247,9 +268,9 @@ func transferError(ctx context.Context, err error, summary *nvtransfer.Summary) 
 		}
 		return &api.APIError{Message: msg, Status: status}
 	}
-	// a local filesystem failure (permissions, a full disk) needs fixing first
-	var pathErr *fs.PathError
-	if errors.As(err, &pathErr) {
+	// a local filesystem failure (permissions, a full disk, a rename that
+	// cannot happen) needs fixing first
+	if errors.As(err, new(*fs.PathError)) || errors.As(err, new(*os.LinkError)) {
 		return &waitfor.FatalError{Code: "cli_error", Err: err}
 	}
 	return &incompleteError{err: err, summary: summary}
