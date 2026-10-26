@@ -32,7 +32,11 @@ utilities:
   send/receive   transfer files to/from pods
 
 deprecated
-  get, create, remove, start, stop, exec, project, config, get models
+  get, create, remove, start, stop, exec, config, get models
+
+serverless development:
+  use the runpod sdk: https://github.com/runpod/runpod-python
+  project commands exit 1 with an sdk notice on stderr
 
 ### Options
 
@@ -62,4 +66,3 @@ deprecated
 * [runpodctl update](runpodctl_update.md)	 - update runpodctl cli
 * [runpodctl user](runpodctl_user.md)	 - show account info
 * [runpodctl version](runpodctl_version.md)	 - print the version
-
