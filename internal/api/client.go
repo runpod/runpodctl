@@ -99,7 +99,7 @@ func (c *Client) requestURL(method, u string, body interface{}) ([]byte, error) 
 	return c.requestURLContext(ctx, method, u, body)
 }
 
-func (c *Client) requestURLContext(ctx context.Context, method, u string, body interface{}) ([]byte, error) {
+func (c *Client) requestURLContext(ctx context.Context, method, u string, body any) ([]byte, error) {
 	var jsonBody []byte
 	if body != nil {
 		var err error

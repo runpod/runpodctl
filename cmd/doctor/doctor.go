@@ -280,7 +280,12 @@ func saveAPIKey(apiKey string) (string, error) {
 		return "", fmt.Errorf("could not create a temporary config file: %w", err)
 	}
 	tmpPath := tmp.Name()
-	defer func() { _ = os.Remove(tmpPath) }() // no-op once renamed
+	defer func() {
+		// after the rename there is nothing left to remove
+		if rmErr := os.Remove(tmpPath); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+			fmt.Fprintf(os.Stderr, "warning: could not remove %s: %v\n", tmpPath, rmErr)
+		}
+	}()
 	if err := tmp.Close(); err != nil {
 		return "", err
 	}
