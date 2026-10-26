@@ -179,8 +179,12 @@ func runTransfer(cmd *cobra.Command, volumeID, src, dst string, upload bool) err
 	if region == "" {
 		region = "us-east-1"
 	}
-	if err := checkEndpointResolves(endpoint); err != nil {
-		return err
+	// an explicit --endpoint-url is the caller's; only the derived data
+	// center endpoint is checked
+	if transferEndpointURL == "" {
+		if err := checkEndpointResolves(endpoint); err != nil {
+			return err
+		}
 	}
 
 	// the first ctrl-c stops the transfer and keeps its resume state; a second
