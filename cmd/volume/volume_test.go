@@ -21,7 +21,7 @@ func TestVolumeCmd_Structure(t *testing.T) {
 	}
 
 	// check subcommands
-	expectedSubcommands := []string{"list", "get <volume-id>", "create", "update <volume-id>", "delete <volume-id>"}
+	expectedSubcommands := []string{"list", "get <volume-id>", "create", "update <volume-id>", "delete <volume-id>", "upload <volume-id> <local-path> [remote-path]", "download <volume-id> <remote-path> [local-path]"}
 	for _, expected := range expectedSubcommands {
 		found := false
 		for _, cmd := range Cmd.Commands() {

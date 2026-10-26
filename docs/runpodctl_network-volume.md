@@ -23,7 +23,9 @@ manage network volumes on runpod
 * [runpodctl](runpodctl.md)	 - cli for runpod.io
 * [runpodctl network-volume create](runpodctl_network-volume_create.md)	 - create a new network volume
 * [runpodctl network-volume delete](runpodctl_network-volume_delete.md)	 - delete a network volume
+* [runpodctl network-volume download](runpodctl_network-volume_download.md)	 - download a file or folder from a network volume
 * [runpodctl network-volume get](runpodctl_network-volume_get.md)	 - get volume details
 * [runpodctl network-volume list](runpodctl_network-volume_list.md)	 - list all network volumes
 * [runpodctl network-volume update](runpodctl_network-volume_update.md)	 - update a network volume
+* [runpodctl network-volume upload](runpodctl_network-volume_upload.md)	 - upload a file or folder to a network volume
 
