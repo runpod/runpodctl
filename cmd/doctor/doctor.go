@@ -267,8 +267,8 @@ func saveAPIKey(apiKey string) (string, error) {
 		// a file that did not parse at startup must not be replaced with just
 		// the key; that would drop whatever else it holds (e.g. the sdk's
 		// [default] key). leave it to the user.
-		if err := file.ReadInConfig(); err != nil {
-			return "", fmt.Errorf("could not read %s, not overwriting it (fix or remove the file, then retry): %w", path, err)
+		if readErr := file.ReadInConfig(); readErr != nil {
+			return "", fmt.Errorf("could not read %s, not overwriting it (fix or remove the file, then retry): %w", path, readErr)
 		}
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return "", fmt.Errorf("could not check %s: %w", path, err)
@@ -280,7 +280,12 @@ func saveAPIKey(apiKey string) (string, error) {
 		return "", fmt.Errorf("could not create a temporary config file: %w", err)
 	}
 	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath) // no-op once renamed
+	defer func() {
+		// after the rename there is nothing left to remove
+		if rmErr := os.Remove(tmpPath); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+			fmt.Fprintf(os.Stderr, "warning: could not remove %s: %v\n", tmpPath, rmErr)
+		}
+	}()
 	if err := tmp.Close(); err != nil {
 		return "", err
 	}
