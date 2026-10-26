@@ -418,7 +418,7 @@ func TestGuardedAttempt_LateRequestEOFKeepsResponseGuarded(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		resp, err := doGuardedModelUploadAttempt(newReq)
+		resp, err := doGuardedModelUploadAttempt(context.Background(), newReq)
 		if err != nil {
 			done <- err
 			return
