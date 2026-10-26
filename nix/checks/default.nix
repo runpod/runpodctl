@@ -27,7 +27,7 @@
 }:
 let
   # Real ssh/rsync on PATH, so the tests that drive both binaries
-  # (cmd/project/hostkey_test.go) run instead of skipping.
+  # (internal/podssh/hostkey_test.go) run instead of skipping.
   testRuntime = [
     pkgs.openssh
     pkgs.rsync
