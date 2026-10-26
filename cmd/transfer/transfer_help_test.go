@@ -1,6 +1,7 @@
 package transfer
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -21,16 +22,22 @@ func TestSendReceiveHelpShowsPairedWorkflow(t *testing.T) {
 	}
 }
 
-// TestHelpExamplesUseRealisticCodes pins that example codes end in a numeric
-// relay index, the shape runReceive requires.
+// TestHelpExamplesUseRealisticCodes pins that every code an example passes to
+// receive ends in a numeric relay index, the shape runReceive requires.
 func TestHelpExamplesUseRealisticCodes(t *testing.T) {
-	for _, cmd := range []string{SendCmd.Example, ReceiveCmd.Example} {
-		if strings.Contains(cmd, "1234-word-word-word") {
-			t.Errorf("example uses a code without a relay index, receive rejects it:\n%s", cmd)
+	receiveArg := regexp.MustCompile(`runpodctl receive (\S+)`)
+	withRelay := regexp.MustCompile(`^\S+-[0-9]+$`)
+	found := 0
+	for _, example := range []string{SendCmd.Example, ReceiveCmd.Example} {
+		for _, m := range receiveArg.FindAllStringSubmatch(example, -1) {
+			found++
+			if !withRelay.MatchString(m[1]) {
+				t.Errorf("example code %q has no relay index suffix, receive rejects it:\n%s", m[1], example)
+			}
 		}
-		if !strings.Contains(cmd, "5254-respect-amen-emotion-14") {
-			t.Errorf("example should use a code ending in a relay index:\n%s", cmd)
-		}
+	}
+	if found == 0 {
+		t.Fatal("expected the examples to show at least one receive command")
 	}
 }
 

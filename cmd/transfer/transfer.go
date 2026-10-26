@@ -37,8 +37,10 @@ var relayURL = "https://raw.githubusercontent.com/runpod/runpodctl/main/cmd/croc
 
 var sendCode string
 
-// minSendCodeLen is the minimum length of a user-supplied --code, checked before
-// the relay index suffix is appended (croc rejects secrets shorter than 6).
+// minSendCodeLen is the minimum length of a user-supplied --code. croc only
+// checks its 6-character minimum after the "-<relay index>" suffix is added, so
+// a 4-character code would pass there; requiring 6 before the suffix keeps the
+// user's own phrase from being trivially short.
 const minSendCodeLen = 6
 
 func validateSendCode(code string) error {
