@@ -293,7 +293,7 @@ func TestCheckAPIKey_RefusesToOverwriteUnreadableConfig(t *testing.T) {
 	if result.Status != statusFail || !strings.Contains(result.Error, "not overwriting") {
 		t.Fatalf("expected a refusal to overwrite, got %+v", result)
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +343,10 @@ func TestSaveAPIKey_KeepsFileValuesNotInMemoryOverrides(t *testing.T) {
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Errorf("config mode = %o, want 600", perm)
 	}
-	entries, _ := os.ReadDir(filepath.Dir(path))
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(entries) != 1 {
 		t.Errorf("expected only config.toml left behind, got %d entries", len(entries))
 	}
@@ -377,7 +380,7 @@ func TestSaveAPIKey_WritesThroughSymlink(t *testing.T) {
 	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
 		t.Fatalf("config is no longer a symlink: %v", err)
 	}
-	data, err := os.ReadFile(target)
+	data, err := os.ReadFile(filepath.Clean(target))
 	if err != nil {
 		t.Fatal(err)
 	}
