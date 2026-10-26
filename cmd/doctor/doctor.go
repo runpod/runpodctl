@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -248,6 +249,12 @@ func saveAPIKey(apiKey string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), configDirPerm); err != nil {
 		return "", fmt.Errorf("could not create config directory: %w", err)
 	}
+	// viper writes back everything it holds in memory. if the file exists but
+	// did not parse at startup, that is nothing, so writing would drop the
+	// tables it still has (e.g. the sdk's [default] key). leave it to the user.
+	if err := checkConfigReadable(path); err != nil {
+		return "", err
+	}
 
 	viper.Set("apiKey", apiKey)
 	viper.SetConfigPermissions(configFilePerm)
@@ -259,6 +266,20 @@ func saveAPIKey(apiKey string) (string, error) {
 		return "", fmt.Errorf("could not restrict permissions on %s: %w", path, err)
 	}
 	return path, nil
+}
+
+// checkConfigReadable fails when path exists but is not valid config, so
+// saveAPIKey never overwrites a file it could not read.
+func checkConfigReadable(path string) error {
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	probe := viper.New()
+	probe.SetConfigFile(path)
+	if err := probe.ReadInConfig(); err != nil {
+		return fmt.Errorf("could not read %s, not overwriting it (fix or remove the file, then retry): %w", path, err)
+	}
+	return nil
 }
 
 func checkAPIConnectivity() checkResult {

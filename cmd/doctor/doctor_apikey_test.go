@@ -275,3 +275,29 @@ func TestDoctor_UnhealthyWithSavedKeyExitsNonZero(t *testing.T) {
 		t.Errorf("report should still be printed with healthy false (err %v), got:\n%s", err, out)
 	}
 }
+
+// A config that failed to parse at startup leaves viper empty; saving then
+// would replace the file with just apiKey and drop everything else in it.
+func TestCheckAPIKey_RefusesToOverwriteUnreadableConfig(t *testing.T) {
+	home := isolatedHome(t)
+	path := filepath.Join(home, ".runpod", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	broken := "[default]\napi_key = \"rpa_SDK\"\nthis is not toml\n"
+	if err := os.WriteFile(path, []byte(broken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := checkAPIKey(goodKey, strings.NewReader(""), io.Discard)
+	if result.Status != statusFail || !strings.Contains(result.Error, "not overwriting") {
+		t.Fatalf("expected a refusal to overwrite, got %+v", result)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != broken {
+		t.Fatalf("config was modified:\n%s", data)
+	}
+}
