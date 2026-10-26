@@ -1,13 +1,110 @@
 package api
 
 import (
+	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func testResponse(status int, body string) *http.Response {
+	return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}
+}
+
+func TestGetRequestConstructionErrorDoesNotRetry(t *testing.T) {
+	withRetryBackoff(t, time.Second)
+	client := newTestClient(t, "http://bad url")
+	start := time.Now()
+	_, err := client.Get("/x", nil)
+	if !errors.Is(err, errRequestConstruction) {
+		t.Fatalf("expected request construction error, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("request construction took %v; it appears to have waited to retry", elapsed)
+	}
+}
+
+func TestRetryWaitStopsOnSignal(t *testing.T) {
+	if os.Getenv("TEST_RETRY_SIGNAL_CHILD") == "1" {
+		withRetryBackoff(t, 5*time.Second)
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
+		}()
+		if waitToRetry(context.Background(), nil, 1) {
+			t.Fatal("retry continued after signal")
+		}
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestRetryWaitStopsOnSignal$")
+	cmd.Env = append(os.Environ(), "TEST_RETRY_SIGNAL_CHILD=1")
+	start := time.Now()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("signal child failed: %v: %s", err, out)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("signal took %v to stop retry wait", elapsed)
+	}
+}
+
+func TestPermanentServerErrorsAreNotRetried(t *testing.T) {
+	for _, status := range []int{http.StatusNotImplemented, http.StatusHTTPVersionNotSupported} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var attempts atomic.Int32
+			client := newTestClient(t, "https://example.invalid")
+			client.httpClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+				attempts.Add(1)
+				return testResponse(status, ""), nil
+			})
+			if _, err := client.Get("/x", nil); err == nil {
+				t.Fatal("expected server error")
+			}
+			if got := attempts.Load(); got != 1 {
+				t.Fatalf("expected 1 attempt, got %d", got)
+			}
+		})
+	}
+	if !retryableStatus(http.MethodGet, http.StatusServiceUnavailable) {
+		t.Fatal("get 503 should still be retried")
+	}
+	if retryableStatus(http.MethodGet, 600) {
+		t.Fatal("status 600 should not be retried")
+	}
+}
+
+func TestWorkerListRetriesTransientGet(t *testing.T) {
+	withFastRetry(t)
+	var attempts atomic.Int32
+	client := newTestClient(t, "https://example.invalid")
+	client.httpClient.Transport = roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		if attempts.Add(1) == 1 {
+			return testResponse(http.StatusServiceUnavailable, ""), nil
+		}
+		return testResponse(http.StatusOK, `{"workers":[{"id":"worker-1"}]}`), nil
+	})
+
+	v2 := &V2Client{baseURL: client.baseURL, apiKey: client.apiKey, httpClient: client.httpClient, userAgent: client.userAgent}
+	workers, err := v2.ListEndpointWorkers(context.Background(), "endpoint-1")
+	if err != nil || len(workers.Workers) != 1 {
+		t.Fatalf("worker listing after retry: %v, %v", workers, err)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("expected 2 attempts, got %d", got)
+	}
+}
 
 func withFastRetry(t *testing.T) {
 	t.Helper()

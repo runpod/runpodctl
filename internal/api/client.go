@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -88,6 +89,12 @@ func (c *Client) request(method, endpoint string, params url.Values, body interf
 // service, see InvokeClient.EndpointHealth) but must still share auth, user agent and the
 // structured APIError handling.
 func (c *Client) requestURL(method, u string, body interface{}) ([]byte, error) {
+	ctx, cancel := c.callContext()
+	defer cancel()
+	return c.requestURLContext(ctx, method, u, body)
+}
+
+func (c *Client) requestURLContext(ctx context.Context, method, u string, body interface{}) ([]byte, error) {
 	var jsonBody []byte
 	if body != nil {
 		var err error
@@ -97,17 +104,12 @@ func (c *Client) requestURL(method, u string, body interface{}) ([]byte, error) 
 		}
 	}
 
-	// one deadline for the whole logical call: retries and the waits between
-	// them share the configured timeout instead of each getting a fresh one.
-	ctx, cancel := c.callContext()
-	defer cancel()
-
 	for attempt := 1; ; attempt++ {
 		resp, err := c.send(ctx, method, u, jsonBody)
 		if resp == nil {
 			// a network error may or may not have reached the server; only
 			// retry idempotent reads.
-			if idempotentMethod(method) && waitToRetry(ctx, nil, attempt) {
+			if idempotentMethod(method) && !errors.Is(err, errRequestConstruction) && waitToRetry(ctx, nil, attempt) {
 				continue
 			}
 			return nil, err
@@ -138,6 +140,8 @@ func (c *Client) requestURL(method, u string, body interface{}) ([]byte, error) 
 	}
 }
 
+var errRequestConstruction = errors.New("failed to create request")
+
 // callContext bounds one logical api call, retries included, by the client's
 // configured timeout (none when it is unset).
 func (c *Client) callContext() (context.Context, context.CancelFunc) {
@@ -164,7 +168,7 @@ func (c *Client) send(ctx context.Context, method, u string, jsonBody []byte) (*
 
 	req, err := http.NewRequestWithContext(ctx, method, u, reqBody)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("%w: %w", errRequestConstruction, err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Content-Type", "application/json")

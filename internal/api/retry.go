@@ -3,7 +3,10 @@ package api
 import (
 	"context"
 	"net/http"
+	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 	"time"
 )
 
@@ -28,14 +31,15 @@ func idempotentMethod(method string) bool {
 }
 
 // retryableStatus reports whether an HTTP status warrants a retry for the given
-// method. Only idempotent reads are retried, on a 429 or a 5xx. A 429 does not
+// method. Only idempotent reads are retried, on a 429 or a transient 5xx. A 429 does not
 // prove a write did nothing: rest v2 pod create runs the create, then refetches
 // the pod, and passes a 429 on that refetch through with the pod already made.
 func retryableStatus(method string, statusCode int) bool {
 	if !idempotentMethod(method) {
 		return false
 	}
-	return statusCode == http.StatusTooManyRequests || statusCode >= 500
+	return statusCode == http.StatusTooManyRequests ||
+		(statusCode >= 500 && statusCode < 600 && statusCode != http.StatusNotImplemented && statusCode != http.StatusHTTPVersionNotSupported)
 }
 
 // retryDelay is how long to wait before the given (1-based) attempt's retry.
@@ -60,11 +64,13 @@ func waitToRetry(ctx context.Context, header http.Header, attempt int) bool {
 	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= delay {
 		return false
 	}
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
 	case <-timer.C:
-		return true
+		return ctx.Err() == nil
 	case <-ctx.Done():
 		return false
 	}

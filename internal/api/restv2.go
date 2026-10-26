@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -56,29 +55,8 @@ func NewV2Client() (*V2Client, error) {
 
 // get issues a GET against the v2 api and returns the raw body.
 func (c *V2Client) get(ctx context.Context, path string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", c.userAgent)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, parseAPIError(body, resp.StatusCode)
-	}
-	return body, nil
+	client := Client{apiKey: c.apiKey, httpClient: c.httpClient, userAgent: c.userAgent}
+	return client.requestURLContext(ctx, http.MethodGet, c.baseURL+path, nil)
 }
 
 // Worker is one worker backing a serverless endpoint, as reported by v2.
