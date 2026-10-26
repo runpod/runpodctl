@@ -329,20 +329,35 @@ func (d *chunkedDownload) completedChunks() map[int]bool {
 	return done
 }
 
-// openPartial opens the partial file at the object's size, emptying it
-// first unless finished chunks are kept.
+// openPartial opens the partial file at the object's size. Unless finished
+// chunks are kept, it first drops the sidecar (so a stop before the next
+// sidecar write cannot vouch for chunks this run discards) and empties the file.
 func (d *chunkedDownload) openPartial(keep bool) error {
+	if !keep {
+		if err := d.root.Remove(d.sidecar); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
 	file, err := d.root.OpenFile(d.partial, os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
 		return err
 	}
+	if err := sizePartial(file, d.f.obj.size, keep); err != nil {
+		file.Close()
+		return err
+	}
 	d.file = file
+	return nil
+}
+
+// sizePartial sets file to size, emptying it first unless keep.
+func sizePartial(file *os.File, size int64, keep bool) error {
 	if !keep {
 		if err := file.Truncate(0); err != nil {
 			return err
 		}
 	}
-	return file.Truncate(d.f.obj.size)
+	return file.Truncate(size)
 }
 
 func (d *chunkedDownload) fetchChunk(ctx context.Context, c int) error {
