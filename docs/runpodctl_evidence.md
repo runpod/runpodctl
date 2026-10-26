@@ -53,14 +53,11 @@ Open issue count: 41 (as of 2026-02-04).
   https://github.com/runpod/runpodctl/issues/204  
   > "If the value contains an equals... the value rejected"
 
-### Project workflow instability
+### Serverless development
 
-- #195 Project files are not synced  
-  https://github.com/runpod/runpodctl/issues/195  
-  > "ERROR: Could not open requirements file... cp: cannot stat '.runpodignore'"
-- #173 Inconsistent working directory between dev and prod  
-  https://github.com/runpod/runpodctl/issues/173  
-  > "In Development: /dev/<project> ... In Production: /prod/<project>/src"
+Use the [Runpod SDK](https://github.com/runpod/runpod-python) for serverless
+development. `runpodctl project`, including help requests, prints an SDK notice
+on stderr, leaves stdout empty, and exits 1.
 
 ### SSH and connection issues
 
