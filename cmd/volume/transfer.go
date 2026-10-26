@@ -133,7 +133,10 @@ func runUpload(cmd *cobra.Command, args []string) error {
 	if len(args) == 3 {
 		remote = args[2]
 	}
-	return runTransfer(cmd, args[0], args[1], remote, true)
+	if _, err := os.Stat(args[1]); err != nil {
+		return clierr.Usagef("local path %s: %v", args[1], errors.Unwrap(err))
+	}
+	return runTransfer(cmd, args[0], args[1], remote, nvtransfer.Volume.Upload)
 }
 
 func runDownload(cmd *cobra.Command, args []string) error {
@@ -141,10 +144,13 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	if len(args) == 3 {
 		local = args[2]
 	}
-	return runTransfer(cmd, args[0], args[1], local, false)
+	return runTransfer(cmd, args[0], args[1], local, nvtransfer.Volume.Download)
 }
 
-func runTransfer(cmd *cobra.Command, volumeID, src, dst string, upload bool) error {
+// transferFunc is nvtransfer.Volume.Upload or nvtransfer.Volume.Download.
+type transferFunc func(v nvtransfer.Volume, ctx context.Context, src, dst string) (*nvtransfer.Summary, error)
+
+func runTransfer(cmd *cobra.Command, volumeID, src, dst string, transfer transferFunc) error {
 	if transferConcurrency < 1 || transferConcurrency > 64 {
 		return clierr.Usagef("--concurrency must be between 1 and 64")
 	}
@@ -153,38 +159,9 @@ func runTransfer(cmd *cobra.Command, volumeID, src, dst string, upload bool) err
 	if accessKey == "" || secretKey == "" {
 		return errMissingS3Keys
 	}
-	if upload {
-		if _, err := os.Stat(src); err != nil {
-			return clierr.Usagef("local path %s: %v", src, errors.Unwrap(err))
-		}
-	}
-
-	dataCenterID := transferDataCenterID
-	endpoint := transferEndpointURL
-	if endpoint == "" {
-		if dataCenterID == "" {
-			client, err := api.NewClient()
-			if err != nil {
-				return err
-			}
-			volume, err := client.GetNetworkVolume(volumeID)
-			if err != nil {
-				return fmt.Errorf("failed to get volume: %w", err)
-			}
-			dataCenterID = volume.DataCenterID
-		}
-		endpoint = nvtransfer.EndpointURL(dataCenterID)
-	}
-	region := dataCenterID
-	if region == "" {
-		region = "us-east-1"
-	}
-	// an explicit --endpoint-url is the caller's; only the derived data
-	// center endpoint is checked
-	if transferEndpointURL == "" {
-		if err := checkEndpointResolves(endpoint); err != nil {
-			return err
-		}
+	dataCenterID, endpoint, err := resolveEndpoint(volumeID)
+	if err != nil {
+		return err
 	}
 
 	// the first ctrl-c stops the transfer and keeps its resume state; a second
@@ -194,37 +171,56 @@ func runTransfer(cmd *cobra.Command, volumeID, src, dst string, upload bool) err
 
 	progress := newProgress(os.Stderr)
 	vol := nvtransfer.Volume{
-		Client:      nvtransfer.NewS3Client(endpoint, region, accessKey, secretKey),
+		Client:      nvtransfer.NewS3Client(endpoint, cmp.Or(dataCenterID, "us-east-1"), accessKey, secretKey),
 		Endpoint:    endpoint,
 		ID:          volumeID,
 		Concurrency: transferConcurrency,
 		Force:       transferForce,
 		Reporter:    progress,
 	}
-
-	var summary *nvtransfer.Summary
-	var err error
-	if upload {
-		summary, err = vol.Upload(ctx, src, dst)
-	} else {
-		summary, err = vol.Download(ctx, src, dst)
-	}
+	summary, err := transfer(vol, ctx, src, dst)
 	progress.stop()
 	if err != nil {
 		return transferError(ctx, err, summary)
 	}
 
-	if dst == "" {
-		dst = "(default)"
-	}
 	format := output.ParseFormat(cmd.Flag("output").Value.String())
 	return output.Print(&transferResult{
 		VolumeID:     volumeID,
 		DataCenterID: dataCenterID,
 		Source:       src,
-		Destination:  dst,
+		Destination:  cmp.Or(dst, "(default)"),
 		Summary:      *summary,
 	}, &output.Config{Format: format})
+}
+
+// resolveEndpoint returns the volume's data center and s3 endpoint. An
+// explicit --endpoint-url is used as given; otherwise the data center comes
+// from --data-center-id or the api, and its endpoint must resolve.
+func resolveEndpoint(volumeID string) (dataCenterID, endpoint string, err error) {
+	if transferEndpointURL != "" {
+		return transferDataCenterID, transferEndpointURL, nil
+	}
+	dataCenterID = transferDataCenterID
+	if dataCenterID == "" {
+		if dataCenterID, err = lookupDataCenter(volumeID); err != nil {
+			return "", "", err
+		}
+	}
+	endpoint = nvtransfer.EndpointURL(dataCenterID)
+	return dataCenterID, endpoint, checkEndpointResolves(endpoint)
+}
+
+func lookupDataCenter(volumeID string) (string, error) {
+	client, err := api.NewClient()
+	if err != nil {
+		return "", err
+	}
+	volume, err := client.GetNetworkVolume(volumeID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get volume: %w", err)
+	}
+	return volume.DataCenterID, nil
 }
 
 // lookupHost and proxyFor are the resolver and the proxy choice the s3
@@ -277,12 +273,8 @@ func transferError(ctx context.Context, err error, summary *nvtransfer.Summary) 
 	case nvtransfer.Resumable(err):
 		return &incompleteError{err: err, summary: summary}
 	}
-	if status := nvtransfer.HTTPStatus(err); status >= 400 && status < 500 && status != http.StatusRequestTimeout && status != http.StatusTooManyRequests {
-		msg := err.Error()
-		if status == http.StatusUnauthorized || status == http.StatusForbidden {
-			msg += " (check the s3 api keys and that they belong to the volume's account)"
-		}
-		return &api.APIError{Message: msg, Status: status}
+	if apiErr := clientError(err); apiErr != nil {
+		return apiErr
 	}
 	// a local filesystem failure (permissions, a full disk, a rename that
 	// cannot happen) needs fixing first
@@ -290,6 +282,20 @@ func transferError(ctx context.Context, err error, summary *nvtransfer.Summary) 
 		return &waitfor.FatalError{Code: "cli_error", Err: err}
 	}
 	return &incompleteError{err: err, summary: summary}
+}
+
+// clientError codes a 4xx the server will repeat on a rerun (not 408 or
+// 429, which pass) as an api error with its status, or returns nil.
+func clientError(err error) error {
+	status := nvtransfer.HTTPStatus(err)
+	if status < 400 || status >= 500 || status == http.StatusRequestTimeout || status == http.StatusTooManyRequests {
+		return nil
+	}
+	msg := err.Error()
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		msg += " (check the s3 api keys and that they belong to the volume's account)"
+	}
+	return &api.APIError{Message: msg, Status: status}
 }
 
 // progress prints transfer progress to stderr: a line redrawn in place on a

@@ -7,6 +7,7 @@ package nvtransfer
 
 import (
 	"context"
+	"maps"
 	"net"
 	"net/http"
 	"strings"
@@ -82,24 +83,15 @@ type savedHeadersKey struct{}
 func unsignedHeaders(stack *middleware.Stack) error {
 	lift := middleware.FinalizeMiddlewareFunc("LiftUnsignedHeaders", func(ctx context.Context, in middleware.FinalizeInput, next middleware.FinalizeHandler) (middleware.FinalizeOutput, middleware.Metadata, error) {
 		if req, ok := in.Request.(*smithyhttp.Request); ok {
-			saved := http.Header{}
-			for _, h := range headersLeftUnsigned {
-				if v := req.Header.Values(h); len(v) > 0 {
-					saved[h] = v
-					req.Header.Del(h)
-				}
-			}
-			ctx = middleware.WithStackValue(ctx, savedHeadersKey{}, saved)
+			ctx = middleware.WithStackValue(ctx, savedHeadersKey{}, liftHeaders(req.Header))
 		}
 		return next.HandleFinalize(ctx, in)
 	})
 	restore := middleware.FinalizeMiddlewareFunc("RestoreUnsignedHeaders", func(ctx context.Context, in middleware.FinalizeInput, next middleware.FinalizeHandler) (middleware.FinalizeOutput, middleware.Metadata, error) {
-		if req, ok := in.Request.(*smithyhttp.Request); ok {
-			if saved, ok := middleware.GetStackValue(ctx, savedHeadersKey{}).(http.Header); ok {
-				for h, v := range saved {
-					req.Header[h] = v
-				}
-			}
+		req, ok := in.Request.(*smithyhttp.Request)
+		saved, found := middleware.GetStackValue(ctx, savedHeadersKey{}).(http.Header)
+		if ok && found {
+			maps.Copy(req.Header, saved)
 		}
 		return next.HandleFinalize(ctx, in)
 	})
@@ -107,4 +99,16 @@ func unsignedHeaders(stack *middleware.Stack) error {
 		return err
 	}
 	return stack.Finalize.Insert(restore, "Signing", middleware.After)
+}
+
+// liftHeaders removes the headers left unsigned from h and returns them.
+func liftHeaders(h http.Header) http.Header {
+	saved := http.Header{}
+	for _, name := range headersLeftUnsigned {
+		if v := h.Values(name); len(v) > 0 {
+			saved[name] = v
+			h.Del(name)
+		}
+	}
+	return saved
 }
