@@ -164,11 +164,14 @@ func TestCompleteModelUpload_FailedPartStopsRemainingParts(t *testing.T) {
 			return
 		}
 		puts.Add(1)
-		// no drainRequestBody: once part 1 fails the client cancels the parts
-		// still in flight, so their bodies can end in a closed connection or
-		// an unexpected EOF. That cancellation is what this test pins.
-		_, _ = io.Copy(io.Discard, r.Body)
-		if r.URL.Query().Get("p") == "1" {
+		// once part 1 fails the client cancels the parts still in flight, so
+		// their bodies can end in a closed connection or an unexpected EOF;
+		// that cancellation is what this test pins. Part 1 is never cancelled.
+		firstPart := r.URL.Query().Get("p") == "1"
+		if _, err := io.Copy(io.Discard, r.Body); err != nil && firstPart {
+			t.Errorf("drain part 1 request body: %v", err)
+		}
+		if firstPart {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
