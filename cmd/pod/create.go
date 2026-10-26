@@ -209,6 +209,9 @@ func runCreate(cmd *cobra.Command, args []string) error {
 // "running", or "" for no wait) from --wait / --wait-for. Setting --wait-for
 // implies waiting, so `--wait-for running` alone is enough.
 func resolveWaitMode(cmd *cobra.Command) (string, error) {
+	if cmd.Flags().Changed("wait") && !createWait && cmd.Flags().Changed("wait-for") {
+		return "", clierr.Usagef("--wait=false cannot be combined with --wait-for")
+	}
 	if !createWait && !cmd.Flags().Changed("wait-for") {
 		return "", nil
 	}
@@ -219,7 +222,7 @@ func resolveWaitMode(cmd *cobra.Command) (string, error) {
 	case waitModeSSH, waitModeRunning:
 		return mode, nil
 	default:
-		return "", fmt.Errorf("invalid --wait-for %q (use ssh or running)", createWaitFor)
+		return "", clierr.Usagef("invalid --wait-for %q (use ssh or running)", createWaitFor)
 	}
 }
 
