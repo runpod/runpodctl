@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -241,7 +242,7 @@ func TestRunBounded_StopsLaunchingAfterFirstError(t *testing.T) {
 	const n = 20
 	boom := errors.New("boom")
 	var started atomic.Int32
-	err := runBounded(n, 2, func(ctx context.Context, i int) error {
+	err := runBounded(context.Background(), n, 2, func(ctx context.Context, i int) error {
 		started.Add(1)
 		if i == 1 {
 			return boom
@@ -254,5 +255,74 @@ func TestRunBounded_StopsLaunchingAfterFirstError(t *testing.T) {
 	}
 	if got := started.Load(); got > 3 {
 		t.Fatalf("expected no work launched after the failure (<= 3 started), got %d", got)
+	}
+}
+
+func TestUploadModelFileChunkCancelsInFlightFiles(t *testing.T) {
+	old := completeModelUploadFile
+	t.Cleanup(func() { completeModelUploadFile = old })
+
+	started := make(chan struct{})
+	completeModelUploadFile = func(ctx context.Context, _ *api.ModelRepoUpload, path string, _ modelUploadProgress) error {
+		if path == "second" {
+			close(started)
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		<-started
+		return errors.New("first file failed")
+	}
+	files := []modelFile{{AbsolutePath: "first", RelativePath: "first"}, {AbsolutePath: "second", RelativePath: "second"}}
+	uploads := []*api.ModelRepoUpload{{SessionID: "first"}, {SessionID: "second"}}
+	done := make(chan error, 1)
+	go func() { _, err := uploadModelFileChunk(files, uploads, nil); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "first file failed") {
+			t.Fatalf("expected first file failure, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("in-flight file did not stop after another file failed")
+	}
+}
+
+func TestCompleteModelUploadWithContextStopsCanceledParts(t *testing.T) {
+	path := writeArtifact(t, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := completeModelUploadWithContext(ctx, &api.ModelRepoUpload{
+		PartSizeBytes: 1,
+		CompleteURL:   "http://127.0.0.1:1",
+		Parts:         []*api.ModelRepoUploadPart{{PartNumber: 1, URL: "http://127.0.0.1:1"}},
+	}, path, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected cancellation, got %v", err)
+	}
+}
+
+func TestRunBoundedReturnsFailureThatTriggeredCancellation(t *testing.T) {
+	started := make(chan struct{})
+	err := runBounded(context.Background(), 2, 2, func(ctx context.Context, i int) error {
+		if i == 0 {
+			<-started
+			return fmt.Errorf("stalled: %w", context.Canceled)
+		}
+		close(started)
+		<-ctx.Done()
+		return errors.New("later 403")
+	})
+	if err == nil || !strings.Contains(err.Error(), "stalled") {
+		t.Fatalf("expected the first stall failure, got %v", err)
+	}
+}
+
+func TestModelUploadTransportIdleConnectionsPerHost(t *testing.T) {
+	transport, ok := modelUploadHTTPClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatal("expected upload HTTP transport")
+	}
+	want := modelRepoUploadConcurrency * modelPartUploadConcurrency
+	if transport.MaxIdleConnsPerHost != want {
+		t.Fatalf("expected %d idle connections per host, got %d", want, transport.MaxIdleConnsPerHost)
 	}
 }

@@ -173,7 +173,7 @@ var (
 	createModelRepoUpload      = api.CreateModelRepoUpload
 	createModelRepoUploadBatch = api.CreateModelRepoUploadBatch
 	completeModelRepoUploadAll = api.CompleteModelRepoUploadBatch
-	completeModelUploadFile    = completeModelUploadWithProgress
+	completeModelUploadFile    = completeModelUploadWithContext
 	getModelsForAdd            = api.GetModels
 	getModelRepoStorageUsage   = api.GetModelRepoStorageUsage
 	sleepModelHashPoll         = waitModelHashPoll
@@ -1023,14 +1023,10 @@ func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInp
 // flight at once. The first failure cancels ctx, so no further fn is started and
 // in-flight calls that honor ctx stop early; one bad part or file must not let the
 // rest of a multi-GB upload go out first. It always waits for every launched call
-// to return, then reports the first error in index order (not completion order)
-// that is not a cancellation it caused, so a failure is deterministic regardless
-// of goroutine scheduling. If only cancellations remain, it reports the failure
-// that triggered them.
-func runBounded(n, concurrency int, fn func(ctx context.Context, i int) error) error {
-	ctx, cancel := context.WithCancelCause(context.Background())
+// to return, then reports the error that first triggered cancellation.
+func runBounded(parent context.Context, n, concurrency int, fn func(ctx context.Context, i int) error) error {
+	ctx, cancel := context.WithCancelCause(parent)
 	defer cancel(nil)
-	errs := make([]error, n)
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 
@@ -1045,18 +1041,12 @@ func runBounded(n, concurrency int, fn func(ctx context.Context, i int) error) e
 			defer wg.Done()
 			defer func() { <-sem }()
 			if err := fn(ctx, i); err != nil {
-				errs[i] = err
 				cancel(err)
 			}
 		}(i)
 	}
 	wg.Wait()
 
-	for _, err := range errs {
-		if err != nil && !errors.Is(err, context.Canceled) {
-			return err
-		}
-	}
 	return context.Cause(ctx)
 }
 
@@ -1084,10 +1074,10 @@ func uploadModelFileChunk(chunk []modelFile, uploads []*api.ModelRepoUpload, pro
 	}
 
 	results := make([]uploadedModelFile, len(chunk))
-	err := runBounded(len(chunk), modelRepoUploadConcurrency, func(_ context.Context, i int) error {
+	err := runBounded(context.Background(), len(chunk), modelRepoUploadConcurrency, func(ctx context.Context, i int) error {
 		file := chunk[i]
 		upload := uploads[i]
-		if err := completeModelUploadFile(upload, file.AbsolutePath, progress); err != nil {
+		if err := completeModelUploadFile(ctx, upload, file.AbsolutePath, progress); err != nil {
 			return fmt.Errorf("upload %s: %w", file.RelativePath, err)
 		}
 		results[i] = uploadedModelFile{
@@ -1158,6 +1148,7 @@ var modelUploadHTTPClient = &http.Client{
 		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   modelRepoUploadConcurrency * modelPartUploadConcurrency,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   15 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
@@ -1342,6 +1333,10 @@ func doGuardedModelUploadAttempt(parent context.Context, newReq func() (*http.Re
 }
 
 func completeModelUploadWithProgress(upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
+	return completeModelUploadWithContext(context.Background(), upload, artifactPath, progress)
+}
+
+func completeModelUploadWithContext(ctx context.Context, upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
 	if upload == nil {
 		return fmt.Errorf("upload details are required")
 	}
@@ -1384,7 +1379,7 @@ func completeModelUploadWithProgress(upload *api.ModelRepoUpload, artifactPath s
 	// lets the PUTs run in parallel: a model repo is commonly one large file, so
 	// uploading its parts sequentially left the pipe mostly idle.
 	completed := make([]completedPart, len(parts))
-	uploadErr := runBounded(len(parts), modelPartUploadConcurrency, func(ctx context.Context, i int) error {
+	uploadErr := runBounded(ctx, len(parts), modelPartUploadConcurrency, func(ctx context.Context, i int) error {
 		part := parts[i]
 		offset := int64(i) * partSize
 		remaining := totalSize - offset
@@ -1448,9 +1443,8 @@ func completeModelUploadWithProgress(upload *api.ModelRepoUpload, artifactPath s
 
 	payload := append([]byte(xml.Header), body...)
 
-	completeCtx := context.Background()
-	resp, err := doModelUploadRequest(completeCtx, "complete upload", func() (*http.Request, error) {
-		completeReq, reqErr := http.NewRequestWithContext(completeCtx, http.MethodPost, upload.CompleteURL, bytes.NewReader(payload))
+	resp, err := doModelUploadRequest(ctx, "complete upload", func() (*http.Request, error) {
+		completeReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, upload.CompleteURL, bytes.NewReader(payload))
 		if reqErr != nil {
 			return nil, fmt.Errorf("create completion request: %w", reqErr)
 		}
