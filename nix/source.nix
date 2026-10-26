@@ -6,10 +6,7 @@
 # rebuilds nothing, editing a workflow re-runs only actionlint, and editing a
 # `.nix` file re-runs only the Nix linters.
 #
-# `goSrc` must keep every non-Go file the build or tests read: the go:embed
-# targets in cmd/project/functions.go (starter_examples, dotfiles included,
-# and exampleDockerfile) and cmd/croc/relays.json. A missing embed fails to
-# compile, so the go-test check catches an omission here.
+# `goSrc` includes cmd/croc/relays.json and test data alongside the go files.
 #
 { lib, src }:
 let
@@ -33,8 +30,6 @@ let
       (fs.fileFilter (f: f.hasExt "go") src)
       (src + "/go.mod")
       (src + "/go.sum")
-      (src + "/cmd/project/starter_examples")
-      (src + "/cmd/project/exampleDockerfile")
       (src + "/cmd/croc/relays.json")
       testdata
     ]

@@ -8,11 +8,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/runpod/runpodctl/cmd/project"
 	"github.com/runpod/runpodctl/cmd/ssh"
 	"github.com/runpod/runpodctl/internal/agent"
 	"github.com/runpod/runpodctl/internal/api"
 	"github.com/runpod/runpodctl/internal/output"
+	"github.com/runpod/runpodctl/internal/podssh"
 	"github.com/runpod/runpodctl/internal/sshconnect"
 
 	"github.com/spf13/cobra"
@@ -261,7 +261,7 @@ func runSSHInfoWithArgs(cmd *cobra.Command, args []string, allowAll bool) error 
 
 func runSSHForget(cmd *cobra.Command, args []string) error {
 	podID := args[0]
-	path, fingerprints, err := project.ForgetHostKey(podID)
+	path, fingerprints, err := podssh.ForgetHostKey(podID)
 	if err != nil {
 		return fmt.Errorf("failed to forget host key for pod %s: %w", podID, err)
 	}
