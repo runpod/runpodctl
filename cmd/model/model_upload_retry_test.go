@@ -379,6 +379,10 @@ func (b *lateEOFBody) Read(p []byte) (int, error) {
 
 func (b *lateEOFBody) Close() error { return nil }
 
+// lateEOFResponsePrefix is what the server writes before stalling the
+// response body.
+const lateEOFResponsePrefix = "0123456789"
+
 // TestGuardedAttempt_LateRequestEOFKeepsResponseGuarded pins that the request
 // body hitting EOF after the response headers arrived does not disarm the
 // stall guard for the response body. Before the fix the late EOF stopped the
@@ -392,7 +396,7 @@ func TestGuardedAttempt_LateRequestEOFKeepsResponseGuarded(t *testing.T) {
 		}
 		w.Header().Set("Content-Length", "1000")
 		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write([]byte("0123456789")); err != nil {
+		if _, err := io.WriteString(w, lateEOFResponsePrefix); err != nil {
 			t.Errorf("write partial body: %v", err)
 		}
 		flusher, ok := w.(http.Flusher)
@@ -419,7 +423,13 @@ func TestGuardedAttempt_LateRequestEOFKeepsResponseGuarded(t *testing.T) {
 			done <- err
 			return
 		}
-		// the response phase has started: now let the request body hit EOF.
+		// consume every byte the server sent before releasing the request EOF,
+		// so no later response progress can re-arm a timer the EOF wrongly
+		// stopped.
+		if _, err := io.ReadFull(resp.Body, make([]byte, len(lateEOFResponsePrefix))); err != nil {
+			done <- err
+			return
+		}
 		close(release)
 		_, err = io.ReadAll(resp.Body)
 		if closeErr := resp.Body.Close(); closeErr != nil {
