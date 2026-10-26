@@ -14,8 +14,16 @@ const (
 	InvokeURLEnv  = "RUNPOD_INVOKE_URL"
 )
 
+// flashAPIKey is where `flash login` saves the key in the shared
+// ~/.runpod/config.toml: a `[default]` table with `api_key`. Reading it here
+// means one login works for both tools.
+const flashAPIKey = "default.api_key"
+
 func APIKey() string {
-	return envOrConfig(APIKeyEnv, "apiKey")
+	if value := envOrConfig(APIKeyEnv, "apiKey"); value != "" {
+		return value
+	}
+	return viper.GetString(flashAPIKey)
 }
 
 func RESTURL() string {
