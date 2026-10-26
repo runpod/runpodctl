@@ -8,11 +8,48 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/runpod/runpodctl/internal/configenv"
 )
+
+func TestInvokeGetRetriesAndRunStaysSingleAttempt(t *testing.T) {
+	withFastRetry(t)
+	var health, status, runs atomic.Int32
+	client := newTestInvokeClient(t, "https://example.invalid")
+	client.httpClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/health"):
+			if health.Add(1) == 1 {
+				return testResponse(http.StatusServiceUnavailable, ""), nil
+			}
+			return testResponse(http.StatusOK, `{"workers":{"ready":1}}`), nil
+		case strings.Contains(r.URL.Path, "/status/"):
+			if status.Add(1) == 1 {
+				return testResponse(http.StatusServiceUnavailable, ""), nil
+			}
+			return testResponse(http.StatusOK, `{"id":"job-1","status":"COMPLETED"}`), nil
+		case strings.HasSuffix(r.URL.Path, "/run"):
+			runs.Add(1)
+			return testResponse(http.StatusServiceUnavailable, ""), nil
+		}
+		return testResponse(http.StatusNotFound, ""), nil
+	})
+	if _, err := client.EndpointHealth(context.Background(), "ep-1"); err != nil {
+		t.Fatalf("health after retry: %v", err)
+	}
+	if _, err := client.JobStatus(context.Background(), "ep-1", "job-1"); err != nil {
+		t.Fatalf("status after retry: %v", err)
+	}
+	if _, err := client.Run(context.Background(), "ep-1", json.RawMessage(`{}`)); err == nil {
+		t.Fatal("expected run error")
+	}
+	if health.Load() != 2 || status.Load() != 2 || runs.Load() != 1 {
+		t.Fatalf("attempts: health=%d status=%d run=%d", health.Load(), status.Load(), runs.Load())
+	}
+}
 
 // newTestInvokeClient points an invoke client at a test server, exercising the
 // same base-url resolution the real client uses (RUNPOD_INVOKE_URL), not a
