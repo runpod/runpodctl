@@ -70,6 +70,10 @@ type goListModule struct {
 // in go.mod reads the module graph and needs no network.
 func crocModuleInfo(t *testing.T) goListModule {
 	t.Helper()
+	// a test binary built with go test -c can run where there is no toolchain.
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not on PATH; skipping the croc version pin check")
+	}
 	out, err := exec.CommandContext(t.Context(), "go", "list", "-m", "-json", crocModule).Output()
 	if err != nil {
 		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
