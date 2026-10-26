@@ -55,7 +55,9 @@ func TestRetryWaitStopsOnSignal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("signal child failed: %v: %s", err, out)
 	}
-	if elapsed := time.Since(start); elapsed > time.Second {
+	// the child's backoff is 5s; this bound includes process start (slow under
+	// -race), so it only has to show the wait was cut short.
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
 		t.Fatalf("signal took %v to stop retry wait", elapsed)
 	}
 }
