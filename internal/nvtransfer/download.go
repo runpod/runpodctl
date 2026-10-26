@@ -48,8 +48,9 @@ type remoteFile struct {
 //
 // remotePath is a directory when it ends in "/" or names a prefix with
 // objects under it. localPath defaults to the remote base name; a file
-// downloaded into an existing local directory keeps its base name. Files
-// already present locally with the remote size are skipped. Large files are
+// downloaded into an existing local directory keeps its base name. Local files
+// with the remote size that are not older than the remote copy are skipped
+// (downloads stamp the remote time on the file). Large files are
 // fetched in chunks into "<name>.rpdownload" with progress kept in
 // "<name>.rpdownload.json", so a rerun continues where it stopped.
 func Download(ctx context.Context, opts Options, remotePath, localPath string) (*Summary, error) {
@@ -109,6 +110,18 @@ func Download(ctx context.Context, opts Options, remotePath, localPath string) (
 		files = append(files, remoteFile{key: k, name: rel, obj: obj})
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].key < files[j].key })
+	// a remote "x.rpdownload" would share its partial file with "x"
+	names := make(map[string]bool, len(files))
+	for _, f := range files {
+		names[f.name] = true
+	}
+	for _, f := range files {
+		for _, suffix := range []string{partialSuffix, sidecarSuffix} {
+			if names[f.name+suffix] {
+				return nil, fmt.Errorf("cannot download both %q and %q: the second name is used for the first's partial download", f.name, f.name+suffix)
+			}
+		}
+	}
 	return r.downloadAll(ctx, root, files)
 }
 
@@ -139,7 +152,9 @@ func (r *run) downloadAll(ctx context.Context, root *os.Root, files []remoteFile
 	var todo []remoteFile
 	var total int64
 	for _, f := range files {
-		if st, err := root.Stat(f.name); err == nil && st.Mode().IsRegular() && st.Size() == f.obj.size {
+		// downloads stamp the remote time, so an unchanged file is the same
+		// size and not older than the remote copy
+		if st, err := root.Stat(f.name); err == nil && st.Mode().IsRegular() && st.Size() == f.obj.size && !f.obj.modified.After(st.ModTime()) {
 			r.skipped()
 			continue
 		}
@@ -189,7 +204,7 @@ func (r *run) downloadFile(ctx context.Context, root *os.Root, f remoteFile) err
 	done := map[int]bool{}
 	var st downloadState
 	if data, err := root.ReadFile(sidecar); err == nil && json.Unmarshal(data, &st) == nil &&
-		st.Size == size && st.ETag == f.obj.etag && st.ChunkSize == chunkSize {
+		st.Key == f.key && st.Size == size && st.ETag == f.obj.etag && st.ChunkSize == chunkSize {
 		if info, err := root.Stat(partial); err == nil && info.Size() == size {
 			for _, c := range st.Done {
 				done[c] = true
@@ -211,7 +226,7 @@ func (r *run) downloadFile(ctx context.Context, root *os.Root, f remoteFile) err
 		return err
 	}
 
-	st = downloadState{Size: size, ETag: f.obj.etag, ChunkSize: chunkSize}
+	st = downloadState{Key: f.key, Size: size, ETag: f.obj.etag, ChunkSize: chunkSize}
 	var missing []int
 	for c := 0; c < chunks; c++ {
 		if done[c] {

@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -236,6 +238,8 @@ func (r *run) multipartUpload(ctx context.Context, file *os.File, f localFile) e
 		}
 		st = uploadState{UploadID: aws.ToString(out.UploadId), PartSize: partSize, FileSize: size, MtimeNs: f.info.ModTime().UnixNano()}
 		if err := writeJSON(statePath, st); err != nil {
+			// without saved state no rerun can find this upload again
+			r.abort(ctx, f.key, st.UploadID)
 			return fmt.Errorf("save upload state: %w", err)
 		}
 	}
@@ -283,6 +287,14 @@ func (r *run) multipartUpload(ctx context.Context, file *os.File, f localFile) e
 		return err
 	}
 
+	// the parts were read over the whole upload; if the file moved under
+	// them, they may mix two versions of it
+	if now, err := os.Stat(f.path); err != nil || now.Size() != size || !now.ModTime().Equal(f.info.ModTime()) {
+		r.abort(ctx, f.key, st.UploadID)
+		_ = os.Remove(statePath)
+		return errLocalChanged
+	}
+
 	err = withRetry(ctx, completeTimeout, func(ctx context.Context) error {
 		_, err := r.Client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
 			Bucket:          aws.String(r.VolumeID),
@@ -292,13 +304,8 @@ func (r *run) multipartUpload(ctx context.Context, file *os.File, f localFile) e
 		})
 		return err
 	})
-	if err != nil {
-		// assembling a large file can outlive the proxy (524) while it still
-		// finishes server-side; a retry then finds the upload gone
-		obj, headErr := r.headObject(ctx, f.key)
-		if headErr != nil || obj == nil || obj.size != size {
-			return fmt.Errorf("complete multipart upload: %w", err)
-		}
+	if err != nil && !r.completedAnyway(ctx, err, f.key, size, multipartETag(etags, n)) {
+		return fmt.Errorf("complete multipart upload: %w", err)
 	}
 	_ = os.Remove(statePath)
 	return nil
@@ -330,9 +337,44 @@ func (r *run) listParts(ctx context.Context, key, uploadID string) ([]types.Part
 	}
 }
 
-// verifyParts keeps the server's parts that match the local file. A part
-// counts when its size is right and, if its etag is an md5, the md5 of the
-// local bytes matches. Anything else is uploaded again.
+// errLocalChanged is a local file modified while its parts were uploading.
+var errLocalChanged = errors.New("local file changed during upload; run the command again to upload the new version")
+
+// completedAnyway reports whether a failed complete actually took effect.
+// Assembling a large file can outlive the proxy (524) while it still finishes
+// server-side, and a retry then finds the upload gone. Only those ambiguous
+// failures qualify, and only when the object at the key is this upload's:
+// its etag equals the multipart etag of our parts, or, if that cannot be
+// computed, its size matches.
+func (r *run) completedAnyway(ctx context.Context, err error, key string, size int64, wantETag string) bool {
+	if !retryable(err) && !isNotFound(err) {
+		return false
+	}
+	obj, headErr := r.headObject(ctx, key)
+	if headErr != nil || obj == nil || obj.size != size {
+		return false
+	}
+	return wantETag == "" || obj.etag == wantETag
+}
+
+// multipartETag is the etag s3 (and runpod, verified) gives an object
+// assembled from parts: the md5 of the parts' binary md5s, then "-<count>".
+// It is "" when a part etag is not an md5.
+func multipartETag(etags map[int32]string, n int32) string {
+	h := md5.New()
+	for i := int32(1); i <= n; i++ {
+		sum, err := hex.DecodeString(trimETag(etags[i]))
+		if err != nil || len(sum) != md5.Size {
+			return ""
+		}
+		h.Write(sum)
+	}
+	return fmt.Sprintf("%s-%d", hex.EncodeToString(h.Sum(nil)), n)
+}
+
+// verifyParts keeps the server's parts that match the local file: right size,
+// and an md5 etag equal to the md5 of the local bytes. A part whose content
+// cannot be verified is uploaded again.
 func verifyParts(file *os.File, parts []types.Part, n int32, size, partSize int64) (map[int32]string, error) {
 	etags := map[int32]string{}
 	for _, p := range parts {
@@ -345,14 +387,16 @@ func verifyParts(file *os.File, parts []types.Part, n int32, size, partSize int6
 			continue
 		}
 		etag := aws.ToString(p.ETag)
-		if want := trimETag(etag); md5Hex.MatchString(want) {
-			h := md5.New()
-			if _, err := io.Copy(h, io.NewSectionReader(file, off, length)); err != nil {
-				return nil, err
-			}
-			if hex.EncodeToString(h.Sum(nil)) != want {
-				continue
-			}
+		want := strings.ToLower(trimETag(etag))
+		if !md5Hex.MatchString(want) {
+			continue
+		}
+		h := md5.New()
+		if _, err := io.Copy(h, io.NewSectionReader(file, off, length)); err != nil {
+			return nil, err
+		}
+		if hex.EncodeToString(h.Sum(nil)) != want {
+			continue
 		}
 		etags[num] = etag
 	}

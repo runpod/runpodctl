@@ -25,6 +25,15 @@ import (
 type fakeObject struct {
 	data     []byte
 	modified time.Time
+	// etag is set for multipart objects, which get "<md5 of md5s>-<n>"
+	etag string
+}
+
+func (o *fakeObject) etagValue() string {
+	if o.etag != "" {
+		return o.etag
+	}
+	return etagOf(o.data)
 }
 
 type fakeUpload struct {
@@ -42,7 +51,11 @@ type fakeS3 struct {
 	calls   map[string]int
 
 	onUploadPart func(part int32) error
-	onGetObject  func(rng string) error
+	// onCompleteBefore runs before the object is assembled
+	onCompleteBefore func() error
+	// opaquePartETags makes parts report etags that are not md5s
+	opaquePartETags bool
+	onGetObject     func(rng string) error
 	// onComplete runs after the object is assembled, so it can simulate a
 	// completion that succeeds server-side but fails on the wire
 	onComplete func() error
@@ -72,6 +85,13 @@ func (f *fakeS3) get(key string) ([]byte, bool) {
 		return nil, false
 	}
 	return obj.data, true
+}
+
+func (f *fakeS3) partETag(data []byte) string {
+	if f.opaquePartETags {
+		return fmt.Sprintf(`"opaque-%d"`, len(data))
+	}
+	return etagOf(data)
 }
 
 func etagOf(data []byte) string {
@@ -120,7 +140,7 @@ func (f *fakeS3) HeadObject(ctx context.Context, in *s3.HeadObjectInput, _ ...fu
 	}
 	return &s3.HeadObjectOutput{
 		ContentLength: aws.Int64(int64(len(obj.data))),
-		ETag:          aws.String(etagOf(obj.data)),
+		ETag:          aws.String(obj.etagValue()),
 		LastModified:  aws.Time(obj.modified),
 	}, nil
 }
@@ -150,7 +170,7 @@ func (f *fakeS3) GetObject(ctx context.Context, in *s3.GetObjectInput, _ ...func
 	return &s3.GetObjectOutput{
 		Body:          io.NopCloser(bytes.NewReader(data)),
 		ContentLength: aws.Int64(int64(len(data))),
-		ETag:          aws.String(etagOf(obj.data)),
+		ETag:          aws.String(obj.etagValue()),
 		LastModified:  aws.Time(obj.modified),
 	}, nil
 }
@@ -178,7 +198,7 @@ func (f *fakeS3) ListObjectsV2(ctx context.Context, in *s3.ListObjectsV2Input, _
 		out.Contents = append(out.Contents, types.Object{
 			Key:          aws.String(k),
 			Size:         aws.Int64(int64(len(obj.data))),
-			ETag:         aws.String(etagOf(obj.data)),
+			ETag:         aws.String(obj.etagValue()),
 			LastModified: aws.Time(obj.modified),
 		})
 	}
@@ -217,7 +237,7 @@ func (f *fakeS3) UploadPart(ctx context.Context, in *s3.UploadPartInput, _ ...fu
 		return nil, apiError("NoSuchUpload")
 	}
 	up.parts[*in.PartNumber] = data
-	return &s3.UploadPartOutput{ETag: aws.String(etagOf(data))}, nil
+	return &s3.UploadPartOutput{ETag: aws.String(f.partETag(data))}, nil
 }
 
 func (f *fakeS3) ListParts(ctx context.Context, in *s3.ListPartsInput, _ ...func(*s3.Options)) (*s3.ListPartsOutput, error) {
@@ -243,12 +263,17 @@ func (f *fakeS3) ListParts(ctx context.Context, in *s3.ListPartsInput, _ ...func
 			continue
 		}
 		data := up.parts[int32(n)]
-		out.Parts = append(out.Parts, types.Part{PartNumber: aws.Int32(int32(n)), Size: aws.Int64(int64(len(data))), ETag: aws.String(etagOf(data))})
+		out.Parts = append(out.Parts, types.Part{PartNumber: aws.Int32(int32(n)), Size: aws.Int64(int64(len(data))), ETag: aws.String(f.partETag(data))})
 	}
 	return out, nil
 }
 
 func (f *fakeS3) CompleteMultipartUpload(ctx context.Context, in *s3.CompleteMultipartUploadInput, _ ...func(*s3.Options)) (*s3.CompleteMultipartUploadOutput, error) {
+	if f.onCompleteBefore != nil {
+		if err := f.onCompleteBefore(); err != nil {
+			return nil, err
+		}
+	}
 	f.mu.Lock()
 	f.calls["CompleteMultipartUpload"]++
 	up, ok := f.uploads[*in.UploadId]
@@ -257,19 +282,23 @@ func (f *fakeS3) CompleteMultipartUpload(ctx context.Context, in *s3.CompleteMul
 		return nil, apiError("NoSuchUpload")
 	}
 	var buf bytes.Buffer
+	sums := md5.New()
 	for i, p := range in.MultipartUpload.Parts {
 		if int(*p.PartNumber) != i+1 {
 			f.mu.Unlock()
 			return nil, errors.New("parts out of order")
 		}
 		data, ok := up.parts[*p.PartNumber]
-		if !ok || etagOf(data) != *p.ETag {
+		if !ok || f.partETag(data) != *p.ETag {
 			f.mu.Unlock()
 			return nil, apiError("InvalidPart")
 		}
 		buf.Write(data)
+		sum := md5.Sum(data)
+		sums.Write(sum[:])
 	}
-	f.objects[up.key] = &fakeObject{data: buf.Bytes(), modified: time.Now()}
+	etag := fmt.Sprintf(`"%s-%d"`, hex.EncodeToString(sums.Sum(nil)), len(in.MultipartUpload.Parts))
+	f.objects[up.key] = &fakeObject{data: buf.Bytes(), modified: time.Now(), etag: etag}
 	delete(f.uploads, *in.UploadId)
 	f.mu.Unlock()
 	if f.onComplete != nil {

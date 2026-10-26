@@ -173,7 +173,7 @@ func cleanKey(p string) (string, error) {
 	}
 	for _, seg := range strings.Split(strings.TrimSuffix(p, "/"), "/") {
 		if seg == ".." {
-			return "", fmt.Errorf("remote path %q must not contain '..'", p)
+			return "", fmt.Errorf("remote path %q must not contain '..': %w", p, ErrInvalidPath)
 		}
 	}
 	p = path.Clean(p)
@@ -185,6 +185,9 @@ func cleanKey(p string) (string, error) {
 	}
 	return p, nil
 }
+
+// ErrInvalidPath is a remote path the transfer refuses before starting.
+var ErrInvalidPath = errors.New("invalid path")
 
 func joinKey(prefix, rel string) string {
 	prefix = strings.TrimSuffix(prefix, "/")
