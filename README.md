@@ -370,7 +370,8 @@ upload and download files or folders on a network volume through its
 s3-compatible api. this needs s3 api keys, which are separate from the api key:
 create them at https://console.runpod.io/user/settings and set
 `RUNPOD_S3_ACCESS_KEY` and `RUNPOD_S3_SECRET_KEY` (or pass `--s3-access-key` /
-`--s3-secret-key`). only [data centers with the s3 api](https://docs.runpod.io/storage/s3-api)
+`--s3-secret-key`, or set `s3AccessKey` / `s3SecretKey` in
+`~/.runpod/config.toml`). only [data centers with the s3 api](https://docs.runpod.io/storage/s3-api)
 are supported.
 
 ```bash
@@ -389,6 +390,9 @@ command again.
 - finished files are skipped: an upload skips files whose remote copy has the
   same size and is not older, a download skips local files of the same size that
   are not older (downloads stamp the remote modification time on the file).
+  times compare in whole seconds. a same-size edit that keeps an older mtime
+  (`cp -p`, `rsync -a`, `tar x`) passes this check: use `--force` to send every
+  file.
 - files over 64 mb upload as multipart. the upload id is kept in
   `~/.runpod/transfers/`, and a rerun reuses every uploaded part whose md5
   matches the local bytes. a changed local file starts a fresh upload.
@@ -397,8 +401,18 @@ command again.
   missing chunks, unless the remote file changed, which restarts it. the file
   appears under its real name only once complete.
 - failed requests (network errors, timeouts, 429, 5xx including runpod's 524)
-  are retried with backoff. a stopped transfer exits with
-  `transfer_incomplete`.
+  are retried with backoff. a transfer stopped by ctrl-c, a failure that
+  outlasted the retries, or a file that changed mid-transfer exits with
+  `transfer_incomplete`. a failure a rerun would hit again gets its own code
+  instead: `not_found`, `unauthorized`/`forbidden`, `bad_request`,
+  `usage_error` (bad path, unresolvable data center) or `cli_error` (local
+  disk errors, names that would collide on disk).
+- a download refuses a folder whose files would share a local path: names
+  that differ only in case or unicode normalization, or a file next to one
+  named like its partial download (`x` and `x.rpdownload`).
+- multipart parts of an upload that is never rerun stay in the volume's
+  hidden `.s3compat_uploads/` folder and count toward its size until the
+  upload is resumed or aborted.
 
 ## output format
 
@@ -506,7 +520,7 @@ codes the cli generates:
 | `graphql_error` | graphql returned an errors array (http 200) |
 | `timeout` | the cli stopped waiting. two cases, told apart by the message: a `--wait` / `--wait-for-hash` budget ran out with the work still running server-side (the message names the command to poll it — do that, do not re-invoke), or a single api call exceeded the `timeout` config key (nothing is running; retry) |
 | `job_failed` | a serverless job reached a terminal status other than `COMPLETED`. the job payload is still on stdout |
-| `no_credentials` | no api key configured — run `runpodctl doctor` or set `RUNPOD_API_KEY` |
+| `no_credentials` | no api key configured — run `runpodctl doctor` or set `RUNPOD_API_KEY`. for `network-volume upload/download`: no s3 api keys (`RUNPOD_S3_ACCESS_KEY` / `RUNPOD_S3_SECRET_KEY`) |
 | `network_error` | the api could not be reached at all — dns, refused, tls, timeout. transient: retry |
 | `create_uncertain` | `pod create` got no usable answer — no reply, a 5xx, or an accepted create whose reply couldn't be read. the pod **may exist and bill**: check `pod list` (and `id`, when set) before retrying |
 | `wait_timeout` | `--wait` gave up before the resource was usable. the resource **was created and still bills** — the last known state is in the message and the id is in `id` |

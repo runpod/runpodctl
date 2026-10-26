@@ -30,6 +30,7 @@ type S3API interface {
 	ListParts(ctx context.Context, in *s3.ListPartsInput, opts ...func(*s3.Options)) (*s3.ListPartsOutput, error)
 	CompleteMultipartUpload(ctx context.Context, in *s3.CompleteMultipartUploadInput, opts ...func(*s3.Options)) (*s3.CompleteMultipartUploadOutput, error)
 	AbortMultipartUpload(ctx context.Context, in *s3.AbortMultipartUploadInput, opts ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error)
+	DeleteObject(ctx context.Context, in *s3.DeleteObjectInput, opts ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
 }
 
 // EndpointURL is the s3 endpoint for a data center, e.g. EU-RO-1 ->
@@ -45,9 +46,12 @@ func EndpointURL(dataCenterID string) string {
 // every s3-compatible store.
 func NewS3Client(endpoint, region, accessKey, secretKey string) *s3.Client {
 	transport := &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-		TLSHandshakeTimeout:   30 * time.Second,
+		Proxy:               http.ProxyFromEnvironment,
+		DialContext:         (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout: 30 * time.Second,
+		// runpod's proxy gives up on a slow response after about 100s (524),
+		// so a server silent for longer than this is a dead connection
+		ResponseHeaderTimeout: 5 * time.Minute,
 		MaxIdleConnsPerHost:   32,
 		IdleConnTimeout:       90 * time.Second,
 		ExpectContinueTimeout: time.Second,

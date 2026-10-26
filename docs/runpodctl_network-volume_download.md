@@ -13,7 +13,8 @@ remote copy are skipped. use "/" as remote-path to download the whole volume.
 
 uses the network volume's s3-compatible api, which needs s3 api keys (separate
 from your runpod api key): create them at https://console.runpod.io/user/settings
-and set RUNPOD_S3_ACCESS_KEY and RUNPOD_S3_SECRET_KEY, or pass the flags.
+and set RUNPOD_S3_ACCESS_KEY and RUNPOD_S3_SECRET_KEY, pass the flags, or set
+s3AccessKey and s3SecretKey in ~/.runpod/config.toml.
 
 the volume's data center is looked up with your runpod api key; pass
 --data-center-id to skip the lookup. only data centers with the s3 api are
@@ -22,6 +23,7 @@ supported: https://docs.runpod.io/storage/s3-api
 transfers resume: if one stops (network drop, ctrl-c, crash), run the same
 command again. finished files are skipped, a large upload continues from its
 uploaded parts, and a large download continues from its finished chunks.
+--force sends every file again, for same-size edits the time check misses.
 
 ```
 runpodctl network-volume download <volume-id> <remote-path> [local-path] [flags]
@@ -39,6 +41,7 @@ runpodctl network-volume download <volume-id> <remote-path> [local-path] [flags]
 ```
       --concurrency int         parallel requests (1-64) (default 4)
       --data-center-id string   volume data center id, e.g. EU-RO-1 (default: looked up from the volume)
+      --force                   transfer every file, even ones the size and time check calls unchanged
   -h, --help                    help for download
       --s3-access-key string    s3 api access key (default: $RUNPOD_S3_ACCESS_KEY)
       --s3-secret-key string    s3 api secret key (default: $RUNPOD_S3_SECRET_KEY)

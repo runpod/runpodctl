@@ -284,10 +284,16 @@ func (f *fakeS3) ListParts(ctx context.Context, in *s3.ListPartsInput, _ ...func
 	if in.PartNumberMarker != nil {
 		fmt.Sscanf(*in.PartNumberMarker, "%d", &marker)
 	}
+	// two parts per page to exercise pagination
 	out := &s3.ListPartsOutput{}
 	for _, n := range nums {
 		if n <= marker {
 			continue
+		}
+		if len(out.Parts) == 2 {
+			out.IsTruncated = aws.Bool(true)
+			out.NextPartNumberMarker = aws.String(fmt.Sprint(*out.Parts[1].PartNumber))
+			break
 		}
 		data := up.parts[int32(n)]
 		out.Parts = append(out.Parts, types.Part{PartNumber: aws.Int32(int32(n)), Size: aws.Int64(int64(len(data))), ETag: aws.String(f.partETag(data))})
@@ -335,6 +341,15 @@ func (f *fakeS3) CompleteMultipartUpload(ctx context.Context, in *s3.CompleteMul
 		}
 	}
 	return &s3.CompleteMultipartUploadOutput{}, nil
+}
+
+func (f *fakeS3) DeleteObject(ctx context.Context, in *s3.DeleteObjectInput, _ ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
+	defer f.track()()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls["DeleteObject"]++
+	delete(f.objects, *in.Key)
+	return &s3.DeleteObjectOutput{}, nil
 }
 
 func (f *fakeS3) AbortMultipartUpload(ctx context.Context, in *s3.AbortMultipartUploadInput, _ ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error) {

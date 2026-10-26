@@ -3,12 +3,16 @@ package nvtransfer
 import (
 	"context"
 	"errors"
+	"io"
+	"io/fs"
 	"net"
 	"net/http"
+	"syscall"
 	"time"
 
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
 const (
@@ -66,14 +70,25 @@ func retryable(err error) bool {
 	if status := HTTPStatus(err); status != 0 {
 		return status == http.StatusTooManyRequests || status == http.StatusRequestTimeout || status >= 500
 	}
+	// a local filesystem failure (a full disk, permissions) does not pass on
+	// its own; checked before net.Error, which syscall.Errno also satisfies
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return false
+	}
+	// a host that does not resolve is a wrong data center, not a blip
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+		return false
+	}
 	var netErr net.Error
 	if errors.As(err, &netErr) {
 		return true
 	}
-	var opErr *smithy.OperationError
-	// an operation error without an http status never reached the server, or
-	// lost the connection mid-response
-	return errors.As(err, &opErr)
+	// a request that failed in transit, as opposed to one the sdk refused to
+	// build (bad parameters, endpoint resolution), which never succeeds
+	var sendErr *smithyhttp.RequestSendError
+	return errors.As(err, &sendErr) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET)
 }
 
 // HTTPStatus is the s3 response status behind err, or 0 when it never got one.
