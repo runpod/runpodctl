@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -89,7 +90,7 @@ func stubAddModelUploadSeams(t *testing.T) {
 			Uploads: uploads,
 		}, nil
 	}
-	completeModelUploadFile = func(upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
+	completeModelUploadFile = func(_ context.Context, upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
 		return nil
 	}
 	completeModelRepoUploadAll = func(sessionIDs []string) ([]*api.CompleteModelRepoUploadResult, error) {

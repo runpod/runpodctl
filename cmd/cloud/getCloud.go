@@ -66,7 +66,7 @@ var GetCloudCmd = &cobra.Command{
 			}
 			onDemandPrice, ok := kv["uninterruptablePrice"].(float64)
 			onDemandPriceString := "Reserved"
-			if ok && spotPrice > 0 {
+			if ok && onDemandPrice > 0 {
 				onDemandPriceString = fmt.Sprintf("%.3f", onDemandPrice)
 			}
 			row := []string{
