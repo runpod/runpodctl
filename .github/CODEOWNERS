@@ -1,0 +1,8 @@
+# Code-owner review is not required on main, so this only auto-requests a
+# review; it never blocks a merge. See nix/README.md §8.
+/nix/                            @daveseddon-runpod
+/flake.nix                       @daveseddon-runpod
+/flake.lock                      @daveseddon-runpod
+/.github/workflows/nix.yml       @daveseddon-runpod
+/.github/workflows/nix-maintenance.yml @daveseddon-runpod
+/tools/staticreport/             @daveseddon-runpod

@@ -1,0 +1,84 @@
+#
+# .github/workflows/nix-maintenance.yml — runpodctl
+#
+# Keeps the flake's pins current so nobody else has to: after a merge that
+# touches Go code or go.mod/go.sum, daily, and on demand, run
+# `nix run .#update-pins` (the go pin, vendorHash, and pruning fixed findings
+# from the lint baseline) and open or update one `nix/maintenance` pull
+# request for the nix owner. A no-op when everything is current.
+#
+# The pull request is opened with the release GitHub App's token rather than
+# GITHUB_TOKEN, so ci.yml and nix.yml run on it.
+#
+name: nix-maintenance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "go.mod"
+      - "go.sum"
+      - "**.go"
+      - ".golangci*.yml"
+  schedule:
+    - cron: "41 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nix-maintenance
+  cancel-in-progress: false
+
+jobs:
+  update-pins:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: update pins
+        id: pins
+        run: |
+          nix run .#update-pins | tee update-pins.log
+          {
+            echo "summary<<EOF"
+            grep '^- ' update-pins.log || true
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          rm update-pins.log
+
+      - name: the pinned build still works
+        run: nix build .#runpodctl -L && ./result/bin/runpodctl --version && rm result
+
+      - name: generate token
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - name: open or update the pull request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          branch: nix/maintenance
+          delete-branch: true
+          add-paths: |
+            nix/versions.nix
+            nix/checks/lint-baseline.txt
+          commit-message: "chore(nix): sync go pin, vendorHash and lint baseline"
+          title: "chore(nix): sync go pin, vendorHash and lint baseline"
+          assignees: daveseddon-runpod
+          reviewers: daveseddon-runpod
+          body: |
+            automated by `nix-maintenance.yml` (`nix run .#update-pins`); the pinned build was verified before this pr was opened.
+
+            ${{ steps.pins.outputs.summary }}
+
+            only the nix owner needs to review this.
