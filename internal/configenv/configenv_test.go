@@ -29,6 +29,9 @@ func TestAPIKey(t *testing.T) {
 		{"top-level wins over rp login", "", "apikey = \"top\"\n[default]\napi_key = \"sdk\"\n", "top"},
 		{"env wins over config", "env", "[default]\napi_key = \"sdk\"\n", "env"},
 		{"nothing set", "", "", ""},
+		{"whitespace top-level falls back to rp login", "", "apikey = \"  \"\n[default]\napi_key = \"sdk\"\n", "sdk"},
+		{"whitespace env falls back to config", "  ", "apikey = \"top\"\n", "top"},
+		{"surrounding whitespace trimmed", "", "[default]\napi_key = \" sdk \\n\"\n", "sdk"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -2,6 +2,7 @@ package configenv
 
 import (
 	"os"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -19,11 +20,15 @@ const (
 // `api_key`. Reading it here means one login works for both tools.
 const sdkAPIKey = "default.api_key"
 
+// APIKey prefers this cli's own key and falls back to the shared sdk key. A
+// whitespace-only value counts as unset, matching how the sdk reads it.
 func APIKey() string {
-	if value := envOrConfig(APIKeyEnv, "apiKey"); value != "" {
-		return value
+	for _, value := range []string{os.Getenv(APIKeyEnv), viper.GetString("apiKey"), viper.GetString(sdkAPIKey)} {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
 	}
-	return viper.GetString(sdkAPIKey)
+	return ""
 }
 
 func RESTURL() string {
