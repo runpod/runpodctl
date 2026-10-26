@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"syscall"
@@ -32,15 +33,32 @@ func s3Code(code string, status int) error {
 	}})
 }
 
-// a data center whose endpoint does not resolve fails before any transfer.
+// a data center whose endpoint does not resolve fails before any transfer;
+// any other lookup failure, or an endpoint behind a proxy, is left to the
+// transfer.
 func TestCheckEndpointResolves(t *testing.T) {
-	err := checkEndpointResolves("https://s3api-nope.invalid/")
+	oldLookup, oldProxy := lookupHost, proxyFor
+	t.Cleanup(func() { lookupHost, proxyFor = oldLookup, oldProxy })
+	proxyFor = func(*http.Request) (*url.URL, error) { return nil, nil }
+	lookupResult := error(nil)
+	lookupHost = func(context.Context, string) ([]string, error) { return nil, lookupResult }
+
+	lookupResult = &net.DNSError{Name: "s3api-nope-1.runpod.io", IsNotFound: true}
+	err := checkEndpointResolves("https://s3api-nope-1.runpod.io/")
 	var coder interface{ ErrorCode() string }
 	if !errors.As(err, &coder) || coder.ErrorCode() != "usage_error" || !strings.Contains(err.Error(), "--data-center-id") {
 		t.Fatalf("expected usage_error naming --data-center-id, got %v", err)
 	}
-	if err := checkEndpointResolves("http://127.0.0.1:9/"); err != nil {
-		t.Fatalf("an ip endpoint must pass: %v", err)
+
+	lookupResult = &net.DNSError{Name: "s3api-eu-ro-1.runpod.io", IsTemporary: true}
+	if err := checkEndpointResolves("https://s3api-eu-ro-1.runpod.io/"); err != nil {
+		t.Fatalf("a failure other than not-found must be left to the retries: %v", err)
+	}
+
+	lookupResult = &net.DNSError{Name: "s3api-eu-ro-1.runpod.io", IsNotFound: true}
+	proxyFor = func(*http.Request) (*url.URL, error) { return url.Parse("http://proxy.example:3128") }
+	if err := checkEndpointResolves("https://s3api-eu-ro-1.runpod.io/"); err != nil {
+		t.Fatalf("behind a proxy the local lookup must be skipped: %v", err)
 	}
 }
 

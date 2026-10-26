@@ -223,17 +223,29 @@ func runTransfer(cmd *cobra.Command, volumeID, src, dst string, upload bool) err
 	}, &output.Config{Format: format})
 }
 
+// lookupHost and proxyFor are the resolver and the proxy choice the s3
+// client's transport uses; tests replace them (net/http caches the proxy
+// environment on first use).
+var (
+	lookupHost = net.DefaultResolver.LookupHost
+	proxyFor   = http.ProxyFromEnvironment
+)
+
 // checkEndpointResolves fails fast on a data center whose s3 endpoint does
 // not resolve, before any transfer starts. Once a transfer is running, a
-// failed lookup is a network drop and is retried like any other.
+// failed lookup is a network drop and is retried like any other. Behind an
+// https proxy the proxy resolves the name, so the local lookup is skipped.
 func checkEndpointResolves(endpoint string) error {
 	u, err := url.Parse(endpoint)
 	if err != nil || u.Hostname() == "" {
 		return clierr.Usagef("invalid s3 endpoint %q", endpoint)
 	}
+	if proxy, err := proxyFor(&http.Request{URL: u}); err == nil && proxy != nil {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	_, err = net.DefaultResolver.LookupHost(ctx, u.Hostname())
+	_, err = lookupHost(ctx, u.Hostname())
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
 		return clierr.Usagef("the s3 endpoint %s does not resolve: check --data-center-id (only data centers with the s3 api are supported) or your network connection", u.Hostname())
