@@ -28,9 +28,12 @@ const (
 	maxPartSize = 500 << 20
 	maxParts    = 10000
 
-	// a response body that delivers nothing for this long is abandoned and
-	// retried
+	// a request or response body that moves nothing for this long is
+	// abandoned and retried, however slow the link
 	idleTimeout = 2 * time.Minute
+	// the cap on one attempt at a part or chunk; stalls are caught sooner by
+	// idleTimeout, so this only bounds a link too slow to be useful
+	requestTimeout = 30 * time.Minute
 	// runpod's proxy answers a slow complete with 524 after about 100s, so
 	// an attempt never legitimately needs longer than this
 	completeTimeout = 30 * time.Minute
@@ -54,15 +57,15 @@ type Options struct {
 	Reporter Reporter
 }
 
-// ErrRefused is a transfer the cli declines before sending anything, for a
-// reason a rerun would hit again.
-var ErrRefused = errors.New("refused")
+// RefusedError is a transfer the cli declines, for a reason a rerun would hit
+// again: a name collision, a file too large, an upload onto a folder.
+type RefusedError struct{ Err error }
 
-// transferTimeout bounds one attempt at moving n bytes: five minutes plus
-// time for n at 256 kb/s, so a stalled upload is retried long before a
-// healthy slow one would finish.
-func transferTimeout(n int64) time.Duration {
-	return 5*time.Minute + time.Duration(n/(256<<10))*time.Second
+func (e *RefusedError) Error() string { return e.Err.Error() }
+func (e *RefusedError) Unwrap() error { return e.Err }
+
+func refusef(format string, args ...any) error {
+	return &RefusedError{Err: fmt.Errorf(format, args...)}
 }
 
 // Summary is the result of a transfer.
@@ -111,10 +114,16 @@ func newRun(opts Options) *run {
 	return &run{Options: opts, sem: make(chan struct{}, opts.Concurrency)}
 }
 
-// call is a retried request holding a concurrency slot per attempt.
+// call is a retried request holding a concurrency slot per attempt. The
+// attempt's deadline starts once the slot is held, so time spent queued behind
+// other requests does not count against it.
 func (r *run) call(ctx context.Context, timeout time.Duration, fn func(ctx context.Context) error) error {
-	return withRetry(ctx, timeout, func(ctx context.Context) error {
-		return r.request(ctx, func() error { return fn(ctx) })
+	return withRetry(ctx, func(ctx context.Context) error {
+		return r.request(ctx, func() error {
+			ctx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			return fn(ctx)
+		})
 	})
 }
 

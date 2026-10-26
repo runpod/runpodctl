@@ -16,8 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/text/cases"
-	"golang.org/x/text/unicode/norm"
+	"github.com/runpod/runpodctl/internal/namefold"
 )
 
 // Everything in this file runs on the receiver before a single byte is written.
@@ -456,29 +455,18 @@ func swapASCIICase(name string) (string, bool) {
 	return string(b), changed
 }
 
-// folder is unicode case folding. strings.ToLower is not: it leaves ſ (U+017F)
-// and ς (U+03C2) as they are, while a case-insensitive filesystem reads them
-// as s and σ, so a declared "d/ſ" and a target walking through "d/s" compared
-// as different names and were one on disk.
-var folder = cases.Fold()
-
 // foldKey is the index key under which two spellings that a filesystem may
-// treat as one name collide. NFC comes first because folding does not
-// normalize, and APFS compares names normalization-insensitively, so "é" and
-// "e\u0301" are one file there.
+// treat as one name collide (namefold.Key).
 //
-// The key over-approximates on purpose, and the probe's answer for case gates
-// it. Full folding maps ß to ss, and a case-insensitive filesystem that keeps
-// normalization forms apart (NTFS) still sees NFC and NFD declared with
-// different contents refused as one destination. Both only ever refuse. What
-// neither the key nor the probe sees: windows resolving 8.3 short names and
-// ignoring trailing dots and spaces, and normalization on a case-sensitive
-// APFS. Those cannot leave an escaping link behind, because every declared
-// symlink is re-resolved through the root once the transfer is done
-// (confinedDest.verifySymlinks); what they can still cost is all-or-nothing
-// and the "same destination, different contents" check.
+// The probe's answer for case gates it. What neither the key nor the probe
+// sees: windows resolving 8.3 short names and ignoring trailing dots and
+// spaces, and normalization on a case-sensitive APFS. Those cannot leave an
+// escaping link behind, because every declared symlink is re-resolved through
+// the root once the transfer is done (confinedDest.verifySymlinks); what they
+// can still cost is all-or-nothing and the "same destination, different
+// contents" check.
 func foldKey(rel string) string {
-	return folder.String(norm.NFC.String(rel))
+	return namefold.Key(rel)
 }
 
 func parentRel(rel string) string {

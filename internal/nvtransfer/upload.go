@@ -54,9 +54,12 @@ func Upload(ctx context.Context, opts Options, localPath, remotePath string) (*S
 	var todo []localFile
 	var total int64
 	if info.IsDir() {
-		files, err := walkLocal(abs, key)
+		files, leftovers, err := walkLocal(abs, key)
 		if err != nil {
 			return nil, err
+		}
+		for range leftovers {
+			r.skipped()
 		}
 		prefix := key
 		if prefix != "" && prefix[len(prefix)-1] != '/' {
@@ -79,9 +82,10 @@ func Upload(ctx context.Context, opts Options, localPath, remotePath string) (*S
 			key += filepath.Base(abs)
 		}
 		obj, err := r.headObject(ctx, key)
-		// runpod answers a head on a directory with 400
-		if HTTPStatus(err) == http.StatusBadRequest {
-			return nil, fmt.Errorf("%q is a folder on the volume; use %q to upload into it: %w", key, key+"/", ErrRefused)
+		// runpod answers a head on a directory with 400, but a head carries
+		// no body, so a 400 for any other reason looks the same: confirm
+		if HTTPStatus(err) == http.StatusBadRequest && r.isFolder(ctx, key) {
+			return nil, refusef("%q is a folder on the volume; use %q to upload into it", key, key+"/")
 		}
 		if err != nil {
 			return nil, fmt.Errorf("check %q: %w", key, err)
@@ -106,9 +110,11 @@ func Upload(ctx context.Context, opts Options, localPath, remotePath string) (*S
 }
 
 // walkLocal lists the regular files under root (following symlinked files)
-// with their keys under prefix.
-func walkLocal(root, prefix string) ([]localFile, error) {
+// with their keys under prefix, and counts the partial-download leftovers it
+// leaves out.
+func walkLocal(root, prefix string) ([]localFile, int, error) {
 	var files []localFile
+	leftovers := 0
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -120,7 +126,11 @@ func walkLocal(root, prefix string) ([]localFile, error) {
 		if err != nil {
 			return err
 		}
-		if !info.Mode().IsRegular() || isDownloadLeftover(p) {
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		if isDownloadLeftover(p) {
+			leftovers++
 			return nil
 		}
 		rel, err := filepath.Rel(root, p)
@@ -130,7 +140,7 @@ func walkLocal(root, prefix string) ([]localFile, error) {
 		files = append(files, localFile{path: p, key: joinKey(prefix, filepath.ToSlash(rel)), info: info})
 		return nil
 	})
-	return files, err
+	return files, leftovers, err
 }
 
 func (r *run) uploadFile(ctx context.Context, f localFile) error {
@@ -142,11 +152,15 @@ func (r *run) uploadFile(ctx context.Context, f localFile) error {
 	size := f.info.Size()
 
 	if size <= singleRequestLimit {
-		err := r.call(ctx, transferTimeout(size), func(ctx context.Context) error {
+		err := r.call(ctx, requestTimeout, func(ctx context.Context) error {
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			body := newIdleSectionReader(io.NewSectionReader(file, 0, size), idleTimeout, cancel)
+			defer body.stop()
 			_, err := r.Client.PutObject(ctx, &s3.PutObjectInput{
 				Bucket:        aws.String(r.VolumeID),
 				Key:           aws.String(f.key),
-				Body:          io.NewSectionReader(file, 0, size),
+				Body:          body,
 				ContentLength: aws.Int64(size),
 			})
 			return err
@@ -154,13 +168,22 @@ func (r *run) uploadFile(ctx context.Context, f localFile) error {
 		if err != nil {
 			return err
 		}
-		if localChanged(f) {
+		now, err := os.Stat(f.path)
+		if err != nil {
+			// gone or unreadable: the object is what was read, keep it
+			return fmt.Errorf("check local file after upload: %w", err)
+		}
+		if now.Size() != size || !now.ModTime().Equal(f.info.ModTime()) {
 			// the object may hold either version, and is newer than the local
-			// edit, so a rerun would skip it; remove it so the rerun sends it
-			_ = r.call(ctx, listTimeout, func(ctx context.Context) error {
+			// edit, so a rerun would skip it; remove it so the rerun sends it.
+			// the delete runs even after a first ctrl-c
+			err := r.call(context.WithoutCancel(ctx), listTimeout, func(ctx context.Context) error {
 				_, err := r.Client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(r.VolumeID), Key: aws.String(f.key)})
 				return err
 			})
+			if err != nil {
+				return refusef("%s changed during upload and the remote copy could not be removed (%v); rerun with --force", f.path, err)
+			}
 			return errLocalChanged
 		}
 		r.sentBytes(size)
@@ -176,7 +199,7 @@ func partSizeFor(size int64) (int64, error) {
 		partSize = (need + (1<<20 - 1)) &^ (1<<20 - 1)
 	}
 	if partSize > maxPartSize {
-		return 0, fmt.Errorf("file too large: %d bytes needs parts over the 500 mb limit: %w", size, ErrRefused)
+		return 0, refusef("file too large: %d bytes needs parts over the 500 mb limit", size)
 	}
 	return partSize, nil
 }
@@ -265,13 +288,17 @@ func (r *run) multipartUpload(ctx context.Context, file *os.File, f localFile) e
 	err = forEach(ctx, r.Concurrency, missing, func(ctx context.Context, part int32) error {
 		off, length := partRange(part, size, partSize)
 		var etag string
-		err := r.call(ctx, transferTimeout(length), func(ctx context.Context) error {
+		err := r.call(ctx, requestTimeout, func(ctx context.Context) error {
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			body := newIdleSectionReader(io.NewSectionReader(file, off, length), idleTimeout, cancel)
+			defer body.stop()
 			out, err := r.Client.UploadPart(ctx, &s3.UploadPartInput{
 				Bucket:        aws.String(r.VolumeID),
 				Key:           aws.String(f.key),
 				UploadId:      aws.String(st.UploadID),
 				PartNumber:    aws.Int32(part),
-				Body:          io.NewSectionReader(file, off, length),
+				Body:          body,
 				ContentLength: aws.Int64(length),
 			})
 			if err == nil {
@@ -340,6 +367,22 @@ func (r *run) listParts(ctx context.Context, key, uploadID string) ([]types.Part
 		}
 		marker = out.NextPartNumberMarker
 	}
+}
+
+// isFolder reports whether key is a folder on the volume: something is
+// listed under key + "/" (runpod lists even an empty folder's own marker).
+func (r *run) isFolder(ctx context.Context, key string) bool {
+	var out *s3.ListObjectsV2Output
+	err := r.call(ctx, listTimeout, func(ctx context.Context) error {
+		var err error
+		out, err = r.Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:  aws.String(r.VolumeID),
+			Prefix:  aws.String(key + "/"),
+			MaxKeys: aws.Int32(1),
+		})
+		return err
+	})
+	return err == nil && len(out.Contents) > 0
 }
 
 // errLocalChanged is a local file modified while it was uploading. Nothing of
