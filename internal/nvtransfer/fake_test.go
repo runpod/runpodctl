@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -55,7 +56,11 @@ type fakeS3 struct {
 	onCompleteBefore func() error
 	// opaquePartETags makes parts report etags that are not md5s
 	opaquePartETags bool
-	onGetObject     func(rng string) error
+
+	// every call counts toward inflight; peak is the most at once
+	inflight, peak atomic.Int32
+	callDelay      time.Duration
+	onGetObject    func(rng string) error
 	// onComplete runs after the object is assembled, so it can simulate a
 	// completion that succeeds server-side but fails on the wire
 	onComplete func() error
@@ -63,6 +68,21 @@ type fakeS3 struct {
 
 func newFakeS3() *fakeS3 {
 	return &fakeS3{objects: map[string]*fakeObject{}, uploads: map[string]*fakeUpload{}, calls: map[string]int{}}
+}
+
+// track counts a call in flight until the returned func runs.
+func (f *fakeS3) track() func() {
+	n := f.inflight.Add(1)
+	for {
+		p := f.peak.Load()
+		if n <= p || f.peak.CompareAndSwap(p, n) {
+			break
+		}
+	}
+	if f.callDelay > 0 {
+		time.Sleep(f.callDelay)
+	}
+	return func() { f.inflight.Add(-1) }
 }
 
 func (f *fakeS3) count(op string) int {
@@ -113,6 +133,7 @@ func apiError(code string) error {
 var errForbidden = statusError(http.StatusForbidden)
 
 func (f *fakeS3) PutObject(ctx context.Context, in *s3.PutObjectInput, _ ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+	defer f.track()()
 	data, err := io.ReadAll(in.Body)
 	if err != nil {
 		return nil, err
@@ -125,6 +146,7 @@ func (f *fakeS3) PutObject(ctx context.Context, in *s3.PutObjectInput, _ ...func
 }
 
 func (f *fakeS3) HeadObject(ctx context.Context, in *s3.HeadObjectInput, _ ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
+	defer f.track()()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls["HeadObject"]++
@@ -146,6 +168,7 @@ func (f *fakeS3) HeadObject(ctx context.Context, in *s3.HeadObjectInput, _ ...fu
 }
 
 func (f *fakeS3) GetObject(ctx context.Context, in *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	defer f.track()()
 	rng := aws.ToString(in.Range)
 	if f.onGetObject != nil {
 		if err := f.onGetObject(rng); err != nil {
@@ -176,6 +199,7 @@ func (f *fakeS3) GetObject(ctx context.Context, in *s3.GetObjectInput, _ ...func
 }
 
 func (f *fakeS3) ListObjectsV2(ctx context.Context, in *s3.ListObjectsV2Input, _ ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+	defer f.track()()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls["ListObjectsV2"]++
@@ -210,6 +234,7 @@ func (f *fakeS3) ListObjectsV2(ctx context.Context, in *s3.ListObjectsV2Input, _
 }
 
 func (f *fakeS3) CreateMultipartUpload(ctx context.Context, in *s3.CreateMultipartUploadInput, _ ...func(*s3.Options)) (*s3.CreateMultipartUploadOutput, error) {
+	defer f.track()()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls["CreateMultipartUpload"]++
@@ -220,6 +245,7 @@ func (f *fakeS3) CreateMultipartUpload(ctx context.Context, in *s3.CreateMultipa
 }
 
 func (f *fakeS3) UploadPart(ctx context.Context, in *s3.UploadPartInput, _ ...func(*s3.Options)) (*s3.UploadPartOutput, error) {
+	defer f.track()()
 	if f.onUploadPart != nil {
 		if err := f.onUploadPart(*in.PartNumber); err != nil {
 			return nil, err
@@ -241,6 +267,7 @@ func (f *fakeS3) UploadPart(ctx context.Context, in *s3.UploadPartInput, _ ...fu
 }
 
 func (f *fakeS3) ListParts(ctx context.Context, in *s3.ListPartsInput, _ ...func(*s3.Options)) (*s3.ListPartsOutput, error) {
+	defer f.track()()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls["ListParts"]++
@@ -269,6 +296,7 @@ func (f *fakeS3) ListParts(ctx context.Context, in *s3.ListPartsInput, _ ...func
 }
 
 func (f *fakeS3) CompleteMultipartUpload(ctx context.Context, in *s3.CompleteMultipartUploadInput, _ ...func(*s3.Options)) (*s3.CompleteMultipartUploadOutput, error) {
+	defer f.track()()
 	if f.onCompleteBefore != nil {
 		if err := f.onCompleteBefore(); err != nil {
 			return nil, err
@@ -310,6 +338,7 @@ func (f *fakeS3) CompleteMultipartUpload(ctx context.Context, in *s3.CompleteMul
 }
 
 func (f *fakeS3) AbortMultipartUpload(ctx context.Context, in *s3.AbortMultipartUploadInput, _ ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error) {
+	defer f.track()()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls["AbortMultipartUpload"]++

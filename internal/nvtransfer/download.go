@@ -110,19 +110,32 @@ func Download(ctx context.Context, opts Options, remotePath, localPath string) (
 		files = append(files, remoteFile{key: k, name: rel, obj: obj})
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].key < files[j].key })
-	// a remote "x.rpdownload" would share its partial file with "x"
-	names := make(map[string]bool, len(files))
+	if err := checkPartialNames(files); err != nil {
+		return nil, err
+	}
+	return r.downloadAll(ctx, root, files)
+}
+
+// checkPartialNames refuses a listing where a file's partial or sidecar name
+// is also a target, or a directory a target lives in ("x" beside
+// "x.rpdownload" or "x.rpdownload/y"). Names are compared case-folded, since
+// the destination may be a case-insensitive filesystem; that can refuse a
+// listing a case-sensitive one would take, which is the safe direction.
+func checkPartialNames(files []remoteFile) error {
+	taken := map[string]string{}
 	for _, f := range files {
-		names[f.name] = true
+		for p := f.name; p != "." && p != string(filepath.Separator); p = filepath.Dir(p) {
+			taken[strings.ToLower(p)] = f.name
+		}
 	}
 	for _, f := range files {
 		for _, suffix := range []string{partialSuffix, sidecarSuffix} {
-			if names[f.name+suffix] {
-				return nil, fmt.Errorf("cannot download both %q and %q: the second name is used for the first's partial download", f.name, f.name+suffix)
+			if other, ok := taken[strings.ToLower(f.name+suffix)]; ok {
+				return fmt.Errorf("cannot download both %q and %q: %q is used for the first's partial download", f.name, other, f.name+suffix)
 			}
 		}
 	}
-	return r.downloadAll(ctx, root, files)
+	return nil
 }
 
 func (r *run) downloadOne(ctx context.Context, key string, obj remoteObject, localPath string) (*Summary, error) {
