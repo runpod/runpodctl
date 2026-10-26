@@ -1061,3 +1061,29 @@ func TestRetryable(t *testing.T) {
 		}
 	}
 }
+
+func TestDiscardedChunksDropTheSidecarFirst(t *testing.T) {
+	_, vol := setup(t)
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	f := remoteFile{key: "f.bin", name: "f.bin", obj: remoteObject{size: 3 * chunkSize, etag: "e"}}
+	// a sidecar that vouches for every chunk beside a partial of the wrong size
+	st := downloadState{Key: f.key, Size: f.obj.size, ETag: "e", ChunkSize: chunkSize, Done: []int{0, 1, 2}}
+	if err := writeJSONIn(root, f.name+sidecarSuffix, st, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, f.name+partialSuffix), []byte("short"))
+
+	// stop before any chunk lands, so no new sidecar is written
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	d := &chunkedDownload{run: newRun(vol), root: root, f: f, partial: f.name + partialSuffix, sidecar: f.name + sidecarSuffix}
+	_ = d.fetch(ctx)
+	if _, err := os.Stat(filepath.Join(dir, f.name+sidecarSuffix)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the stale sidecar survived beside a resized partial: %v", err)
+	}
+}
