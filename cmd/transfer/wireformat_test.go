@@ -15,7 +15,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,6 +75,10 @@ func crocModuleInfo(t *testing.T) goListModule {
 	// a test binary built with go test -c can run where there is no toolchain.
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go toolchain not on PATH; skipping the croc version pin check")
+	}
+	// go list -m resolves against the module in the working directory.
+	if gomod, err := exec.CommandContext(t.Context(), "go", "env", "GOMOD").Output(); err != nil || strings.TrimSpace(string(gomod)) == "" || strings.TrimSpace(string(gomod)) == os.DevNull {
+		t.Skip("not inside the runpodctl module; skipping the croc version pin check")
 	}
 	out, err := exec.CommandContext(t.Context(), "go", "list", "-m", "-json", crocModule).Output()
 	if err != nil {
@@ -255,5 +261,24 @@ func TestMessageDecodesPinnedCiphertext(t *testing.T) {
 	want := message.Message{Type: message.TypeFileInfo, Message: "meta", Bytes: []byte("payload"), Num: 7}
 	if got.Type != want.Type || got.Message != want.Message || !bytes.Equal(got.Bytes, want.Bytes) || got.Bytes2 != nil || got.Num != want.Num {
 		t.Errorf("decoded %+v, want %+v", got, want)
+	}
+}
+
+// TestChunkFrameFormat locks the plaintext layout of a file chunk: an 8 byte
+// little-endian offset, then the payload. A peer on an older runpodctl reads
+// it this way, so swapping the byte order on both ends here would still pass a
+// same-version transfer and break every mixed-version one.
+func TestChunkFrameFormat(t *testing.T) {
+	frame := encodeChunkFrame(0x0102030405060708, []byte("hi"))
+	want := []byte{0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 'h', 'i'}
+	if !bytes.Equal(frame, want) {
+		t.Fatalf("encodeChunkFrame = % x, want % x", frame, want)
+	}
+	pos, payload, err := decodeChunkFrame(want)
+	if err != nil || pos != 0x0102030405060708 || string(payload) != "hi" {
+		t.Fatalf("decodeChunkFrame = (%#x, %q, %v)", pos, payload, err)
+	}
+	if _, _, err := decodeChunkFrame(want[:7]); err == nil {
+		t.Fatal("a frame shorter than the offset must be rejected")
 	}
 }
