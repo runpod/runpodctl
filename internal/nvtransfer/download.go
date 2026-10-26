@@ -54,8 +54,8 @@ type remoteFile struct {
 // (downloads stamp the remote time on the file). Large files are
 // fetched in chunks into "<name>.rpdownload" with progress kept in
 // "<name>.rpdownload.json", so a rerun continues where it stopped.
-func Download(ctx context.Context, opts Options, remotePath, localPath string) (*Summary, error) {
-	r := newRun(opts)
+func (v Volume) Download(ctx context.Context, remotePath, localPath string) (*Summary, error) {
+	r := newRun(v)
 	key, err := cleanKey(remotePath)
 	if err != nil {
 		return nil, err
@@ -82,11 +82,11 @@ func Download(ctx context.Context, opts Options, remotePath, localPath string) (
 	}
 	// a typo must not look like an empty folder; the whole volume may be empty
 	if len(listed) == 0 && key != "" {
-		return nil, fmt.Errorf("%q on volume %s: %w", strings.TrimSuffix(key, "/"), r.VolumeID, ErrNotFound)
+		return nil, fmt.Errorf("%q on volume %s: %w", strings.TrimSuffix(key, "/"), r.ID, ErrNotFound)
 	}
 
 	if localPath == "" {
-		localPath = r.VolumeID
+		localPath = r.ID
 		if key != "" {
 			localPath = path.Base(strings.TrimSuffix(key, "/"))
 		}
@@ -324,7 +324,7 @@ func (r *run) getRange(ctx context.Context, file *os.File, key string, off, leng
 	return r.call(ctx, requestTimeout, func(ctx context.Context) error {
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
-		in := &s3.GetObjectInput{Bucket: aws.String(r.VolumeID), Key: aws.String(key)}
+		in := &s3.GetObjectInput{Bucket: aws.String(r.ID), Key: aws.String(key)}
 		if off != 0 || length != size {
 			in.Range = aws.String(fmt.Sprintf("bytes=%d-%d", off, off+length-1))
 		}
