@@ -4,6 +4,7 @@
 #
 # Run:
 #   lint-quick                       (inside nix develop)
+#   golangci-lint run -c .golangci-quick.yml   (any golangci-lint v2, no nix needed)
 #   nix build .#static-analysis-report   (all tiers, hermetic)
 #
 # The three tiers are supersets: quick ⊂ .golangci.yml ⊂ .golangci-comprehensive.yml.

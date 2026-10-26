@@ -93,7 +93,7 @@ nix/
 
 | Setting | Value | Why |
 | --- | --- | --- |
-| `env.CGO_ENABLED` | `"0"` | matches goreleaser and the makefile; a static binary |
+| `env.CGO_ENABLED` | `"0"` | matches goreleaser and the Makefile; a static binary |
 | `subPackages` | `[ "." ]` | the CLI is `main.go` at the root |
 | `ldflags` | `-s -w -X main.Version=<version>` | identical to `.goreleaser.yml` |
 | `GOFLAGS` | `-trimpath` | no build paths in the binary |
@@ -103,7 +103,7 @@ nix/
 
 **`proxyVendor = true`.** With it, `goModules` is a GOPROXY-format module cache rather than a `vendor/` tree. The repo has no `vendor/` directory and every build uses `-mod=mod`, so this matches how runpodctl is built today. It also lets `go mod verify` and `go mod tidy -diff` run inside the sandbox with `GOPROXY=file://<goModules>`, which a vendor tree can't support. *To confirm in phase 2:* that `tidy -diff` finds every module it needs in that cache.
 
-**Embedded files.** `cmd/project/functions.go` embeds `starter_examples/*`, `starter_examples/*/.*` (dotfiles) and `exampleDockerfile`. `nix/source.nix` must keep all of them, and the `go-test` check fails loudly if one is missing, because the embed won't compile.
+**Runtime assets.** `nix/source.nix` includes `cmd/croc/relays.json` alongside the Go sources and test data.
 
 ### Version
 
@@ -125,11 +125,11 @@ nix/
 
 The Go version is pinned in three places today (`go.mod`, `ci.yml`, `release.yml`). The flake must not become a fourth that drifts.
 
-- **nixpkgs lags Go point releases.** The locked `nixos-unstable` ships Go **1.26.8**, which carries the ten `net/http`, `crypto/tls`, `net/textproto` and `os` advisories fixed in 1.26.9 (see PR #371). So `versions.nix` overrides `go_1_26` to 1.26.9, fetched from `go.dev/dl` by hash, as xtcp2 does:
+- **nixpkgs lags Go point releases.** `versions.nix` takes nixpkgs' derivation for `go.mod`'s minor series (`go_1_26` for 1.26.x, so a minor bump moves it too) and pins it to **1.26.10**, including the `crypto/x509` fix for [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809). The source archive is fetched from `go.dev/dl` by hash:
 
   ```nix
-  go = pkgs.go_1_26.overrideAttrs (_old: rec {
-    version = "1.26.9";
+  pinnedGo = goBase.overrideAttrs (_old: rec {  # goBase = pkgs.go_1_26
+    version = "1.26.10";
     src = pkgs.fetchurl {
       url = "https://go.dev/dl/go${version}.src.tar.gz";
       hash = "sha256-…";
@@ -137,7 +137,7 @@ The Go version is pinned in three places today (`go.mod`, `ci.yml`, `release.yml
   });
   ```
 
-- **Enforced at evaluation time.** `versions.nix` reads the `go` directive from `go.mod` and `assert`s `lib.versionAtLeast go.version goModVersion`. The directive is a minimum, so this is Go's own semantics, and it lets the flake build with 1.26.9 while `go.mod` on main still says 1.26.6 (#371 bumps it; the two are then equal). A `go.mod` bump past the flake's Go fails `nix flake check` immediately, with a message saying which file to edit.
+- **Enforced at evaluation time.** `versions.nix` reads the `go` directive from `go.mod` and `assert`s `lib.versionAtLeast go.version goModVersion`. The directive is a minimum, matching Go's own semantics. A `go.mod` bump past the flake's Go fails `nix flake check` immediately, with a message saying which file to edit.
 - **`GOTOOLCHAIN=local`** in every check and build, so Go never tries to download a toolchain in the sandbox.
 - **Recommendation for the workflows:** `actions/setup-go` with `go-version-file: go.mod`, so `go.mod` becomes the one hand-edited source and the flake asserts against it.
 
@@ -242,7 +242,7 @@ Rules for the golangci-lint configs (the same ones xtcp2 follows):
 **The lint ratchet.** Turning the tiers on will report findings in existing code. Rather than block on fixing them all at once:
 
 - `nix/checks/lint-baseline.txt` is committed with one line per finding, `<tool>\t<path> | <message> (<rule>)`: no line or column, and digits in messages read as `N`, so unrelated edits don't move a finding. Counts were the first idea, but they can't satisfy the next rule.
-- The `lint-baseline` check compares the findings as a multiset. A new finding fails even if an old one was fixed in the same PR, and a fixed finding that is still listed fails too, so the file only ever shrinks through review.
+- The `lint-baseline` check compares the findings as a multiset. A new finding fails even if an old one was fixed in the same PR. A fixed finding that is still listed is reported but does not fail, so a contributor fixing lint never turns nix red; the nix-maintenance pr prunes it, and the file only ever shrinks through review.
 - `nix run .#update-lint-baseline` rewrites the file. Review sees the diff.
 - One measure derivation (`static-analysis-measure`) runs every tool once; the check and the report (`nix build .#static-analysis-report`) both read it.
 - Findings are fixed in small per-package PRs. A fix is a code change. A `//nolint` is allowed only with a linter name and a written reason (enforced by golangci-lint's `nolintlint`).
@@ -270,7 +270,7 @@ runpodctl had no fuzz targets. The fuzzing layer is built so that adding one is 
 
 | Target | Invariant |
 | --- | --- |
-| `rsyncConnectionLost` (`cmd/project/ssh.go`) | a refused host key is never classified as a restarting pod |
+| `rsyncConnectionLost` (`internal/podssh/ssh.go`) | a refused host key is never classified as a restarting pod |
 | `rsyncRemoteShell` / `quoteSSHConfigValue` | rsync's and openssh's parsers split the result back into the original arguments |
 | receive manifest validation, `foldKey` (`cmd/transfer/confine.go`) | no accepted manifest resolves outside the destination; case-fold/NFC aliases collide |
 | `validateChunkRanges` (`cmd/transfer/croc.go`) | an accepted resume request is well-formed and its true sum (no overflow) is within the file's chunks |
@@ -293,7 +293,7 @@ Today the only benchmarks are in `cmd/serverless/randomstring_bench_test.go`. Ne
 
 A new workflow, `.github/workflows/nix.yml`. `ci.yml` is not changed.
 
-> **Non-blocking by design.** The job sets `continue-on-error: true` and is not a required status check, so a red Nix run never blocks a merge while the lint ratchet is non-zero and `vendorHash` updates are manual.
+> **Non-blocking by design.** No job is a required status check. On pull requests the jobs set `continue-on-error`, so a contributor never sees the workflow fail; on main and nightly they report honestly and a `report` job opens a `nix-red` issue for the owner. Pins and the baseline are kept current by `nix-maintenance.yml` (`nix run .#update-pins`).
 
 | Setting | Value |
 | --- | --- |
@@ -354,7 +354,7 @@ Each phase is one PR, small enough to review on its own:
 ## 13. Open questions and risks
 
 - **`vendorHash` ownership.** Who updates it, and do we automate it on Dependabot PRs? This is the main ongoing cost.
-- **Binary cache.** Cachix (shared with users, needs a token) or magic-nix-cache (CI only, no secrets)? Without one, every CI run rebuilds Go itself, because the 1.26.9 override isn't in `cache.nixos.org`.
+- **Binary cache.** Cachix (shared with users, needs a token) or magic-nix-cache (CI only, no secrets)? Without one, every CI run rebuilds Go itself, because the 1.26.10 override isn't in `cache.nixos.org`.
 - **Image publishing.** GHCR under `runpod/`, signing (cosign) and tags. Out of scope until someone needs the image.
 - **Darwin sandbox.** Loopback tests need `__darwinAllowLocalNetworking`. If the darwin sandbox still rejects them, the affected checks become linux-only, and the reason is written in the check file.
 - **`tools/upx`.** The committed 561 KB executable stays out of the Nix path. Nix images aren't upx-compressed, because stripping already gives most of the gain, and a compressed binary is slower to start and harder to scan.
