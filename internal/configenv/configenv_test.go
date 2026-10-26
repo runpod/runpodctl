@@ -25,9 +25,9 @@ func TestAPIKey(t *testing.T) {
 		want string
 	}{
 		{"top-level apikey", "", "apikey = \"top\"\n", "top"},
-		{"flash login default table", "", "[default]\napi_key = \"flash\"\n", "flash"},
-		{"top-level wins over flash", "", "apikey = \"top\"\n[default]\napi_key = \"flash\"\n", "top"},
-		{"env wins over config", "env", "[default]\napi_key = \"flash\"\n", "env"},
+		{"rp login default table", "", "[default]\napi_key = \"sdk\"\n", "sdk"},
+		{"top-level wins over rp login", "", "apikey = \"top\"\n[default]\napi_key = \"sdk\"\n", "top"},
+		{"env wins over config", "env", "[default]\napi_key = \"sdk\"\n", "env"},
 		{"nothing set", "", "", ""},
 	}
 	for _, tc := range cases {
