@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
@@ -46,7 +47,45 @@ func TestGetRelaysTimesOutOnBlockedServer(t *testing.T) {
 		if !errors.As(err, &uerr) || !uerr.Timeout() {
 			t.Fatalf("want client timeout error, got %v", err)
 		}
+		if !strings.Contains(err.Error(), srv.URL) || !strings.Contains(err.Error(), "retry") {
+			t.Fatalf("timeout should name the unreachable relay list and suggest retrying: %v", err)
+		}
+		if err.Error() != strings.ToLower(err.Error()) {
+			t.Fatalf("timeout error should be lowercase: %v", err)
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("getRelays ignored relayFetchTimeout")
+	}
+}
+
+func TestGetRelaysReportsFailedFetch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+
+	origURL := relayURL
+	relayURL = srv.URL
+	t.Cleanup(func() { relayURL = origURL })
+
+	_, err := getRelays()
+	if err == nil || !strings.Contains(err.Error(), srv.URL) || !strings.Contains(err.Error(), "503") || !strings.Contains(err.Error(), "retry") {
+		t.Fatalf("failed fetch should name the relay list, status, and retry: %v", err)
+	}
+}
+
+func TestGetRelaysReportsInvalidResponseSource(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("not json"))
+	}))
+	t.Cleanup(srv.Close)
+
+	origURL := relayURL
+	relayURL = srv.URL
+	t.Cleanup(func() { relayURL = origURL })
+
+	_, err := getRelays()
+	if err == nil || !strings.Contains(err.Error(), "invalid relay list from "+srv.URL) {
+		t.Fatalf("invalid response should name its source: %v", err)
 	}
 }

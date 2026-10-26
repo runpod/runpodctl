@@ -64,17 +64,31 @@ func init() {
 	SendCmd.Flags().StringVar(&sendCode, "code", "", "codephrase used to connect")
 }
 
+type relayFetchError struct {
+	url string
+	err error
+}
+
+func (e relayFetchError) Error() string {
+	return fmt.Sprintf("relay list at %s is unreachable; retry when it is available: %s", e.url, strings.ToLower(e.err.Error()))
+}
+
+func (e relayFetchError) Unwrap() error { return e.err }
+
 func getRelays() ([]Relay, error) {
 	client := &http.Client{Timeout: relayFetchTimeout}
 	res, err := client.Get(relayURL)
 	if err != nil {
-		return nil, err
+		return nil, relayFetchError{url: relayURL, err: err}
 	}
 	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("relay list at %s returned status %d; retry when it is available", relayURL, res.StatusCode)
+	}
 
 	var response RelayResponse
 	if err := json.NewDecoder(res.Body).Decode(&response); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("invalid relay list from %s: %w", relayURL, err)
 	}
 
 	return response.Relays, nil
