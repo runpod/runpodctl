@@ -62,18 +62,43 @@ func readJSON(path string, v any) (bool, error) {
 	return true, nil
 }
 
-// writeJSON writes atomically so a crash never leaves a half-written state.
+// writeJSON writes an upload state file, creating its directory.
 func writeJSON(path string, v any) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return writeJSONIn(root, filepath.Base(path), v, 0o600)
+}
+
+// writeJSONIn replaces name under root atomically: the data is synced to a
+// temp file before the rename, so a crash leaves the old file or the new
+// one, never an empty or torn one.
+func writeJSONIn(root *os.Root, name string, v any, perm os.FileMode) error {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	tmp := name + ".tmp"
+	f, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return root.Rename(tmp, name)
 }

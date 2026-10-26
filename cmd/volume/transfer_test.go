@@ -1,0 +1,77 @@
+package volume
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"net"
+	"net/http"
+	"strings"
+	"syscall"
+	"testing"
+
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
+	"github.com/runpod/runpodctl/internal/nvtransfer"
+)
+
+func s3Status(code int) error {
+	return fmt.Errorf("operation failed: %w", &awshttp.ResponseError{ResponseError: &smithyhttp.ResponseError{
+		Response: &smithyhttp.Response{Response: &http.Response{StatusCode: code}},
+		Err:      fmt.Errorf("http %d", code),
+	}})
+}
+
+// transferError is the contract agents branch on: only a failure a rerun can
+// get past is transfer_incomplete with the resume hint.
+func TestTransferErrorCodes(t *testing.T) {
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	cases := []struct {
+		name   string
+		ctx    context.Context
+		err    error
+		code   string
+		status int
+		resume bool
+	}{
+		{"interrupted", canceled, errors.New("boom"), "transfer_incomplete", 0, true},
+		{"invalid path", nil, fmt.Errorf("bad: %w", nvtransfer.ErrInvalidPath), "usage_error", 0, false},
+		{"missing path", nil, fmt.Errorf("x: %w", nvtransfer.ErrNotFound), "not_found", 0, false},
+		{"refused", nil, fmt.Errorf("too large: %w", nvtransfer.ErrRefused), "cli_error", 0, false},
+		{"bad data center", nil, &net.DNSError{Name: "s3api-xx-9.runpod.io", IsNotFound: true}, "usage_error", 0, false},
+		{"unauthorized", nil, s3Status(401), "unauthorized", 401, false},
+		{"forbidden", nil, s3Status(403), "forbidden", 403, false},
+		{"no such bucket", nil, s3Status(404), "not_found", 404, false},
+		{"bad request", nil, s3Status(400), "bad_request", 400, false},
+		{"rate limited", nil, s3Status(429), "transfer_incomplete", 0, true},
+		{"server error", nil, s3Status(503), "transfer_incomplete", 0, true},
+		{"full disk", nil, &fs.PathError{Op: "write", Path: "out", Err: syscall.ENOSPC}, "cli_error", 0, false},
+		{"network", nil, errors.New("connection reset"), "transfer_incomplete", 0, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ctx := c.ctx
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			err := transferError(ctx, c.err, nil)
+			var coder interface{ ErrorCode() string }
+			if !errors.As(err, &coder) || coder.ErrorCode() != c.code {
+				t.Fatalf("code = %v, want %s (%v)", coder, c.code, err)
+			}
+			var statuser interface{ HTTPStatus() int }
+			got := 0
+			if errors.As(err, &statuser) {
+				got = statuser.HTTPStatus()
+			}
+			if got != c.status {
+				t.Errorf("status = %d, want %d", got, c.status)
+			}
+			if hint := strings.Contains(err.Error(), "re-run the same command"); hint != c.resume {
+				t.Errorf("resume hint = %v, want %v: %s", hint, c.resume, err)
+			}
+		})
+	}
+}

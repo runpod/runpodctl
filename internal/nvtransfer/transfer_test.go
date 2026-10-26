@@ -6,15 +6,21 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"math/rand"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
 // setup shrinks every size to a few kib, makes retries instant and keeps
@@ -314,12 +320,16 @@ func TestSingleRequestUploadDetectsChangeBetweenRetries(t *testing.T) {
 	fake, opts := setup(t)
 	src := filepath.Join(t.TempDir(), "small.txt")
 	writeFile(t, src, []byte("original"))
+	old := time.Now().Add(-time.Hour)
+	os.Chtimes(src, old, old)
 	var calls atomic.Int32
 	opts.Client = putHook{fakeS3: fake, before: func() error {
 		if calls.Add(1) == 1 {
-			future := time.Now().Add(time.Hour)
+			// a same-size edit whose mtime is older than the object the
+			// retry writes, so the skip rule alone would keep the object
 			os.WriteFile(src, []byte("CHANGED!"), 0o644)
-			os.Chtimes(src, future, future)
+			past := time.Now().Add(-30 * time.Minute)
+			os.Chtimes(src, past, past)
 			return statusError(503)
 		}
 		return nil
@@ -327,6 +337,185 @@ func TestSingleRequestUploadDetectsChangeBetweenRetries(t *testing.T) {
 	_, err := Upload(context.Background(), opts, src, "small.txt")
 	if !errors.Is(err, errLocalChanged) {
 		t.Fatalf("expected errLocalChanged, got %v", err)
+	}
+	if _, ok := fake.get("small.txt"); ok {
+		t.Fatal("the object written across the change must be removed")
+	}
+	// the rerun the error asks for sends the new version
+	if _, err := Upload(context.Background(), opts, src, "small.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := fake.get("small.txt"); string(got) != "CHANGED!" {
+		t.Fatalf("rerun left %q on the volume", got)
+	}
+}
+
+func TestDownloadMissingFolderIsNotFound(t *testing.T) {
+	fake, opts := setup(t)
+	fake.put("other/x", []byte("x"))
+	_, err := Download(context.Background(), opts, "missing/", t.TempDir())
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+	// an empty volume root is a valid, empty download
+	empty, opts2 := setup(t)
+	_ = empty
+	if sum, err := Download(context.Background(), opts2, "/", t.TempDir()); err != nil || sum.FilesTransferred != 0 {
+		t.Fatalf("empty root: %+v %v", sum, err)
+	}
+}
+
+func TestForceTransfersUnchangedFiles(t *testing.T) {
+	fake, opts := setup(t)
+	src := filepath.Join(t.TempDir(), "data")
+	writeFile(t, filepath.Join(src, "a.txt"), []byte("alpha"))
+	if _, err := Upload(context.Background(), opts, src, ""); err != nil {
+		t.Fatal(err)
+	}
+	opts.Force = true
+	sum, err := Upload(context.Background(), opts, src, "")
+	if err != nil || sum.FilesTransferred != 1 || sum.FilesSkipped != 0 {
+		t.Fatalf("force upload: %+v %v", sum, err)
+	}
+	dst := t.TempDir()
+	if _, err := Download(context.Background(), opts, "data/", dst); err != nil {
+		t.Fatal(err)
+	}
+	sum, err = Download(context.Background(), opts, "data/", dst)
+	if err != nil || sum.FilesTransferred != 1 {
+		t.Fatalf("force download: %+v %v", sum, err)
+	}
+	_ = fake
+}
+
+func TestUploadOntoRemoteFolderIsRefused(t *testing.T) {
+	fake, opts := setup(t)
+	fake.put("models/a.bin", []byte("a"))
+	src := filepath.Join(t.TempDir(), "w.bin")
+	writeFile(t, src, []byte("w"))
+	_, err := Upload(context.Background(), opts, src, "models")
+	if !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), `"models/"`) {
+		t.Fatalf("expected a refusal naming models/, got %v", err)
+	}
+}
+
+func TestFolderUploadSkipsDownloadLeftovers(t *testing.T) {
+	fake, opts := setup(t)
+	src := filepath.Join(t.TempDir(), "data")
+	writeFile(t, filepath.Join(src, "a.bin"), []byte("a"))
+	writeFile(t, filepath.Join(src, "b.bin"+partialSuffix), []byte("partial"))
+	writeFile(t, filepath.Join(src, "b.bin"+sidecarSuffix), []byte("{}"))
+	sum, err := Upload(context.Background(), opts, src, "")
+	if err != nil || sum.FilesTransferred != 1 {
+		t.Fatalf("summary %+v %v", sum, err)
+	}
+	if _, ok := fake.get("data/b.bin" + partialSuffix); ok {
+		t.Fatal("a partial download was uploaded as data")
+	}
+}
+
+func TestDownloadIntoMissingFolderWithTrailingSlash(t *testing.T) {
+	fake, opts := setup(t)
+	fake.put("w.bin", []byte("w"))
+	out := filepath.Join(t.TempDir(), "out") + string(filepath.Separator)
+	if _, err := Download(context.Background(), opts, "w.bin", out); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(out, "w.bin")); err != nil || string(got) != "w" {
+		t.Fatalf("expected out/w.bin, got %q %v", got, err)
+	}
+}
+
+func TestDownloadStopsWhenRemoteReplacedMidway(t *testing.T) {
+	fake, opts := setup(t)
+	opts.Concurrency = 1
+	fake.put("f.bin", randomBytes(4*(4<<10)))
+	fake.onGetObject = func(rng string) error {
+		if strings.HasPrefix(rng, "bytes=8192-") {
+			fake.put("f.bin", randomBytes(4*(4<<10) + 1)[:4*(4<<10)])
+		}
+		return nil
+	}
+	dst := filepath.Join(t.TempDir(), "f.bin")
+	if _, err := Download(context.Background(), opts, "f.bin", dst); !errors.Is(err, errRemoteChanged) {
+		t.Fatalf("expected errRemoteChanged, got %v", err)
+	}
+	if _, err := os.Stat(dst); err == nil {
+		t.Fatal("a mixed file was moved into place")
+	}
+}
+
+func TestDownloadSidecarPinnedToETag(t *testing.T) {
+	fake, opts := setup(t)
+	data := randomBytes(4 * (4 << 10))
+	fake.put("b.bin", data)
+	dst := filepath.Join(t.TempDir(), "b.bin")
+	writeFile(t, dst+partialSuffix, bytes.Repeat([]byte{'z'}, len(data)))
+	side, _ := json.Marshal(downloadState{Key: "b.bin", Size: int64(len(data)), ETag: "an-older-version", ChunkSize: chunkSize, Done: []int{0, 1, 2, 3}})
+	writeFile(t, dst+sidecarSuffix, side)
+	if _, err := Download(context.Background(), opts, "b.bin", dst); err != nil {
+		t.Fatal(err)
+	}
+	if fake.count("GetObject") != 4 {
+		t.Fatalf("chunks of another version were reused: %d gets", fake.count("GetObject"))
+	}
+	if got, _ := os.ReadFile(dst); !bytes.Equal(got, data) {
+		t.Fatal("content mismatch")
+	}
+}
+
+func TestCompletedAnywayNegatives(t *testing.T) {
+	fake, opts := setup(t)
+	r := newRun(opts)
+	ctx := context.Background()
+	// nothing at the key
+	if r.completedAnyway(ctx, statusError(524), "k", 3, "x-1") {
+		t.Fatal("accepted a missing object")
+	}
+	fake.put("k", []byte("abc"))
+	if r.completedAnyway(ctx, apiError("InvalidPart"), "k", 3, trimETag(etagOf([]byte("abc")))) {
+		t.Fatal("accepted a definite failure")
+	}
+	if r.completedAnyway(ctx, statusError(524), "k", 4, trimETag(etagOf([]byte("abc")))) {
+		t.Fatal("accepted a size mismatch")
+	}
+	if r.completedAnyway(ctx, statusError(524), "k", 3, "") {
+		t.Fatal("accepted without a verifiable etag")
+	}
+	if !r.completedAnyway(ctx, statusError(524), "k", 3, trimETag(etagOf([]byte("abc")))) {
+		t.Fatal("rejected a matching object")
+	}
+}
+
+func TestSkipRulesCompareWholeSeconds(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "f")
+	writeFile(t, p, []byte("abc"))
+	stamp := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	// the local file carries sub-second precision, the server's date does not
+	os.Chtimes(p, stamp, stamp.Add(700*time.Millisecond))
+	info, _ := os.Stat(p)
+	remote := remoteObject{size: 3, modified: stamp}
+	if !remoteUnchanged(info, remote) || !downloadUnchanged(info, remote) {
+		t.Fatal("a sub-second difference must not count as a change")
+	}
+	if remoteUnchanged(info, remoteObject{size: 3, modified: stamp.Add(-time.Second)}) {
+		t.Fatal("an older remote copy must upload")
+	}
+	if downloadUnchanged(info, remoteObject{size: 3, modified: stamp.Add(time.Second)}) {
+		t.Fatal("a newer remote copy must download")
+	}
+}
+
+func TestIdleReaderCancelsStalledBody(t *testing.T) {
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	r := newIdleReader(pr, 20*time.Millisecond, cancel)
+	defer r.stop()
+	go func() { <-ctx.Done(); pw.CloseWithError(ctx.Err()) }()
+	if _, err := io.ReadAll(r); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected the stalled read to be canceled, got %v", err)
 	}
 }
 
@@ -560,6 +749,24 @@ func TestDownloadRefusesPartialNameCollision(t *testing.T) {
 	}
 }
 
+func TestDownloadRefusesTargetsThatShareALocalName(t *testing.T) {
+	for name, pair := range map[string][2]string{
+		"case":          {"d/Model.bin", "d/model.bin"},
+		"unicode fold":  {"d/s", "d/\u017f"},
+		"normalization": {"d/\u00e9", "d/e\u0301"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake, opts := setup(t)
+			fake.put(pair[0], []byte("a"))
+			fake.put(pair[1], []byte("b"))
+			_, err := Download(context.Background(), opts, "d/", t.TempDir())
+			if !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "same file") {
+				t.Fatalf("expected a refusal, got %v", err)
+			}
+		})
+	}
+}
+
 func TestDownloadRestartsWhenRemoteChanged(t *testing.T) {
 	fake, opts := setup(t)
 	ctx := context.Background()
@@ -695,6 +902,10 @@ func TestRetryable(t *testing.T) {
 		{context.DeadlineExceeded, true},
 		{transientError{errors.New("eof")}, true},
 		{errRemoteChanged, false},
+		{&smithy.OperationError{Err: &smithyhttp.RequestSendError{Err: errors.New("connection refused")}}, true},
+		{&smithy.OperationError{Err: errors.New("invalid parameter")}, false},
+		{&smithy.OperationError{Err: &net.DNSError{Name: "s3api-xx-1.runpod.io", IsNotFound: true}}, false},
+		{&fs.PathError{Op: "write", Path: "f", Err: syscall.ENOSPC}, false},
 	}
 	for _, c := range cases {
 		if got := retryable(c.err); got != c.want {

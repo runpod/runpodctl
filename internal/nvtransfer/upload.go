@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -66,7 +67,7 @@ func Upload(ctx context.Context, opts Options, localPath, remotePath string) (*S
 			return nil, err
 		}
 		for _, f := range files {
-			if obj, ok := remote[f.key]; ok && unchanged(f.info, obj) {
+			if obj, ok := remote[f.key]; ok && !r.Force && remoteUnchanged(f.info, obj) {
 				r.skipped()
 				continue
 			}
@@ -78,10 +79,14 @@ func Upload(ctx context.Context, opts Options, localPath, remotePath string) (*S
 			key += filepath.Base(abs)
 		}
 		obj, err := r.headObject(ctx, key)
+		// runpod answers a head on a directory with 400
+		if HTTPStatus(err) == http.StatusBadRequest {
+			return nil, fmt.Errorf("%q is a folder on the volume; use %q to upload into it: %w", key, key+"/", ErrRefused)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("check %q: %w", key, err)
 		}
-		if obj != nil && unchanged(info, *obj) {
+		if obj != nil && !r.Force && remoteUnchanged(info, *obj) {
 			r.skipped()
 		} else {
 			todo = append(todo, localFile{path: abs, key: key, info: info})
@@ -94,16 +99,10 @@ func Upload(ctx context.Context, opts Options, localPath, remotePath string) (*S
 		if err := r.uploadFile(ctx, f); err != nil {
 			return fmt.Errorf("upload %s: %w", f.key, err)
 		}
-		r.transferred(f.key, f.info.Size())
+		r.transferred(f.key)
 		return nil
 	})
 	return &r.summary, err
-}
-
-// unchanged is the skip rule: same size, and the remote copy was written at or
-// after the local file's last change.
-func unchanged(local os.FileInfo, remote remoteObject) bool {
-	return local.Size() == remote.size && !remote.modified.Before(local.ModTime())
 }
 
 // walkLocal lists the regular files under root (following symlinked files)
@@ -121,7 +120,7 @@ func walkLocal(root, prefix string) ([]localFile, error) {
 		if err != nil {
 			return err
 		}
-		if !info.Mode().IsRegular() {
+		if !info.Mode().IsRegular() || isDownloadLeftover(p) {
 			return nil
 		}
 		rel, err := filepath.Rel(root, p)
@@ -143,26 +142,28 @@ func (r *run) uploadFile(ctx context.Context, f localFile) error {
 	size := f.info.Size()
 
 	if size <= singleRequestLimit {
-		err := withRetry(ctx, requestTimeout, func(ctx context.Context) error {
-			return r.request(ctx, func() error {
-				_, err := r.Client.PutObject(ctx, &s3.PutObjectInput{
-					Bucket:        aws.String(r.VolumeID),
-					Key:           aws.String(f.key),
-					Body:          io.NewSectionReader(file, 0, size),
-					ContentLength: aws.Int64(size),
-				})
-				return err
+		err := r.call(ctx, transferTimeout(size), func(ctx context.Context) error {
+			_, err := r.Client.PutObject(ctx, &s3.PutObjectInput{
+				Bucket:        aws.String(r.VolumeID),
+				Key:           aws.String(f.key),
+				Body:          io.NewSectionReader(file, 0, size),
+				ContentLength: aws.Int64(size),
 			})
+			return err
 		})
 		if err != nil {
 			return err
 		}
-		// a retry rereads the file; if it changed meanwhile, the object may
-		// not be the version that was measured
-		if now, err := os.Stat(f.path); err != nil || now.Size() != size || !now.ModTime().Equal(f.info.ModTime()) {
+		if localChanged(f) {
+			// the object may hold either version, and is newer than the local
+			// edit, so a rerun would skip it; remove it so the rerun sends it
+			_ = r.call(ctx, listTimeout, func(ctx context.Context) error {
+				_, err := r.Client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(r.VolumeID), Key: aws.String(f.key)})
+				return err
+			})
 			return errLocalChanged
 		}
-		r.Reporter.Add(size)
+		r.sentBytes(size)
 		return nil
 	}
 	return r.multipartUpload(ctx, file, f)
@@ -175,7 +176,7 @@ func partSizeFor(size int64) (int64, error) {
 		partSize = (need + (1<<20 - 1)) &^ (1<<20 - 1)
 	}
 	if partSize > maxPartSize {
-		return 0, fmt.Errorf("file too large: %d bytes needs parts over the 500 mb limit", size)
+		return 0, fmt.Errorf("file too large: %d bytes needs parts over the 500 mb limit: %w", size, ErrRefused)
 	}
 	return partSize, nil
 }
@@ -231,7 +232,7 @@ func (r *run) multipartUpload(ctx context.Context, file *os.File, f localFile) e
 	}
 	if !resumed {
 		var out *s3.CreateMultipartUploadOutput
-		err := r.call(ctx, requestTimeout, func(ctx context.Context) error {
+		err := r.call(ctx, listTimeout, func(ctx context.Context) error {
 			var err error
 			out, err = r.Client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
 				Bucket: aws.String(r.VolumeID),
@@ -254,7 +255,7 @@ func (r *run) multipartUpload(ctx context.Context, file *os.File, f localFile) e
 	for i := int32(1); i <= n; i++ {
 		if _, ok := etags[i]; ok {
 			_, length := partRange(i, size, partSize)
-			r.Reporter.Add(length)
+			r.Reporter.Reused(length)
 			continue
 		}
 		missing = append(missing, i)
@@ -264,21 +265,19 @@ func (r *run) multipartUpload(ctx context.Context, file *os.File, f localFile) e
 	err = forEach(ctx, r.Concurrency, missing, func(ctx context.Context, part int32) error {
 		off, length := partRange(part, size, partSize)
 		var etag string
-		err := withRetry(ctx, requestTimeout, func(ctx context.Context) error {
-			return r.request(ctx, func() error {
-				out, err := r.Client.UploadPart(ctx, &s3.UploadPartInput{
-					Bucket:        aws.String(r.VolumeID),
-					Key:           aws.String(f.key),
-					UploadId:      aws.String(st.UploadID),
-					PartNumber:    aws.Int32(part),
-					Body:          io.NewSectionReader(file, off, length),
-					ContentLength: aws.Int64(length),
-				})
-				if err == nil {
-					etag = aws.ToString(out.ETag)
-				}
-				return err
+		err := r.call(ctx, transferTimeout(length), func(ctx context.Context) error {
+			out, err := r.Client.UploadPart(ctx, &s3.UploadPartInput{
+				Bucket:        aws.String(r.VolumeID),
+				Key:           aws.String(f.key),
+				UploadId:      aws.String(st.UploadID),
+				PartNumber:    aws.Int32(part),
+				Body:          io.NewSectionReader(file, off, length),
+				ContentLength: aws.Int64(length),
 			})
+			if err == nil {
+				etag = aws.ToString(out.ETag)
+			}
+			return err
 		})
 		if err != nil {
 			return fmt.Errorf("part %d/%d: %w", part, n, err)
@@ -286,7 +285,7 @@ func (r *run) multipartUpload(ctx context.Context, file *os.File, f localFile) e
 		mu.Lock()
 		etags[part] = etag
 		mu.Unlock()
-		r.Reporter.Add(length)
+		r.sentBytes(length)
 		return nil
 	})
 	if err != nil {
@@ -295,7 +294,7 @@ func (r *run) multipartUpload(ctx context.Context, file *os.File, f localFile) e
 
 	// the parts were read over the whole upload; if the file moved under
 	// them, they may mix two versions of it
-	if now, err := os.Stat(f.path); err != nil || now.Size() != size || !now.ModTime().Equal(f.info.ModTime()) {
+	if localChanged(f) {
 		r.abort(ctx, f.key, st.UploadID)
 		_ = os.Remove(statePath)
 		return errLocalChanged
@@ -343,8 +342,24 @@ func (r *run) listParts(ctx context.Context, key, uploadID string) ([]types.Part
 	}
 }
 
-// errLocalChanged is a local file modified while its parts were uploading.
-var errLocalChanged = errors.New("local file changed during upload; run the command again to upload the new version")
+// errLocalChanged is a local file modified while it was uploading. Nothing of
+// it is kept, so a rerun uploads the new version.
+var errLocalChanged = errors.New("local file changed during upload")
+
+// localChanged reports whether f no longer has the size and mtime it was
+// measured with. Retries and parts reread the file, so a change can mix two
+// versions.
+func localChanged(f localFile) bool {
+	now, err := os.Stat(f.path)
+	return err != nil || now.Size() != f.info.Size() || !now.ModTime().Equal(f.info.ModTime())
+}
+
+// isDownloadLeftover reports a partial download, its sidecar, or the
+// sidecar's temp file, which an interrupted download leaves next to the
+// target and which are not data to upload.
+func isDownloadLeftover(path string) bool {
+	return strings.HasSuffix(path, partialSuffix) || strings.HasSuffix(path, sidecarSuffix) || strings.HasSuffix(path, sidecarSuffix+".tmp")
+}
 
 // completedAnyway reports whether a failed complete actually took effect.
 // Assembling a large file can outlive the proxy (524) while it still finishes

@@ -1,9 +1,12 @@
 package volume
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,6 +20,7 @@ import (
 	"github.com/runpod/runpodctl/internal/configenv"
 	"github.com/runpod/runpodctl/internal/nvtransfer"
 	"github.com/runpod/runpodctl/internal/output"
+	"github.com/runpod/runpodctl/internal/waitfor"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -26,7 +30,8 @@ const transferLong = `%s
 
 uses the network volume's s3-compatible api, which needs s3 api keys (separate
 from your runpod api key): create them at https://console.runpod.io/user/settings
-and set RUNPOD_S3_ACCESS_KEY and RUNPOD_S3_SECRET_KEY, or pass the flags.
+and set RUNPOD_S3_ACCESS_KEY and RUNPOD_S3_SECRET_KEY, pass the flags, or set
+s3AccessKey and s3SecretKey in ~/.runpod/config.toml.
 
 the volume's data center is looked up with your runpod api key; pass
 --data-center-id to skip the lookup. only data centers with the s3 api are
@@ -34,7 +39,8 @@ supported: https://docs.runpod.io/storage/s3-api
 
 transfers resume: if one stops (network drop, ctrl-c, crash), run the same
 command again. finished files are skipped, a large upload continues from its
-uploaded parts, and a large download continues from its finished chunks.`
+uploaded parts, and a large download continues from its finished chunks.
+--force sends every file again, for same-size edits the time check misses.`
 
 var uploadCmd = &cobra.Command{
 	Use:   "upload <volume-id> <local-path> [remote-path]",
@@ -72,6 +78,7 @@ var (
 	transferSecretKey    string
 	transferEndpointURL  string
 	transferConcurrency  int
+	transferForce        bool
 )
 
 func init() {
@@ -80,6 +87,7 @@ func init() {
 		c.Flags().StringVar(&transferAccessKey, "s3-access-key", "", "s3 api access key (default: $RUNPOD_S3_ACCESS_KEY)")
 		c.Flags().StringVar(&transferSecretKey, "s3-secret-key", "", "s3 api secret key (default: $RUNPOD_S3_SECRET_KEY)")
 		c.Flags().IntVar(&transferConcurrency, "concurrency", 4, "parallel requests (1-64)")
+		c.Flags().BoolVar(&transferForce, "force", false, "transfer every file, even ones the size and time check calls unchanged")
 		c.Flags().StringVar(&transferEndpointURL, "endpoint-url", "", "s3 endpoint url override")
 		c.Flags().MarkHidden("endpoint-url") //nolint:errcheck
 	}
@@ -104,7 +112,7 @@ type incompleteError struct {
 func (e *incompleteError) Error() string {
 	msg := e.err.Error()
 	if e.summary != nil && e.summary.FilesTransferred > 0 {
-		msg = fmt.Sprintf("%s (%d files finished before the failure)", msg, e.summary.FilesTransferred)
+		msg = fmt.Sprintf("%s (%d files finished first)", msg, e.summary.FilesTransferred)
 	}
 	return msg + "; re-run the same command to resume"
 }
@@ -112,14 +120,12 @@ func (e *incompleteError) Error() string {
 func (e *incompleteError) Unwrap() error     { return e.err }
 func (e *incompleteError) ErrorCode() string { return "transfer_incomplete" }
 
-// missingS3KeysError reuses no_credentials: the fix is the same kind of
-// local setup.
-type missingS3KeysError struct{}
-
-func (missingS3KeysError) Error() string {
-	return "s3 api keys not found. create them at https://console.runpod.io/user/settings then: export RUNPOD_S3_ACCESS_KEY=... RUNPOD_S3_SECRET_KEY=... (or pass --s3-access-key/--s3-secret-key)"
+// errMissingS3Keys reuses no_credentials: the fix is the same kind of local
+// setup.
+var errMissingS3Keys = &api.APIError{
+	Message: "s3 api keys not found. create them at https://console.runpod.io/user/settings then: export RUNPOD_S3_ACCESS_KEY=... RUNPOD_S3_SECRET_KEY=... (or pass --s3-access-key/--s3-secret-key, or set s3AccessKey/s3SecretKey in ~/.runpod/config.toml)",
+	Code:    "no_credentials",
 }
-func (missingS3KeysError) ErrorCode() string { return "no_credentials" }
 
 func runUpload(cmd *cobra.Command, args []string) error {
 	remote := ""
@@ -141,10 +147,10 @@ func runTransfer(cmd *cobra.Command, volumeID, src, dst string, upload bool) err
 	if transferConcurrency < 1 || transferConcurrency > 64 {
 		return clierr.Usagef("--concurrency must be between 1 and 64")
 	}
-	accessKey := firstNonEmpty(transferAccessKey, configenv.S3AccessKey())
-	secretKey := firstNonEmpty(transferSecretKey, configenv.S3SecretKey())
+	accessKey := cmp.Or(transferAccessKey, configenv.S3AccessKey())
+	secretKey := cmp.Or(transferSecretKey, configenv.S3SecretKey())
 	if accessKey == "" || secretKey == "" {
-		return missingS3KeysError{}
+		return errMissingS3Keys
 	}
 	if upload {
 		if _, err := os.Stat(src); err != nil {
@@ -173,7 +179,9 @@ func runTransfer(cmd *cobra.Command, volumeID, src, dst string, upload bool) err
 		region = "us-east-1"
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// the first ctrl-c stops the transfer and keeps its resume state; a second
+	// one exits at once, even during a long abort or complete
+	ctx, stop := waitfor.SignalContext(context.Background(), signal.NotifyContext, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	progress := newProgress(os.Stderr)
@@ -182,6 +190,7 @@ func runTransfer(cmd *cobra.Command, volumeID, src, dst string, upload bool) err
 		Endpoint:    endpoint,
 		VolumeID:    volumeID,
 		Concurrency: transferConcurrency,
+		Force:       transferForce,
 		Reporter:    progress,
 	}
 
@@ -210,44 +219,40 @@ func runTransfer(cmd *cobra.Command, volumeID, src, dst string, upload bool) err
 	}, &output.Config{Format: format})
 }
 
-// transferError codes a failed transfer. A missing path or a rejected
-// credential is final and rerunning will not help; anything else stopped a
-// transfer that a rerun resumes.
+// transferError codes a failed transfer. Only a transfer that stopped for a
+// reason that can pass (interrupted, a network failure or 5xx that outlasted
+// the retries, a file changed mid-transfer) is transfer_incomplete with the
+// resume hint. Anything a rerun would hit identically gets the code for its
+// cause, so an agent following the code does not loop.
 func transferError(ctx context.Context, err error, summary *nvtransfer.Summary) error {
 	if ctx.Err() != nil {
 		return &incompleteError{err: errors.New("interrupted"), summary: summary}
 	}
-	if errors.Is(err, nvtransfer.ErrInvalidPath) {
+	switch {
+	case errors.Is(err, nvtransfer.ErrInvalidPath):
 		return &clierr.UsageError{Err: err}
+	case errors.Is(err, nvtransfer.ErrNotFound):
+		return api.NewNotFoundError("%s", err.Error())
+	case errors.Is(err, nvtransfer.ErrRefused):
+		return &waitfor.FatalError{Code: "cli_error", Err: err}
 	}
-	if errors.Is(err, nvtransfer.ErrNotFound) {
-		return &codedError{err: err, code: "not_found"}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+		return &clierr.UsageError{Err: fmt.Errorf("%w (the s3 endpoint does not resolve: check --data-center-id)", err)}
 	}
-	switch nvtransfer.HTTPStatus(err) {
-	case http.StatusUnauthorized:
-		return &codedError{err: err, code: "unauthorized"}
-	case http.StatusForbidden:
-		return &codedError{err: fmt.Errorf("%w (check the s3 api keys and that they belong to the volume's account)", err), code: "forbidden"}
+	if status := nvtransfer.HTTPStatus(err); status >= 400 && status < 500 && status != http.StatusRequestTimeout && status != http.StatusTooManyRequests {
+		msg := err.Error()
+		if status == http.StatusUnauthorized || status == http.StatusForbidden {
+			msg += " (check the s3 api keys and that they belong to the volume's account)"
+		}
+		return &api.APIError{Message: msg, Status: status}
+	}
+	// a local filesystem failure (permissions, a full disk) needs fixing first
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return &waitfor.FatalError{Code: "cli_error", Err: err}
 	}
 	return &incompleteError{err: err, summary: summary}
-}
-
-type codedError struct {
-	err  error
-	code string
-}
-
-func (e *codedError) Error() string     { return e.err.Error() }
-func (e *codedError) Unwrap() error     { return e.err }
-func (e *codedError) ErrorCode() string { return e.code }
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // progress prints transfer progress to stderr: a line redrawn in place on a
@@ -259,6 +264,7 @@ type progress struct {
 	files    atomic.Int64
 	total    atomic.Int64
 	done     atomic.Int64
+	reused   atomic.Int64
 	finished atomic.Int64
 
 	once sync.Once
@@ -298,6 +304,13 @@ func (p *progress) Start(files int, bytes int64) {
 }
 
 func (p *progress) Add(bytes int64) { p.done.Add(bytes) }
+
+// Reused counts toward done but not toward the rate, so a resume does not
+// open with a burst.
+func (p *progress) Reused(bytes int64) {
+	p.done.Add(bytes)
+	p.reused.Add(bytes)
+}
 func (p *progress) FileDone(string) { p.finished.Add(1) }
 
 func (p *progress) print() {
@@ -306,7 +319,7 @@ func (p *progress) print() {
 	if total > 0 {
 		pct = float64(done) / float64(total) * 100
 	}
-	rate := float64(done) / time.Since(p.started).Seconds()
+	rate := float64(done-p.reused.Load()) / time.Since(p.started).Seconds()
 	line := fmt.Sprintf("%s / %s (%.1f%%) at %s/s, files %d/%d",
 		humanBytes(float64(done)), humanBytes(float64(total)), pct, humanBytes(rate), p.finished.Load(), p.files.Load())
 	if p.tty {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path"
 	"strings"
 	"sync"
@@ -27,8 +28,12 @@ const (
 	maxPartSize = 500 << 20
 	maxParts    = 10000
 
-	requestTimeout  = 30 * time.Minute
-	completeTimeout = 2 * time.Hour
+	// a response body that delivers nothing for this long is abandoned and
+	// retried
+	idleTimeout = 2 * time.Minute
+	// runpod's proxy answers a slow complete with 524 after about 100s, so
+	// an attempt never legitimately needs longer than this
+	completeTimeout = 30 * time.Minute
 	listTimeout     = 10 * time.Minute
 
 	// multipart parts and their metadata live here until the upload completes
@@ -44,7 +49,20 @@ type Options struct {
 	VolumeID string
 	// Concurrency bounds the requests in flight across all files. Default 4.
 	Concurrency int
-	Reporter    Reporter
+	// Force transfers every file, even those the skip rule calls unchanged.
+	Force    bool
+	Reporter Reporter
+}
+
+// ErrRefused is a transfer the cli declines before sending anything, for a
+// reason a rerun would hit again.
+var ErrRefused = errors.New("refused")
+
+// transferTimeout bounds one attempt at moving n bytes: five minutes plus
+// time for n at 256 kb/s, so a stalled upload is retried long before a
+// healthy slow one would finish.
+func transferTimeout(n int64) time.Duration {
+	return 5*time.Minute + time.Duration(n/(256<<10))*time.Second
 }
 
 // Summary is the result of a transfer.
@@ -59,8 +77,11 @@ type Reporter interface {
 	// Start is called once the work is known: files and bytes to transfer,
 	// excluding files skipped as unchanged.
 	Start(files int, bytes int64)
-	// Add reports bytes landed, including parts reused from an earlier run.
+	// Add reports bytes sent or received.
 	Add(bytes int64)
+	// Reused reports bytes an earlier run already moved: uploaded parts or
+	// downloaded chunks a resume keeps.
+	Reused(bytes int64)
 	FileDone(name string)
 }
 
@@ -68,6 +89,7 @@ type nopReporter struct{}
 
 func (nopReporter) Start(int, int64) {}
 func (nopReporter) Add(int64)        {}
+func (nopReporter) Reused(int64)     {}
 func (nopReporter) FileDone(string)  {}
 
 // run is one transfer's shared state.
@@ -89,8 +111,7 @@ func newRun(opts Options) *run {
 	return &run{Options: opts, sem: make(chan struct{}, opts.Concurrency)}
 }
 
-// call is a retried request holding a concurrency slot per attempt. Data
-// requests take their slot through request inside their own retry loop.
+// call is a retried request holding a concurrency slot per attempt.
 func (r *run) call(ctx context.Context, timeout time.Duration, fn func(ctx context.Context) error) error {
 	return withRetry(ctx, timeout, func(ctx context.Context) error {
 		return r.request(ctx, func() error { return fn(ctx) })
@@ -111,12 +132,31 @@ func (r *run) request(ctx context.Context, fn func() error) error {
 	return fn()
 }
 
-func (r *run) transferred(name string, bytes int64) {
+func (r *run) transferred(name string) {
 	r.mu.Lock()
 	r.summary.FilesTransferred++
-	r.summary.BytesTransferred += bytes
 	r.mu.Unlock()
 	r.Reporter.FileDone(name)
+}
+
+// sentBytes counts bytes this run moved; reused ones are not counted.
+func (r *run) sentBytes(n int64) {
+	r.mu.Lock()
+	r.summary.BytesTransferred += n
+	r.mu.Unlock()
+	r.Reporter.Add(n)
+}
+
+// remoteUnchanged is the upload skip rule: same size, and the remote copy was
+// written at or after the local file's last change. downloadUnchanged is the
+// mirror for downloads, which stamp the remote time on the file. Times are
+// compared in whole seconds: s3 dates carry no finer precision.
+func remoteUnchanged(local os.FileInfo, remote remoteObject) bool {
+	return local.Size() == remote.size && !remote.modified.Truncate(time.Second).Before(local.ModTime().Truncate(time.Second))
+}
+
+func downloadUnchanged(local os.FileInfo, remote remoteObject) bool {
+	return local.Size() == remote.size && !remote.modified.Truncate(time.Second).After(local.ModTime().Truncate(time.Second))
 }
 
 func (r *run) skipped() {

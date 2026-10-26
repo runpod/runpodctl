@@ -18,6 +18,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 )
 
 const (
@@ -75,15 +77,13 @@ func Download(ctx context.Context, opts Options, remotePath, localPath string) (
 		if err != nil {
 			return nil, err
 		}
-		if len(listed) == 0 {
-			return nil, fmt.Errorf("%q on volume %s: %w", key, r.VolumeID, ErrNotFound)
-		}
 		key += "/"
+	} else if listed, err = r.listPrefix(ctx, key); err != nil {
+		return nil, err
 	}
-	if listed == nil {
-		if listed, err = r.listPrefix(ctx, key); err != nil {
-			return nil, err
-		}
+	// a typo must not look like an empty folder; the whole volume may be empty
+	if len(listed) == 0 && key != "" {
+		return nil, fmt.Errorf("%q on volume %s: %w", strings.TrimSuffix(key, "/"), r.VolumeID, ErrNotFound)
 	}
 
 	if localPath == "" {
@@ -105,37 +105,61 @@ func Download(ctx context.Context, opts Options, remotePath, localPath string) (
 	for k, obj := range listed {
 		rel := filepath.FromSlash(strings.TrimPrefix(k, key))
 		if !filepath.IsLocal(rel) {
-			return nil, fmt.Errorf("refusing remote file %q: it would be written outside %s", k, localPath)
+			return nil, fmt.Errorf("remote file %q would be written outside %s: %w", k, localPath, ErrRefused)
 		}
 		files = append(files, remoteFile{key: k, name: rel, obj: obj})
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].key < files[j].key })
-	if err := checkPartialNames(files); err != nil {
+	if err := checkLocalNames(files); err != nil {
 		return nil, err
 	}
 	return r.downloadAll(ctx, root, files)
 }
 
-// checkPartialNames refuses a listing where a file's partial or sidecar name
-// is also a target, or a directory a target lives in ("x" beside
-// "x.rpdownload" or "x.rpdownload/y"). Names are compared case-folded, since
-// the destination may be a case-insensitive filesystem; that can refuse a
-// listing a case-sensitive one would take, which is the safe direction.
-func checkPartialNames(files []remoteFile) error {
-	taken := map[string]string{}
+// checkLocalNames refuses a listing whose files would share a path on disk:
+// two targets that are one name on a case-insensitive or normalizing
+// filesystem ("Model.bin" and "model.bin"), or a file whose partial or
+// sidecar name is also a target or a directory a target lives in ("x" beside
+// "x.rpdownload" or "x.rpdownload/y"). Names are compared under foldKey; that
+// can refuse a listing a case-sensitive filesystem would take, which is the
+// safe direction.
+func checkLocalNames(files []remoteFile) error {
+	targets := map[string]string{}
+	dirs := map[string]string{}
 	for _, f := range files {
-		for p := f.name; p != "." && p != string(filepath.Separator); p = filepath.Dir(p) {
-			taken[strings.ToLower(p)] = f.name
+		k := foldKey(f.name)
+		if other, ok := targets[k]; ok {
+			return fmt.Errorf("cannot download both %q and %q: they are the same file on a case-insensitive filesystem: %w", other, f.name, ErrRefused)
+		}
+		targets[k] = f.name
+		for p := filepath.Dir(f.name); p != "." && p != string(filepath.Separator); p = filepath.Dir(p) {
+			dirs[foldKey(p)] = f.name
 		}
 	}
 	for _, f := range files {
 		for _, suffix := range []string{partialSuffix, sidecarSuffix} {
-			if other, ok := taken[strings.ToLower(f.name+suffix)]; ok {
-				return fmt.Errorf("cannot download both %q and %q: %q is used for the first's partial download", f.name, other, f.name+suffix)
+			k := foldKey(f.name + suffix)
+			other, ok := targets[k]
+			if !ok {
+				other, ok = dirs[k]
+			}
+			if ok {
+				return fmt.Errorf("cannot download both %q and %q: %q is used for the first's partial download: %w", f.name, other, f.name+suffix, ErrRefused)
 			}
 		}
 	}
 	return nil
+}
+
+// folder is unicode case folding, which strings.ToLower is not (it leaves ſ
+// and ς alone while case-insensitive filesystems read them as s and σ).
+var folder = cases.Fold()
+
+// foldKey is the key under which two spellings a filesystem may treat as one
+// name collide: nfc first, since folding does not normalize and apfs compares
+// names normalization-insensitively. same rule as cmd/transfer's foldKey.
+func foldKey(name string) string {
+	return folder.String(norm.NFC.String(name))
 }
 
 func (r *run) downloadOne(ctx context.Context, key string, obj remoteObject, localPath string) (*Summary, error) {
@@ -143,7 +167,8 @@ func (r *run) downloadOne(ctx context.Context, key string, obj remoteObject, loc
 	if localPath == "" {
 		localPath = base
 	}
-	if st, err := os.Stat(localPath); err == nil && st.IsDir() {
+	// a trailing slash names a folder to download into, as on upload
+	if st, err := os.Stat(localPath); (err == nil && st.IsDir()) || strings.HasSuffix(localPath, "/") || strings.HasSuffix(localPath, string(filepath.Separator)) {
 		localPath = filepath.Join(localPath, base)
 	}
 	abs, err := filepath.Abs(localPath)
@@ -165,9 +190,7 @@ func (r *run) downloadAll(ctx context.Context, root *os.Root, files []remoteFile
 	var todo []remoteFile
 	var total int64
 	for _, f := range files {
-		// downloads stamp the remote time, so an unchanged file is the same
-		// size and not older than the remote copy
-		if st, err := root.Stat(f.name); err == nil && st.Mode().IsRegular() && st.Size() == f.obj.size && !f.obj.modified.After(st.ModTime()) {
+		if st, err := root.Stat(f.name); err == nil && !r.Force && st.Mode().IsRegular() && downloadUnchanged(st, f.obj) {
 			r.skipped()
 			continue
 		}
@@ -179,7 +202,7 @@ func (r *run) downloadAll(ctx context.Context, root *os.Root, files []remoteFile
 		if err := r.downloadFile(ctx, root, f); err != nil {
 			return fmt.Errorf("download %s: %w", f.key, err)
 		}
-		r.transferred(f.key, f.obj.size)
+		r.transferred(f.key)
 		return nil
 	})
 	return &r.summary, err
@@ -244,7 +267,7 @@ func (r *run) downloadFile(ctx context.Context, root *os.Root, f remoteFile) err
 	for c := 0; c < chunks; c++ {
 		if done[c] {
 			st.Done = append(st.Done, c)
-			r.Reporter.Add(chunkLen(c, size))
+			r.Reporter.Reused(chunkLen(c, size))
 		} else {
 			missing = append(missing, c)
 		}
@@ -265,8 +288,7 @@ func (r *run) downloadFile(ctx context.Context, root *os.Root, f remoteFile) err
 		}
 		st.Done = append(st.Done, c)
 		slices.Sort(st.Done)
-		r.Reporter.Add(length)
-		return writeRootJSON(root, sidecar, st)
+		return writeJSONIn(root, sidecar, st, 0o644)
 	})
 	if err != nil {
 		return err
@@ -306,40 +328,73 @@ func finish(root *os.Root, partial string, f remoteFile, sidecar string) error {
 
 // getRange writes bytes [off, off+length) of the object into file at off.
 func (r *run) getRange(ctx context.Context, file *os.File, key string, off, length, size int64, etag string) error {
-	return withRetry(ctx, requestTimeout, func(ctx context.Context) error {
-		return r.request(ctx, func() error {
-			in := &s3.GetObjectInput{Bucket: aws.String(r.VolumeID), Key: aws.String(key)}
-			if off != 0 || length != size {
-				in.Range = aws.String(fmt.Sprintf("bytes=%d-%d", off, off+length-1))
-			}
-			out, err := r.Client.GetObject(ctx, in)
-			if err != nil {
-				return err
-			}
-			defer out.Body.Close()
-			if got := trimETag(aws.ToString(out.ETag)); etag != "" && got != "" && got != etag {
-				return errRemoteChanged
-			}
-			n, err := io.Copy(io.NewOffsetWriter(file, off), io.LimitReader(out.Body, length))
-			if err != nil {
-				return transientError{fmt.Errorf("read response: %w", err)}
-			}
-			if n != length {
-				return transientError{fmt.Errorf("short read: got %d of %d bytes", n, length)}
-			}
-			return nil
-		})
+	return r.call(ctx, transferTimeout(length), func(ctx context.Context) error {
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		in := &s3.GetObjectInput{Bucket: aws.String(r.VolumeID), Key: aws.String(key)}
+		if off != 0 || length != size {
+			in.Range = aws.String(fmt.Sprintf("bytes=%d-%d", off, off+length-1))
+		}
+		out, err := r.Client.GetObject(ctx, in)
+		if err != nil {
+			return err
+		}
+		defer out.Body.Close()
+		if got := trimETag(aws.ToString(out.ETag)); etag != "" && got != "" && got != etag {
+			return errRemoteChanged
+		}
+		dst := &offsetWriter{w: io.NewOffsetWriter(file, off)}
+		body := newIdleReader(out.Body, idleTimeout, cancel)
+		defer body.stop()
+		n, err := io.Copy(dst, io.LimitReader(body, length))
+		switch {
+		case dst.err != nil:
+			// a full or failing disk does not get better on retry
+			return fmt.Errorf("write %s: %w", file.Name(), dst.err)
+		case err != nil:
+			return transientError{fmt.Errorf("read response: %w", err)}
+		case n != length:
+			return transientError{fmt.Errorf("short read: got %d of %d bytes", n, length)}
+		}
+		r.sentBytes(n)
+		return nil
 	})
 }
 
-func writeRootJSON(root *os.Root, name string, v any) error {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	tmp := name + ".tmp"
-	if err := root.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return root.Rename(tmp, name)
+// offsetWriter keeps the writer's error apart from the reader's, so a local
+// write failure is not mistaken for a dropped connection.
+type offsetWriter struct {
+	w   io.Writer
+	err error
 }
+
+func (o *offsetWriter) Write(p []byte) (int, error) {
+	n, err := o.w.Write(p)
+	if err != nil {
+		o.err = err
+	}
+	return n, err
+}
+
+// idleReader cancels a response whose body stops delivering bytes for the
+// idle window, so a stalled connection is retried in minutes rather than at
+// the end of the attempt's deadline.
+type idleReader struct {
+	r     io.Reader
+	idle  time.Duration
+	timer *time.Timer
+}
+
+func newIdleReader(r io.Reader, idle time.Duration, cancel context.CancelFunc) *idleReader {
+	return &idleReader{r: r, idle: idle, timer: time.AfterFunc(idle, cancel)}
+}
+
+func (i *idleReader) Read(p []byte) (int, error) {
+	n, err := i.r.Read(p)
+	if n > 0 {
+		i.timer.Reset(i.idle)
+	}
+	return n, err
+}
+
+func (i *idleReader) stop() { i.timer.Stop() }
