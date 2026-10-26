@@ -317,7 +317,7 @@ func TestAmbiguousCompleteWithoutVerifiableETagFails(t *testing.T) {
 	}
 }
 
-func TestSingleRequestUploadDetectsChangeBetweenRetries(t *testing.T) {
+func TestSingleRequestUploadDetectsChangeAfterPut(t *testing.T) {
 	fake, opts := setup(t)
 	src := filepath.Join(t.TempDir(), "small.txt")
 	writeFile(t, src, []byte("original"))
