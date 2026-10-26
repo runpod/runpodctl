@@ -7,11 +7,13 @@ import (
 )
 
 const (
-	APIKeyEnv     = "RUNPOD_API_KEY"
-	RESTURLEnv    = "RUNPOD_API_URL"
-	RESTV2URLEnv  = "RUNPOD_REST_V2_URL"
-	GraphQLURLEnv = "RUNPOD_GRAPHQL_URL"
-	InvokeURLEnv  = "RUNPOD_INVOKE_URL"
+	APIKeyEnv      = "RUNPOD_API_KEY"
+	RESTURLEnv     = "RUNPOD_API_URL"
+	RESTV2URLEnv   = "RUNPOD_REST_V2_URL"
+	GraphQLURLEnv  = "RUNPOD_GRAPHQL_URL"
+	InvokeURLEnv   = "RUNPOD_INVOKE_URL"
+	S3AccessKeyEnv = "RUNPOD_S3_ACCESS_KEY"
+	S3SecretKeyEnv = "RUNPOD_S3_SECRET_KEY"
 )
 
 func APIKey() string {
@@ -40,6 +42,16 @@ func RESTV2URL() string {
 // overridden separately. Empty means use the prod default.
 func InvokeURL() string {
 	return envOrConfig(InvokeURLEnv, "invokeUrl")
+}
+
+// S3AccessKey and S3SecretKey are the s3 api keys network volume transfers
+// sign with. They are separate credentials from the api key.
+func S3AccessKey() string {
+	return envOrConfig(S3AccessKeyEnv, "s3AccessKey")
+}
+
+func S3SecretKey() string {
+	return envOrConfig(S3SecretKeyEnv, "s3SecretKey")
 }
 
 func envOrConfig(envKey, configKey string) string {

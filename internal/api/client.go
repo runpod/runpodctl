@@ -278,6 +278,8 @@ func (c *Client) Delete(endpoint string) ([]byte, error) {
 //	network_error             -- api unreachable (see internal/output)
 //	wait_timeout              -- --wait gave up; resource exists (internal/waitfor)
 //	wait_interrupted          -- --wait was cancelled; resource exists (ditto)
+//	transfer_incomplete       -- a network volume upload/download stopped
+//	                             partway; rerunning resumes it (cmd/volume)
 //	cli_error                 -- any other uncoded local failure (fallback)
 //
 // An explicit code returned by the API is passed through (lowercased) instead
