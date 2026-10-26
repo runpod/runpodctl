@@ -20,8 +20,8 @@ runpodctl receive <code> [flags]
   # receive using the exact code printed by 'runpodctl send'
   runpodctl receive 5254-respect-amen-emotion-14
 
-  # sender used --code my-secret and send printed my-secret-14
-  runpodctl receive my-secret-14
+  # sender used --code my-long-secret-phrase and send printed my-long-secret-phrase-14
+  runpodctl receive my-long-secret-phrase-14
 ```
 
 ### Options

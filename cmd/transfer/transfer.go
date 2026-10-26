@@ -39,8 +39,10 @@ var sendCode string
 
 // minSendCodeLen is the minimum length of a user-supplied --code. croc only
 // checks its 6-character minimum after the "-<relay index>" suffix is added, so
-// a 4-character code would pass there; requiring 6 before the suffix keeps the
-// user's own phrase from being trivially short.
+// a 4-character code would pass there. croc uses the first 5 characters as the
+// relay room and only the rest as the pake password, so this floor keeps at
+// least one character of the user's own phrase secret; the help asks for a
+// long phrase rather than implying 6 is enough.
 const minSendCodeLen = 6
 
 func validateSendCode(code string) error {
@@ -62,15 +64,16 @@ on the other machine (e.g. inside a pod) with that exact code to complete the
 transfer.
 
 with --code, the code is not one-time: it is your codephrase plus the relay index
-that send prints (e.g. my-secret-14), and the receiver must type the printed value.`,
+that send prints (e.g. my-long-secret-phrase-14), and the receiver must type the printed value.`,
 	Example: `  # on this machine: prints a one-time code like 5254-respect-amen-emotion-14
   runpodctl send ./model.safetensors
 
   # then, on the pod (or any other computer), use the exact code send printed:
   runpodctl receive 5254-respect-amen-emotion-14
 
-  # with a fixed codephrase (minimum 6 characters), send prints my-secret-<relay index>:
-  runpodctl send --code my-secret ./model.safetensors`,
+  # with a fixed codephrase (minimum 6 characters; only the part after the 5th is secret,
+  # so use a long one), send prints <codephrase>-<relay index>:
+  runpodctl send --code my-long-secret-phrase ./model.safetensors`,
 	RunE: runSend,
 }
 
@@ -87,8 +90,8 @@ the trailing relay index. if the sender used --code, type the printed
 	Example: `  # receive using the exact code printed by 'runpodctl send'
   runpodctl receive 5254-respect-amen-emotion-14
 
-  # sender used --code my-secret and send printed my-secret-14
-  runpodctl receive my-secret-14`,
+  # sender used --code my-long-secret-phrase and send printed my-long-secret-phrase-14
+  runpodctl receive my-long-secret-phrase-14`,
 	RunE: runReceive,
 }
 

@@ -11,7 +11,7 @@ on the other machine (e.g. inside a pod) with that exact code to complete the
 transfer.
 
 with --code, the code is not one-time: it is your codephrase plus the relay index
-that send prints (e.g. my-secret-14), and the receiver must type the printed value.
+that send prints (e.g. my-long-secret-phrase-14), and the receiver must type the printed value.
 
 ```
 runpodctl send <file> [flags]
@@ -26,8 +26,9 @@ runpodctl send <file> [flags]
   # then, on the pod (or any other computer), use the exact code send printed:
   runpodctl receive 5254-respect-amen-emotion-14
 
-  # with a fixed codephrase (minimum 6 characters), send prints my-secret-<relay index>:
-  runpodctl send --code my-secret ./model.safetensors
+  # with a fixed codephrase (minimum 6 characters; only the part after the 5th is secret,
+  # so use a long one), send prints <codephrase>-<relay index>:
+  runpodctl send --code my-long-secret-phrase ./model.safetensors
 ```
 
 ### Options
