@@ -426,7 +426,7 @@ func TestGuardedAttempt_LateRequestEOFKeepsResponseGuarded(t *testing.T) {
 		// consume every byte the server sent before releasing the request EOF,
 		// so no later response progress can re-arm a timer the EOF wrongly
 		// stopped.
-		if _, err := io.ReadFull(resp.Body, make([]byte, len(lateEOFResponsePrefix))); err != nil {
+		if _, err = io.ReadFull(resp.Body, make([]byte, len(lateEOFResponsePrefix))); err != nil {
 			done <- err
 			return
 		}
