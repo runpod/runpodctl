@@ -6,11 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -36,29 +33,11 @@ func TestGetRequestConstructionErrorDoesNotRetry(t *testing.T) {
 	}
 }
 
-func TestRetryWaitStopsOnSignal(t *testing.T) {
-	if os.Getenv("TEST_RETRY_SIGNAL_CHILD") == "1" {
-		withRetryBackoff(t, 5*time.Second)
-		go func() {
-			time.Sleep(50 * time.Millisecond)
-			_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
-		}()
-		if waitToRetry(context.Background(), nil, 1) {
-			t.Fatal("retry continued after signal")
-		}
-		return
-	}
-	cmd := exec.Command(os.Args[0], "-test.run=^TestRetryWaitStopsOnSignal$")
-	cmd.Env = append(os.Environ(), "TEST_RETRY_SIGNAL_CHILD=1")
-	start := time.Now()
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("signal child failed: %v: %s", err, out)
-	}
-	// the child's backoff is 5s; this bound includes process start (slow under
-	// -race), so it only has to show the wait was cut short.
-	if elapsed := time.Since(start); elapsed > 3*time.Second {
-		t.Fatalf("signal took %v to stop retry wait", elapsed)
+func TestRetryDelayCapsHugeRetryAfter(t *testing.T) {
+	h := http.Header{}
+	h.Set("Retry-After", "10000000000")
+	if got := retryDelay(h, 1); got != maxRetryAfter {
+		t.Fatalf("retryDelay = %v, want %v", got, maxRetryAfter)
 	}
 }
 

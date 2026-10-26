@@ -47,7 +47,11 @@ func retryableStatus(method string, statusCode int) bool {
 // present, otherwise uses exponential backoff.
 func retryDelay(header http.Header, attempt int) time.Duration {
 	if secs, err := strconv.Atoi(header.Get("Retry-After")); err == nil && secs >= 0 {
-		return min(time.Duration(secs)*time.Second, maxRetryAfter)
+		// cap before converting: a huge value overflows time.Duration negative.
+		if secs >= int(maxRetryAfter/time.Second) {
+			return maxRetryAfter
+		}
+		return time.Duration(secs) * time.Second
 	}
 	return retryBackoff * time.Duration(1<<(attempt-1))
 }
@@ -64,14 +68,32 @@ func waitToRetry(ctx context.Context, header http.Header, attempt int) bool {
 	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= delay {
 		return false
 	}
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	// a ctrl-c during the wait stops it. the signal is then re-raised, so the
+	// process still ends (or an outer handler, e.g. a --wait loop, still sees
+	// it) instead of the interrupt being consumed here.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigs)
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
 	case <-timer.C:
-		return ctx.Err() == nil
+		return true
 	case <-ctx.Done():
 		return false
+	case sig := <-sigs:
+		signal.Stop(sigs)
+		reraise(sig)
+		return false
 	}
+}
+
+// reraise delivers sig to this process again once our handler is gone, so the
+// default action or another handler applies. where that isn't possible
+// (windows), exit the way an interrupted process would.
+func reraise(sig os.Signal) {
+	if p, err := os.FindProcess(os.Getpid()); err == nil && p.Signal(sig) == nil {
+		return
+	}
+	os.Exit(130)
 }
