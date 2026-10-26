@@ -103,7 +103,7 @@ func init() {
 	CreatePodsCmd.Flags().IntVar(&gpuCount, "gpuCount", 1, "number of GPUs for the pod")
 	CreatePodsCmd.Flags().IntVar(&podCount, "podCount", 1, "number of pods to create with the same name")
 	CreatePodsCmd.Flags().IntVar(&volumeInGb, "volumeSize", api.LegacyDefaultVolumeInGb, "persistent volume disk size in GB")
-	CreatePodsCmd.Flags().StringSliceVar(&env, "env", nil, "container arguments")
+	CreatePodsCmd.Flags().StringArrayVar(&env, "env", nil, "container arguments")
 	CreatePodsCmd.Flags().StringSliceVar(&ports, "ports", nil, "ports to expose; max only 1 http and 1 tcp allowed; e.g. '8888/http'")
 	CreatePodsCmd.Flags().StringVar(&dockerArgs, "args", "", "container arguments")
 	CreatePodsCmd.Flags().StringVar(&gpuTypeId, "gpuType", "", "gpu type id, e.g. 'NVIDIA GeForce RTX 3090'")
