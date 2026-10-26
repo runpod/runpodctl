@@ -33,8 +33,8 @@ type localFile struct {
 // contents land under remotePath. Files whose remote copy has the same size
 // and is not older than the local file are skipped, so rerunning an
 // interrupted directory upload only sends what is missing.
-func Upload(ctx context.Context, opts Options, localPath, remotePath string) (*Summary, error) {
-	r := newRun(opts)
+func (v Volume) Upload(ctx context.Context, localPath, remotePath string) (*Summary, error) {
+	r := newRun(v)
 	abs, err := filepath.Abs(localPath)
 	if err != nil {
 		return nil, err
@@ -158,7 +158,7 @@ func (r *run) uploadFile(ctx context.Context, f localFile) error {
 			body := newIdleSectionReader(io.NewSectionReader(file, 0, size), idleTimeout, cancel)
 			defer body.stop()
 			_, err := r.Client.PutObject(ctx, &s3.PutObjectInput{
-				Bucket:        aws.String(r.VolumeID),
+				Bucket:        aws.String(r.ID),
 				Key:           aws.String(f.key),
 				Body:          body,
 				ContentLength: aws.Int64(size),
@@ -178,7 +178,7 @@ func (r *run) uploadFile(ctx context.Context, f localFile) error {
 			// edit, so a rerun would skip it; remove it so the rerun sends it.
 			// the delete runs even after a first ctrl-c
 			err := r.call(context.WithoutCancel(ctx), listTimeout, func(ctx context.Context) error {
-				_, err := r.Client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(r.VolumeID), Key: aws.String(f.key)})
+				_, err := r.Client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(r.ID), Key: aws.String(f.key)})
 				return err
 			})
 			if err != nil {
@@ -223,7 +223,7 @@ func (r *run) multipartUpload(ctx context.Context, file *os.File, f localFile) e
 		return err
 	}
 	n := partCount(size, partSize)
-	statePath, err := uploadStatePath(r.Endpoint, r.VolumeID, f.key, f.path)
+	statePath, err := uploadStatePath(r.Endpoint, r.ID, f.key, f.path)
 	if err != nil {
 		return err
 	}
@@ -258,7 +258,7 @@ func (r *run) multipartUpload(ctx context.Context, file *os.File, f localFile) e
 		err := r.call(ctx, listTimeout, func(ctx context.Context) error {
 			var err error
 			out, err = r.Client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
-				Bucket: aws.String(r.VolumeID),
+				Bucket: aws.String(r.ID),
 				Key:    aws.String(f.key),
 			})
 			return err
@@ -294,7 +294,7 @@ func (r *run) multipartUpload(ctx context.Context, file *os.File, f localFile) e
 			body := newIdleSectionReader(io.NewSectionReader(file, off, length), idleTimeout, cancel)
 			defer body.stop()
 			out, err := r.Client.UploadPart(ctx, &s3.UploadPartInput{
-				Bucket:        aws.String(r.VolumeID),
+				Bucket:        aws.String(r.ID),
 				Key:           aws.String(f.key),
 				UploadId:      aws.String(st.UploadID),
 				PartNumber:    aws.Int32(part),
@@ -329,7 +329,7 @@ func (r *run) multipartUpload(ctx context.Context, file *os.File, f localFile) e
 
 	err = r.call(ctx, completeTimeout, func(ctx context.Context) error {
 		_, err := r.Client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
-			Bucket:          aws.String(r.VolumeID),
+			Bucket:          aws.String(r.ID),
 			Key:             aws.String(f.key),
 			UploadId:        aws.String(st.UploadID),
 			MultipartUpload: &types.CompletedMultipartUpload{Parts: completedParts(etags, n)},
@@ -351,7 +351,7 @@ func (r *run) listParts(ctx context.Context, key, uploadID string) ([]types.Part
 		err := r.call(ctx, listTimeout, func(ctx context.Context) error {
 			var err error
 			out, err = r.Client.ListParts(ctx, &s3.ListPartsInput{
-				Bucket:           aws.String(r.VolumeID),
+				Bucket:           aws.String(r.ID),
 				Key:              aws.String(key),
 				UploadId:         aws.String(uploadID),
 				PartNumberMarker: marker,
@@ -376,7 +376,7 @@ func (r *run) isFolder(ctx context.Context, key string) bool {
 	err := r.call(ctx, listTimeout, func(ctx context.Context) error {
 		var err error
 		out, err = r.Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-			Bucket:  aws.String(r.VolumeID),
+			Bucket:  aws.String(r.ID),
 			Prefix:  aws.String(key + "/"),
 			MaxKeys: aws.Int32(1),
 		})
@@ -472,7 +472,7 @@ func verifyParts(file *os.File, parts []types.Part, n int32, size, partSize int6
 func (r *run) abort(ctx context.Context, key, uploadID string) {
 	_ = r.call(ctx, listTimeout, func(ctx context.Context) error {
 		_, err := r.Client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
-			Bucket:   aws.String(r.VolumeID),
+			Bucket:   aws.String(r.ID),
 			Key:      aws.String(key),
 			UploadId: aws.String(uploadID),
 		})

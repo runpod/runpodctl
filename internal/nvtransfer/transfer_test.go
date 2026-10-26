@@ -26,7 +26,7 @@ import (
 
 // setup shrinks every size to a few kib, makes retries instant and keeps
 // upload state in a temp dir.
-func setup(t *testing.T) (*fakeS3, Options) {
+func setup(t *testing.T) (*fakeS3, Volume) {
 	t.Helper()
 	oldSingle, oldPart, oldChunk := singleRequestLimit, minPartSize, chunkSize
 	oldPolicy, oldStateDir := retryPolicy, stateDir
@@ -39,7 +39,7 @@ func setup(t *testing.T) (*fakeS3, Options) {
 		retryPolicy, stateDir = oldPolicy, oldStateDir
 	})
 	fake := newFakeS3()
-	return fake, Options{Client: fake, Endpoint: "https://s3api-test.runpod.io/", VolumeID: "vol1", Concurrency: 3}
+	return fake, Volume{Client: fake, Endpoint: "https://s3api-test.runpod.io/", ID: "vol1", Concurrency: 3}
 }
 
 func randomBytes(n int) []byte {
@@ -70,14 +70,14 @@ func stateFiles(t *testing.T) []string {
 }
 
 func TestUploadDownloadRoundTripFile(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	ctx := context.Background()
 	for _, size := range []int{0, 100, 4 << 10, 10<<10 + 7} {
 		data := randomBytes(size)
 		src := filepath.Join(t.TempDir(), "model.bin")
 		writeFile(t, src, data)
 
-		sum, err := Upload(ctx, opts, src, "models/")
+		sum, err := vol.Upload(ctx, src, "models/")
 		if err != nil {
 			t.Fatalf("size %d: upload: %v", size, err)
 		}
@@ -90,7 +90,7 @@ func TestUploadDownloadRoundTripFile(t *testing.T) {
 		}
 
 		dst := filepath.Join(t.TempDir(), "out.bin")
-		if _, err := Download(ctx, opts, "models/model.bin", dst); err != nil {
+		if _, err := vol.Download(ctx, "models/model.bin", dst); err != nil {
 			t.Fatalf("size %d: download: %v", size, err)
 		}
 		local, err := os.ReadFile(dst)
@@ -104,7 +104,7 @@ func TestUploadDownloadRoundTripFile(t *testing.T) {
 }
 
 func TestUploadDirectorySkipsUnchanged(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	ctx := context.Background()
 	src := filepath.Join(t.TempDir(), "data")
 	files := map[string][]byte{
@@ -116,7 +116,7 @@ func TestUploadDirectorySkipsUnchanged(t *testing.T) {
 		writeFile(t, filepath.Join(src, filepath.FromSlash(name)), data)
 	}
 
-	sum, err := Upload(ctx, opts, src, "")
+	sum, err := vol.Upload(ctx, src, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestUploadDirectorySkipsUnchanged(t *testing.T) {
 	}
 
 	// a rerun sends nothing
-	sum, err = Upload(ctx, opts, src, "")
+	sum, err = vol.Upload(ctx, src, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestUploadDirectorySkipsUnchanged(t *testing.T) {
 	future := time.Now().Add(time.Hour)
 	writeFile(t, filepath.Join(src, "a.txt"), []byte("ALPHA"))
 	os.Chtimes(filepath.Join(src, "a.txt"), future, future)
-	sum, err = Upload(ctx, opts, src, "")
+	sum, err = vol.Upload(ctx, src, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestUploadDirectorySkipsUnchanged(t *testing.T) {
 }
 
 func TestMultipartUploadResumesAfterFailure(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	ctx := context.Background()
 	data := randomBytes(10*(4<<10) + 123) // 11 parts
 	src := filepath.Join(t.TempDir(), "big.bin")
@@ -164,14 +164,14 @@ func TestMultipartUploadResumesAfterFailure(t *testing.T) {
 
 	// parts 7+ are refused, so the first run stops partway; one at a time
 	// keeps the set of finished parts deterministic
-	opts.Concurrency = 1
+	vol.Concurrency = 1
 	fake.onUploadPart = func(part int32) error {
 		if part >= 7 {
 			return errForbidden
 		}
 		return nil
 	}
-	if _, err := Upload(ctx, opts, src, "big.bin"); err == nil {
+	if _, err := vol.Upload(ctx, src, "big.bin"); err == nil {
 		t.Fatal("expected the first run to fail")
 	}
 	if len(stateFiles(t)) != 1 {
@@ -190,7 +190,7 @@ func TestMultipartUploadResumesAfterFailure(t *testing.T) {
 	fake.mu.Unlock()
 
 	fake.onUploadPart = nil
-	if _, err := Upload(ctx, opts, src, "big.bin"); err != nil {
+	if _, err := vol.Upload(ctx, src, "big.bin"); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
 	resent := fake.count("UploadPart") - firstRun
@@ -211,7 +211,7 @@ func TestMultipartUploadResumesAfterFailure(t *testing.T) {
 }
 
 func TestMultipartUploadRestartsWhenFileChanged(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	ctx := context.Background()
 	src := filepath.Join(t.TempDir(), "big.bin")
 	writeFile(t, src, randomBytes(5*(4<<10)))
@@ -222,14 +222,14 @@ func TestMultipartUploadRestartsWhenFileChanged(t *testing.T) {
 		}
 		return nil
 	}
-	if _, err := Upload(ctx, opts, src, "big.bin"); err == nil {
+	if _, err := vol.Upload(ctx, src, "big.bin"); err == nil {
 		t.Fatal("expected failure")
 	}
 	fake.onUploadPart = nil
 
 	changed := randomBytes(6 * (4 << 10))
 	writeFile(t, src, changed)
-	if _, err := Upload(ctx, opts, src, "big.bin"); err != nil {
+	if _, err := vol.Upload(ctx, src, "big.bin"); err != nil {
 		t.Fatal(err)
 	}
 	if fake.count("AbortMultipartUpload") != 1 || fake.count("CreateMultipartUpload") != 2 {
@@ -241,7 +241,7 @@ func TestMultipartUploadRestartsWhenFileChanged(t *testing.T) {
 }
 
 func TestUploadRetriesTransientErrors(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	src := filepath.Join(t.TempDir(), "big.bin")
 	data := randomBytes(3 * (4 << 10))
 	writeFile(t, src, data)
@@ -253,7 +253,7 @@ func TestUploadRetriesTransientErrors(t *testing.T) {
 		}
 		return nil
 	}
-	if _, err := Upload(context.Background(), opts, src, "big.bin"); err != nil {
+	if _, err := vol.Upload(context.Background(), src, "big.bin"); err != nil {
 		t.Fatal(err)
 	}
 	if failures.Load() != 3 {
@@ -265,7 +265,7 @@ func TestUploadRetriesTransientErrors(t *testing.T) {
 }
 
 func TestCompleteTimeoutTreatedAsSuccessWhenObjectExists(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	src := filepath.Join(t.TempDir(), "big.bin")
 	data := randomBytes(3 * (4 << 10))
 	writeFile(t, src, data)
@@ -273,7 +273,7 @@ func TestCompleteTimeoutTreatedAsSuccessWhenObjectExists(t *testing.T) {
 	// the server assembles the file but the response is lost to a 524; the
 	// retry then finds the upload gone
 	fake.onComplete = func() error { return statusError(524) }
-	if _, err := Upload(context.Background(), opts, src, "big.bin"); err != nil {
+	if _, err := vol.Upload(context.Background(), src, "big.bin"); err != nil {
 		t.Fatalf("expected success via head check, got %v", err)
 	}
 	if got, _ := fake.get("big.bin"); !bytes.Equal(got, data) {
@@ -287,14 +287,14 @@ func TestFailedCompleteDoesNotAcceptAnOldObject(t *testing.T) {
 		"definite failure":                  apiError("InvalidPart"),
 	} {
 		t.Run(name, func(t *testing.T) {
-			fake, opts := setup(t)
+			fake, vol := setup(t)
 			src := filepath.Join(t.TempDir(), "big.bin")
 			data := randomBytes(3 * (4 << 10))
 			writeFile(t, src, data)
 			// an older object of the same size already sits at the key
 			fake.objects["big.bin"] = &fakeObject{data: bytes.Repeat([]byte{'o'}, len(data)), modified: time.Now().Add(-time.Hour)}
 			fake.onCompleteBefore = func() error { return completeErr }
-			if _, err := Upload(context.Background(), opts, src, "big.bin"); err == nil {
+			if _, err := vol.Upload(context.Background(), src, "big.bin"); err == nil {
 				t.Fatal("a failed complete was reported as success")
 			}
 			if len(stateFiles(t)) != 1 {
@@ -305,26 +305,26 @@ func TestFailedCompleteDoesNotAcceptAnOldObject(t *testing.T) {
 }
 
 func TestAmbiguousCompleteWithoutVerifiableETagFails(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	fake.opaquePartETags = true
 	src := filepath.Join(t.TempDir(), "big.bin")
 	data := randomBytes(3 * (4 << 10))
 	writeFile(t, src, data)
 	fake.objects["big.bin"] = &fakeObject{data: bytes.Repeat([]byte{'o'}, len(data)), modified: time.Now().Add(-time.Hour)}
 	fake.onCompleteBefore = func() error { return statusError(524) }
-	if _, err := Upload(context.Background(), opts, src, "big.bin"); err == nil {
+	if _, err := vol.Upload(context.Background(), src, "big.bin"); err == nil {
 		t.Fatal("a same-size object was accepted without a verifiable etag")
 	}
 }
 
 func TestSingleRequestUploadDetectsChangeAfterPut(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	src := filepath.Join(t.TempDir(), "small.txt")
 	writeFile(t, src, []byte("original"))
 	old := time.Now().Add(-time.Hour)
 	os.Chtimes(src, old, old)
 	var calls atomic.Int32
-	opts.Client = putHook{fakeS3: fake, after: func() {
+	vol.Client = putHook{fakeS3: fake, after: func() {
 		if calls.Add(1) == 1 {
 			// a same-size edit right after the object was written, with an
 			// mtime older than the object, so the skip rule alone would keep
@@ -334,7 +334,7 @@ func TestSingleRequestUploadDetectsChangeAfterPut(t *testing.T) {
 			os.Chtimes(src, past, past)
 		}
 	}}
-	_, err := Upload(context.Background(), opts, src, "small.txt")
+	_, err := vol.Upload(context.Background(), src, "small.txt")
 	if !errors.Is(err, errLocalChanged) {
 		t.Fatalf("expected errLocalChanged, got %v", err)
 	}
@@ -342,7 +342,7 @@ func TestSingleRequestUploadDetectsChangeAfterPut(t *testing.T) {
 		t.Fatal("the object written across the change must be removed")
 	}
 	// the rerun the error asks for sends the new version
-	if _, err := Upload(context.Background(), opts, src, "small.txt"); err != nil {
+	if _, err := vol.Upload(context.Background(), src, "small.txt"); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := fake.get("small.txt"); string(got) != "CHANGED!" {
@@ -351,26 +351,26 @@ func TestSingleRequestUploadDetectsChangeAfterPut(t *testing.T) {
 }
 
 func TestFailedDeleteAfterLocalChangeAsksForForce(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	src := filepath.Join(t.TempDir(), "small.txt")
 	writeFile(t, src, []byte("original"))
-	opts.Client = putHook{fakeS3: fake, deleteErr: errForbidden, after: func() {
+	vol.Client = putHook{fakeS3: fake, deleteErr: errForbidden, after: func() {
 		future := time.Now().Add(time.Hour)
 		os.WriteFile(src, []byte("CHANGED!"), 0o644)
 		os.Chtimes(src, future, future)
 	}}
-	_, err := Upload(context.Background(), opts, src, "small.txt")
+	_, err := vol.Upload(context.Background(), src, "small.txt")
 	if !errors.As(err, new(*RefusedError)) || !strings.Contains(err.Error(), "--force") {
 		t.Fatalf("expected a refusal naming --force, got %v", err)
 	}
 }
 
 func TestVanishedLocalFileKeepsTheUploadedObject(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	src := filepath.Join(t.TempDir(), "small.txt")
 	writeFile(t, src, []byte("original"))
-	opts.Client = putHook{fakeS3: fake, after: func() { os.Remove(src) }}
-	if _, err := Upload(context.Background(), opts, src, "small.txt"); err == nil {
+	vol.Client = putHook{fakeS3: fake, after: func() { os.Remove(src) }}
+	if _, err := vol.Upload(context.Background(), src, "small.txt"); err == nil {
 		t.Fatal("expected an error for the vanished file")
 	}
 	if got, ok := fake.get("small.txt"); !ok || string(got) != "original" {
@@ -382,11 +382,11 @@ func TestVanishedLocalFileKeepsTheUploadedObject(t *testing.T) {
 }
 
 func TestHead400ThatIsNotAFolderKeepsItsStatus(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	src := filepath.Join(t.TempDir(), "w.bin")
 	writeFile(t, src, []byte("w"))
-	opts.Client = headHook{fakeS3: fake, err: statusError(http.StatusBadRequest)}
-	_, err := Upload(context.Background(), opts, src, "w.bin")
+	vol.Client = headHook{fakeS3: fake, err: statusError(http.StatusBadRequest)}
+	_, err := vol.Upload(context.Background(), src, "w.bin")
 	if errors.As(err, new(*RefusedError)) || HTTPStatus(err) != http.StatusBadRequest {
 		t.Fatalf("expected the 400 itself, got %v", err)
 	}
@@ -403,10 +403,10 @@ func (h headHook) HeadObject(context.Context, *s3.HeadObjectInput, ...func(*s3.O
 }
 
 func TestDownloadRefusesFileThatIsAlsoAFolder(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	fake.put("d/a", []byte("file"))
 	fake.put("d/A/b", []byte("nested"))
-	_, err := Download(context.Background(), opts, "d/", t.TempDir())
+	_, err := vol.Download(context.Background(), "d/", t.TempDir())
 	if !errors.As(err, new(*RefusedError)) || !strings.Contains(err.Error(), "file and a folder") {
 		t.Fatalf("expected a refusal, got %v", err)
 	}
@@ -442,37 +442,37 @@ func TestUploadBodyIdleWatchCancelsAndSeekResets(t *testing.T) {
 }
 
 func TestDownloadMissingFolderIsNotFound(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	fake.put("other/x", []byte("x"))
-	_, err := Download(context.Background(), opts, "missing/", t.TempDir())
+	_, err := vol.Download(context.Background(), "missing/", t.TempDir())
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 	// an empty volume root is a valid, empty download
-	empty, opts2 := setup(t)
+	empty, vol2 := setup(t)
 	_ = empty
-	if sum, err := Download(context.Background(), opts2, "/", t.TempDir()); err != nil || sum.FilesTransferred != 0 {
+	if sum, err := vol2.Download(context.Background(), "/", t.TempDir()); err != nil || sum.FilesTransferred != 0 {
 		t.Fatalf("empty root: %+v %v", sum, err)
 	}
 }
 
 func TestForceTransfersUnchangedFiles(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	src := filepath.Join(t.TempDir(), "data")
 	writeFile(t, filepath.Join(src, "a.txt"), []byte("alpha"))
-	if _, err := Upload(context.Background(), opts, src, ""); err != nil {
+	if _, err := vol.Upload(context.Background(), src, ""); err != nil {
 		t.Fatal(err)
 	}
-	opts.Force = true
-	sum, err := Upload(context.Background(), opts, src, "")
+	vol.Force = true
+	sum, err := vol.Upload(context.Background(), src, "")
 	if err != nil || sum.FilesTransferred != 1 || sum.FilesSkipped != 0 {
 		t.Fatalf("force upload: %+v %v", sum, err)
 	}
 	dst := t.TempDir()
-	if _, err := Download(context.Background(), opts, "data/", dst); err != nil {
+	if _, err := vol.Download(context.Background(), "data/", dst); err != nil {
 		t.Fatal(err)
 	}
-	sum, err = Download(context.Background(), opts, "data/", dst)
+	sum, err = vol.Download(context.Background(), "data/", dst)
 	if err != nil || sum.FilesTransferred != 1 {
 		t.Fatalf("force download: %+v %v", sum, err)
 	}
@@ -480,23 +480,23 @@ func TestForceTransfersUnchangedFiles(t *testing.T) {
 }
 
 func TestUploadOntoRemoteFolderIsRefused(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	fake.put("models/a.bin", []byte("a"))
 	src := filepath.Join(t.TempDir(), "w.bin")
 	writeFile(t, src, []byte("w"))
-	_, err := Upload(context.Background(), opts, src, "models")
+	_, err := vol.Upload(context.Background(), src, "models")
 	if !errors.As(err, new(*RefusedError)) || !strings.Contains(err.Error(), `"models/"`) {
 		t.Fatalf("expected a refusal naming models/, got %v", err)
 	}
 }
 
 func TestFolderUploadSkipsDownloadLeftovers(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	src := filepath.Join(t.TempDir(), "data")
 	writeFile(t, filepath.Join(src, "a.bin"), []byte("a"))
 	writeFile(t, filepath.Join(src, "b.bin"+partialSuffix), []byte("partial"))
 	writeFile(t, filepath.Join(src, "b.bin"+sidecarSuffix), []byte("{}"))
-	sum, err := Upload(context.Background(), opts, src, "")
+	sum, err := vol.Upload(context.Background(), src, "")
 	if err != nil || sum.FilesTransferred != 1 {
 		t.Fatalf("summary %+v %v", sum, err)
 	}
@@ -506,10 +506,10 @@ func TestFolderUploadSkipsDownloadLeftovers(t *testing.T) {
 }
 
 func TestDownloadIntoMissingFolderWithTrailingSlash(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	fake.put("w.bin", []byte("w"))
 	out := filepath.Join(t.TempDir(), "out") + string(filepath.Separator)
-	if _, err := Download(context.Background(), opts, "w.bin", out); err != nil {
+	if _, err := vol.Download(context.Background(), "w.bin", out); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := os.ReadFile(filepath.Join(out, "w.bin")); err != nil || string(got) != "w" {
@@ -518,8 +518,8 @@ func TestDownloadIntoMissingFolderWithTrailingSlash(t *testing.T) {
 }
 
 func TestDownloadStopsWhenRemoteReplacedMidway(t *testing.T) {
-	fake, opts := setup(t)
-	opts.Concurrency = 1
+	fake, vol := setup(t)
+	vol.Concurrency = 1
 	fake.put("f.bin", randomBytes(4*(4<<10)))
 	fake.onGetObject = func(rng string) error {
 		if strings.HasPrefix(rng, "bytes=8192-") {
@@ -528,7 +528,7 @@ func TestDownloadStopsWhenRemoteReplacedMidway(t *testing.T) {
 		return nil
 	}
 	dst := filepath.Join(t.TempDir(), "f.bin")
-	if _, err := Download(context.Background(), opts, "f.bin", dst); !errors.Is(err, errRemoteChanged) {
+	if _, err := vol.Download(context.Background(), "f.bin", dst); !errors.Is(err, errRemoteChanged) {
 		t.Fatalf("expected errRemoteChanged, got %v", err)
 	}
 	if _, err := os.Stat(dst); err == nil {
@@ -537,14 +537,14 @@ func TestDownloadStopsWhenRemoteReplacedMidway(t *testing.T) {
 }
 
 func TestDownloadSidecarPinnedToETag(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	data := randomBytes(4 * (4 << 10))
 	fake.put("b.bin", data)
 	dst := filepath.Join(t.TempDir(), "b.bin")
 	writeFile(t, dst+partialSuffix, bytes.Repeat([]byte{'z'}, len(data)))
 	side, _ := json.Marshal(downloadState{Key: "b.bin", Size: int64(len(data)), ETag: "an-older-version", ChunkSize: chunkSize, Done: []int{0, 1, 2, 3}})
 	writeFile(t, dst+sidecarSuffix, side)
-	if _, err := Download(context.Background(), opts, "b.bin", dst); err != nil {
+	if _, err := vol.Download(context.Background(), "b.bin", dst); err != nil {
 		t.Fatal(err)
 	}
 	if fake.count("GetObject") != 4 {
@@ -556,8 +556,8 @@ func TestDownloadSidecarPinnedToETag(t *testing.T) {
 }
 
 func TestCompletedAnywayNegatives(t *testing.T) {
-	fake, opts := setup(t)
-	r := newRun(opts)
+	fake, vol := setup(t)
+	r := newRun(vol)
 	ctx := context.Background()
 	// nothing at the key
 	if r.completedAnyway(ctx, statusError(524), "k", 3, "x-1") {
@@ -618,39 +618,39 @@ type putHook struct {
 	deleteErr error
 }
 
-func (h putHook) PutObject(ctx context.Context, in *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+func (h putHook) PutObject(ctx context.Context, in *s3.PutObjectInput, vol ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
 	if h.before != nil {
 		if err := h.before(); err != nil {
 			return nil, err
 		}
 	}
-	out, err := h.fakeS3.PutObject(ctx, in, opts...)
+	out, err := h.fakeS3.PutObject(ctx, in, vol...)
 	if err == nil && h.after != nil {
 		h.after()
 	}
 	return out, err
 }
 
-func (h putHook) DeleteObject(ctx context.Context, in *s3.DeleteObjectInput, opts ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
+func (h putHook) DeleteObject(ctx context.Context, in *s3.DeleteObjectInput, vol ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
 	if h.deleteErr != nil {
 		return nil, h.deleteErr
 	}
-	return h.fakeS3.DeleteObject(ctx, in, opts...)
+	return h.fakeS3.DeleteObject(ctx, in, vol...)
 }
 
 func TestRequestsInFlightNeverExceedConcurrency(t *testing.T) {
-	fake, opts := setup(t)
-	opts.Concurrency = 2
+	fake, vol := setup(t)
+	vol.Concurrency = 2
 	fake.callDelay = 2 * time.Millisecond
 	src := filepath.Join(t.TempDir(), "data")
 	for i := 0; i < 4; i++ {
 		writeFile(t, filepath.Join(src, fmt.Sprintf("f%d.bin", i)), randomBytes(3*(4<<10)+i))
 		writeFile(t, filepath.Join(src, fmt.Sprintf("s%d.txt", i)), []byte("small"))
 	}
-	if _, err := Upload(context.Background(), opts, src, "data"); err != nil {
+	if _, err := vol.Upload(context.Background(), src, "data"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Download(context.Background(), opts, "data/", t.TempDir()); err != nil {
+	if _, err := vol.Download(context.Background(), "data/", t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 	if p := fake.peak.Load(); p > 2 {
@@ -659,9 +659,9 @@ func TestRequestsInFlightNeverExceedConcurrency(t *testing.T) {
 }
 
 func TestUnverifiablePartsAreUploadedAgain(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	fake.opaquePartETags = true
-	opts.Concurrency = 1
+	vol.Concurrency = 1
 	src := filepath.Join(t.TempDir(), "big.bin")
 	data := randomBytes(5 * (4 << 10))
 	writeFile(t, src, data)
@@ -671,12 +671,12 @@ func TestUnverifiablePartsAreUploadedAgain(t *testing.T) {
 		}
 		return nil
 	}
-	if _, err := Upload(context.Background(), opts, src, "big.bin"); err == nil {
+	if _, err := vol.Upload(context.Background(), src, "big.bin"); err == nil {
 		t.Fatal("expected failure")
 	}
 	first := fake.count("UploadPart")
 	fake.onUploadPart = nil
-	if _, err := Upload(context.Background(), opts, src, "big.bin"); err != nil {
+	if _, err := vol.Upload(context.Background(), src, "big.bin"); err != nil {
 		t.Fatal(err)
 	}
 	if resent := fake.count("UploadPart") - first; resent != 5 {
@@ -688,8 +688,8 @@ func TestUnverifiablePartsAreUploadedAgain(t *testing.T) {
 }
 
 func TestLocalFileChangedDuringUploadAborts(t *testing.T) {
-	fake, opts := setup(t)
-	opts.Concurrency = 1
+	fake, vol := setup(t)
+	vol.Concurrency = 1
 	src := filepath.Join(t.TempDir(), "big.bin")
 	writeFile(t, src, randomBytes(3*(4<<10)))
 	fake.onUploadPart = func(part int32) error {
@@ -700,7 +700,7 @@ func TestLocalFileChangedDuringUploadAborts(t *testing.T) {
 		}
 		return nil
 	}
-	_, err := Upload(context.Background(), opts, src, "big.bin")
+	_, err := vol.Upload(context.Background(), src, "big.bin")
 	if !errors.Is(err, errLocalChanged) {
 		t.Fatalf("expected errLocalChanged, got %v", err)
 	}
@@ -713,7 +713,7 @@ func TestLocalFileChangedDuringUploadAborts(t *testing.T) {
 }
 
 func TestUnsavableStateAbortsTheUpload(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	if os.Geteuid() == 0 {
 		t.Skip("root writes through directory permissions")
 	}
@@ -726,7 +726,7 @@ func TestUnsavableStateAbortsTheUpload(t *testing.T) {
 	stateDir = func() (string, error) { return readOnly, nil }
 	src := filepath.Join(t.TempDir(), "big.bin")
 	writeFile(t, src, randomBytes(3*(4<<10)))
-	if _, err := Upload(context.Background(), opts, src, "big.bin"); err == nil {
+	if _, err := vol.Upload(context.Background(), src, "big.bin"); err == nil {
 		t.Fatal("expected failure")
 	}
 	if fake.count("AbortMultipartUpload") != 1 {
@@ -735,13 +735,13 @@ func TestUnsavableStateAbortsTheUpload(t *testing.T) {
 }
 
 func TestNonRetryableErrorIsNotRetried(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	src := filepath.Join(t.TempDir(), "big.bin")
 	writeFile(t, src, randomBytes(2*(4<<10)+1))
 	var calls atomic.Int32
 	fake.onUploadPart = func(int32) error { calls.Add(1); return errForbidden }
-	opts.Concurrency = 1
-	if _, err := Upload(context.Background(), opts, src, "big.bin"); err == nil {
+	vol.Concurrency = 1
+	if _, err := vol.Upload(context.Background(), src, "big.bin"); err == nil {
 		t.Fatal("expected failure")
 	}
 	if calls.Load() != 1 {
@@ -750,20 +750,20 @@ func TestNonRetryableErrorIsNotRetried(t *testing.T) {
 }
 
 func TestDownloadResumesFromSidecar(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	ctx := context.Background()
 	data := randomBytes(8*(4<<10) + 99) // 9 chunks
 	fake.put("ckpt/model.bin", data)
 	dst := filepath.Join(t.TempDir(), "model.bin")
 
-	opts.Concurrency = 1
+	vol.Concurrency = 1
 	fake.onGetObject = func(rng string) error {
 		if strings.HasPrefix(rng, "bytes=16384-") { // chunk 4
 			return errForbidden
 		}
 		return nil
 	}
-	if _, err := Download(ctx, opts, "ckpt/model.bin", dst); err == nil {
+	if _, err := vol.Download(ctx, "ckpt/model.bin", dst); err == nil {
 		t.Fatal("expected the first run to fail")
 	}
 	if _, err := os.Stat(dst + sidecarSuffix); err != nil {
@@ -775,7 +775,7 @@ func TestDownloadResumesFromSidecar(t *testing.T) {
 	firstRun := fake.count("GetObject")
 
 	fake.onGetObject = nil
-	if _, err := Download(ctx, opts, "ckpt/model.bin", dst); err != nil {
+	if _, err := vol.Download(ctx, "ckpt/model.bin", dst); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
 	if fetched := fake.count("GetObject") - firstRun; fetched != 9-firstRun {
@@ -792,24 +792,24 @@ func TestDownloadResumesFromSidecar(t *testing.T) {
 	}
 
 	// a rerun with the file in place is a skip
-	sum, err := Download(ctx, opts, "ckpt/model.bin", dst)
+	sum, err := vol.Download(ctx, "ckpt/model.bin", dst)
 	if err != nil || sum.FilesSkipped != 1 {
 		t.Fatalf("expected skip, got %+v %v", sum, err)
 	}
 }
 
 func TestDownloadRefetchesNewerSameSizeRemote(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	ctx := context.Background()
 	fake.put("f.txt", []byte("version-1"))
 	dst := filepath.Join(t.TempDir(), "f.txt")
-	if _, err := Download(ctx, opts, "f.txt", dst); err != nil {
+	if _, err := vol.Download(ctx, "f.txt", dst); err != nil {
 		t.Fatal(err)
 	}
 	fake.mu.Lock()
 	fake.objects["f.txt"] = &fakeObject{data: []byte("version-2"), modified: time.Now().Add(time.Minute)}
 	fake.mu.Unlock()
-	sum, err := Download(ctx, opts, "f.txt", dst)
+	sum, err := vol.Download(ctx, "f.txt", dst)
 	if err != nil || sum.FilesTransferred != 1 {
 		t.Fatalf("expected a refetch, got %+v %v", sum, err)
 	}
@@ -819,7 +819,7 @@ func TestDownloadRefetchesNewerSameSizeRemote(t *testing.T) {
 }
 
 func TestDownloadIgnoresSidecarOfAnotherKey(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	data := randomBytes(4 * (4 << 10))
 	fake.put("b.bin", data)
 	dir := t.TempDir()
@@ -828,7 +828,7 @@ func TestDownloadIgnoresSidecarOfAnotherKey(t *testing.T) {
 	writeFile(t, dst+partialSuffix, bytes.Repeat([]byte{'z'}, len(data)))
 	side, _ := json.Marshal(downloadState{Key: "a.bin", Size: int64(len(data)), ETag: trimETag(etagOf(data)), ChunkSize: chunkSize, Done: []int{0, 1, 2, 3}})
 	writeFile(t, dst+sidecarSuffix, side)
-	if _, err := Download(context.Background(), opts, "b.bin", dst); err != nil {
+	if _, err := vol.Download(context.Background(), "b.bin", dst); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := os.ReadFile(dst); !bytes.Equal(got, data) {
@@ -844,10 +844,10 @@ func TestDownloadRefusesPartialNameCollision(t *testing.T) {
 		"case-insensitive": "d/X.RPDOWNLOAD",
 	} {
 		t.Run(name, func(t *testing.T) {
-			fake, opts := setup(t)
+			fake, vol := setup(t)
 			fake.put("d/x", []byte("x"))
 			fake.put(other, []byte("y"))
-			_, err := Download(context.Background(), opts, "d/", t.TempDir())
+			_, err := vol.Download(context.Background(), "d/", t.TempDir())
 			if err == nil || !strings.Contains(err.Error(), "partial download") {
 				t.Fatalf("expected a collision refusal, got %v", err)
 			}
@@ -862,10 +862,10 @@ func TestDownloadRefusesTargetsThatShareALocalName(t *testing.T) {
 		"normalization": {"d/\u00e9", "d/e\u0301"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			fake, opts := setup(t)
+			fake, vol := setup(t)
 			fake.put(pair[0], []byte("a"))
 			fake.put(pair[1], []byte("b"))
-			_, err := Download(context.Background(), opts, "d/", t.TempDir())
+			_, err := vol.Download(context.Background(), "d/", t.TempDir())
 			if !errors.As(err, new(*RefusedError)) || !strings.Contains(err.Error(), "one file") {
 				t.Fatalf("expected a refusal, got %v", err)
 			}
@@ -874,24 +874,24 @@ func TestDownloadRefusesTargetsThatShareALocalName(t *testing.T) {
 }
 
 func TestDownloadRestartsWhenRemoteChanged(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	ctx := context.Background()
 	fake.put("f.bin", randomBytes(4*(4<<10)))
 	dst := filepath.Join(t.TempDir(), "f.bin")
-	opts.Concurrency = 1
+	vol.Concurrency = 1
 	fake.onGetObject = func(rng string) error {
 		if strings.HasPrefix(rng, "bytes=8192-") {
 			return errForbidden
 		}
 		return nil
 	}
-	if _, err := Download(ctx, opts, "f.bin", dst); err == nil {
+	if _, err := vol.Download(ctx, "f.bin", dst); err == nil {
 		t.Fatal("expected failure")
 	}
 	fake.onGetObject = nil
 	replaced := randomBytes(4*(4<<10) + 5)
 	fake.put("f.bin", replaced)
-	if _, err := Download(ctx, opts, "f.bin", dst); err != nil {
+	if _, err := vol.Download(ctx, "f.bin", dst); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := os.ReadFile(dst); !bytes.Equal(got, replaced) {
@@ -900,7 +900,7 @@ func TestDownloadRestartsWhenRemoteChanged(t *testing.T) {
 }
 
 func TestDownloadDirectory(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	ctx := context.Background()
 	fake.put("data/a.txt", []byte("alpha"))
 	fake.put("data/sub/b.bin", randomBytes(9<<10))
@@ -910,7 +910,7 @@ func TestDownloadDirectory(t *testing.T) {
 
 	dst := filepath.Join(t.TempDir(), "out")
 	// "data" without a slash is detected as a directory
-	sum, err := Download(ctx, opts, "data", dst)
+	sum, err := vol.Download(ctx, "data", dst)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -924,18 +924,18 @@ func TestDownloadDirectory(t *testing.T) {
 	if got, _ := os.ReadFile(filepath.Join(dst, "sub", "b.bin")); !bytes.Equal(got, want) {
 		t.Fatal("sub/b.bin wrong")
 	}
-	sum, err = Download(ctx, opts, "data/", dst)
+	sum, err = vol.Download(ctx, "data/", dst)
 	if err != nil || sum.FilesSkipped != 2 || sum.FilesTransferred != 0 {
 		t.Fatalf("rerun: %+v %v", sum, err)
 	}
 }
 
 func TestDownloadRefusesKeysEscapingDestination(t *testing.T) {
-	fake, opts := setup(t)
+	fake, vol := setup(t)
 	fake.put("data/../../evil.txt", []byte("x"))
 	parent := t.TempDir()
 	dst := filepath.Join(parent, "out")
-	_, err := Download(context.Background(), opts, "data/", dst)
+	_, err := vol.Download(context.Background(), "data/", dst)
 	if err == nil || !strings.Contains(err.Error(), "outside") {
 		t.Fatalf("expected refusal, got %v", err)
 	}
@@ -945,8 +945,8 @@ func TestDownloadRefusesKeysEscapingDestination(t *testing.T) {
 }
 
 func TestDownloadMissingPath(t *testing.T) {
-	_, opts := setup(t)
-	_, err := Download(context.Background(), opts, "nope", t.TempDir())
+	_, vol := setup(t)
+	_, err := vol.Download(context.Background(), "nope", t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("expected not found, got %v", err)
 	}

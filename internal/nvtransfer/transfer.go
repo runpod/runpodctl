@@ -43,13 +43,14 @@ const (
 	uploadsDir = ".s3compat_uploads/"
 )
 
-// Options configure a transfer.
-type Options struct {
+// Volume is a network volume reached through its s3 api, with the settings
+// for transfers to and from it.
+type Volume struct {
 	Client S3API
 	// Endpoint identifies the s3 endpoint in upload state file names, so the
 	// same key on two data centers never shares state.
 	Endpoint string
-	VolumeID string
+	ID       string
 	// Concurrency bounds the requests in flight across all files. Default 4.
 	Concurrency int
 	// Force transfers every file, even those the skip rule calls unchanged.
@@ -97,21 +98,21 @@ func (nopReporter) FileDone(string)  {}
 
 // run is one transfer's shared state.
 type run struct {
-	Options
+	Volume
 	sem chan struct{}
 
 	mu      sync.Mutex
 	summary Summary
 }
 
-func newRun(opts Options) *run {
-	if opts.Concurrency <= 0 {
-		opts.Concurrency = 4
+func newRun(v Volume) *run {
+	if v.Concurrency <= 0 {
+		v.Concurrency = 4
 	}
-	if opts.Reporter == nil {
-		opts.Reporter = nopReporter{}
+	if v.Reporter == nil {
+		v.Reporter = nopReporter{}
 	}
-	return &run{Options: opts, sem: make(chan struct{}, opts.Concurrency)}
+	return &run{Volume: v, sem: make(chan struct{}, v.Concurrency)}
 }
 
 // call is a retried request holding a concurrency slot per attempt. The
@@ -270,7 +271,7 @@ func (r *run) listPrefix(ctx context.Context, prefix string) (map[string]remoteO
 		err := r.call(ctx, listTimeout, func(ctx context.Context) error {
 			var err error
 			out, err = r.Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-				Bucket:            aws.String(r.VolumeID),
+				Bucket:            aws.String(r.ID),
 				Prefix:            aws.String(prefix),
 				ContinuationToken: token,
 			})
@@ -307,7 +308,7 @@ func (r *run) headObject(ctx context.Context, key string) (*remoteObject, error)
 	var out *s3.HeadObjectOutput
 	err := r.call(ctx, listTimeout, func(ctx context.Context) error {
 		var err error
-		out, err = r.Client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(r.VolumeID), Key: aws.String(key)})
+		out, err = r.Client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(r.ID), Key: aws.String(key)})
 		return err
 	})
 	if isNotFound(err) {

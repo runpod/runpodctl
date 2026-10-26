@@ -193,10 +193,10 @@ func runTransfer(cmd *cobra.Command, volumeID, src, dst string, upload bool) err
 	defer stop()
 
 	progress := newProgress(os.Stderr)
-	opts := nvtransfer.Options{
+	vol := nvtransfer.Volume{
 		Client:      nvtransfer.NewS3Client(endpoint, region, accessKey, secretKey),
 		Endpoint:    endpoint,
-		VolumeID:    volumeID,
+		ID:          volumeID,
 		Concurrency: transferConcurrency,
 		Force:       transferForce,
 		Reporter:    progress,
@@ -205,9 +205,9 @@ func runTransfer(cmd *cobra.Command, volumeID, src, dst string, upload bool) err
 	var summary *nvtransfer.Summary
 	var err error
 	if upload {
-		summary, err = nvtransfer.Upload(ctx, opts, src, dst)
+		summary, err = vol.Upload(ctx, src, dst)
 	} else {
-		summary, err = nvtransfer.Download(ctx, opts, src, dst)
+		summary, err = vol.Download(ctx, src, dst)
 	}
 	progress.stop()
 	if err != nil {
