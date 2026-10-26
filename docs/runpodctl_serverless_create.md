@@ -42,7 +42,7 @@ runpodctl serverless create [flags]
 ```
       --compute-type string           compute type (GPU or CPU) (default "GPU")
       --data-center-ids string        comma-separated list of data center ids
-      --env strings                   env vars in KEY=VALUE format; overrides hub defaults (repeatable)
+      --env stringArray               env vars in KEY=VALUE format; overrides hub defaults (repeatable)
       --execution-timeout int         max seconds per request (default -1)
       --flash-boot                    enable flash boot (default true)
       --gpu-count int                 number of gpus per worker (default 1)
