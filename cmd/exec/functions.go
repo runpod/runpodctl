@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/runpod/runpodctl/cmd/project"
+	"github.com/runpod/runpodctl/internal/podssh"
 )
 
 func PythonOverSSH(podID string, file string, pythonCommand string) error {
-	sshConn, err := project.PodSSHConnection(podID)
+	sshConn, err := podssh.Connect(podID)
 	if err != nil {
 		return fmt.Errorf("getting SSH connection: %w", err)
 	}

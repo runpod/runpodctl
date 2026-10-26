@@ -11,7 +11,7 @@
 # nixos-unstable this flake was written against carried 1.26.8, which has ten
 # advisories fixed in 1.26.9). The `go` directive in go.mod is a *minimum*, so
 # the assertion below only requires the flake's Go to be at least that; it
-# fails evaluation, naming the file to edit, when go.mod moves past it.
+# fails evaluation of anything that uses Go when go.mod moves past it.
 #
 { pkgs, lib }:
 let
@@ -31,22 +31,35 @@ let
   # main.go's default version, e.g. "v3.0.0"; -X main.Version overrides it.
   baseVersion = readMatch ../main.go ".*\nvar Version = \"([^\"]+)\"\n.*" "var Version";
 
-  go = pkgs.go_1_26.overrideAttrs (_old: rec {
-    version = "1.26.9";
+  # nixpkgs' derivation for go.mod's minor series (go_1_26 for 1.26.x), so a
+  # go.mod minor bump moves the base too and the pin never builds 1.27 source
+  # with 1.26's patches.
+  goAttr = "go_" + lib.replaceStrings [ "." ] [ "_" ] (lib.versions.majorMinor goModVersion);
+  goBase =
+    pkgs.${goAttr}
+      or (throw "nix/versions.nix: nixpkgs has no ${goAttr} for go.mod's go ${goModVersion}; run `nix flake update nixpkgs`");
+
+  pinnedGo = goBase.overrideAttrs (_old: rec {
+    version = "1.26.10";
     src = pkgs.fetchurl {
       url = "https://go.dev/dl/go${version}.src.tar.gz";
-      hash = "sha256-lzXX3Ntls10/pXfwQGRzfAO4nPGitx5uaf4vPG+f1Mo=";
+      hash = "sha256-/WPog7ovK/ypPBZGsx6+9j4rHk0rMXyXidl2po2B828=";
     };
   });
+  # The assertion guards `go` alone, not the whole set: `nix run .#update-pins`
+  # must still evaluate when go.mod has moved past the pin, since that is what
+  # rewrites it.
+  go =
+    assert lib.assertMsg (lib.versionAtLeast pinnedGo.version goModVersion)
+      "go.mod requires go ${goModVersion} but nix/versions.nix pins ${pinnedGo.version}; run `nix run .#update-pins`";
+    pinnedGo;
 in
-assert lib.assertMsg (lib.versionAtLeast go.version goModVersion)
-  "go.mod requires go ${goModVersion} but nix/versions.nix pins ${go.version}; bump the go override in nix/versions.nix";
 {
   inherit go goModVersion baseVersion;
 
   # Hash of the proxyVendor module cache (`goModules`). Any go.mod/go.sum
   # change invalidates it: run `nix run .#update-vendor-hash`.
-  vendorHash = "sha256-euC7FNi6GTu5W6DE/SPuywtnoM8an6etlcHJbQBxxeQ=";
+  vendorHash = "sha256-0xRsyNToZJWpT8MTdXstQXewWTLJNGxrknGUot6SdAg=";
 
   # Identical to .goreleaser.yml, minus the version, which the package adds.
   ldflags = [
@@ -57,7 +70,9 @@ assert lib.assertMsg (lib.versionAtLeast go.version goModVersion)
   # Analysis tools come straight from nixpkgs (and so from cache.nixos.org).
   # They only need the same Go *language* version (1.26) as the module; the
   # pinned `go` above is first on PATH in every check, so package loading and
-  # govulncheck's standard-library check both see 1.26.9.
+  # govulncheck's standard-library check both see 1.26.10. A go.mod minor
+  # bump (1.27) also needs releases of these that read that Go's export data;
+  # see nix/README.md §8.
   inherit (pkgs)
     golangci-lint
     gosec

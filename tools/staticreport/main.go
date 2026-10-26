@@ -6,10 +6,11 @@
 //	staticreport report   -baseline FILE -root DIR -in NAME=FORMAT:PATH... -exit NAME=N... \
 //	                      [-vuln PATH] [-meta-file PATH] -md OUT.md -json OUT.json
 //
-// FORMAT is one of golangci, staticcheck or gosec. `baseline` exits 0 when the
-// findings match the baseline exactly, 1 when a finding is new or a listed one
-// is gone (the ratchet only moves by update-lint-baseline), 2 on unusable
-// input, and 3 when a tool failed rather than reporting findings.
+// FORMAT is one of golangci, staticcheck or gosec. `baseline` exits 0 when no
+// finding is new (listed findings that are gone are only reported, so fixing
+// one never fails the check; update-lint-baseline prunes them), 1 when a
+// finding is new, 2 on unusable input, and 3 when a tool failed rather than
+// reporting findings.
 package main
 
 import (
@@ -226,7 +227,7 @@ func runBaseline(o *options, measured []Measured, baseline Baseline, stdout, std
 		for _, key := range d.Fixed {
 			fmt.Fprintf(stdout, "  fixed: %s\n", key)
 		}
-		if len(d.New) > 0 || len(d.Fixed) > 0 {
+		if len(d.New) > 0 {
 			rc = exitFindings
 		}
 	}
@@ -236,11 +237,10 @@ func runBaseline(o *options, measured []Measured, baseline Baseline, stdout, std
 			return exitUsage
 		}
 	}
-	switch rc {
-	case exitOK:
-		fmt.Fprintln(stdout, "lint-baseline: findings match the baseline")
-	default:
-		fmt.Fprintln(stdout, "lint-baseline: fix the new findings; if findings were fixed, run `nix run .#update-lint-baseline` and commit the shrunk baseline")
+	if rc != exitOK {
+		fmt.Fprintln(stdout, "lint-baseline: fix the new findings")
+	} else {
+		fmt.Fprintln(stdout, "lint-baseline: no new findings; fixed ones are pruned by the nix-maintenance pr (nix run .#update-pins)")
 	}
 	return rc
 }
