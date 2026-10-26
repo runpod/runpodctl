@@ -423,21 +423,26 @@ func TestListPartsStopsOnARepeatedMarker(t *testing.T) {
 	}
 }
 
-func TestDownloadRefusesASymlinkedPartial(t *testing.T) {
-	fake, vol := setup(t)
-	fake.put("x", []byte("remote"))
-	dir := t.TempDir()
-	other := filepath.Join(dir, "other")
-	writeFile(t, other, []byte("keep me"))
-	if err := os.Symlink("other", filepath.Join(dir, "x"+partialSuffix)); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
-	_, err := vol.Download(context.Background(), "x", filepath.Join(dir, "x"))
-	if !errors.As(err, new(*RefusedError)) {
-		t.Fatalf("expected a refusal, got %v", err)
-	}
-	if got, _ := os.ReadFile(other); string(got) != "keep me" {
-		t.Fatalf("the symlink target was overwritten: %q", got)
+func TestDownloadRefusesSymlinkedWorkFiles(t *testing.T) {
+	for _, suffix := range workSuffixes {
+		t.Run(suffix, func(t *testing.T) {
+			fake, vol := setup(t)
+			// over one chunk, so the sidecar path is the one taken
+			fake.put("x", randomBytes(3*int(chunkSize)))
+			dir := t.TempDir()
+			other := filepath.Join(dir, "other")
+			writeFile(t, other, []byte("keep me"))
+			if err := os.Symlink("other", filepath.Join(dir, "x"+suffix)); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+			_, err := vol.Download(context.Background(), "x", filepath.Join(dir, "x"))
+			if !errors.As(err, new(*RefusedError)) {
+				t.Fatalf("expected a refusal, got %v", err)
+			}
+			if got, _ := os.ReadFile(other); string(got) != "keep me" {
+				t.Fatalf("the symlink target was overwritten: %q", got)
+			}
+		})
 	}
 }
 

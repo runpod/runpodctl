@@ -265,8 +265,6 @@ type remoteObject struct {
 	etag     string
 }
 
-// listPrefix lists every object under prefix (which ends in "/" or is "").
-// Directory markers and in-progress multipart data are left out.
 // addFiles adds the listed files to objects, leaving out folder markers and
 // in-progress multipart parts.
 func addFiles(objects map[string]remoteObject, listed []types.Object) {
@@ -283,6 +281,8 @@ func addFiles(objects map[string]remoteObject, listed []types.Object) {
 	}
 }
 
+// listPrefix lists every object under prefix (which ends in "/" or is "").
+// Directory markers and in-progress multipart data are left out.
 func (r *run) listPrefix(ctx context.Context, prefix string) (map[string]remoteObject, error) {
 	objects := map[string]remoteObject{}
 	var token *string

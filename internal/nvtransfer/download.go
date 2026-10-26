@@ -224,8 +224,10 @@ func (r *run) downloadFile(ctx context.Context, root *os.Root, f remoteFile) err
 		}
 	}
 	partial := f.name + partialSuffix
-	if err := refuseNonRegular(root, partial); err != nil {
-		return err
+	for _, suffix := range workSuffixes {
+		if err := refuseNonRegular(root, f.name+suffix); err != nil {
+			return err
+		}
 	}
 	if f.obj.size <= chunkSize {
 		return r.downloadWhole(ctx, root, f, partial)
@@ -234,8 +236,9 @@ func (r *run) downloadFile(ctx context.Context, root *os.Root, f remoteFile) err
 	return d.fetch(ctx)
 }
 
-// refuseNonRegular refuses a partial download path that exists as anything
-// but a regular file: a symlink there would point the write at another file.
+// refuseNonRegular refuses a download work file (partial, sidecar, or the
+// sidecar's temp file) that exists as anything but a regular file: a symlink
+// there would point the write at another file.
 func refuseNonRegular(root *os.Root, name string) error {
 	info, err := root.Lstat(name)
 	if errors.Is(err, fs.ErrNotExist) {
