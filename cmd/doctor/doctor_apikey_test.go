@@ -348,3 +348,40 @@ func TestSaveAPIKey_KeepsFileValuesNotInMemoryOverrides(t *testing.T) {
 		t.Errorf("expected only config.toml left behind, got %d entries", len(entries))
 	}
 }
+
+// A symlinked config (dotfile managers) must stay a link, with the key written
+// to its target.
+func TestSaveAPIKey_WritesThroughSymlink(t *testing.T) {
+	home := isolatedHome(t)
+	target := filepath.Join(home, "dotfiles", "config.toml")
+	link := filepath.Join(home, ".runpod", "config.toml")
+	for _, dir := range []string{filepath.Dir(target), filepath.Dir(link)} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(target, []byte("apiurl = 'https://saved.example'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	viper.SetConfigFile(link)
+	if err := viper.ReadInConfig(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := saveAPIKey(goodKey); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("config is no longer a symlink: %v", err)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), goodKey) || !strings.Contains(string(data), "saved.example") {
+		t.Fatalf("target not updated in place:\n%s", data)
+	}
+}

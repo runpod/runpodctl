@@ -250,6 +250,11 @@ func saveAPIKey(apiKey string) (string, error) {
 		}
 		path = filepath.Join(home, ".runpod", "config.toml")
 	}
+	// write through a symlinked config (stow, dotfile repos) to its target, so
+	// the rename below replaces the real file rather than the link.
+	if target, err := filepath.EvalSymlinks(path); err == nil {
+		path = target
+	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, configDirPerm); err != nil {
 		return "", fmt.Errorf("could not create config directory: %w", err)
