@@ -3,10 +3,33 @@ package pods
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/runpod/runpodctl/internal/api"
 )
+
+func TestLegacyCreatePodsEnvKeepsCommasAndQuotes(t *testing.T) {
+	oldEnv := env
+	flag := CreatePodsCmd.Flags().Lookup("env")
+	oldChanged := flag.Changed
+	t.Cleanup(func() {
+		env = oldEnv
+		flag.Changed = oldChanged
+	})
+
+	if err := CreatePodsCmd.Flags().Parse([]string{
+		"--env", "CUDA_VISIBLE_DEVICES=0,1",
+		"--env", `GREETING="hi"`,
+	}); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+
+	want := []string{"CUDA_VISIBLE_DEVICES=0,1", `GREETING="hi"`}
+	if !reflect.DeepEqual(env, want) {
+		t.Errorf("env = %q, want %q", env, want)
+	}
+}
 
 // --gpuType "A,B" moves on to B only when A was cleanly refused; a 5xx or a
 // timeout may have created the pod

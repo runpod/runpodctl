@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -355,5 +356,94 @@ func TestCompleteModelUpload_TransportErrorIsNotReportedAsStall(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "no progress") {
 		t.Fatalf("expected a transport error, got it reported as a stall: %v", err)
+	}
+}
+
+// lateEOFBody yields its payload, then holds back the final EOF read until
+// release is closed. The transport makes that read from its write goroutine
+// after copying ContentLength bytes, so it can land after Do has returned.
+type lateEOFBody struct {
+	payload []byte
+	release <-chan struct{}
+}
+
+func (b *lateEOFBody) Read(p []byte) (int, error) {
+	if len(b.payload) > 0 {
+		n := copy(p, b.payload)
+		b.payload = b.payload[n:]
+		return n, nil
+	}
+	<-b.release
+	return 0, io.EOF
+}
+
+func (b *lateEOFBody) Close() error { return nil }
+
+// lateEOFResponsePrefix is what the server writes before stalling the
+// response body.
+const lateEOFResponsePrefix = "0123456789"
+
+// TestGuardedAttempt_LateRequestEOFKeepsResponseGuarded pins that the request
+// body hitting EOF after the response headers arrived does not disarm the
+// stall guard for the response body. Before the fix the late EOF stopped the
+// timer, so a response body that stalled mid-stream blocked forever.
+func TestGuardedAttempt_LateRequestEOFKeepsResponseGuarded(t *testing.T) {
+	shortStallTimeout(t, 200*time.Millisecond)
+	release := make(chan struct{})
+	server := stallingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if _, err := io.CopyN(io.Discard, r.Body, 6); err != nil {
+			t.Errorf("read request body: %v", err)
+		}
+		w.Header().Set("Content-Length", "1000")
+		w.WriteHeader(http.StatusOK)
+		if _, err := io.WriteString(w, lateEOFResponsePrefix); err != nil {
+			t.Errorf("write partial body: %v", err)
+		}
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Error("response writer does not support flushing")
+			return
+		}
+		flusher.Flush()
+	})
+
+	newReq := func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPut, server.URL, &lateEOFBody{payload: []byte("abcdef"), release: release})
+		if err != nil {
+			return nil, err
+		}
+		req.ContentLength = 6
+		return req, nil
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		resp, err := doGuardedModelUploadAttempt(context.Background(), newReq)
+		if err != nil {
+			done <- err
+			return
+		}
+		// consume every byte the server sent before releasing the request EOF,
+		// so no later response progress can re-arm a timer the EOF wrongly
+		// stopped.
+		if _, err = io.ReadFull(resp.Body, make([]byte, len(lateEOFResponsePrefix))); err != nil {
+			done <- err
+			return
+		}
+		close(release)
+		_, err = io.ReadAll(resp.Body)
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			t.Errorf("close response body: %v", closeErr)
+		}
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected the stalled response body to fail the read")
+		}
+	case <-time.After(uploadTestDeadline):
+		t.Fatalf("response body read still blocked after %s", uploadTestDeadline)
 	}
 }

@@ -173,7 +173,7 @@ var (
 	createModelRepoUpload      = api.CreateModelRepoUpload
 	createModelRepoUploadBatch = api.CreateModelRepoUploadBatch
 	completeModelRepoUploadAll = api.CompleteModelRepoUploadBatch
-	completeModelUploadFile    = completeModelUploadWithProgress
+	completeModelUploadFile    = completeModelUploadWithContext
 	getModelsForAdd            = api.GetModels
 	getModelRepoStorageUsage   = api.GetModelRepoStorageUsage
 	sleepModelHashPoll         = waitModelHashPoll
@@ -192,6 +192,11 @@ const modelRepoUploadBatchSize = 500
 // its expiresInSeconds TTL, and serialized S3 round trips were the dominant remaining
 // cost for the many-small-files case this batching work targets.
 const modelRepoUploadConcurrency = 4
+
+// modelPartUploadConcurrency bounds how many multipart PUTs of a *single* file
+// run at once. Kept modest because it multiplies with modelRepoUploadConcurrency
+// when several multi-part files upload together (4x4 worst case).
+const modelPartUploadConcurrency = 4
 
 // checkModelRepoStorageQuota rejects an upload of requestedBytes that would exceed the
 // account's quota, before anything is created server-side. Deliberately fails open: an
@@ -1014,33 +1019,35 @@ func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInp
 	return uploadedFiles, uploadModel, modelVersionUUID, nil
 }
 
-// runBounded runs fn(i) for every i in [0, n) with at most concurrency goroutines in
-// flight at once, always waits for every launched call to finish -- even after one
-// fails, since fn has no cancellation signal to stop early -- and then returns the
-// first error in index order (not completion order), so a failure is deterministic
-// regardless of goroutine scheduling.
-func runBounded(n int, concurrency int, fn func(i int) error) error {
-	errs := make([]error, n)
+// runBounded runs fn(ctx, i) for i in [0, n) with at most concurrency goroutines in
+// flight at once. The first failure cancels ctx, so no further fn is started and
+// in-flight calls that honor ctx stop early; one bad part or file must not let the
+// rest of a multi-GB upload go out first. It always waits for every launched call
+// to return, then reports the error that first triggered cancellation.
+func runBounded(parent context.Context, n, concurrency int, fn func(ctx context.Context, i int) error) error {
+	ctx, cancel := context.WithCancelCause(parent)
+	defer cancel(nil)
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 
-	for i := 0; i < n; i++ {
-		wg.Add(1)
+	for i := range n {
 		sem <- struct{}{}
+		if ctx.Err() != nil {
+			<-sem
+			break
+		}
+		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			errs[i] = fn(i)
+			if err := fn(ctx, i); err != nil {
+				cancel(err)
+			}
 		}(i)
 	}
 	wg.Wait()
 
-	for _, err := range errs {
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return context.Cause(ctx)
 }
 
 // uploadModelFileChunk uploads every file in chunk to S3, with up to
@@ -1067,10 +1074,10 @@ func uploadModelFileChunk(chunk []modelFile, uploads []*api.ModelRepoUpload, pro
 	}
 
 	results := make([]uploadedModelFile, len(chunk))
-	err := runBounded(len(chunk), modelRepoUploadConcurrency, func(i int) error {
+	err := runBounded(context.Background(), len(chunk), modelRepoUploadConcurrency, func(ctx context.Context, i int) error {
 		file := chunk[i]
 		upload := uploads[i]
-		if err := completeModelUploadFile(upload, file.AbsolutePath, progress); err != nil {
+		if err := completeModelUploadFile(ctx, upload, file.AbsolutePath, progress); err != nil {
 			return fmt.Errorf("upload %s: %w", file.RelativePath, err)
 		}
 		results[i] = uploadedModelFile{
@@ -1141,6 +1148,7 @@ var modelUploadHTTPClient = &http.Client{
 		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   modelRepoUploadConcurrency * modelPartUploadConcurrency,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   15 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
@@ -1159,42 +1167,75 @@ func isRetryableUploadStatus(code int) bool {
 // the wait for headers; this covers the two phases it does not: a server that
 // stops consuming the request body, and one that sends headers then stalls the
 // response body. Slow transfers that keep making progress are never cut off.
+//
+// The transport reads the request body from its own goroutine and can make
+// the final EOF read after the response headers arrived, so once the response
+// phase starts, request body events are ignored; otherwise that late EOF
+// would stop the timer guarding the response body.
 type stallGuard struct {
-	timer  *time.Timer
-	cancel context.CancelFunc
+	mu         sync.Mutex
+	timer      *time.Timer
+	cancel     context.CancelFunc
+	responding bool
 }
 
 func newStallGuard(cancel context.CancelFunc) *stallGuard {
 	return &stallGuard{timer: time.AfterFunc(modelUploadStallTimeout, cancel), cancel: cancel}
 }
 
-func (g *stallGuard) arm()    { g.timer.Reset(modelUploadStallTimeout) }
+// startResponse switches the guard to the response body phase and arms it.
+func (g *stallGuard) startResponse() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.responding = true
+	g.timer.Reset(modelUploadStallTimeout)
+}
+
+// progress re-arms the guard after a body read that moved bytes.
+func (g *stallGuard) progress(fromResponse bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if fromResponse == g.responding {
+		g.timer.Reset(modelUploadStallTimeout)
+	}
+}
+
+// idle stops the guard once a body is fully read.
+func (g *stallGuard) idle(fromResponse bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if fromResponse == g.responding {
+		g.timer.Stop()
+	}
+}
+
 func (g *stallGuard) disarm() { g.timer.Stop() }
 
 // stallReader re-arms the guard on every read that moves bytes. On EOF it
 // disarms, so the guard is idle while waiting for response headers.
-// cancelOnClose is set only for response bodies: the transport closes the
-// request body itself once written, which must not end the attempt.
+// response is set only for response bodies: it marks their phase and cancels
+// the attempt on Close. The transport closes the request body itself once
+// written, which must not end the attempt.
 type stallReader struct {
-	r             io.ReadCloser
-	guard         *stallGuard
-	cancelOnClose bool
+	r        io.ReadCloser
+	guard    *stallGuard
+	response bool
 }
 
 func (s *stallReader) Read(p []byte) (int, error) {
 	n, err := s.r.Read(p)
 	if n > 0 {
-		s.guard.arm()
+		s.guard.progress(s.response)
 	}
 	if err == io.EOF {
-		s.guard.disarm()
+		s.guard.idle(s.response)
 	}
 	return n, err
 }
 
 func (s *stallReader) Close() error {
 	err := s.r.Close()
-	if s.cancelOnClose {
+	if s.response {
 		s.guard.disarm()
 		s.guard.cancel()
 	}
@@ -1206,11 +1247,16 @@ func (s *stallReader) Close() error {
 // is called once per attempt so the request body can be re-read on retry. On
 // success or a non-retryable status it returns the response for the caller to
 // validate and close; its body stays stall-guarded. If every attempt fails
-// transiently it returns the last error.
-func doModelUploadRequest(what string, newReq func() (*http.Request, error)) (*http.Response, error) {
+// transiently it returns the last error. Once ctx is done (another part failed)
+// it starts no further attempt and stops waiting out a backoff. newReq must
+// build its request with ctx so an in-flight attempt is aborted too.
+func doModelUploadRequest(ctx context.Context, what string, newReq func() (*http.Request, error)) (*http.Response, error) {
 	var lastErr error
 	for attempt := 1; attempt <= modelUploadMaxAttempts; attempt++ {
-		resp, err := doGuardedModelUploadAttempt(newReq)
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("%s: %w", what, errors.Join(err, lastErr))
+		}
+		resp, err := doGuardedModelUploadAttempt(ctx, newReq)
 		retryAfter := ""
 		switch {
 		case err != nil:
@@ -1226,10 +1272,20 @@ func doModelUploadRequest(what string, newReq func() (*http.Request, error)) (*h
 		}
 
 		if attempt < modelUploadMaxAttempts {
-			time.Sleep(modelUploadRetryDelay(attempt, retryAfter, time.Now()))
+			sleepCtx(ctx, modelUploadRetryDelay(attempt, retryAfter, time.Now()))
 		}
 	}
 	return nil, lastErr
+}
+
+// sleepCtx waits for d or until ctx is done, whichever comes first.
+func sleepCtx(ctx context.Context, d time.Duration) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
+	}
 }
 
 // modelUploadErrorSnippet reads at most modelUploadErrorBodyLimit bytes of an
@@ -1274,14 +1330,15 @@ func modelUploadRetryDelay(attempt int, retryAfter string, now time.Time) time.D
 	return min(wait, modelUploadMaxRetryAfter)
 }
 
-// doGuardedModelUploadAttempt runs one attempt under a stallGuard. The returned
-// response body re-arms the guard on read and cancels the attempt on Close.
-func doGuardedModelUploadAttempt(newReq func() (*http.Request, error)) (*http.Response, error) {
+// doGuardedModelUploadAttempt runs one attempt under a stallGuard, as a child of
+// parent. The returned response body re-arms the guard on read and cancels the
+// attempt on Close.
+func doGuardedModelUploadAttempt(parent context.Context, newReq func() (*http.Request, error)) (*http.Response, error) {
 	req, err := newReq()
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithCancel(req.Context())
+	ctx, cancel := context.WithCancel(parent)
 	guard := newStallGuard(cancel)
 	req = req.WithContext(ctx)
 	if req.Body != nil {
@@ -1293,8 +1350,9 @@ func doGuardedModelUploadAttempt(newReq func() (*http.Request, error)) (*http.Re
 
 	resp, err := modelUploadHTTPClient.Do(req)
 	if err != nil {
-		// read before cancel: afterwards ctx.Err() is always set.
-		stalled := ctx.Err() != nil
+		// read before cancel: afterwards ctx.Err() is always set. A done parent
+		// means the whole upload was canceled, not that this attempt stalled.
+		stalled := ctx.Err() != nil && parent.Err() == nil
 		guard.disarm()
 		cancel()
 		if stalled {
@@ -1302,12 +1360,16 @@ func doGuardedModelUploadAttempt(newReq func() (*http.Request, error)) (*http.Re
 		}
 		return nil, err
 	}
-	guard.arm()
-	resp.Body = &stallReader{r: resp.Body, guard: guard, cancelOnClose: true}
+	guard.startResponse()
+	resp.Body = &stallReader{r: resp.Body, guard: guard, response: true}
 	return resp, nil
 }
 
 func completeModelUploadWithProgress(upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
+	return completeModelUploadWithContext(context.Background(), upload, artifactPath, progress)
+}
+
+func completeModelUploadWithContext(ctx context.Context, upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
 	if upload == nil {
 		return fmt.Errorf("upload details are required")
 	}
@@ -1345,62 +1407,61 @@ func completeModelUploadWithProgress(upload *api.ModelRepoUpload, artifactPath s
 		return fmt.Errorf("invalid part size %d", partSize)
 	}
 
-	var offset int64
-	completed := make([]completedPart, 0, len(parts))
-
-	for _, part := range parts {
+	// parts are contiguous and uniform (partSize each) except the last, so a
+	// part's offset is a pure function of its position — no accumulation. This
+	// lets the PUTs run in parallel: a model repo is commonly one large file, so
+	// uploading its parts sequentially left the pipe mostly idle.
+	completed := make([]completedPart, len(parts))
+	uploadErr := runBounded(ctx, len(parts), modelPartUploadConcurrency, func(ctx context.Context, i int) error {
+		part := parts[i]
+		offset := int64(i) * partSize
 		remaining := totalSize - offset
 		if remaining <= 0 {
 			return fmt.Errorf("no data remaining for part %d", part.PartNumber)
 		}
+		chunkSize := min(partSize, remaining)
 
-		chunkSize := partSize
-		if remaining < chunkSize {
-			chunkSize = remaining
-		}
-
-		partOffset, partChunk := offset, chunkSize
-		resp, err := doModelUploadRequest(fmt.Sprintf("upload part %d", part.PartNumber), func() (*http.Request, error) {
+		resp, err := doModelUploadRequest(ctx, fmt.Sprintf("upload part %d", part.PartNumber), func() (*http.Request, error) {
 			// fresh SectionReader per attempt so a retry re-reads the chunk.
-			req, reqErr := http.NewRequest(http.MethodPut, part.URL, io.NewSectionReader(file, partOffset, partChunk))
+			// os.File.ReadAt (used by SectionReader) is safe for concurrent use.
+			req, reqErr := http.NewRequestWithContext(ctx, http.MethodPut, part.URL, io.NewSectionReader(file, offset, chunkSize))
 			if reqErr != nil {
 				return nil, fmt.Errorf("create request for part %d: %w", part.PartNumber, reqErr)
 			}
-			req.ContentLength = partChunk
+			req.ContentLength = chunkSize
 			return req, nil
 		})
 		if err != nil {
 			return err
 		}
-		func() {
-			defer resp.Body.Close()
-			// a non-retryable status reaches here (2xx handled below, 4xx errors out).
-			if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-				err = fmt.Errorf("upload part %d failed: status %d: %s", part.PartNumber, resp.StatusCode, modelUploadErrorSnippet(resp.Body))
-				return
-			}
-			etag := strings.Trim(resp.Header.Get("ETag"), "\"")
-			if etag == "" {
-				err = fmt.Errorf("upload part %d missing ETag", part.PartNumber)
-				return
-			}
-			completed = append(completed, completedPart{PartNumber: part.PartNumber, ETag: fmt.Sprintf("%q", etag)})
-		}()
-		if err != nil {
-			return err
+		defer resp.Body.Close()
+
+		// a non-retryable status reaches here (2xx ok, 4xx errors out).
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			return fmt.Errorf("upload part %d failed: status %d: %s", part.PartNumber, resp.StatusCode, modelUploadErrorSnippet(resp.Body))
 		}
+		etag := strings.Trim(resp.Header.Get("ETag"), "\"")
+		if etag == "" {
+			return fmt.Errorf("upload part %d missing ETag", part.PartNumber)
+		}
+		completed[i] = completedPart{PartNumber: part.PartNumber, ETag: fmt.Sprintf("%q", etag)}
 
 		// account for the part once it succeeds, so a retried part is not
 		// double-counted (coarser than per-byte, but correct under retry).
 		if progress != nil {
 			_ = progress.Add64(chunkSize) //nolint:errcheck // progress is cosmetic; a failed redraw must not fail the upload
 		}
-
-		offset += chunkSize
+		return nil
+	})
+	if uploadErr != nil {
+		return uploadErr
 	}
 
-	if offset != totalSize {
-		return fmt.Errorf("uploaded %d bytes but artifact size is %d bytes", offset, totalSize)
+	// verify the parts fully covered the file. The last part carries the
+	// remainder; if the plan stopped short the artifact was under-uploaded.
+	lastOffset := int64(len(parts)-1) * partSize
+	if covered := lastOffset + min(partSize, totalSize-lastOffset); covered != totalSize {
+		return fmt.Errorf("uploaded %d bytes but artifact size is %d bytes", covered, totalSize)
 	}
 
 	completePayload := completeMultipartUpload{
@@ -1415,8 +1476,8 @@ func completeModelUploadWithProgress(upload *api.ModelRepoUpload, artifactPath s
 
 	payload := append([]byte(xml.Header), body...)
 
-	resp, err := doModelUploadRequest("complete upload", func() (*http.Request, error) {
-		completeReq, reqErr := http.NewRequest(http.MethodPost, upload.CompleteURL, bytes.NewReader(payload))
+	resp, err := doModelUploadRequest(ctx, "complete upload", func() (*http.Request, error) {
+		completeReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, upload.CompleteURL, bytes.NewReader(payload))
 		if reqErr != nil {
 			return nil, fmt.Errorf("create completion request: %w", reqErr)
 		}
