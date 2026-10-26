@@ -58,8 +58,8 @@ var downloadCmd = &cobra.Command{
 
 remote-path is a folder when it ends in "/" or has files under it. local-path
 defaults to the remote name; a file downloaded into an existing local folder
-keeps its name. local files with the remote size are skipped. use "/" as
-remote-path to download the whole volume.`),
+keeps its name. local files with the remote size that are not older than the
+remote copy are skipped. use "/" as remote-path to download the whole volume.`),
 	Example: `  runpodctl network-volume download abc123 models/model.safetensors
   runpodctl network-volume download abc123 outputs/ ./outputs`,
 	Args: cobra.RangeArgs(2, 3),
@@ -216,6 +216,9 @@ func runTransfer(cmd *cobra.Command, volumeID, src, dst string, upload bool) err
 func transferError(ctx context.Context, err error, summary *nvtransfer.Summary) error {
 	if ctx.Err() != nil {
 		return &incompleteError{err: errors.New("interrupted"), summary: summary}
+	}
+	if errors.Is(err, nvtransfer.ErrInvalidPath) {
+		return &clierr.UsageError{Err: err}
 	}
 	if errors.Is(err, nvtransfer.ErrNotFound) {
 		return &codedError{err: err, code: "not_found"}

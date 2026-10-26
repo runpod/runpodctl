@@ -3,6 +3,7 @@ package nvtransfer
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"math/rand"
 	"os"
@@ -270,6 +271,105 @@ func TestCompleteTimeoutTreatedAsSuccessWhenObjectExists(t *testing.T) {
 	}
 }
 
+func TestFailedCompleteDoesNotAcceptAnOldObject(t *testing.T) {
+	for name, completeErr := range map[string]error{
+		"ambiguous 524, old object differs": statusError(524),
+		"definite failure":                  apiError("InvalidPart"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake, opts := setup(t)
+			src := filepath.Join(t.TempDir(), "big.bin")
+			data := randomBytes(3 * (4 << 10))
+			writeFile(t, src, data)
+			// an older object of the same size already sits at the key
+			fake.objects["big.bin"] = &fakeObject{data: bytes.Repeat([]byte{'o'}, len(data)), modified: time.Now().Add(-time.Hour)}
+			fake.onCompleteBefore = func() error { return completeErr }
+			if _, err := Upload(context.Background(), opts, src, "big.bin"); err == nil {
+				t.Fatal("a failed complete was reported as success")
+			}
+			if len(stateFiles(t)) != 1 {
+				t.Fatal("upload state must survive so a rerun can complete")
+			}
+		})
+	}
+}
+
+func TestUnverifiablePartsAreUploadedAgain(t *testing.T) {
+	fake, opts := setup(t)
+	fake.opaquePartETags = true
+	opts.Concurrency = 1
+	src := filepath.Join(t.TempDir(), "big.bin")
+	data := randomBytes(5 * (4 << 10))
+	writeFile(t, src, data)
+	fake.onUploadPart = func(part int32) error {
+		if part == 4 {
+			return errForbidden
+		}
+		return nil
+	}
+	if _, err := Upload(context.Background(), opts, src, "big.bin"); err == nil {
+		t.Fatal("expected failure")
+	}
+	first := fake.count("UploadPart")
+	fake.onUploadPart = nil
+	if _, err := Upload(context.Background(), opts, src, "big.bin"); err != nil {
+		t.Fatal(err)
+	}
+	if resent := fake.count("UploadPart") - first; resent != 5 {
+		t.Fatalf("parts without an md5 etag must be resent: %d of 5", resent)
+	}
+	if got, _ := fake.get("big.bin"); !bytes.Equal(got, data) {
+		t.Fatal("content mismatch")
+	}
+}
+
+func TestLocalFileChangedDuringUploadAborts(t *testing.T) {
+	fake, opts := setup(t)
+	opts.Concurrency = 1
+	src := filepath.Join(t.TempDir(), "big.bin")
+	writeFile(t, src, randomBytes(3*(4<<10)))
+	fake.onUploadPart = func(part int32) error {
+		if part == 2 {
+			future := time.Now().Add(time.Hour)
+			os.WriteFile(src, bytes.Repeat([]byte{'n'}, 3*(4<<10)), 0o644)
+			os.Chtimes(src, future, future)
+		}
+		return nil
+	}
+	_, err := Upload(context.Background(), opts, src, "big.bin")
+	if !errors.Is(err, errLocalChanged) {
+		t.Fatalf("expected errLocalChanged, got %v", err)
+	}
+	if fake.count("AbortMultipartUpload") != 1 || fake.count("CompleteMultipartUpload") != 0 {
+		t.Fatalf("expected abort and no complete, calls %v", fake.calls)
+	}
+	if len(stateFiles(t)) != 0 {
+		t.Fatal("state of an aborted upload must be removed")
+	}
+}
+
+func TestUnsavableStateAbortsTheUpload(t *testing.T) {
+	fake, opts := setup(t)
+	if os.Geteuid() == 0 {
+		t.Skip("root writes through directory permissions")
+	}
+	// readable but not writable: no state is found, and none can be saved
+	readOnly := t.TempDir()
+	if err := os.Chmod(readOnly, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(readOnly, 0o700) })
+	stateDir = func() (string, error) { return readOnly, nil }
+	src := filepath.Join(t.TempDir(), "big.bin")
+	writeFile(t, src, randomBytes(3*(4<<10)))
+	if _, err := Upload(context.Background(), opts, src, "big.bin"); err == nil {
+		t.Fatal("expected failure")
+	}
+	if fake.count("AbortMultipartUpload") != 1 {
+		t.Fatalf("an upload whose id cannot be saved must be aborted, calls %v", fake.calls)
+	}
+}
+
 func TestNonRetryableErrorIsNotRetried(t *testing.T) {
 	fake, opts := setup(t)
 	src := filepath.Join(t.TempDir(), "big.bin")
@@ -331,6 +431,54 @@ func TestDownloadResumesFromSidecar(t *testing.T) {
 	sum, err := Download(ctx, opts, "ckpt/model.bin", dst)
 	if err != nil || sum.FilesSkipped != 1 {
 		t.Fatalf("expected skip, got %+v %v", sum, err)
+	}
+}
+
+func TestDownloadRefetchesNewerSameSizeRemote(t *testing.T) {
+	fake, opts := setup(t)
+	ctx := context.Background()
+	fake.put("f.txt", []byte("version-1"))
+	dst := filepath.Join(t.TempDir(), "f.txt")
+	if _, err := Download(ctx, opts, "f.txt", dst); err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	fake.objects["f.txt"] = &fakeObject{data: []byte("version-2"), modified: time.Now().Add(time.Minute)}
+	fake.mu.Unlock()
+	sum, err := Download(ctx, opts, "f.txt", dst)
+	if err != nil || sum.FilesTransferred != 1 {
+		t.Fatalf("expected a refetch, got %+v %v", sum, err)
+	}
+	if got, _ := os.ReadFile(dst); string(got) != "version-2" {
+		t.Fatalf("stale local copy kept: %q", got)
+	}
+}
+
+func TestDownloadIgnoresSidecarOfAnotherKey(t *testing.T) {
+	fake, opts := setup(t)
+	data := randomBytes(4 * (4 << 10))
+	fake.put("b.bin", data)
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "x.bin")
+	// a partial download of a different key with the same size and etag
+	writeFile(t, dst+partialSuffix, bytes.Repeat([]byte{'z'}, len(data)))
+	side, _ := json.Marshal(downloadState{Key: "a.bin", Size: int64(len(data)), ETag: trimETag(etagOf(data)), ChunkSize: chunkSize, Done: []int{0, 1, 2, 3}})
+	writeFile(t, dst+sidecarSuffix, side)
+	if _, err := Download(context.Background(), opts, "b.bin", dst); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(dst); !bytes.Equal(got, data) {
+		t.Fatal("chunks of another key were reused")
+	}
+}
+
+func TestDownloadRefusesPartialNameCollision(t *testing.T) {
+	fake, opts := setup(t)
+	fake.put("d/x", []byte("x"))
+	fake.put("d/x.rpdownload", []byte("y"))
+	_, err := Download(context.Background(), opts, "d/", t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "partial download") {
+		t.Fatalf("expected a collision refusal, got %v", err)
 	}
 }
 
@@ -429,8 +577,8 @@ func TestCleanKey(t *testing.T) {
 			t.Errorf("cleanKey(%q) = %q, %v; want %q", in, got, err, want)
 		}
 	}
-	if _, err := cleanKey("a/../b"); err == nil {
-		t.Error("expected '..' to be rejected")
+	if _, err := cleanKey("a/../b"); !errors.Is(err, ErrInvalidPath) {
+		t.Errorf("expected '..' to be rejected with ErrInvalidPath, got %v", err)
 	}
 }
 

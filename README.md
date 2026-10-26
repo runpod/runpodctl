@@ -387,7 +387,8 @@ transfers resume: if one stops (network drop, ctrl-c, crash), run the same
 command again.
 
 - finished files are skipped: an upload skips files whose remote copy has the
-  same size and is not older, a download skips local files with the remote size.
+  same size and is not older, a download skips local files of the same size that
+  are not older (downloads stamp the remote modification time on the file).
 - files over 64 mb upload as multipart. the upload id is kept in
   `~/.runpod/transfers/`, and a rerun reuses every uploaded part whose md5
   matches the local bytes. a changed local file starts a fresh upload.

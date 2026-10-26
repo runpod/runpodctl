@@ -21,6 +21,7 @@ type uploadState struct {
 // downloadState sits next to the partial file and lists the chunks already
 // written and synced. Size and etag pin it to one version of the remote object.
 type downloadState struct {
+	Key       string `json:"key"`
 	Size      int64  `json:"size"`
 	ETag      string `json:"etag"`
 	ChunkSize int64  `json:"chunkSize"`

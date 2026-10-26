@@ -8,8 +8,8 @@ download a file or folder from a network volume.
 
 remote-path is a folder when it ends in "/" or has files under it. local-path
 defaults to the remote name; a file downloaded into an existing local folder
-keeps its name. local files with the remote size are skipped. use "/" as
-remote-path to download the whole volume.
+keeps its name. local files with the remote size that are not older than the
+remote copy are skipped. use "/" as remote-path to download the whole volume.
 
 uses the network volume's s3-compatible api, which needs s3 api keys (separate
 from your runpod api key): create them at https://console.runpod.io/user/settings
