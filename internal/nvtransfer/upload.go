@@ -154,10 +154,16 @@ func (r *run) uploadFile(ctx context.Context, f localFile) error {
 				return err
 			})
 		})
-		if err == nil {
-			r.Reporter.Add(size)
+		if err != nil {
+			return err
 		}
-		return err
+		// a retry rereads the file; if it changed meanwhile, the object may
+		// not be the version that was measured
+		if now, err := os.Stat(f.path); err != nil || now.Size() != size || !now.ModTime().Equal(f.info.ModTime()) {
+			return errLocalChanged
+		}
+		r.Reporter.Add(size)
+		return nil
 	}
 	return r.multipartUpload(ctx, file, f)
 }
@@ -225,7 +231,7 @@ func (r *run) multipartUpload(ctx context.Context, file *os.File, f localFile) e
 	}
 	if !resumed {
 		var out *s3.CreateMultipartUploadOutput
-		err := withRetry(ctx, requestTimeout, func(ctx context.Context) error {
+		err := r.call(ctx, requestTimeout, func(ctx context.Context) error {
 			var err error
 			out, err = r.Client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
 				Bucket: aws.String(r.VolumeID),
@@ -295,7 +301,7 @@ func (r *run) multipartUpload(ctx context.Context, file *os.File, f localFile) e
 		return errLocalChanged
 	}
 
-	err = withRetry(ctx, completeTimeout, func(ctx context.Context) error {
+	err = r.call(ctx, completeTimeout, func(ctx context.Context) error {
 		_, err := r.Client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
 			Bucket:          aws.String(r.VolumeID),
 			Key:             aws.String(f.key),
@@ -316,7 +322,7 @@ func (r *run) listParts(ctx context.Context, key, uploadID string) ([]types.Part
 	var marker *string
 	for {
 		var out *s3.ListPartsOutput
-		err := withRetry(ctx, listTimeout, func(ctx context.Context) error {
+		err := r.call(ctx, listTimeout, func(ctx context.Context) error {
 			var err error
 			out, err = r.Client.ListParts(ctx, &s3.ListPartsInput{
 				Bucket:           aws.String(r.VolumeID),
@@ -344,8 +350,7 @@ var errLocalChanged = errors.New("local file changed during upload; run the comm
 // Assembling a large file can outlive the proxy (524) while it still finishes
 // server-side, and a retry then finds the upload gone. Only those ambiguous
 // failures qualify, and only when the object at the key is this upload's:
-// its etag equals the multipart etag of our parts, or, if that cannot be
-// computed, its size matches.
+// its size matches and its etag equals the multipart etag of our parts.
 func (r *run) completedAnyway(ctx context.Context, err error, key string, size int64, wantETag string) bool {
 	if !retryable(err) && !isNotFound(err) {
 		return false
@@ -354,7 +359,8 @@ func (r *run) completedAnyway(ctx context.Context, err error, key string, size i
 	if headErr != nil || obj == nil || obj.size != size {
 		return false
 	}
-	return wantETag == "" || obj.etag == wantETag
+	// without our multipart etag the object's identity cannot be confirmed
+	return wantETag != "" && obj.etag == wantETag
 }
 
 // multipartETag is the etag s3 (and runpod, verified) gives an object
@@ -406,7 +412,7 @@ func verifyParts(file *os.File, parts []types.Part, n int32, size, partSize int6
 // abort discards an upload that can no longer be resumed. Failure only leaves
 // orphaned parts behind, so it is not an error.
 func (r *run) abort(ctx context.Context, key, uploadID string) {
-	_ = withRetry(ctx, listTimeout, func(ctx context.Context) error {
+	_ = r.call(ctx, listTimeout, func(ctx context.Context) error {
 		_, err := r.Client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
 			Bucket:   aws.String(r.VolumeID),
 			Key:      aws.String(key),

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 // setup shrinks every size to a few kib, makes retries instant and keeps
@@ -294,6 +297,72 @@ func TestFailedCompleteDoesNotAcceptAnOldObject(t *testing.T) {
 	}
 }
 
+func TestAmbiguousCompleteWithoutVerifiableETagFails(t *testing.T) {
+	fake, opts := setup(t)
+	fake.opaquePartETags = true
+	src := filepath.Join(t.TempDir(), "big.bin")
+	data := randomBytes(3 * (4 << 10))
+	writeFile(t, src, data)
+	fake.objects["big.bin"] = &fakeObject{data: bytes.Repeat([]byte{'o'}, len(data)), modified: time.Now().Add(-time.Hour)}
+	fake.onCompleteBefore = func() error { return statusError(524) }
+	if _, err := Upload(context.Background(), opts, src, "big.bin"); err == nil {
+		t.Fatal("a same-size object was accepted without a verifiable etag")
+	}
+}
+
+func TestSingleRequestUploadDetectsChangeBetweenRetries(t *testing.T) {
+	fake, opts := setup(t)
+	src := filepath.Join(t.TempDir(), "small.txt")
+	writeFile(t, src, []byte("original"))
+	var calls atomic.Int32
+	opts.Client = putHook{fakeS3: fake, before: func() error {
+		if calls.Add(1) == 1 {
+			future := time.Now().Add(time.Hour)
+			os.WriteFile(src, []byte("CHANGED!"), 0o644)
+			os.Chtimes(src, future, future)
+			return statusError(503)
+		}
+		return nil
+	}}
+	_, err := Upload(context.Background(), opts, src, "small.txt")
+	if !errors.Is(err, errLocalChanged) {
+		t.Fatalf("expected errLocalChanged, got %v", err)
+	}
+}
+
+// putHook fails or mutates before a PutObject reaches the fake.
+type putHook struct {
+	*fakeS3
+	before func() error
+}
+
+func (h putHook) PutObject(ctx context.Context, in *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+	if err := h.before(); err != nil {
+		return nil, err
+	}
+	return h.fakeS3.PutObject(ctx, in, opts...)
+}
+
+func TestRequestsInFlightNeverExceedConcurrency(t *testing.T) {
+	fake, opts := setup(t)
+	opts.Concurrency = 2
+	fake.callDelay = 2 * time.Millisecond
+	src := filepath.Join(t.TempDir(), "data")
+	for i := 0; i < 4; i++ {
+		writeFile(t, filepath.Join(src, fmt.Sprintf("f%d.bin", i)), randomBytes(3*(4<<10)+i))
+		writeFile(t, filepath.Join(src, fmt.Sprintf("s%d.txt", i)), []byte("small"))
+	}
+	if _, err := Upload(context.Background(), opts, src, "data"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Download(context.Background(), opts, "data/", t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if p := fake.peak.Load(); p > 2 {
+		t.Fatalf("%d requests in flight with concurrency 2", p)
+	}
+}
+
 func TestUnverifiablePartsAreUploadedAgain(t *testing.T) {
 	fake, opts := setup(t)
 	fake.opaquePartETags = true
@@ -473,12 +542,21 @@ func TestDownloadIgnoresSidecarOfAnotherKey(t *testing.T) {
 }
 
 func TestDownloadRefusesPartialNameCollision(t *testing.T) {
-	fake, opts := setup(t)
-	fake.put("d/x", []byte("x"))
-	fake.put("d/x.rpdownload", []byte("y"))
-	_, err := Download(context.Background(), opts, "d/", t.TempDir())
-	if err == nil || !strings.Contains(err.Error(), "partial download") {
-		t.Fatalf("expected a collision refusal, got %v", err)
+	for name, other := range map[string]string{
+		"file":             "d/x.rpdownload",
+		"sidecar":          "d/x.rpdownload.json",
+		"directory":        "d/x.rpdownload/y",
+		"case-insensitive": "d/X.RPDOWNLOAD",
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake, opts := setup(t)
+			fake.put("d/x", []byte("x"))
+			fake.put(other, []byte("y"))
+			_, err := Download(context.Background(), opts, "d/", t.TempDir())
+			if err == nil || !strings.Contains(err.Error(), "partial download") {
+				t.Fatalf("expected a collision refusal, got %v", err)
+			}
+		})
 	}
 }
 

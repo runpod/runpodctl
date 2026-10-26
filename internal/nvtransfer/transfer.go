@@ -89,6 +89,14 @@ func newRun(opts Options) *run {
 	return &run{Options: opts, sem: make(chan struct{}, opts.Concurrency)}
 }
 
+// call is a retried request holding a concurrency slot per attempt. Data
+// requests take their slot through request inside their own retry loop.
+func (r *run) call(ctx context.Context, timeout time.Duration, fn func(ctx context.Context) error) error {
+	return withRetry(ctx, timeout, func(ctx context.Context) error {
+		return r.request(ctx, func() error { return fn(ctx) })
+	})
+}
+
 // request holds a concurrency slot for the duration of fn.
 func (r *run) request(ctx context.Context, fn func() error) error {
 	if err := ctx.Err(); err != nil {
@@ -210,7 +218,7 @@ func (r *run) listPrefix(ctx context.Context, prefix string) (map[string]remoteO
 	var token *string
 	for {
 		var out *s3.ListObjectsV2Output
-		err := withRetry(ctx, listTimeout, func(ctx context.Context) error {
+		err := r.call(ctx, listTimeout, func(ctx context.Context) error {
 			var err error
 			out, err = r.Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
 				Bucket:            aws.String(r.VolumeID),
@@ -248,7 +256,7 @@ func (r *run) listPrefix(ctx context.Context, prefix string) (map[string]remoteO
 // headObject returns nil, nil when the object does not exist.
 func (r *run) headObject(ctx context.Context, key string) (*remoteObject, error) {
 	var out *s3.HeadObjectOutput
-	err := withRetry(ctx, listTimeout, func(ctx context.Context) error {
+	err := r.call(ctx, listTimeout, func(ctx context.Context) error {
 		var err error
 		out, err = r.Client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(r.VolumeID), Key: aws.String(key)})
 		return err
