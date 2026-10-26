@@ -1159,42 +1159,75 @@ func isRetryableUploadStatus(code int) bool {
 // the wait for headers; this covers the two phases it does not: a server that
 // stops consuming the request body, and one that sends headers then stalls the
 // response body. Slow transfers that keep making progress are never cut off.
+//
+// The transport reads the request body from its own goroutine and can make
+// the final EOF read after the response headers arrived, so once the response
+// phase starts, request body events are ignored; otherwise that late EOF
+// would stop the timer guarding the response body.
 type stallGuard struct {
-	timer  *time.Timer
-	cancel context.CancelFunc
+	mu         sync.Mutex
+	timer      *time.Timer
+	cancel     context.CancelFunc
+	responding bool
 }
 
 func newStallGuard(cancel context.CancelFunc) *stallGuard {
 	return &stallGuard{timer: time.AfterFunc(modelUploadStallTimeout, cancel), cancel: cancel}
 }
 
-func (g *stallGuard) arm()    { g.timer.Reset(modelUploadStallTimeout) }
+// startResponse switches the guard to the response body phase and arms it.
+func (g *stallGuard) startResponse() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.responding = true
+	g.timer.Reset(modelUploadStallTimeout)
+}
+
+// progress re-arms the guard after a body read that moved bytes.
+func (g *stallGuard) progress(fromResponse bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if fromResponse == g.responding {
+		g.timer.Reset(modelUploadStallTimeout)
+	}
+}
+
+// idle stops the guard once a body is fully read.
+func (g *stallGuard) idle(fromResponse bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if fromResponse == g.responding {
+		g.timer.Stop()
+	}
+}
+
 func (g *stallGuard) disarm() { g.timer.Stop() }
 
 // stallReader re-arms the guard on every read that moves bytes. On EOF it
 // disarms, so the guard is idle while waiting for response headers.
-// cancelOnClose is set only for response bodies: the transport closes the
-// request body itself once written, which must not end the attempt.
+// response is set only for response bodies: it marks their phase and cancels
+// the attempt on Close. The transport closes the request body itself once
+// written, which must not end the attempt.
 type stallReader struct {
-	r             io.ReadCloser
-	guard         *stallGuard
-	cancelOnClose bool
+	r        io.ReadCloser
+	guard    *stallGuard
+	response bool
 }
 
 func (s *stallReader) Read(p []byte) (int, error) {
 	n, err := s.r.Read(p)
 	if n > 0 {
-		s.guard.arm()
+		s.guard.progress(s.response)
 	}
 	if err == io.EOF {
-		s.guard.disarm()
+		s.guard.idle(s.response)
 	}
 	return n, err
 }
 
 func (s *stallReader) Close() error {
 	err := s.r.Close()
-	if s.cancelOnClose {
+	if s.response {
 		s.guard.disarm()
 		s.guard.cancel()
 	}
@@ -1302,8 +1335,8 @@ func doGuardedModelUploadAttempt(newReq func() (*http.Request, error)) (*http.Re
 		}
 		return nil, err
 	}
-	guard.arm()
-	resp.Body = &stallReader{r: resp.Body, guard: guard, cancelOnClose: true}
+	guard.startResponse()
+	resp.Body = &stallReader{r: resp.Body, guard: guard, response: true}
 	return resp, nil
 }
 
