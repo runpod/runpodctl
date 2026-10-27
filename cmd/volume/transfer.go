@@ -128,6 +128,12 @@ var errMissingS3Keys = &api.APIError{
 	Code:    "no_credentials",
 }
 
+// errAPIKeyRejected replaces the api's bare 401 text with the fix.
+var errAPIKeyRejected = &api.APIError{
+	Message: "the runpod api rejected the api key (401): run runpodctl doctor or check RUNPOD_API_KEY",
+	Status:  http.StatusUnauthorized,
+}
+
 func runUpload(cmd *cobra.Command, args []string) error {
 	remote := ""
 	if len(args) == 3 {
@@ -217,6 +223,10 @@ func lookupDataCenter(volumeID string) (string, error) {
 		return "", err
 	}
 	volume, err := client.GetNetworkVolume(volumeID)
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) && apiErr.Status == http.StatusUnauthorized {
+		return "", errAPIKeyRejected
+	}
 	if err != nil {
 		return "", fmt.Errorf("failed to get volume: %w", err)
 	}
