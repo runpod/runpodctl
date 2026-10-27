@@ -59,6 +59,7 @@ This document exists for non-obvious, error-prone shortcomings in the codebase, 
 
 ## constraints
 
+- never edit `CHANGELOG.md` (or `.release-please-manifest.json`): release-please writes them from the squash-merge commit titles on main. a conventional pr title (`feat(volume): ...`, `fix(pod): ...`) is the changelog entry.
 - all text output must be lowercase and concise.
 - default output format is json (for agent consumption); never change this default.
 - e2e tests cost real money — always clean up resources with `t.Cleanup`.
