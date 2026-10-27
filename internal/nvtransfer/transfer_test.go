@@ -26,19 +26,17 @@ import (
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
-// setup shrinks every size to a few kib, makes retries instant and keeps
-// upload state in a temp dir.
+// setup shrinks every size to a few kib and keeps upload state in a temp dir.
 func setup(t *testing.T) (*fakeS3, Volume) {
 	t.Helper()
 	oldSingle, oldPart, oldChunk := singleRequestLimit, minPartSize, chunkSize
-	oldPolicy, oldStateDir := retryPolicy, stateDir
+	oldStateDir := stateDir
 	singleRequestLimit, minPartSize, chunkSize = 4<<10, 4<<10, 4<<10
-	retryPolicy.baseDelay = time.Millisecond
 	dir := t.TempDir()
 	stateDir = func() (string, error) { return dir, nil }
 	t.Cleanup(func() {
 		singleRequestLimit, minPartSize, chunkSize = oldSingle, oldPart, oldChunk
-		retryPolicy, stateDir = oldPolicy, oldStateDir
+		stateDir = oldStateDir
 	})
 	fake := newFakeS3()
 	return fake, Volume{Client: fake, Endpoint: "https://s3api-test.runpod.io/", ID: "vol1", Concurrency: 3}
@@ -242,7 +240,7 @@ func TestMultipartUploadRestartsWhenFileChanged(t *testing.T) {
 	}
 }
 
-func TestUploadRetriesTransientErrors(t *testing.T) {
+func TestUploadThatOutlastsRetriesResumes(t *testing.T) {
 	fake, vol := setup(t)
 	src := filepath.Join(t.TempDir(), "big.bin")
 	data := randomBytes(3 * (4 << 10))
@@ -250,16 +248,20 @@ func TestUploadRetriesTransientErrors(t *testing.T) {
 
 	var failures atomic.Int32
 	fake.onUploadPart = func(part int32) error {
-		if part == 2 && failures.Add(1) <= 2 {
+		if part == 2 && failures.Add(1) == 1 {
 			return statusError(524)
 		}
 		return nil
 	}
+	if _, err := vol.Upload(context.Background(), src, "big.bin"); HTTPStatus(err) != 524 {
+		t.Fatalf("expected the 524, got %v", err)
+	}
+	sent := fake.count("UploadPart")
 	if _, err := vol.Upload(context.Background(), src, "big.bin"); err != nil {
 		t.Fatal(err)
 	}
-	if failures.Load() != 3 {
-		t.Fatalf("expected two 524s then success, got %d attempts", failures.Load())
+	if again := fake.count("UploadPart") - sent; again != 1 {
+		t.Fatalf("the rerun should send only the failed part, sent %d", again)
 	}
 	if got, _ := fake.get("big.bin"); !bytes.Equal(got, data) {
 		t.Fatal("content mismatch")
@@ -1040,7 +1042,7 @@ func TestPartSizeFor(t *testing.T) {
 	}
 }
 
-func TestRetryable(t *testing.T) {
+func TestTransient(t *testing.T) {
 	cases := []struct {
 		err  error
 		want bool
@@ -1061,8 +1063,8 @@ func TestRetryable(t *testing.T) {
 		{&fs.PathError{Op: "write", Path: "f", Err: syscall.ENOSPC}, false},
 	}
 	for _, c := range cases {
-		if got := retryable(c.err); got != c.want {
-			t.Errorf("retryable(%v) = %v, want %v", c.err, got, c.want)
+		if got := transient(c.err); got != c.want {
+			t.Errorf("transient(%v) = %v, want %v", c.err, got, c.want)
 		}
 	}
 }
