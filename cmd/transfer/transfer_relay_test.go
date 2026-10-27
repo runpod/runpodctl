@@ -76,7 +76,9 @@ func TestGetRelaysReportsFailedFetch(t *testing.T) {
 
 func TestGetRelaysReportsInvalidResponseSource(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("not json"))
+		if _, err := w.Write([]byte("not json")); err != nil {
+			t.Error(err)
+		}
 	}))
 	t.Cleanup(srv.Close)
 
