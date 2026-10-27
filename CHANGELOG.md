@@ -1,5 +1,40 @@
 # Changelog
 
+## [3.1.0](https://github.com/runpod/runpodctl/compare/v3.0.1...v3.1.0) (2026-10-27)
+
+
+### Features
+
+* **api:** centralized transient-error retry, money-safe (CON-1716) ([#352](https://github.com/runpod/runpodctl/issues/352)) ([e61253b](https://github.com/runpod/runpodctl/commit/e61253b49bd38e3be68c6c5d965a657cbb290443))
+* **doctor:** non-interactive --api-key for CI/agents ([#349](https://github.com/runpod/runpodctl/issues/349)) ([4afffe2](https://github.com/runpod/runpodctl/commit/4afffe283d677c3f4a68d9660d3add72fd2f7ffd))
+* **pod:** --wait-for running for CPU pods without sshd (POD-341) ([#357](https://github.com/runpod/runpodctl/issues/357)) ([8b06cd8](https://github.com/runpod/runpodctl/commit/8b06cd8d69d6296a9b74de54398824a0e0d27fa5))
+
+
+### Bug Fixes
+
+* **cloud:** use on-demand price for on-demand display condition ([#377](https://github.com/runpod/runpodctl/issues/377)) ([94e22b2](https://github.com/runpod/runpodctl/commit/94e22b220d941275df343e24bb5332862eb0f078))
+* direct project commands to the Runpod SDK (CON-874) ([#382](https://github.com/runpod/runpodctl/issues/382)) ([416403f](https://github.com/runpod/runpodctl/commit/416403f44d2c5b81b3b30b9aadddb37fa8bd3294))
+* **model:** keep response body stall-guarded (STO-807) ([#379](https://github.com/runpod/runpodctl/issues/379)) ([c5bafc8](https://github.com/runpod/runpodctl/commit/c5bafc8839cf6affde82270f28ad4578f32bd906))
+* **model:** timeout + retry on multipart upload requests (STO-807) ([#350](https://github.com/runpod/runpodctl/issues/350)) ([fa1d9c6](https://github.com/runpod/runpodctl/commit/fa1d9c606d55acfac99e227ed2bf152c8b1d32a6))
+* read the API key saved by rp login ([#386](https://github.com/runpod/runpodctl/issues/386)) ([711475a](https://github.com/runpod/runpodctl/commit/711475abcc92e27cb5f05ff6fa35f757b0dac79f))
+* **serverless:** keep commas and quotes in --env values ([#380](https://github.com/runpod/runpodctl/issues/380)) ([0275d7c](https://github.com/runpod/runpodctl/commit/0275d7c2660e4a8228a8ef38f1e1eef333d3d4dd))
+
+
+### Code Refactoring
+
+* **api:** shared GraphQL response parsing (CON-1717) ([#353](https://github.com/runpod/runpodctl/issues/353)) ([e123973](https://github.com/runpod/runpodctl/commit/e12397351fa126394ad04910ec6551351d164f01))
+
+
+### Performance Improvements
+
+* **model:** parallelize multipart part uploads (STO-808) ([#351](https://github.com/runpod/runpodctl/issues/351)) ([616aa68](https://github.com/runpod/runpodctl/commit/616aa68929f2417caf68b57de6d6949fdfdb5c37))
+* **transfer:** 10s relay-list fetch timeout, was 2m (CON-1719) ([#355](https://github.com/runpod/runpodctl/issues/355)) ([a46eb87](https://github.com/runpod/runpodctl/commit/a46eb87deeef1739c3680e79c21d77a033134f80))
+
+
+### Documentation
+
+* **transfer:** document the send/receive workflow in help (CON-1720) ([#356](https://github.com/runpod/runpodctl/issues/356)) ([270fb71](https://github.com/runpod/runpodctl/commit/270fb7131e2f789ff8eae959cb06f97cf4a8bf53))
+
 ## [3.0.1](https://github.com/runpod/runpodctl/compare/v3.0.0...v3.0.1) (2026-10-15)
 
 
