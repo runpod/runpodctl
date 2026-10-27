@@ -438,7 +438,7 @@ func TestWaitForRunningPod(t *testing.T) {
 		}
 		fetchPodDetailsFn = func(string, bool, bool) (*podDetails, error) {
 			t.Error("timed-out wait must not re-read")
-			return nil, nil
+			return nil, errors.New("unexpected re-read")
 		}
 
 		cmd, _ := waitCommand()
