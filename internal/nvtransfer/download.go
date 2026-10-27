@@ -196,6 +196,29 @@ func (r *run) downloadOne(ctx context.Context, key string, obj remoteObject, loc
 }
 
 func (r *run) downloadAll(ctx context.Context, root *os.Root, files []remoteFile) (*Summary, error) {
+	todo, total, err := r.planDownloads(root, files)
+	if err != nil {
+		return nil, err
+	}
+	r.Reporter.Start(len(todo), total)
+	err = forEach(ctx, r.Concurrency, todo, func(ctx context.Context, f remoteFile) error {
+		if err := r.downloadFile(ctx, root, f); err != nil {
+			return fmt.Errorf("download %s: %w", f.key, err)
+		}
+		r.transferred(f.key)
+		return nil
+	})
+	return &r.summary, err
+}
+
+// planDownloads checks every target's local path, then returns the files to
+// fetch and their total size, counting unchanged local copies as skipped.
+func (r *run) planDownloads(root *os.Root, files []remoteFile) ([]remoteFile, int64, error) {
+	for _, f := range files {
+		if err := checkLocalPaths(root, f.name); err != nil {
+			return nil, 0, err
+		}
+	}
 	var todo []remoteFile
 	var total int64
 	for _, f := range files {
@@ -206,21 +229,10 @@ func (r *run) downloadAll(ctx context.Context, root *os.Root, files []remoteFile
 		todo = append(todo, f)
 		total += f.obj.size
 	}
-	r.Reporter.Start(len(todo), total)
-	err := forEach(ctx, r.Concurrency, todo, func(ctx context.Context, f remoteFile) error {
-		if err := r.downloadFile(ctx, root, f); err != nil {
-			return fmt.Errorf("download %s: %w", f.key, err)
-		}
-		r.transferred(f.key)
-		return nil
-	})
-	return &r.summary, err
+	return todo, total, nil
 }
 
 func (r *run) downloadFile(ctx context.Context, root *os.Root, f remoteFile) error {
-	if err := checkLocalPaths(root, f.name); err != nil {
-		return err
-	}
 	if dir := filepath.Dir(f.name); dir != "." {
 		if err := root.MkdirAll(dir, 0o755); err != nil {
 			return err
@@ -412,11 +424,15 @@ func finishDownload(root *os.Root, partial string, f remoteFile, sidecar string)
 	if err := root.Rename(partial, f.name); err != nil {
 		return err
 	}
-	if !f.obj.modified.IsZero() {
-		_ = root.Chtimes(f.name, time.Now(), f.obj.modified)
-	}
 	if sidecar != "" {
 		_ = root.Remove(sidecar)
+	}
+	if f.obj.modified.IsZero() {
+		return nil
+	}
+	// without the remote time, the next run cannot tell the file is unchanged
+	if err := root.Chtimes(f.name, time.Now(), f.obj.modified); err != nil {
+		return fmt.Errorf("downloaded %s but could not set its time: %w", f.name, err)
 	}
 	return nil
 }

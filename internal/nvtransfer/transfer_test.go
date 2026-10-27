@@ -1151,3 +1151,21 @@ func TestEditDuringCompleteRemovesTheObject(t *testing.T) {
 		t.Fatal("the object completed from the old version was kept")
 	}
 }
+
+func TestUploadFollowsASymlinkedFolder(t *testing.T) {
+	fake, vol := setup(t)
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real")
+	writeFile(t, filepath.Join(real, "a.txt"), []byte("a"))
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	sum, err := vol.Upload(context.Background(), link, "data")
+	if err != nil || sum.FilesTransferred != 1 {
+		t.Fatalf("expected one file uploaded, got %+v %v", sum, err)
+	}
+	if _, ok := fake.get("data/a.txt"); !ok {
+		t.Fatal("data/a.txt missing")
+	}
+}
