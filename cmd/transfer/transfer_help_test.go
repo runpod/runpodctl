@@ -26,7 +26,7 @@ func TestSendReceiveHelpShowsPairedWorkflow(t *testing.T) {
 // receive ends in a numeric relay index, the shape runReceive requires.
 func TestHelpExamplesUseRealisticCodes(t *testing.T) {
 	receiveArg := regexp.MustCompile(`runpodctl receive (\S+)`)
-	withRelay := regexp.MustCompile(`^\S+-[0-9]+$`)
+	withRelay := regexp.MustCompile(`^\S+-\d+$`)
 	found := 0
 	for _, example := range []string{SendCmd.Example, ReceiveCmd.Example} {
 		for _, m := range receiveArg.FindAllStringSubmatch(example, -1) {
