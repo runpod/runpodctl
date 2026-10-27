@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -14,6 +15,28 @@ import (
 	"github.com/runpod/runpodctl/internal/waitfor"
 	"github.com/spf13/cobra"
 )
+
+func TestLegacyCreatePodEnvKeepsCommasAndQuotes(t *testing.T) {
+	oldEnv := env
+	flag := CreatePodCmd.Flags().Lookup("env")
+	oldChanged := flag.Changed
+	t.Cleanup(func() {
+		env = oldEnv
+		flag.Changed = oldChanged
+	})
+
+	if err := CreatePodCmd.Flags().Parse([]string{
+		"--env", "CUDA_VISIBLE_DEVICES=0,1",
+		"--env", `GREETING="hi"`,
+	}); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+
+	want := []string{"CUDA_VISIBLE_DEVICES=0,1", `GREETING="hi"`}
+	if !reflect.DeepEqual(env, want) {
+		t.Errorf("env = %q, want %q", env, want)
+	}
+}
 
 func TestCreateCmd_WaitFlags(t *testing.T) {
 	flags := createCmd.Flags()

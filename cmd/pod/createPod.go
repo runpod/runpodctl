@@ -113,7 +113,7 @@ func init() {
 	CreatePodCmd.Flags().BoolVar(&secureCloud, "secureCloud", false, "create in secure cloud")
 	CreatePodCmd.Flags().IntVar(&containerDiskInGb, "containerDiskSize", 20, "container disk size in GB")
 	CreatePodCmd.Flags().StringVar(&dockerArgs, "args", "", "container arguments")
-	CreatePodCmd.Flags().StringSliceVar(&env, "env", nil, "container arguments")
+	CreatePodCmd.Flags().StringArrayVar(&env, "env", nil, "container arguments")
 	CreatePodCmd.Flags().IntVar(&gpuCount, "gpuCount", 1, "number of GPUs for the pod")
 	CreatePodCmd.Flags().StringVar(&gpuTypeId, "gpuType", "", "gpu type id, e.g. 'NVIDIA GeForce RTX 3090'")
 	CreatePodCmd.Flags().StringVar(&imageName, "imageName", "", "container image name")

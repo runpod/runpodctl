@@ -457,6 +457,47 @@ func TestRunCreate_HubDeploymentConstraints(t *testing.T) {
 	}
 }
 
+// --env values are passed to the container verbatim, so a comma or a quote in
+// a value must survive flag parsing. each --env is one KEY=VALUE pair.
+func TestRunCreate_EnvValuesKeepCommasAndQuotes(t *testing.T) {
+	snapshotCreateFlags(t)
+	createTemplateID, createHubID = "", "hub-1"
+
+	if err := createCmd.Flags().Parse([]string{
+		"--env", "CUDA_VISIBLE_DEVICES=0,1",
+		"--env", `GREETING="hi"`,
+	}); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+
+	client := &mockServerlessCreateClient{listing: mockHubListing(`{"runsOn":"GPU"}`)}
+	oldFactory := newServerlessCreateClient
+	newServerlessCreateClient = func() (serverlessCreateClient, error) { return client, nil }
+	t.Cleanup(func() { newServerlessCreateClient = oldFactory })
+	installMockWaitHealthClient(t, client)
+
+	if err := runCreate(mockCreateCommand(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if client.createInput == nil || client.createInput.Template == nil {
+		t.Fatal("endpoint create was not called with an inline template")
+	}
+
+	got := map[string]string{}
+	for _, env := range client.createInput.Template.Env {
+		got[env.Key] = env.Value
+	}
+	want := map[string]string{"CUDA_VISIBLE_DEVICES": "0,1", "GREETING": `"hi"`}
+	for key, value := range want {
+		if got[key] != value {
+			t.Errorf("env %s = %q, want %q", key, got[key], value)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("env = %v, want %v", got, want)
+	}
+}
+
 func TestCreateCmd_WaitFlags(t *testing.T) {
 	flags := createCmd.Flags()
 

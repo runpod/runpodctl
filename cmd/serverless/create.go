@@ -143,7 +143,7 @@ func init() {
 	createCmd.Flags().IntVar(&createWorkersMax, "workers-max", 3, "maximum number of workers")
 	createCmd.Flags().StringVar(&createDataCenterIDs, "data-center-ids", "", "comma-separated list of data center ids")
 	createCmd.Flags().StringVar(&createNetworkVolumeID, "network-volume-id", "", "network volume id to attach")
-	createCmd.Flags().StringSliceVar(&createEnvVars, "env", nil, "env vars in KEY=VALUE format; overrides hub defaults (repeatable)")
+	createCmd.Flags().StringArrayVar(&createEnvVars, "env", nil, "env vars in KEY=VALUE format; overrides hub defaults (repeatable)")
 	createCmd.Flags().StringVar(&createMinCudaVersion, "min-cuda-version", "", "minimum cuda version (e.g., 12.6)")
 	createCmd.Flags().StringVar(&createScaleBy, "scale-by", "", "autoscale strategy: delay (seconds of queue wait) or requests (pending request count)")
 	createCmd.Flags().IntVar(&createScaleThreshold, "scale-threshold", -1, "trigger point for autoscaler (delay: seconds, requests: count)")
