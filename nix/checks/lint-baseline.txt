@@ -4032,8 +4032,6 @@ golangci-tier2	cmd/transfer/croc.go | QFN: could use strings.ReplaceAll instead 
 golangci-tier2	cmd/transfer/croc.go | QFN: could use strings.ReplaceAll instead (staticcheck)
 golangci-tier2	cmd/transfer/croc.go | SAN: this value of err is never used (staticcheck)
 golangci-tier2	cmd/transfer/croc.go | STN: at least one file in a package should have a package comment (staticcheck)
-golangci-tier2	cmd/transfer/croc.go | append to slice `posByte` with non-zero initialized length (makezero)
-golangci-tier2	cmd/transfer/croc.go | append to slice `posByte` with non-zero initialized length (makezero)
 golangci-tier2	cmd/transfer/croc.go | assignOp: replace `uploadLimit = uploadLimit * N` with `uploadLimit *= N` (gocritic)
 golangci-tier2	cmd/transfer/croc.go | cognitive complexity N of func `(*Client).Receive` is high (> N) (gocognit)
 golangci-tier2	cmd/transfer/croc.go | cognitive complexity N of func `(*Client).Send` is high (> N) (gocognit)
