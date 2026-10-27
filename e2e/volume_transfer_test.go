@@ -23,7 +23,7 @@ func TestCLI_NetworkVolumeTransfer(t *testing.T) {
 	volumeID := createTestVolume(t)
 
 	src := t.TempDir()
-	big := writeRandom(t, filepath.Join(src, "big.bin"), 150<<20) // over one 64 mib part
+	writeRandom(t, filepath.Join(src, "big.bin"), 150<<20) // over one 64 mib part
 	writeRandom(t, filepath.Join(src, "sub", "small.txt"), 1<<10)
 
 	runTransfer(t, "upload", volumeID, src, "data")
@@ -34,9 +34,6 @@ func TestCLI_NetworkVolumeTransfer(t *testing.T) {
 		if digest(t, filepath.Join(src, rel)) != digest(t, filepath.Join(dst, rel)) {
 			t.Fatalf("%s differs after the round trip", rel)
 		}
-	}
-	if digest(t, filepath.Join(dst, "big.bin")) != big {
-		t.Fatal("big.bin differs after the round trip")
 	}
 
 	if sum := runTransfer(t, "upload", volumeID, src, "data"); sum.FilesTransferred != 0 || sum.FilesSkipped != 2 {
@@ -82,7 +79,7 @@ func runTransfer(t *testing.T, direction, volumeID, from, to string) transferSum
 	return sum
 }
 
-func writeRandom(t *testing.T, path string, size int) string {
+func writeRandom(t *testing.T, path string, size int) {
 	t.Helper()
 	data := make([]byte, size)
 	rand.Read(data)
@@ -92,8 +89,6 @@ func writeRandom(t *testing.T, path string, size int) string {
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	sum := sha256.Sum256(data)
-	return string(sum[:])
 }
 
 func digest(t *testing.T, path string) string {

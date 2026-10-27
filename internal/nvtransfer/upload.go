@@ -81,7 +81,12 @@ func (v Volume) Upload(ctx context.Context, localPath, remotePath string) (*Summ
 // planDir lists the files under dir.path to upload under dir.key, counting
 // unchanged files and partial-download leftovers as skipped.
 func (r *run) planDir(ctx context.Context, dir localFile) ([]localFile, error) {
-	files, leftovers, err := walkLocal(dir.path, dir.key)
+	// WalkDir does not follow a symlinked root, so resolve it first
+	root, err := filepath.EvalSymlinks(dir.path)
+	if err != nil {
+		return nil, err
+	}
+	files, leftovers, err := walkLocal(root, dir.key)
 	if err != nil {
 		return nil, err
 	}
