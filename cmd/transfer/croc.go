@@ -1787,12 +1787,11 @@ func (c *Client) receiveData(i int) {
 		// the frame is an 8 byte offset followed by the payload. a shorter one
 		// used to be a slice bounds panic on this goroutine, which takes the
 		// whole process with it.
-		position, payload, err := decodeChunkFrame(data)
+		positionInt64, payload, err := decodeChunkFrame(data)
 		if err != nil {
 			c.abortReceive(err)
 			return
 		}
-		positionInt64 := int64(position)
 
 		// the offset is peer-supplied and goes straight into WriteAt, so
 		// without a bound the peer can write anywhere in the file, or grow it
@@ -1885,11 +1884,14 @@ func encodeChunkFrame(pos uint64, payload []byte) []byte {
 // decodeChunkFrame splits a chunk built by encodeChunkFrame. A frame shorter
 // than the offset is an error rather than a slice bounds panic, which would
 // take the whole process down.
-func decodeChunkFrame(data []byte) (uint64, []byte, error) {
+func decodeChunkFrame(data []byte) (pos int64, payload []byte, err error) {
 	if len(data) < 8 {
 		return 0, nil, fmt.Errorf("peer sent a %d byte chunk, too short to carry an offset", len(data))
 	}
-	return binary.LittleEndian.Uint64(data[:8]), data[8:], nil
+	if err := binary.Read(bytes.NewReader(data[:8]), binary.LittleEndian, &pos); err != nil {
+		return 0, nil, fmt.Errorf("could not read a chunk offset: %w", err)
+	}
+	return pos, data[8:], nil
 }
 
 func chunkFits(offset int64, n int, size int64) bool {
