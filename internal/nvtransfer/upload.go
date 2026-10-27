@@ -297,7 +297,12 @@ func (r *run) multipartUpload(ctx context.Context, file *os.File, f localFile) e
 		m.abandon(ctx)
 		return errLocalChanged
 	}
-	return m.complete(ctx)
+	if err := m.complete(ctx); err != nil {
+		return err
+	}
+	// completing a large file can take minutes: an edit made meanwhile
+	// would otherwise be skipped as unchanged by the next run
+	return r.keepIfUnchanged(ctx, f)
 }
 
 // resume picks up the upload a saved state file points at, keeping the

@@ -61,6 +61,8 @@ type fakeS3 struct {
 	inflight, peak atomic.Int32
 	callDelay      time.Duration
 	onGetObject    func(rng string) error
+	// dropBody makes a GetObject body fail halfway when it returns true
+	dropBody func(rng string) bool
 	// onComplete runs after the object is assembled, so it can simulate a
 	// completion that succeeds server-side but fails on the wire
 	onComplete func() error
@@ -190,8 +192,12 @@ func (f *fakeS3) GetObject(ctx context.Context, in *s3.GetObjectInput, _ ...func
 		}
 		data = data[start : end+1]
 	}
+	var body io.Reader = bytes.NewReader(data)
+	if f.dropBody != nil && f.dropBody(rng) {
+		body = io.MultiReader(bytes.NewReader(data[:len(data)/2]), failingReader{io.ErrUnexpectedEOF})
+	}
 	return &s3.GetObjectOutput{
-		Body:          io.NopCloser(bytes.NewReader(data)),
+		Body:          io.NopCloser(body),
 		ContentLength: aws.Int64(int64(len(data))),
 		ETag:          aws.String(obj.etagValue()),
 		LastModified:  aws.Time(obj.modified),
@@ -363,3 +369,8 @@ func (f *fakeS3) AbortMultipartUpload(ctx context.Context, in *s3.AbortMultipart
 	delete(f.uploads, *in.UploadId)
 	return &s3.AbortMultipartUploadOutput{}, nil
 }
+
+// failingReader fails every read with err.
+type failingReader struct{ err error }
+
+func (r failingReader) Read([]byte) (int, error) { return 0, r.err }
