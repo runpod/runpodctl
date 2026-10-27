@@ -106,20 +106,21 @@ func (f *podFinder) locate() (pod *api.LegacyPod, st State, found bool, err erro
 	f.seen = true
 	f.missed = 0
 
+	if pod.Runtime == nil {
+		if reader, ok := f.lister.(PodReader); ok {
+			// use the single-pod snapshot whole, status and runtime together, so
+			// a pod that exited between the two reads is judged on its fresh
+			// status. a failed re-read keeps the listed view and polls again.
+			if fresh, err := reader.GetPodRuntime(f.podID); err == nil && fresh != nil && fresh.ID == f.podID {
+				pod = fresh
+			}
+		}
+	}
+
 	if terminalPodStatuses[strings.ToUpper(pod.DesiredStatus)] {
 		return nil, State{}, false, &FatalError{
 			Code: "conflict",
 			Err:  fmt.Errorf("pod %s is %s, so the wait cannot succeed", f.podID, strings.ToLower(pod.DesiredStatus)),
-		}
-	}
-
-	if pod.Runtime == nil {
-		if reader, ok := f.lister.(PodReader); ok {
-			// best effort: a failed or empty re-read leaves the listed view,
-			// which reads as "not up yet" and is polled again.
-			if fresh, err := reader.GetPodRuntime(f.podID); err == nil && fresh != nil && fresh.Runtime != nil {
-				pod.Runtime = fresh.Runtime
-			}
 		}
 	}
 

@@ -406,3 +406,20 @@ func TestPodRunningPollerFillsRuntimeFromSingleRead(t *testing.T) {
 		t.Fatalf("expected not ready and no error on a failed re-read, got %+v, %v", st, err)
 	}
 }
+
+// the re-read is used whole: a pod that exited between the list and the
+// single read ends the wait instead of passing on stale runtime.
+func TestPodRunningPollerUsesFreshStatusFromSingleRead(t *testing.T) {
+	lister := &readerPodLister{
+		fakePodLister: fakePodLister{pods: []*api.LegacyPod{{ID: "pod-1", DesiredStatus: "RUNNING"}}},
+		byID:          &api.LegacyPod{ID: "pod-1", DesiredStatus: "EXITED", Runtime: &api.LegacyRuntime{}},
+	}
+	st, err := PodRunningPoller(lister, "pod-1")(context.Background())
+	if st.Ready {
+		t.Fatalf("an exited pod must not be ready: %+v", st)
+	}
+	var fatal *FatalError
+	if !errors.As(err, &fatal) || fatal.Code != "conflict" {
+		t.Fatalf("expected a conflict for the exited pod, got %v", err)
+	}
+}
