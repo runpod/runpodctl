@@ -34,8 +34,8 @@ var ErrNotFound = errors.New("not found")
 // It is not retried: the finished chunks belong to the old version.
 var errRemoteChanged = errors.New("remote file changed during download")
 
-// transientError marks a failure worth retrying that the sdk does not type,
-// such as a connection dropped while reading a response body.
+// transientError marks a response body that dropped mid-read, which the sdk
+// does not retry.
 type transientError struct{ error }
 
 func (e transientError) Unwrap() error { return e.error }
@@ -406,39 +406,55 @@ func finishDownload(root *os.Root, partial string, f remoteFile, sidecar string)
 	return nil
 }
 
+// bodyAttempts bounds how often getRange refetches a range whose body
+// dropped mid-read; the sdk retries the request but not the body.
+const bodyAttempts = 3
+
 // getRange writes bytes [off, off+length) of the object into file at off.
 func (r *run) getRange(ctx context.Context, file *os.File, key string, off, length, size int64, etag string) error {
-	return r.call(ctx, requestTimeout, func(ctx context.Context) error {
-		ctx, cancel := context.WithCancel(ctx)
-		defer cancel()
-		in := &s3.GetObjectInput{Bucket: aws.String(r.ID), Key: aws.String(key)}
-		if off != 0 || length != size {
-			in.Range = aws.String(fmt.Sprintf("bytes=%d-%d", off, off+length-1))
-		}
-		out, err := r.Client.GetObject(ctx, in)
-		if err != nil {
+	var err error
+	for range bodyAttempts {
+		err = r.call(ctx, requestTimeout, func(ctx context.Context) error {
+			return r.readRange(ctx, file, key, off, length, size, etag)
+		})
+		if !errors.As(err, new(transientError)) || ctx.Err() != nil {
 			return err
 		}
-		defer out.Body.Close()
-		if got := trimETag(aws.ToString(out.ETag)); etag != "" && got != "" && got != etag {
-			return errRemoteChanged
-		}
-		dst := &offsetWriter{w: io.NewOffsetWriter(file, off)}
-		body := newIdleReader(out.Body, idleTimeout, cancel)
-		defer body.stop()
-		n, err := io.Copy(dst, io.LimitReader(body, length))
-		switch {
-		case dst.err != nil:
-			// a full or failing disk does not get better on retry
-			return fmt.Errorf("write %s: %w", file.Name(), dst.err)
-		case err != nil:
-			return transientError{fmt.Errorf("read response: %w", err)}
-		case n != length:
-			return transientError{fmt.Errorf("short read: got %d of %d bytes", n, length)}
-		}
-		r.addBytes(n)
-		return nil
-	})
+	}
+	return err
+}
+
+// readRange is one attempt of getRange.
+func (r *run) readRange(ctx context.Context, file *os.File, key string, off, length, size int64, etag string) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	in := &s3.GetObjectInput{Bucket: aws.String(r.ID), Key: aws.String(key)}
+	if off != 0 || length != size {
+		in.Range = aws.String(fmt.Sprintf("bytes=%d-%d", off, off+length-1))
+	}
+	out, err := r.Client.GetObject(ctx, in)
+	if err != nil {
+		return err
+	}
+	defer out.Body.Close()
+	if got := trimETag(aws.ToString(out.ETag)); etag != "" && got != "" && got != etag {
+		return errRemoteChanged
+	}
+	dst := &offsetWriter{w: io.NewOffsetWriter(file, off)}
+	body := newIdleReader(out.Body, idleTimeout, cancel)
+	defer body.stop()
+	n, err := io.Copy(dst, io.LimitReader(body, length))
+	switch {
+	case dst.err != nil:
+		// a full or failing disk does not get better on retry
+		return fmt.Errorf("write %s: %w", file.Name(), dst.err)
+	case err != nil:
+		return transientError{fmt.Errorf("read response: %w", err)}
+	case n != length:
+		return transientError{fmt.Errorf("short read: got %d of %d bytes", n, length)}
+	}
+	r.addBytes(n)
+	return nil
 }
 
 // offsetWriter keeps the writer's error apart from the reader's, so a local

@@ -115,16 +115,14 @@ func newRun(v Volume) *run {
 	return &run{Volume: v, sem: make(chan struct{}, v.Concurrency)}
 }
 
-// call is a retried request holding a concurrency slot per attempt. The
-// attempt's deadline starts once the slot is held, so time spent queued behind
-// other requests does not count against it.
+// call runs one request holding a concurrency slot. Its deadline starts once
+// the slot is held, so time spent queued behind other requests does not count
+// against it. The sdk retries inside fn.
 func (r *run) call(ctx context.Context, timeout time.Duration, fn func(ctx context.Context) error) error {
-	return withRetry(ctx, func(ctx context.Context) error {
-		return r.request(ctx, func() error {
-			ctx, cancel := context.WithTimeout(ctx, timeout)
-			defer cancel()
-			return fn(ctx)
-		})
+	return r.request(ctx, func() error {
+		ctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		return fn(ctx)
 	})
 }
 

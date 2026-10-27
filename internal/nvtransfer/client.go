@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go/middleware"
@@ -40,9 +41,9 @@ func EndpointURL(dataCenterID string) string {
 	return "https://s3api-" + strings.ToLower(strings.TrimSpace(dataCenterID)) + ".runpod.io/"
 }
 
-// NewS3Client builds a client for one data center's endpoint. The sdk's own
-// retries are off because every call goes through withRetry, which also covers
-// the 524s runpod returns on slow operations. Checksums are only sent when an
+// NewS3Client builds a client for one data center's endpoint. The sdk's
+// standard retryer handles throttling, 5xx (including the 524s runpod returns
+// on slow operations) and dropped connections. Checksums are only sent when an
 // operation requires them: the sdk's default crc headers are not accepted by
 // every s3-compatible store.
 func NewS3Client(endpoint, region, accessKey, secretKey string) *s3.Client {
@@ -65,9 +66,19 @@ func NewS3Client(endpoint, region, accessKey, secretKey string) *s3.Client {
 		Credentials:                credentials.NewStaticCredentialsProvider(accessKey, secretKey, ""),
 		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
 		ResponseChecksumValidation: aws.ResponseChecksumValidationWhenRequired,
-		Retryer:                    aws.NopRetryer{},
+		Retryer:                    newRetryer(),
 		HTTPClient:                 &http.Client{Transport: transport},
 		APIOptions:                 []func(*middleware.Stack) error{unsignedHeaders},
+	})
+}
+
+// newRetryer is the sdk's standard retryer, which also retries the 524
+// runpod's proxy returns when an operation outlives it (the sdk retries only
+// 500, 502, 503 and 504).
+func newRetryer() aws.Retryer {
+	return retry.NewStandard(func(o *retry.StandardOptions) {
+		o.MaxAttempts = maxAttempts
+		o.Retryables = append(o.Retryables, retry.RetryableHTTPStatusCode{Codes: map[int]struct{}{524: {}}})
 	})
 }
 

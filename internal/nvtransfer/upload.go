@@ -499,7 +499,7 @@ func isDownloadLeftover(path string) bool {
 // failures qualify, and only when the object at the key is this upload's:
 // its size matches and its etag equals the multipart etag of our parts.
 func (r *run) completedAnyway(ctx context.Context, err error, key string, size int64, wantETag string) bool {
-	if !retryable(err) && !isNotFound(err) {
+	if !transient(err) && !isNotFound(err) {
 		return false
 	}
 	obj, headErr := r.headObject(ctx, key)

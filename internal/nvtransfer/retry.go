@@ -8,52 +8,19 @@ import (
 	"net"
 	"net/http"
 	"syscall"
-	"time"
 
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
-const (
-	defaultMaxAttempts = 8
-	defaultBaseDelay   = time.Second
-	maxDelay           = 30 * time.Second
-)
+// maxAttempts bounds the sdk's tries per request, the first included.
+const maxAttempts = 10
 
-// retryPolicy is package state so tests can make retries instant.
-var retryPolicy = struct {
-	attempts  int
-	baseDelay time.Duration
-}{defaultMaxAttempts, defaultBaseDelay}
-
-// withRetry runs fn until it succeeds, fails with a non-retryable error, or
-// runs out of attempts. fn bounds each attempt itself (see run.call).
-func withRetry(ctx context.Context, fn func(ctx context.Context) error) error {
-	var err error
-	delay := retryPolicy.baseDelay
-	for attempt := 1; attempt <= retryPolicy.attempts; attempt++ {
-		err = fn(ctx)
-		if err == nil || ctx.Err() != nil || !retryable(err) || attempt == retryPolicy.attempts {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(delay):
-		}
-		delay *= 2
-		if delay > maxDelay {
-			delay = maxDelay
-		}
-	}
-	return err
-}
-
-// retryable reports whether err is worth another attempt: network failures,
+// transient reports a failure that may pass on its own: network failures,
 // timeouts, throttling and 5xx (runpod returns 524 when an operation outlives
 // its proxy). Other 4xx are final.
-func retryable(err error) bool {
+func transient(err error) bool {
 	if err == nil {
 		return false
 	}

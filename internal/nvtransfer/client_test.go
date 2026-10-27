@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -42,5 +43,27 @@ func TestAcceptEncodingSentButNotSigned(t *testing.T) {
 	}
 	if path != "/vol1" {
 		t.Fatalf("expected path-style /vol1, got %q", path)
+	}
+}
+
+// the client retries the 524 runpod's proxy returns on a slow operation.
+func TestClientRetries524(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1) <= 2 {
+			w.WriteHeader(524)
+			return
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		w.Write([]byte(`<ListBucketResult></ListBucketResult>`))
+	}))
+	defer srv.Close()
+
+	client := NewS3Client(srv.URL+"/", "EU-RO-1", "user_x", "secret")
+	if _, err := client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{Bucket: aws.String("vol1")}); err != nil {
+		t.Fatal(err)
+	}
+	if hits.Load() != 3 {
+		t.Fatalf("expected two 524s then success, got %d requests", hits.Load())
 	}
 }
