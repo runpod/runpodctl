@@ -117,3 +117,12 @@ func TestTransferErrorCodes(t *testing.T) {
 		})
 	}
 }
+
+func TestRejectedKeysNameTheFix(t *testing.T) {
+	for _, status := range []int{401, 403} {
+		msg := transferError(context.Background(), s3Status(status), nil).Error()
+		if !strings.HasPrefix(msg, "the volume's s3 api rejected the keys") || !strings.Contains(msg, "RUNPOD_S3_ACCESS_KEY") {
+			t.Errorf("%d: %s", status, msg)
+		}
+	}
+}

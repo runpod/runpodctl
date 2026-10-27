@@ -218,22 +218,37 @@ func (r *run) downloadAll(ctx context.Context, root *os.Root, files []remoteFile
 }
 
 func (r *run) downloadFile(ctx context.Context, root *os.Root, f remoteFile) error {
+	if err := checkLocalPaths(root, f.name); err != nil {
+		return err
+	}
 	if dir := filepath.Dir(f.name); dir != "." {
 		if err := root.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
 	}
 	partial := f.name + partialSuffix
-	for _, suffix := range workSuffixes {
-		if err := refuseNonRegular(root, f.name+suffix); err != nil {
-			return err
-		}
-	}
 	if f.obj.size <= chunkSize {
 		return r.downloadWhole(ctx, root, f, partial)
 	}
 	d := &chunkedDownload{run: r, root: root, f: f, partial: partial, sidecar: f.name + sidecarSuffix}
 	return d.fetch(ctx)
+}
+
+// checkLocalPaths refuses a target whose existing parent folder is a symlink
+// ("alias/x" and "real/x" would be one file, which checkLocalNames cannot
+// see) or whose work files exist as anything but regular files.
+func checkLocalPaths(root *os.Root, name string) error {
+	for dir := filepath.Dir(name); dir != "."; dir = filepath.Dir(dir) {
+		if info, err := root.Lstat(dir); err == nil && info.Mode()&fs.ModeSymlink != 0 {
+			return refusef("%q is a symlink; download into a real folder", dir)
+		}
+	}
+	for _, suffix := range workSuffixes {
+		if err := refuseNonRegular(root, name+suffix); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // refuseNonRegular refuses a download work file (partial, sidecar, or the

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/ratelimit"
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -74,10 +75,12 @@ func NewS3Client(endpoint, region, accessKey, secretKey string) *s3.Client {
 
 // newRetryer is the sdk's standard retryer, which also retries the 524
 // runpod's proxy returns when an operation outlives it (the sdk retries only
-// 500, 502, 503 and 504).
+// 500, 502, 503 and 504). Its retry quota is off: one client serves a whole
+// run, and a drained quota would end every later request after one try.
 func newRetryer() aws.Retryer {
 	return retry.NewStandard(func(o *retry.StandardOptions) {
 		o.MaxAttempts = maxAttempts
+		o.RateLimiter = ratelimit.None
 		o.Retryables = append(o.Retryables, retry.RetryableHTTPStatusCode{Codes: map[int]struct{}{524: {}}})
 	})
 }

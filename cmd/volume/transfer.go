@@ -293,7 +293,7 @@ func clientError(err error) error {
 	}
 	msg := err.Error()
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
-		msg += " (check the s3 api keys and that they belong to the volume's account)"
+		msg = fmt.Sprintf("the volume's s3 api rejected the keys (%d): check that RUNPOD_S3_ACCESS_KEY and RUNPOD_S3_SECRET_KEY are current and belong to the volume's account (create keys at https://console.runpod.io/user/settings)", status)
 	}
 	return &api.APIError{Message: msg, Status: status}
 }

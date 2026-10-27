@@ -1094,3 +1094,60 @@ func TestDiscardedChunksDropTheSidecarFirst(t *testing.T) {
 		t.Fatalf("the stale sidecar survived beside a resized partial: %v", err)
 	}
 }
+
+func TestDownloadRefetchesADroppedBody(t *testing.T) {
+	fake, vol := setup(t)
+	data := randomBytes(3 * int(chunkSize))
+	fake.put("f.bin", data)
+	var dropped atomic.Bool
+	fake.dropBody = func(rng string) bool {
+		// the middle chunk drops once
+		return strings.HasPrefix(rng, fmt.Sprintf("bytes=%d-", chunkSize)) && !dropped.Swap(true)
+	}
+	dst := filepath.Join(t.TempDir(), "f.bin")
+	if _, err := vol.Download(context.Background(), "f.bin", dst); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.count("GetObject"); got != 4 {
+		t.Fatalf("expected 3 chunks plus one refetch, got %d gets", got)
+	}
+	if got, _ := os.ReadFile(dst); !bytes.Equal(got, data) {
+		t.Fatal("content mismatch")
+	}
+}
+
+func TestDownloadRefusesASymlinkedParentFolder(t *testing.T) {
+	fake, vol := setup(t)
+	fake.put("d/alias/x", []byte("a"))
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real", filepath.Join(dir, "alias")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	_, err := vol.Download(context.Background(), "d/", dir)
+	if !errors.As(err, new(*RefusedError)) || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected a refusal, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "real", "x")); err == nil {
+		t.Fatal("wrote through the symlinked folder")
+	}
+}
+
+func TestEditDuringCompleteRemovesTheObject(t *testing.T) {
+	fake, vol := setup(t)
+	src := filepath.Join(t.TempDir(), "big.bin")
+	writeFile(t, src, randomBytes(3*int(chunkSize)))
+	fake.onComplete = func() error {
+		later := time.Now().Add(time.Minute)
+		writeFile(t, src, randomBytes(3*int(chunkSize)))
+		return os.Chtimes(src, later, later)
+	}
+	if _, err := vol.Upload(context.Background(), src, "big.bin"); !errors.Is(err, errLocalChanged) {
+		t.Fatalf("expected errLocalChanged, got %v", err)
+	}
+	if _, ok := fake.get("big.bin"); ok {
+		t.Fatal("the object completed from the old version was kept")
+	}
+}
