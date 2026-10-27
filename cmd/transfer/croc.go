@@ -43,6 +43,9 @@ import (
 	"github.com/schollz/croc/v9/src/utils"
 )
 
+// WIRE FORMAT: these raw requests are exchanged before any croc message and
+// compared byte for byte by the peer. Changing one breaks the handshake.
+// Locked by TestForkHandshakeStrings.
 var (
 	ipRequest        = []byte("ips?")
 	handshakeRequest = []byte("handshake")
@@ -152,7 +155,13 @@ type Client struct {
 	numberOfTransferredFiles int
 }
 
-// FileInfo registers the information about the file
+// FileInfo registers the information about the file.
+//
+// WIRE FORMAT: this is serialized to JSON and sent to the peer, so the json tags
+// below are part of the croc wire contract. Both ends must agree, including the
+// runpodctl copy the platform mounts into the container. Renaming a field or
+// changing a tag breaks transfers and must be a deliberate, versioned change.
+// See cmd/croc/croc.go and E-3968; locked by cmd/transfer/wireformat_test.go.
 type FileInfo struct {
 	Name         string      `json:"n,omitempty"`
 	FolderRemote string      `json:"fr,omitempty"`
@@ -167,14 +176,23 @@ type FileInfo struct {
 	TempFile     bool        `json:"tf,omitempty"`
 }
 
-// RemoteFileRequest requests specific bytes
+// RemoteFileRequest requests specific bytes.
+//
+// WIRE FORMAT: this is sent to the peer as JSON inside a TypeRecipientReady
+// message. It has no struct tags, so its wire keys are the Go field names;
+// renaming a field silently changes the wire and breaks the chunk request.
+// Locked by TestRemoteFileRequestWireGolden.
 type RemoteFileRequest struct {
 	CurrentFileChunkRanges    []int64
 	FilesToTransferCurrentNum int
 	MachineID                 string
 }
 
-// SenderInfo lists the files to be transferred
+// SenderInfo lists the files to be transferred.
+//
+// WIRE FORMAT: this is sent to the peer as JSON. It has no struct tags, so its
+// Go field names are the wire keys and renaming a field changes the wire. Keep
+// both ends in sync; locked by cmd/transfer/wireformat_test.go. See E-3968.
 type SenderInfo struct {
 	FilesToTransfer        []FileInfo
 	EmptyFoldersToTransfer []FileInfo
@@ -1769,19 +1787,11 @@ func (c *Client) receiveData(i int) {
 		// the frame is an 8 byte offset followed by the payload. a shorter one
 		// used to be a slice bounds panic on this goroutine, which takes the
 		// whole process with it.
-		if len(data) < 8 {
-			c.abortReceive(fmt.Errorf("peer sent a %d byte chunk, too short to carry an offset", len(data)))
-			return
-		}
-		var position uint64
-		rbuf := bytes.NewReader(data[:8])
-		err = binary.Read(rbuf, binary.LittleEndian, &position)
+		positionInt64, payload, err := decodeChunkFrame(data)
 		if err != nil {
-			c.abortReceive(fmt.Errorf("could not read a chunk offset: %w", err))
+			c.abortReceive(err)
 			return
 		}
-		positionInt64 := int64(position)
-		payload := data[8:]
 
 		// the offset is peer-supplied and goes straight into WriteAt, so
 		// without a bound the peer can write anywhere in the file, or grow it
@@ -1862,6 +1872,28 @@ func (c *Client) abortReceive(err error) {
 // chunkFits reports whether n bytes written at offset stay within size. The
 // offset is peer-supplied, so this is written to not overflow: offset+n wraps
 // negative for an offset near MaxInt64 and would pass a plain sum.
+// encodeChunkFrame builds the plaintext of one file chunk: its offset as 8
+// little-endian bytes, then the payload. Both ends of a transfer must agree
+// on this byte for byte, including the runpodctl mounted into a pod.
+func encodeChunkFrame(pos uint64, payload []byte) []byte {
+	frame := make([]byte, 8, 8+len(payload))
+	binary.LittleEndian.PutUint64(frame, pos)
+	return append(frame, payload...)
+}
+
+// decodeChunkFrame splits a chunk built by encodeChunkFrame. A frame shorter
+// than the offset is an error rather than a slice bounds panic, which would
+// take the whole process down.
+func decodeChunkFrame(data []byte) (pos int64, payload []byte, err error) {
+	if len(data) < 8 {
+		return 0, nil, fmt.Errorf("peer sent a %d byte chunk, too short to carry an offset", len(data))
+	}
+	if err := binary.Read(bytes.NewReader(data[:8]), binary.LittleEndian, &pos); err != nil {
+		return 0, nil, fmt.Errorf("could not read a chunk offset: %w", err)
+	}
+	return pos, data[8:], nil
+}
+
 func chunkFits(offset int64, n int, size int64) bool {
 	length := int64(n)
 	return offset >= 0 && length <= size && offset <= size-length
@@ -1901,19 +1933,17 @@ func (c *Client) sendData(i int) {
 			}
 			c.mutex.Unlock()
 			if usableChunk {
-				posByte := make([]byte, 8)
-				binary.LittleEndian.PutUint64(posByte, pos)
 				var err error
 				var dataToSend []byte
 				if c.Options.NoCompress {
 					dataToSend, err = crypt.Encrypt(
-						append(posByte, data[:n]...),
+						encodeChunkFrame(pos, data[:n]),
 						c.Key,
 					)
 				} else {
 					dataToSend, err = crypt.Encrypt(
 						compress.Compress(
-							append(posByte, data[:n]...),
+							encodeChunkFrame(pos, data[:n]),
 						),
 						c.Key,
 					)
