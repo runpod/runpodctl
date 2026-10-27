@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
@@ -124,5 +125,21 @@ func TestRejectedKeysNameTheFix(t *testing.T) {
 		if !strings.HasPrefix(msg, "the volume's s3 api rejected the keys") || !strings.Contains(msg, "RUNPOD_S3_ACCESS_KEY") {
 			t.Errorf("%d: %s", status, msg)
 		}
+	}
+}
+
+func TestRejectedAPIKeyNamesTheFix(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"Subject token is invalid or expired"}`))
+	}))
+	defer server.Close()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("RUNPOD_API_KEY", "rpa_invalid")
+	t.Setenv("RUNPOD_REST_V2_URL", server.URL+"/v2/")
+
+	_, err := lookupDataCenter("vol1")
+	if !errors.Is(err, errAPIKeyRejected) {
+		t.Fatalf("expected the rejected-key error, got %v", err)
 	}
 }
