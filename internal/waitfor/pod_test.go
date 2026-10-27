@@ -369,3 +369,57 @@ func TestPodSSHPollerResetsMissesOnAFailedRead(t *testing.T) {
 		t.Fatalf("this miss is the first of a new run, so it must be tolerated, got a fatal %v", err)
 	}
 }
+
+// readerPodLister lists a pod without runtime, as the v2 list can, and reports
+// it on the single-pod read.
+type readerPodLister struct {
+	fakePodLister
+	byID  *api.LegacyPod
+	err   error
+	reads int
+}
+
+func (r *readerPodLister) GetPodRuntime(string) (*api.LegacyPod, error) {
+	r.reads++
+	return r.byID, r.err
+}
+
+func TestPodRunningPollerFillsRuntimeFromSingleRead(t *testing.T) {
+	listed := &api.LegacyPod{ID: "pod-1", DesiredStatus: "RUNNING"}
+	lister := &readerPodLister{
+		fakePodLister: fakePodLister{pods: []*api.LegacyPod{listed}},
+		byID:          &api.LegacyPod{ID: "pod-1", DesiredStatus: "RUNNING", Runtime: &api.LegacyRuntime{}},
+	}
+	st, err := PodRunningPoller(lister, "pod-1")(context.Background())
+	if err != nil || !st.Ready {
+		t.Fatalf("expected ready from the single-pod runtime, got %+v, %v", st, err)
+	}
+	if lister.reads != 1 {
+		t.Errorf("single-pod reads = %d, want 1", lister.reads)
+	}
+
+	// a failed re-read keeps the listed view: not up yet, keep polling.
+	lister.byID, lister.err = nil, errors.New("boom")
+	listed.Runtime = nil
+	st, err = PodRunningPoller(lister, "pod-1")(context.Background())
+	if err != nil || st.Ready {
+		t.Fatalf("expected not ready and no error on a failed re-read, got %+v, %v", st, err)
+	}
+}
+
+// the re-read is used whole: a pod that exited between the list and the
+// single read ends the wait instead of passing on stale runtime.
+func TestPodRunningPollerUsesFreshStatusFromSingleRead(t *testing.T) {
+	lister := &readerPodLister{
+		fakePodLister: fakePodLister{pods: []*api.LegacyPod{{ID: "pod-1", DesiredStatus: "RUNNING"}}},
+		byID:          &api.LegacyPod{ID: "pod-1", DesiredStatus: "EXITED", Runtime: &api.LegacyRuntime{}},
+	}
+	st, err := PodRunningPoller(lister, "pod-1")(context.Background())
+	if st.Ready {
+		t.Fatalf("an exited pod must not be ready: %+v", st)
+	}
+	var fatal *FatalError
+	if !errors.As(err, &fatal) || fatal.Code != "conflict" {
+		t.Fatalf("expected a conflict for the exited pod, got %v", err)
+	}
+}

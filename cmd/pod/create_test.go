@@ -56,11 +56,68 @@ func TestCreateCmd_WaitFlags(t *testing.T) {
 // snapshotWaitFlags restores the --wait globals after a test mutates them.
 func snapshotWaitFlags(t *testing.T) {
 	t.Helper()
-	oldWait, oldTimeout, oldSSH := createWait, createWaitTimeout, createSSH
+	oldWait, oldTimeout, oldSSH, oldFor := createWait, createWaitTimeout, createSSH, createWaitFor
 	t.Cleanup(func() {
-		createWait, createWaitTimeout, createSSH = oldWait, oldTimeout, oldSSH
+		createWait, createWaitTimeout, createSSH, createWaitFor = oldWait, oldTimeout, oldSSH, oldFor
 	})
-	createWait, createWaitTimeout, createSSH = false, defaultWaitTimeout, true
+	createWait, createWaitTimeout, createSSH, createWaitFor = false, defaultWaitTimeout, true, "ssh"
+}
+
+func TestResolveWaitMode(t *testing.T) {
+	cases := []struct {
+		name        string
+		wait        bool
+		waitChanged bool
+		waitFor     string
+		forChanged  bool
+		want        string
+		wantErr     string
+	}{
+		{name: "no flags -> no wait", want: ""},
+		{name: "--wait alone defaults to ssh", wait: true, waitFor: "ssh", want: "ssh"},
+		{name: "--wait-for running implies wait", waitFor: "running", forChanged: true, want: "running"},
+		{name: "explicit --wait=false conflicts with --wait-for", waitFor: "running", waitChanged: true, forChanged: true, wantErr: "--wait=false cannot be combined with --wait-for"},
+		{name: "--wait-for ssh explicit", waitFor: "ssh", forChanged: true, want: "ssh"},
+		{name: "--wait-for is case-insensitive", waitFor: "RUNNING", forChanged: true, want: "running"},
+		{name: "invalid --wait-for is rejected", waitFor: "banner", forChanged: true, wantErr: `invalid --wait-for "banner"`},
+		{name: "explicit empty --wait-for is rejected", waitFor: "", forChanged: true, wantErr: `invalid --wait-for ""`},
+		{name: "explicit blank --wait-for with --wait is rejected", wait: true, waitFor: "  ", forChanged: true, wantErr: `invalid --wait-for "  "`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshotWaitFlags(t)
+			createWait = tc.wait
+			createWaitFor = tc.waitFor
+
+			cmd := &cobra.Command{}
+			cmd.Flags().Bool("wait", false, "")
+			cmd.Flags().String("wait-for", "ssh", "")
+			if tc.waitChanged {
+				cmd.Flags().Lookup("wait").Changed = true
+			}
+			if tc.forChanged {
+				cmd.Flags().Lookup("wait-for").Changed = true
+			}
+
+			got, err := resolveWaitMode(cmd)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("error = %v, want it to contain %q", err, tc.wantErr)
+				}
+				var usage interface{ ErrorCode() string }
+				if !errors.As(err, &usage) || usage.ErrorCode() != "usage_error" {
+					t.Errorf("error = %v, want usage_error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("mode = %q, want %q", got, tc.want)
+			}
+		})
+	}
 }
 
 func waitCommand(changedFlags ...string) (*cobra.Command, *bytes.Buffer) {
@@ -80,6 +137,7 @@ func TestResolveWaitTimeout(t *testing.T) {
 	cases := []struct {
 		name         string
 		setup        func()
+		waitMode     string
 		computeType  string
 		cloudType    string
 		changedFlags []string
@@ -89,11 +147,13 @@ func TestResolveWaitTimeout(t *testing.T) {
 	}{
 		{
 			name:        "no wait means no timeout",
+			waitMode:    "",
 			computeType: "GPU",
 			want:        0,
 		},
 		{
 			name:         "wait-timeout without wait is called out, not silently dropped",
+			waitMode:     "",
 			computeType:  "GPU",
 			changedFlags: []string{"wait-timeout"},
 			want:         0,
@@ -101,41 +161,48 @@ func TestResolveWaitTimeout(t *testing.T) {
 		},
 		{
 			name:        "default timeout",
-			setup:       func() { createWait = true },
+			waitMode:    "ssh",
 			computeType: "GPU",
 			want:        10 * time.Minute,
 		},
 		{
 			name:        "explicit timeout, days included",
-			setup:       func() { createWait = true; createWaitTimeout = "90s" },
+			setup:       func() { createWaitTimeout = "90s" },
+			waitMode:    "ssh",
 			computeType: "GPU",
 			want:        90 * time.Second,
 		},
 		{
 			name:        "unparseable timeout",
-			setup:       func() { createWait = true; createWaitTimeout = "later" },
+			setup:       func() { createWaitTimeout = "later" },
+			waitMode:    "ssh",
 			computeType: "GPU",
 			wantErr:     `invalid --wait-timeout: invalid duration "later"`,
 		},
 		{
 			// nothing will ever listen on port 22, so this can only time out.
-			name:        "wait with ssh disabled is refused",
-			setup:       func() { createWait = true; createSSH = false },
+			name:        "ssh wait with ssh disabled is refused",
+			setup:       func() { createSSH = false },
+			waitMode:    "ssh",
 			computeType: "GPU",
 			wantErr:     "--wait waits for ssh, so it cannot be combined with --ssh=false",
 		},
 		{
-			// v2 sets up ssh on cpu pods too, so a cpu wait needs no caveat
-			name:        "cpu waits like gpu",
-			setup:       func() { createWait = true },
+			// the rest create sends startSsh for cpu pods too, but an image whose
+			// sshd never starts still cannot satisfy the ssh wait, so this warns
+			// instead of refusing outright.
+			name:        "cpu ssh wait warns that ssh depends on the image",
+			waitMode:    "ssh",
 			computeType: "CPU",
 			want:        10 * time.Minute,
+			wantStderr:  "--wait only succeeds if the image runs sshd",
 		},
 		{
-			// the api cannot ask for a community machine with a public ip, and
-			// without one there is no public port 22 to probe
-			name:        "community cloud is called out",
-			setup:       func() { createWait = true },
+			// community cloud only maps a public port 22 on machines with a public
+			// ip, which the api cannot request, so this wait can time out for a
+			// reason the flags do not make obvious.
+			name:        "community cloud ssh wait is called out",
+			waitMode:    "ssh",
 			computeType: "GPU",
 			cloudType:   "COMMUNITY",
 			want:        10 * time.Minute,
@@ -143,9 +210,19 @@ func TestResolveWaitTimeout(t *testing.T) {
 		},
 		{
 			name:        "secure cloud says nothing about public ips",
-			setup:       func() { createWait = true },
+			waitMode:    "ssh",
 			computeType: "GPU",
 			cloudType:   "SECURE",
+			want:        10 * time.Minute,
+		},
+		{
+			// the running wait needs neither ssh nor a public port, so none of the
+			// ssh-only refusals or warnings apply — even for a cpu pod with ssh off.
+			name:        "running wait skips all ssh-only checks",
+			setup:       func() { createSSH = false },
+			waitMode:    "running",
+			computeType: "CPU",
+			cloudType:   "COMMUNITY",
 			want:        10 * time.Minute,
 		},
 	}
@@ -162,7 +239,7 @@ func TestResolveWaitTimeout(t *testing.T) {
 			if cloudType == "" {
 				cloudType = "SECURE"
 			}
-			got, err := resolveWaitTimeout(cmd, cloudType)
+			got, err := resolveWaitTimeout(cmd, tc.waitMode, tc.computeType, cloudType)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("error = %v, want it to contain %q", err, tc.wantErr)
@@ -319,6 +396,76 @@ func TestWaitForPodSSH(t *testing.T) {
 		_, err := waitForPodSSH(context.Background(), cmd, "pod-1", time.Minute)
 		if !errors.Is(err, api.ErrNoCredentials) {
 			t.Fatalf("expected the no_credentials sentinel, got %v", err)
+		}
+	})
+}
+
+func TestWaitForRunningPod(t *testing.T) {
+	oldLister, oldInterval, oldFetch := newPodWaitLister, waitPollInterval, fetchPodDetailsFn
+	t.Cleanup(func() {
+		newPodWaitLister, waitPollInterval, fetchPodDetailsFn = oldLister, oldInterval, oldFetch
+	})
+	waitPollInterval = time.Millisecond
+
+	t.Run("re-reads the running pod", func(t *testing.T) {
+		lister := &fakePodLister{pods: []*api.LegacyPod{{
+			ID: "pod-1", DesiredStatus: "RUNNING", Runtime: &api.LegacyRuntime{},
+		}}}
+		newPodWaitLister = func() (waitfor.PodLister, error) { return lister, nil }
+		want := &podDetails{Pod: &api.Pod{ID: "pod-1"}}
+		reads := 0
+		fetchPodDetailsFn = func(id string, includeMachine, includeTemplate bool) (*podDetails, error) {
+			reads++
+			if id != "pod-1" || includeMachine || includeTemplate {
+				t.Errorf("re-read args = (%q, %t, %t)", id, includeMachine, includeTemplate)
+			}
+			return want, nil
+		}
+
+		cmd, _ := waitCommand()
+		got, err := waitForRunningPod(cmd, "pod-1", time.Minute)
+		if err != nil || got != want {
+			t.Fatalf("wait result = (%v, %v), want re-read pod", got, err)
+		}
+		if lister.calls != 1 || reads != 1 {
+			t.Errorf("polls = %d, re-reads = %d, want one each", lister.calls, reads)
+		}
+	})
+
+	t.Run("timeout carries id and delete hint", func(t *testing.T) {
+		newPodWaitLister = func() (waitfor.PodLister, error) {
+			return &fakePodLister{pods: []*api.LegacyPod{{ID: "pod-1", DesiredStatus: "RUNNING"}}}, nil
+		}
+		fetchPodDetailsFn = func(string, bool, bool) (*podDetails, error) {
+			t.Error("timed-out wait must not re-read")
+			return nil, errors.New("unexpected re-read")
+		}
+
+		cmd, _ := waitCommand()
+		_, err := waitForRunningPod(cmd, "pod-1", 2*time.Millisecond)
+		var waitErr *waitfor.Error
+		if !errors.As(err, &waitErr) || waitErr.ErrorCode() != waitfor.CodeTimeout {
+			t.Fatalf("error = %v, want wait timeout", err)
+		}
+		if resourceIDOf(err) != "pod-1" || !strings.Contains(err.Error(), "runpodctl pod delete pod-1") {
+			t.Errorf("error = %v, want machine-readable pod id and delete hint", err)
+		}
+	})
+
+	t.Run("failed re-read keeps the pod id", func(t *testing.T) {
+		newPodWaitLister = func() (waitfor.PodLister, error) {
+			return &fakePodLister{pods: []*api.LegacyPod{{
+				ID: "pod-1", DesiredStatus: "RUNNING", Runtime: &api.LegacyRuntime{},
+			}}}, nil
+		}
+		fetchPodDetailsFn = func(string, bool, bool) (*podDetails, error) {
+			return nil, errors.New("read failed")
+		}
+
+		cmd, _ := waitCommand()
+		_, err := waitForRunningPod(cmd, "pod-1", time.Minute)
+		if resourceIDOf(err) != "pod-1" || !strings.Contains(err.Error(), "read failed") {
+			t.Errorf("error = %v, want pod id and read failure", err)
 		}
 	})
 }
@@ -624,6 +771,41 @@ func TestPodDetailsWithSSH(t *testing.T) {
 			t.Errorf("error id = %q, want pod-1", resourceIDOf(err))
 		}
 	})
+}
+
+// invalid wait flags must fail before a request can create a billable pod.
+func TestRunCreate_InvalidWaitFlagsBeforeCreate(t *testing.T) {
+	saved := []string{createImageName, createComputeType, createGpuTypeID, createTemplateID}
+	t.Cleanup(func() {
+		createImageName, createComputeType, createGpuTypeID, createTemplateID = saved[0], saved[1], saved[2], saved[3]
+	})
+	t.Setenv("RUNPOD_API_KEY", "")
+	createImageName, createComputeType, createGpuTypeID, createTemplateID = "alpine", "CPU", "", ""
+
+	for _, tc := range []struct {
+		name, waitFor, want string
+		waitChanged         bool
+	}{
+		{name: "explicit false", waitFor: "running", waitChanged: true, want: "--wait=false cannot be combined with --wait-for"},
+		{name: "invalid mode", waitFor: "banner", want: `invalid --wait-for "banner"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshotWaitFlags(t)
+			createWaitFor = tc.waitFor
+			cmd := &cobra.Command{}
+			cmd.Flags().Bool("wait", false, "")
+			cmd.Flags().String("wait-for", "ssh", "")
+			cmd.Flags().Lookup("wait-for").Changed = true
+			if tc.waitChanged {
+				cmd.Flags().Lookup("wait").Changed = true
+			}
+			err := runCreate(cmd, nil)
+			var usage interface{ ErrorCode() string }
+			if !errors.As(err, &usage) || usage.ErrorCode() != "usage_error" || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %v, want usage_error containing %q before create", err, tc.want)
+			}
+		})
+	}
 }
 
 // a gpu create with no gpu id must be refused before any request: the v2 create
