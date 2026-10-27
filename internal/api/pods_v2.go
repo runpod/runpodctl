@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -233,6 +234,21 @@ func (c *Client) GetPods() ([]*LegacyPod, error) {
 		out = append(out, pods[i].toLegacyPod())
 	}
 	return out, nil
+}
+
+// GetPodRuntime reads one pod by id in the same runtime/ssh view as GetPods.
+// The v2 list can leave runtime out while the single-pod read reports it
+// (seen in prod), so a wait that needs runtime fills it in from here.
+func (c *Client) GetPodRuntime(podID string) (*LegacyPod, error) {
+	data, err := c.GetV2("/pods/"+url.PathEscape(podID), nil)
+	if err != nil {
+		return nil, err
+	}
+	var p v2Pod
+	if err := json.Unmarshal(data, &p); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return p.toLegacyPod(), nil
 }
 
 // GetLegacyPods returns every pod as the legacy `get pod` command prints it:

@@ -28,6 +28,13 @@ var terminalPodStatuses = map[string]bool{
 	"ERROR":      true, // rest v2: the container is in an unrecoverable state
 }
 
+// PodReader is optionally implemented by a PodLister that can read one pod by
+// id. The v2 list can omit runtime that the single-pod read reports, and
+// runtime is what both waits key on, so a listed pod without it is re-read.
+type PodReader interface {
+	GetPodRuntime(podID string) (*api.LegacyPod, error)
+}
+
 // podFinder holds the cross-poll bookkeeping (whether the pod has ever been
 // seen, and the run of consecutive misses) shared by every pod poll, so the
 // not-found and terminal-status logic lives in exactly one place.
@@ -103,6 +110,16 @@ func (f *podFinder) locate() (pod *api.LegacyPod, st State, found bool, err erro
 		return nil, State{}, false, &FatalError{
 			Code: "conflict",
 			Err:  fmt.Errorf("pod %s is %s, so the wait cannot succeed", f.podID, strings.ToLower(pod.DesiredStatus)),
+		}
+	}
+
+	if pod.Runtime == nil {
+		if reader, ok := f.lister.(PodReader); ok {
+			// best effort: a failed or empty re-read leaves the listed view,
+			// which reads as "not up yet" and is polled again.
+			if fresh, err := reader.GetPodRuntime(f.podID); err == nil && fresh != nil && fresh.Runtime != nil {
+				pod.Runtime = fresh.Runtime
+			}
 		}
 	}
 
