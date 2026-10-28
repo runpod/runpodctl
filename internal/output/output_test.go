@@ -520,3 +520,38 @@ func TestPrintRaw_NilConfigDefaultsToJSON(t *testing.T) {
 		t.Errorf("expected indented json, got %s", out)
 	}
 }
+
+// Print round-trips structs through json to rename gpu keys. Decoding that into
+// interface{} used to turn every number into a float64, and yaml.v3 writes a
+// float64 of a million or more in exponent form, so a pod up for two weeks
+// printed `uptimeSeconds: 1.2096e+06` under --output yaml.
+func TestPrint_YAMLKeepsLargeIntegers(t *testing.T) {
+	type pod struct {
+		UptimeSeconds      int     `json:"uptimeSeconds"`
+		ExecutionTimeoutMs int     `json:"executionTimeoutMs"`
+		CostPerHr          float64 `json:"costPerHr"`
+	}
+	out := captureStdout(t, func() {
+		if err := Print(pod{UptimeSeconds: 1209600, ExecutionTimeoutMs: 3600000, CostPerHr: 0.69}, &Config{Format: FormatYAML}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+	for _, want := range []string{"uptimeSeconds: 1209600\n", "executionTimeoutMs: 3600000\n", "costPerHr: 0.69\n"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("yaml output should contain %q, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestPrint_JSONKeepsIntegersAbove2To53(t *testing.T) {
+	out := captureStdout(t, func() {
+		if err := Print(struct {
+			N int64 `json:"n"`
+		}{N: 9007199254740993}, &Config{Format: FormatJSON}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+	if !strings.Contains(out, `"n": 9007199254740993`) {
+		t.Errorf("json output lost integer precision: %s", out)
+	}
+}

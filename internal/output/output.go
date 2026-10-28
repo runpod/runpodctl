@@ -52,7 +52,8 @@ func Print(data interface{}, cfg *Config) error {
 // output and the invoke api's health body. Print is built for the cli's own
 // typed control-plane structs, where rewriting gpuTypeId -> gpuId is wanted;
 // doing that to third-party data silently renames a handler's own keys, and the
-// map round trip it uses corrupts any integer above 2^53. Keys are still sorted
+// map round trip it uses rewrites number literals (1.50 comes back as 1.5, and an
+// integer outside int64 as a rounded float64). Keys are still sorted
 // (stable output across api versions) but key names and number literals are
 // reproduced exactly.
 func PrintRaw(raw []byte, cfg *Config) error {
@@ -376,8 +377,11 @@ func normalizeGPUKeys(data interface{}) interface{} {
 		if err != nil {
 			return data
 		}
-		var decoded interface{}
-		if err := json.Unmarshal(raw, &decoded); err != nil {
+		// UseNumber, not a plain Unmarshal: a float64 loses integers above 2^53,
+		// and yaml.v3 prints a float64 of a million or more in exponent form
+		// (uptimeSeconds: 1.2096e+06).
+		decoded, err := decodeRawJSON(raw)
+		if err != nil {
 			return data
 		}
 		return renameGPUKeys(decoded)
@@ -404,6 +408,17 @@ func renameGPUKeys(value interface{}) interface{} {
 			typed[i] = renameGPUKeys(item)
 		}
 		return typed
+	case json.Number:
+		// back to a native number so yaml.v3 emits it unquoted; json.Number is a
+		// string type and would otherwise print as "1209600". an integer stays
+		// an int64; anything else is the float64 it was before.
+		if i, err := typed.Int64(); err == nil {
+			return i
+		}
+		if f, err := typed.Float64(); err == nil {
+			return f
+		}
+		return value
 	default:
 		return value
 	}
