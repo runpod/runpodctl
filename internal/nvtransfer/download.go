@@ -411,6 +411,10 @@ func chunkLen(c int, size int64) int64 {
 	return min(chunkSize, size-off)
 }
 
+var stampDownloadTime = func(root *os.Root, name string, modified time.Time) error {
+	return root.Chtimes(name, time.Now(), modified)
+}
+
 // finishDownload moves the completed partial file into place and stamps it with the
 // remote modification time, so uploading it back is recognized as unchanged.
 func finishDownload(root *os.Root, partial string, f remoteFile, sidecar string) error {
@@ -430,9 +434,10 @@ func finishDownload(root *os.Root, partial string, f remoteFile, sidecar string)
 	if f.obj.modified.IsZero() {
 		return nil
 	}
-	// without the remote time, the next run cannot tell the file is unchanged
-	if err := root.Chtimes(f.name, time.Now(), f.obj.modified); err != nil {
-		return fmt.Errorf("downloaded %s but could not set its time: %w", f.name, err)
+	// The file is complete and already in place. A filesystem that rejects
+	// timestamp changes must not make a folder download fail partway through.
+	if err := stampDownloadTime(root, f.name, f.obj.modified); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: downloaded %s but could not set its time: %v\n", f.name, err)
 	}
 	return nil
 }

@@ -63,6 +63,26 @@ func TestCheckEndpointResolves(t *testing.T) {
 	}
 }
 
+func TestTransferChecksEndpointBeforeS3Keys(t *testing.T) {
+	oldDC, oldEndpoint, oldAccess, oldSecret, oldLookup, oldProxy := transferDataCenterID, transferEndpointURL, transferAccessKey, transferSecretKey, lookupHost, proxyFor
+	t.Cleanup(func() {
+		transferDataCenterID, transferEndpointURL, transferAccessKey, transferSecretKey, lookupHost, proxyFor = oldDC, oldEndpoint, oldAccess, oldSecret, oldLookup, oldProxy
+	})
+	transferDataCenterID, transferEndpointURL = "NOPE-1", ""
+	transferAccessKey, transferSecretKey = "", ""
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("RUNPOD_S3_ACCESS_KEY", "")
+	t.Setenv("RUNPOD_S3_SECRET_KEY", "")
+	proxyFor = func(*http.Request) (*url.URL, error) { return nil, nil }
+	lookupHost = func(context.Context, string) ([]string, error) {
+		return nil, &net.DNSError{Name: "s3api-nope-1.runpod.io", IsNotFound: true}
+	}
+	err := runTransfer(nil, "vol1", "src", "dst", nil)
+	if err == nil || !strings.Contains(err.Error(), "does not resolve") {
+		t.Fatalf("expected endpoint error before credential check, got %v", err)
+	}
+}
+
 // transferError is the contract agents branch on: only a failure a rerun can
 // get past is transfer_incomplete with the resume hint.
 func TestTransferErrorCodes(t *testing.T) {
@@ -122,7 +142,10 @@ func TestTransferErrorCodes(t *testing.T) {
 func TestRejectedKeysNameTheFix(t *testing.T) {
 	for _, status := range []int{401, 403} {
 		msg := transferError(context.Background(), s3Status(status), nil).Error()
-		if !strings.HasPrefix(msg, "the volume's s3 api rejected the keys") || !strings.Contains(msg, "RUNPOD_S3_ACCESS_KEY") {
+		if !strings.HasPrefix(msg, "the volume's s3 api rejected the keys") ||
+			!strings.Contains(msg, "RUNPOD_S3_ACCESS_KEY") ||
+			!strings.Contains(msg, "~/.runpod/config.toml") ||
+			!strings.Contains(msg, "http ") {
 			t.Errorf("%d: %s", status, msg)
 		}
 	}
@@ -141,5 +164,8 @@ func TestRejectedAPIKeyNamesTheFix(t *testing.T) {
 	_, err := lookupDataCenter("vol1")
 	if !errors.Is(err, errAPIKeyRejected) {
 		t.Fatalf("expected the rejected-key error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "~/.runpod/config.toml") || !strings.Contains(err.Error(), "Subject token is invalid or expired") {
+		t.Fatalf("expected saved-key and API error details, got %v", err)
 	}
 }

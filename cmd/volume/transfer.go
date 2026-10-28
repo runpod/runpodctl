@@ -27,10 +27,12 @@ import (
 	"golang.org/x/term"
 )
 
+const s3KeysURL = "https://console.runpod.io/user/settings"
+
 const transferLong = `%s
 
 uses the network volume's s3-compatible api, which needs s3 api keys (separate
-from your runpod api key): create them at https://console.runpod.io/user/settings
+from your runpod api key): create them at %s
 and set RUNPOD_S3_ACCESS_KEY and RUNPOD_S3_SECRET_KEY, pass the flags, or set
 s3AccessKey and s3SecretKey in ~/.runpod/config.toml.
 
@@ -51,7 +53,7 @@ var uploadCmd = &cobra.Command{
 remote-path defaults to the local name. a file uploaded to a remote path ending
 in "/" keeps its name inside that folder; a folder's contents land under
 remote-path. files whose remote copy has the same size and is not older are
-skipped.`),
+skipped.`, s3KeysURL),
 	Example: `  runpodctl network-volume upload abc123 ./model.safetensors models/
   runpodctl network-volume upload abc123 ./dataset datasets/dataset`,
 	Args: cobra.RangeArgs(2, 3),
@@ -66,7 +68,7 @@ var downloadCmd = &cobra.Command{
 remote-path is a folder when it ends in "/" or has files under it. local-path
 defaults to the remote name; a file downloaded into an existing local folder
 keeps its name. local files with the remote size that are not older than the
-remote copy are skipped. use "/" as remote-path to download the whole volume.`),
+	remote copy are skipped. use "/" as remote-path to download the whole volume.`, s3KeysURL),
 	Example: `  runpodctl network-volume download abc123 models/model.safetensors
   runpodctl network-volume download abc123 outputs/ ./outputs`,
 	Args: cobra.RangeArgs(2, 3),
@@ -124,13 +126,13 @@ func (e *incompleteError) ErrorCode() string { return "transfer_incomplete" }
 // errMissingS3Keys reuses no_credentials: the fix is the same kind of local
 // setup.
 var errMissingS3Keys = &api.APIError{
-	Message: "s3 api keys not found. create them at https://console.runpod.io/user/settings then: export RUNPOD_S3_ACCESS_KEY=... RUNPOD_S3_SECRET_KEY=... (or pass --s3-access-key/--s3-secret-key, or set s3AccessKey/s3SecretKey in ~/.runpod/config.toml)",
+	Message: "s3 api keys not found. create them at " + s3KeysURL + " then: export RUNPOD_S3_ACCESS_KEY=... RUNPOD_S3_SECRET_KEY=... (or pass --s3-access-key/--s3-secret-key, or set s3AccessKey/s3SecretKey in ~/.runpod/config.toml)",
 	Code:    "no_credentials",
 }
 
 // errAPIKeyRejected replaces the api's bare 401 text with the fix.
 var errAPIKeyRejected = &api.APIError{
-	Message: "the runpod api rejected the api key (401): run runpodctl doctor or check RUNPOD_API_KEY",
+	Message: "the runpod api rejected the api key (401): run runpodctl doctor or check RUNPOD_API_KEY or ~/.runpod/config.toml",
 	Status:  http.StatusUnauthorized,
 }
 
@@ -160,14 +162,14 @@ func runTransfer(cmd *cobra.Command, volumeID, src, dst string, transfer transfe
 	if transferConcurrency < 1 || transferConcurrency > 64 {
 		return clierr.Usagef("--concurrency must be between 1 and 64")
 	}
+	dataCenterID, endpoint, err := resolveEndpoint(volumeID)
+	if err != nil {
+		return err
+	}
 	accessKey := cmp.Or(transferAccessKey, configenv.S3AccessKey())
 	secretKey := cmp.Or(transferSecretKey, configenv.S3SecretKey())
 	if accessKey == "" || secretKey == "" {
 		return errMissingS3Keys
-	}
-	dataCenterID, endpoint, err := resolveEndpoint(volumeID)
-	if err != nil {
-		return err
 	}
 
 	// the first ctrl-c stops the transfer and keeps its resume state; a second
@@ -225,7 +227,7 @@ func lookupDataCenter(volumeID string) (string, error) {
 	volume, err := client.GetNetworkVolume(volumeID)
 	var apiErr *api.APIError
 	if errors.As(err, &apiErr) && apiErr.Status == http.StatusUnauthorized {
-		return "", errAPIKeyRejected
+		return "", fmt.Errorf("%w: %v", errAPIKeyRejected, err)
 	}
 	if err != nil {
 		return "", fmt.Errorf("failed to get volume: %w", err)
@@ -303,7 +305,7 @@ func clientError(err error) error {
 	}
 	msg := err.Error()
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
-		msg = fmt.Sprintf("the volume's s3 api rejected the keys (%d): check that RUNPOD_S3_ACCESS_KEY and RUNPOD_S3_SECRET_KEY are current and belong to the volume's account (create keys at https://console.runpod.io/user/settings)", status)
+		msg = fmt.Sprintf("the volume's s3 api rejected the keys (%d): check --s3-access-key/--s3-secret-key, RUNPOD_S3_ACCESS_KEY/RUNPOD_S3_SECRET_KEY, or s3AccessKey/s3SecretKey in ~/.runpod/config.toml (create keys at %s): %v", status, s3KeysURL, err)
 	}
 	return &api.APIError{Message: msg, Status: status}
 }

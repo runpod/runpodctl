@@ -257,14 +257,42 @@ func TestUploadThatOutlastsRetriesResumes(t *testing.T) {
 		t.Fatalf("expected the 524, got %v", err)
 	}
 	sent := fake.count("UploadPart")
+	fake.mu.Lock()
+	stored := 0
+	for _, upload := range fake.uploads {
+		stored += len(upload.parts)
+	}
+	fake.mu.Unlock()
 	if _, err := vol.Upload(context.Background(), src, "big.bin"); err != nil {
 		t.Fatal(err)
 	}
-	if again := fake.count("UploadPart") - sent; again != 1 {
-		t.Fatalf("the rerun should send only the failed part, sent %d", again)
+	if again := fake.count("UploadPart") - sent; again != 3-stored {
+		t.Fatalf("the rerun sent %d parts; expected %d missing parts", again, 3-stored)
 	}
 	if got, _ := fake.get("big.bin"); !bytes.Equal(got, data) {
 		t.Fatal("content mismatch")
+	}
+}
+
+func TestDownloadKeepsCompletedFileWhenTimestampCannotBeSet(t *testing.T) {
+	root, err := os.OpenRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err := os.WriteFile(filepath.Join(root.Name(), "file.rpdownload"), []byte("done"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := stampDownloadTime
+	stampDownloadTime = func(_ *os.Root, _ string, _ time.Time) error { return syscall.EPERM }
+	t.Cleanup(func() { stampDownloadTime = old })
+	f := remoteFile{name: "file", obj: remoteObject{size: 4, modified: time.Now().Add(-time.Hour)}}
+	if err := finishDownload(root, "file.rpdownload", f, ""); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root.Name(), "file"))
+	if err != nil || !bytes.Equal(data, []byte("done")) {
+		t.Fatalf("completed file = %q, %v", data, err)
 	}
 }
 
