@@ -393,7 +393,8 @@ command again.
 
 - finished files are skipped: an upload skips files whose remote copy has the
   same size and is not older, a download skips local files of the same size that
-  are not older (downloads stamp the remote modification time on the file).
+  are not older (downloads stamp the remote modification time on the file when
+  the local filesystem permits it; otherwise they warn and keep the file).
   times compare in whole seconds. a same-size edit that keeps an older mtime
   (`cp -p`, `rsync -a`, `tar x`) passes this check: use `--force` to send every
   file.
@@ -405,7 +406,8 @@ command again.
   missing chunks, unless the remote file changed, which restarts it. the file
   appears under its real name only once complete.
 - failed requests (network errors, timeouts, 429, 5xx including runpod's 524)
-  are retried with backoff. a transfer stopped by ctrl-c, a failure that
+  are retried with backoff; a dropped download body is refetched up to three
+  times. a transfer stopped by ctrl-c, a failure that
   outlasted the retries, or a file that changed mid-transfer exits with
   `transfer_incomplete`. a failure a rerun would hit again gets its own code
   instead: `not_found`, `unauthorized`/`forbidden`, `bad_request`,
