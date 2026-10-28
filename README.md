@@ -368,6 +368,58 @@ two consequences worth knowing:
 a refused archive is left in place rather than deleted, so nothing that
 arrived is lost, and the error names where it is.
 
+### network volume files
+
+upload and download files or folders on a network volume through its
+s3-compatible api. this needs s3 api keys, which are separate from the api key:
+create them at https://console.runpod.io/user/settings and set
+`RUNPOD_S3_ACCESS_KEY` and `RUNPOD_S3_SECRET_KEY` (or pass `--s3-access-key` /
+`--s3-secret-key`, or set `s3AccessKey` / `s3SecretKey` in
+`~/.runpod/config.toml`). only [data centers with the s3 api](https://docs.runpod.io/storage/s3-api)
+are supported.
+
+```bash
+runpodctl network-volume upload <volume-id> ./model.safetensors models/
+runpodctl network-volume upload <volume-id> ./dataset datasets/dataset
+runpodctl network-volume download <volume-id> models/model.safetensors
+runpodctl network-volume download <volume-id> outputs/ ./outputs
+```
+
+the volume's data center is looked up with the api key; `--data-center-id`
+skips the lookup. `--concurrency` (default 4) bounds parallel requests.
+
+transfers resume: if one stops (network drop, ctrl-c, crash), run the same
+command again.
+
+- finished files are skipped: an upload skips files whose remote copy has the
+  same size and is not older, a download skips local files of the same size that
+  are not older (downloads stamp the remote modification time on the file when
+  the local filesystem permits it; otherwise they warn and keep the file).
+  times compare in whole seconds. a same-size edit that keeps an older mtime
+  (`cp -p`, `rsync -a`, `tar x`) passes this check: use `--force` to send every
+  file.
+- files over 64 mb upload as multipart. the upload id is kept in
+  `~/.runpod/transfers/`, and a rerun reuses every uploaded part whose md5
+  matches the local bytes. a changed local file starts a fresh upload.
+- files over 64 mb download in 64 mb chunks into `<name>.rpdownload`, with the
+  finished chunks listed in `<name>.rpdownload.json`. a rerun fetches only the
+  missing chunks, unless the remote file changed, which restarts it. the file
+  appears under its real name only once complete.
+- failed requests (network errors, timeouts, 429, 5xx including runpod's 524)
+  are retried with backoff; a dropped download body is refetched up to three
+  times. a transfer stopped by ctrl-c, a failure that
+  outlasted the retries, or a file that changed mid-transfer exits with
+  `transfer_incomplete`. a failure a rerun would hit again gets its own code
+  instead: `not_found`, `unauthorized`/`forbidden`, `bad_request`,
+  `usage_error` (bad path, unresolvable data center) or `cli_error` (local
+  disk errors, names that would collide on disk).
+- a download refuses a folder whose files would share a local path: names
+  that differ only in case or unicode normalization, or a file next to one
+  named like its partial download (`x` and `x.rpdownload`).
+- multipart parts of an upload that is never rerun stay in the volume's
+  hidden `.s3compat_uploads/` folder and count toward its size until the
+  upload is resumed or aborted.
+
 ## output format
 
 default output is json (optimized for agents). `--output` takes `json` or `yaml`:
@@ -474,11 +526,12 @@ codes the cli generates:
 | `graphql_error` | graphql returned an errors array (http 200) |
 | `timeout` | the cli stopped waiting. two cases, told apart by the message: a `--wait` / `--wait-for-hash` budget ran out with the work still running server-side (the message names the command to poll it — do that, do not re-invoke), or a single api call exceeded the `timeout` config key (nothing is running; retry) |
 | `job_failed` | a serverless job reached a terminal status other than `COMPLETED`. the job payload is still on stdout |
-| `no_credentials` | no api key configured — run `runpodctl doctor` or set `RUNPOD_API_KEY` |
+| `no_credentials` | no api key configured — run `runpodctl doctor` or set `RUNPOD_API_KEY`. for `network-volume upload/download`: no s3 api keys (`RUNPOD_S3_ACCESS_KEY` / `RUNPOD_S3_SECRET_KEY`) |
 | `network_error` | the api could not be reached at all — dns, refused, tls, timeout. transient: retry |
 | `create_uncertain` | `pod create` got no usable answer — no reply, a 5xx, or an accepted create whose reply couldn't be read. the pod **may exist and bill**: check `pod list` (and `id`, when set) before retrying |
 | `wait_timeout` | `--wait` gave up before the resource was usable. the resource **was created and still bills** — the last known state is in the message and the id is in `id` |
 | `wait_interrupted` | `--wait` was cancelled (ctrl-c / SIGTERM). same as above: the resource exists, and `id` names it |
+| `transfer_incomplete` | a `network-volume upload/download` stopped partway (interrupted, or a request kept failing). rerun the same command: it resumes |
 | `cli_error` | anything else local: validation, config, bad input (including a malformed `RUNPOD_API_URL`) |
 
 the api may also return its own code, which is passed through lowercased, so
@@ -511,6 +564,7 @@ its errors are json with a `code` and exit 1.
 | `RUNPOD_GRAPHQL_URL` | `https://api.runpod.io/graphql` | graphql, for what rest v2 does not cover yet: account info, the model repo, hub, serverless create and model references, template readmes and port labels, community templates, spot pods and `get cloud` (config key `apiUrl`) |
 | `RUNPOD_INVOKE_URL` | `https://api.runpod.ai/v2` | base for the serverless invoke urls reported by `serverless create/get/list/update`, and the host `serverless run/status/health` call (config key `invokeUrl`) |
 | `RUNPOD_REST_V2_URL` | `https://api.runpod.io/v2` | rest v2, the main control plane: pods, serverless reads and updates, templates, volumes, registries, billing, the gpu/cpu/data center catalog, ssh keys and logs (config key `restV2ApiUrl`) |
+| `RUNPOD_S3_ACCESS_KEY` / `RUNPOD_S3_SECRET_KEY` | — | s3 api keys for `network-volume upload/download` (config keys `s3AccessKey` / `s3SecretKey`) |
 | `RUNPOD_NO_UPDATE_CHECK` | — | any value turns off the update check and prompt |
 
 invoke is a separate service from the control plane: pointing `RUNPOD_API_URL`
