@@ -12,7 +12,7 @@ permissions:
 jobs:
   release:
     name: release
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     concurrency: release-${{ github.ref }}
     # belt and braces over quill's own notary bound, which is already firm:
     # notary.PollStatus wraps the poll loop in context.WithTimeout, and
@@ -103,7 +103,7 @@ jobs:
     name: Linear Release Sync
     needs: release
     if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     permissions:
       contents: read
     steps:
@@ -122,7 +122,7 @@ jobs:
     name: Linear Release Complete
     needs: [release, linear-sync]
     if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     permissions:
       contents: read
     steps:

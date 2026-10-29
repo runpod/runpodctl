@@ -10,7 +10,7 @@ permissions:
 jobs:
   release-please:
     name: release-please
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       # the app token, not GITHUB_TOKEN: a tag pushed with GITHUB_TOKEN does not
       # trigger other workflows, so release.yml (goreleaser, signing, the brew
