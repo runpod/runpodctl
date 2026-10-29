@@ -173,7 +173,7 @@ let
         versions.actionlint
         versions.shellcheck
       ];
-      script = "actionlint -shellcheck=shellcheck .github/workflows/*.yml";
+      script = "actionlint -config-file .github/actionlint.yaml -shellcheck=shellcheck .github/workflows/*.yml";
     };
   };
 
