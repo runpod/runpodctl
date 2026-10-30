@@ -1,0 +1,4 @@
+# Blacksmith runner labels, so actionlint accepts them in runs-on.
+self-hosted-runner:
+  labels:
+    - blacksmith-2vcpu-ubuntu-2404

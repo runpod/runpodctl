@@ -34,7 +34,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-latest
+          - runner: blacksmith-2vcpu-ubuntu-2404
             system: x86_64-linux
           - runner: ubuntu-24.04-arm
             system: aarch64-linux
@@ -87,7 +87,7 @@ jobs:
 
   fuzz:
     continue-on-error: ${{ github.event_name == 'pull_request' }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -117,7 +117,7 @@ jobs:
   report:
     needs: [flake, fuzz]
     if: ${{ !cancelled() && github.event_name != 'pull_request' }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     permissions:
       issues: write
     env:
