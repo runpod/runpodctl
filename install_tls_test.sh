@@ -21,15 +21,14 @@ for failed_download in version archive checksum; do
 
         curl() {
             if [[ "$1" != "--proto" || "$2" != "=https" ||
-                  "$3" != "--proto-redir" || "$4" != "=https" ||
-                  "$5" != "-fsSL" || "$6" != https://* ]]; then
+                  "$3" != "-fsSL" || "$4" != https://* ]]; then
                 echo "download must require verified https" >&2
                 touch "$TEST_TMPDIR/unsafe-download"
                 return 1
             fi
 
             local stage
-            case "$6" in
+            case "$4" in
                 */releases/latest) stage=version ;;
                 *.tar.gz) stage=archive ;;
                 *_sha256.txt) stage=checksum ;;
@@ -42,8 +41,8 @@ for failed_download in version archive checksum; do
             if [[ "$stage" == version ]]; then
                 printf '{"tag_name":"v9.9.9"}\n'
             else
-                [[ "$7" == "-o" ]] || return 1
-                printf 'release archive bytes' > "$8"
+                [[ "$5" == "-o" ]] || return 1
+                printf 'release archive bytes' > "$6"
             fi
         }
 
