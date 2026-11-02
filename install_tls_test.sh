@@ -14,7 +14,7 @@ for failed_download in version archive checksum; do
         set -e
         check_root() { :; }
         check_system_requirements() { :; }
-        jq() { printf 'v9.9.9\n'; }
+        jq() { cat >/dev/null; printf 'v9.9.9\n'; }
         tar() { touch "$marker"; }
         chmod() { touch "$marker"; }
         mv() { touch "$marker"; }
