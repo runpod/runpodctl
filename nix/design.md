@@ -205,7 +205,7 @@ The Go version is pinned in three places today (`go.mod`, `ci.yml`, `release.yml
 - Record provenance in `$out` (`command.sh`, `go-version.txt`), as xtcp2's linkmonitor checks do.
 - On darwin, `__darwinAllowLocalNetworking = true`, because about 35 test files bind `127.0.0.1:0`.
 
-**Each check gets its own fileset** from `nix/source.nix` (Go sources for Go checks, `*.nix` for Nix checks, `*.sh` for shellcheck, `.github/workflows` for actionlint). So editing a workflow doesn't re-run the Go tests.
+**Each check gets its own fileset** from `nix/source.nix` (Go sources for Go checks, `*.nix` for Nix checks, `*.sh` for shellcheck, `.github/workflows` plus `.github/actionlint.yaml` for actionlint). So editing a workflow doesn't re-run the Go tests.
 
 ### Tier 0: correctness (fast; gated from the start)
 
@@ -220,7 +220,7 @@ The Go version is pinned in three places today (`go.mod`, `ci.yml`, `release.yml
 | `fuzz-seeds` | every `Fuzz*` target's seed corpus (see [section 8](#8-fuzzing)) |
 | `nixfmt` / `deadnix` / `statix` | the Nix layer itself: `nixfmt --check`, `deadnix --fail`, `statix check` |
 | `shellcheck` | `shellcheck --severity=style` on every `*.sh`; no `# shellcheck disable` anywhere. `-o all` (about 150 optional findings in `install.sh`) is a follow-up |
-| `actionlint` | every workflow under `.github/workflows` |
+| `actionlint` | every workflow under `.github/workflows`, with the runner labels from `.github/actionlint.yaml` |
 
 ### Tier 1 and 2: pedantic static analysis
 
@@ -301,7 +301,7 @@ A new workflow, `.github/workflows/nix.yml`. `ci.yml` is not changed.
 | Permissions | `contents: read` |
 | Actions | pinned by full commit SHA, with the version in a comment |
 | Nix install | `cachix/install-nix-action`, `experimental-features = nix-command flakes` |
-| Matrix | `ubuntu-latest` (x86_64-linux), `ubuntu-24.04-arm` (aarch64-linux), `macos-latest` (aarch64-darwin) |
+| Matrix | `blacksmith-2vcpu-ubuntu-2404` (x86_64-linux), `ubuntu-24.04-arm` (aarch64-linux), `macos-latest` (aarch64-darwin) |
 
 ### Steps per runner
 

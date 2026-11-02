@@ -2,7 +2,8 @@ name: test
 on: [push]
 jobs:
   build:
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    # on: push also runs in contributors' forks, where Blacksmith isn't available.
+    runs-on: ${{ github.repository_owner == 'runpod' && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - name: Setup Go 1.26.10
