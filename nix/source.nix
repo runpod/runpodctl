@@ -61,5 +61,14 @@ in
 
   nixSrc = toSource (inTree (fs.fileFilter (f: f.hasExt "nix") src));
   shSrc = toSource (inTree (fs.fileFilter (f: f.hasExt "sh") src));
-  workflowSrc = toSource (inTree (src + "/.github/workflows"));
+  # The workflows plus actionlint's config, which declares the Blacksmith
+  # runner labels.
+  workflowSrc = toSource (
+    inTree (
+      fs.unions [
+        (src + "/.github/workflows")
+        (src + "/.github/actionlint.yaml")
+      ]
+    )
+  );
 }

@@ -173,7 +173,9 @@ let
         versions.actionlint
         versions.shellcheck
       ];
-      script = "actionlint -shellcheck=shellcheck .github/workflows/*.yml";
+      # actionlint only finds .github/actionlint.yaml from a .git root, and the
+      # sandboxed copy of workflowSrc has none, so the config is passed explicitly.
+      script = "actionlint -config-file .github/actionlint.yaml -shellcheck=shellcheck .github/workflows/*.yml";
     };
   };
 
