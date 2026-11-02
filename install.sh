@@ -20,7 +20,7 @@
 #   - macOS (Intel and Apple Silicon)
 
 set -eo pipefail
-REQUIRED_PKGS=("jq")  # Add all required packages to this list, separated by spaces.
+REQUIRED_PKGS=("jq" "curl")  # Add all required packages to this list, separated by spaces.
 
 VERSION=""
 DOWNLOAD_URL=""
