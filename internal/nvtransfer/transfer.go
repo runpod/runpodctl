@@ -299,8 +299,11 @@ func (r *run) listPrefix(ctx context.Context, prefix string) (map[string]remoteO
 			return nil, fmt.Errorf("list %q: %w", prefix, err)
 		}
 		addFiles(objects, out.Contents)
-		if !aws.ToBool(out.IsTruncated) || out.NextContinuationToken == nil {
+		if !aws.ToBool(out.IsTruncated) {
 			return objects, nil
+		}
+		if aws.ToString(out.NextContinuationToken) == "" {
+			return nil, errors.New("listing is truncated but has no next page token; retry shortly")
 		}
 		if token != nil && *token == *out.NextContinuationToken {
 			// runpod computes md5s for files written outside the s3 api on

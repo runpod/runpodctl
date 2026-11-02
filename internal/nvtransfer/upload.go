@@ -452,8 +452,11 @@ func (r *run) listParts(ctx context.Context, key, uploadID string) ([]types.Part
 			return nil, err
 		}
 		parts = append(parts, out.Parts...)
-		if !aws.ToBool(out.IsTruncated) || out.NextPartNumberMarker == nil || len(out.Parts) == 0 {
+		if !aws.ToBool(out.IsTruncated) {
 			return parts, nil
+		}
+		if aws.ToString(out.NextPartNumberMarker) == "" {
+			return nil, errors.New("part listing is truncated but has no next page marker; retry shortly")
 		}
 		if marker != nil && *marker == *out.NextPartNumberMarker {
 			return nil, errors.New("part listing returned the same page marker twice; retry shortly")
