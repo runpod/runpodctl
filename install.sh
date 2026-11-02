@@ -5,10 +5,11 @@
 # This script provides a unified approach to installing the RunPod CLI tool.
 #
 # Usage:
-#   wget -qO- cli.runpod.net | bash
+#   curl --proto '=https' --proto-redir '=https' -fsSL https://cli.runpod.net | sudo bash
 #
 # Requirements:
 #   - Bash shell
+#   - curl with https support
 #   - Internet connection
 #   - Homebrew (for macOS users)
 #   - jq (for JSON processing, will be installed automatically)
@@ -18,7 +19,7 @@
 #   - Linux (amd64)
 #   - macOS (Intel and Apple Silicon)
 
-set -e
+set -eo pipefail
 REQUIRED_PKGS=("jq")  # Add all required packages to this list, separated by spaces.
 
 VERSION=""
@@ -90,7 +91,7 @@ check_system_requirements() {
 # ----------------------------- runpodctl Version ---------------------------- #
 fetch_latest_version() {
     local version_url="https://api.github.com/repos/runpod/runpodctl/releases/latest"
-    VERSION=$(wget -q -O- "$version_url" | jq -r '.tag_name')
+    VERSION=$(curl --proto '=https' --proto-redir '=https' -fsSL "$version_url" | jq -r '.tag_name')
     if [ -z "$VERSION" ]; then
         echo "Failed to fetch the latest version of runpodctl."
         exit 1
@@ -191,14 +192,14 @@ download_and_install_cli() {
     trap 'rm -rf "$download_dir"; trap - RETURN' RETURN
 
     local archive_path="$download_dir/$cli_archive_file_name"
-    if ! wget -q --progress=bar "$DOWNLOAD_URL" -O "$archive_path"; then
+    if ! curl --proto '=https' --proto-redir '=https' -fsSL "$DOWNLOAD_URL" -o "$archive_path"; then
         echo "Failed to download $cli_archive_file_name."
         return 1
     fi
 
     local checksum_path="$download_dir/$checksum_file"
     local checksum_url="https://github.com/runpod/runpodctl/releases/download/${VERSION}/${checksum_file}"
-    if ! wget -q --progress=bar "$checksum_url" -O "$checksum_path"; then
+    if ! curl --proto '=https' --proto-redir '=https' -fsSL "$checksum_url" -o "$checksum_path"; then
         echo "Failed to download $checksum_file."
         return 1
     fi

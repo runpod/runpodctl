@@ -44,8 +44,12 @@ _note: all pods automatically come with runpodctl installed with a pod-scoped ap
 #### linux/macos (wsl)
 
 ```bash
-wget -qO- cli.runpod.net | sudo bash
+curl --proto '=https' --proto-redir '=https' -fsSL https://cli.runpod.net | sudo bash
 ```
+
+the installer must be downloaded over verified https, including redirects. a shell
+script cannot authenticate its own download; the curl options enforce this before
+any script content reaches bash.
 
 #### macos
 

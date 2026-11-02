@@ -5,6 +5,8 @@ jobs:
     runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
+      - name: Test installer
+        run: bash install_test.sh && bash install_tls_test.sh
       - name: Setup Go 1.26.10
         uses: actions/setup-go@v5
         with:
