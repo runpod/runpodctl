@@ -63,10 +63,10 @@ run_download_cleanup_success_test() {
         }
 
         local downloaded_archive_path=""
-        wget() {
+        curl() {
             local output=""
             while [[ $# -gt 0 ]]; do
-                if [[ "$1" == "-O" ]]; then
+                if [[ "$1" == "-o" ]]; then
                     output=$2
                     shift 2
                     continue
@@ -85,7 +85,7 @@ run_download_cleanup_success_test() {
                     printf '%s  %s\n' "$digest" "$ARCHIVE_FILENAME" > "$output"
                     ;;
                 *)
-                    echo "unexpected wget output path: $output" >&2
+                    echo "unexpected curl output path: $output" >&2
                     return 1
                     ;;
             esac
@@ -148,10 +148,10 @@ run_download_cleanup_calculation_failure_test() {
             printf '%s\n' "$expected_download_dir"
         }
 
-        wget() {
+        curl() {
             local output_path=""
             while [[ $# -gt 0 ]]; do
-                if [[ "$1" == "-O" ]]; then
+                if [[ "$1" == "-o" ]]; then
                     output_path=$2
                     shift 2
                     continue
@@ -167,7 +167,7 @@ run_download_cleanup_calculation_failure_test() {
                     printf '%064d  %s\n' 0 "$ARCHIVE_FILENAME" > "$output_path"
                     ;;
                 *)
-                    echo "unexpected wget output path: $output_path" >&2
+                    echo "unexpected curl output path: $output_path" >&2
                     return 1
                     ;;
             esac

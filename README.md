@@ -44,7 +44,7 @@ _note: all pods automatically come with runpodctl installed with a pod-scoped ap
 #### linux/macos (wsl)
 
 ```bash
-wget -qO- cli.runpod.net | sudo bash
+curl -fsSL https://cli.runpod.net | sudo bash
 ```
 
 #### macos
