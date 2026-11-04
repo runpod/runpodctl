@@ -27,7 +27,9 @@ func TestAcceptEncodingSentButNotSigned(t *testing.T) {
 		acceptEncoding = r.Header.Get("Accept-Encoding")
 		path = r.URL.Path
 		w.Header().Set("Content-Type", "application/xml")
-		w.Write([]byte(`<ListBucketResult></ListBucketResult>`))
+		if _, err := w.Write([]byte(`<ListBucketResult></ListBucketResult>`)); err != nil {
+			t.Error(err)
+		}
 	}))
 	defer srv.Close()
 
@@ -49,13 +51,15 @@ func TestAcceptEncodingSentButNotSigned(t *testing.T) {
 // the client retries the 524 runpod's proxy returns on a slow operation.
 func TestClientRetries524(t *testing.T) {
 	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if hits.Add(1) <= 2 {
 			w.WriteHeader(524)
 			return
 		}
 		w.Header().Set("Content-Type", "application/xml")
-		w.Write([]byte(`<ListBucketResult></ListBucketResult>`))
+		if _, err := w.Write([]byte(`<ListBucketResult></ListBucketResult>`)); err != nil {
+			t.Error(err)
+		}
 	}))
 	defer srv.Close()
 

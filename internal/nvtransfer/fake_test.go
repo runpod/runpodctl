@@ -3,12 +3,13 @@ package nvtransfer
 import (
 	"bytes"
 	"context"
-	"crypto/md5"
+	"crypto/md5" // #nosec G501 -- the fake reproduces s3's md5 etags
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -118,6 +119,7 @@ func (f *fakeS3) partETag(data []byte) string {
 }
 
 func etagOf(data []byte) string {
+	// #nosec G401 -- s3 etags are md5
 	sum := md5.Sum(data)
 	return `"` + hex.EncodeToString(sum[:]) + `"`
 }
@@ -135,7 +137,7 @@ func apiError(code string) error {
 
 var errForbidden = statusError(http.StatusForbidden)
 
-func (f *fakeS3) PutObject(ctx context.Context, in *s3.PutObjectInput, _ ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+func (f *fakeS3) PutObject(_ context.Context, in *s3.PutObjectInput, _ ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
 	defer f.track()()
 	data, err := io.ReadAll(in.Body)
 	if err != nil {
@@ -148,7 +150,7 @@ func (f *fakeS3) PutObject(ctx context.Context, in *s3.PutObjectInput, _ ...func
 	return &s3.PutObjectOutput{ETag: aws.String(etagOf(data))}, nil
 }
 
-func (f *fakeS3) HeadObject(ctx context.Context, in *s3.HeadObjectInput, _ ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
+func (f *fakeS3) HeadObject(_ context.Context, in *s3.HeadObjectInput, _ ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
 	defer f.track()()
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -170,7 +172,7 @@ func (f *fakeS3) HeadObject(ctx context.Context, in *s3.HeadObjectInput, _ ...fu
 	}, nil
 }
 
-func (f *fakeS3) GetObject(ctx context.Context, in *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+func (f *fakeS3) GetObject(_ context.Context, in *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
 	defer f.track()()
 	rng := aws.ToString(in.Range)
 	if f.onGetObject != nil {
@@ -205,7 +207,7 @@ func (f *fakeS3) GetObject(ctx context.Context, in *s3.GetObjectInput, _ ...func
 	}, nil
 }
 
-func (f *fakeS3) ListObjectsV2(ctx context.Context, in *s3.ListObjectsV2Input, _ ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+func (f *fakeS3) ListObjectsV2(_ context.Context, in *s3.ListObjectsV2Input, _ ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
 	defer f.track()()
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -220,7 +222,10 @@ func (f *fakeS3) ListObjectsV2(ctx context.Context, in *s3.ListObjectsV2Input, _
 	// two keys per page to exercise pagination
 	start := 0
 	if in.ContinuationToken != nil {
-		fmt.Sscanf(*in.ContinuationToken, "%d", &start)
+		var err error
+		if start, err = strconv.Atoi(*in.ContinuationToken); err != nil {
+			return nil, err
+		}
 	}
 	end := min(start+2, len(keys))
 	out := &s3.ListObjectsV2Output{}
@@ -240,7 +245,7 @@ func (f *fakeS3) ListObjectsV2(ctx context.Context, in *s3.ListObjectsV2Input, _
 	return out, nil
 }
 
-func (f *fakeS3) CreateMultipartUpload(ctx context.Context, in *s3.CreateMultipartUploadInput, _ ...func(*s3.Options)) (*s3.CreateMultipartUploadOutput, error) {
+func (f *fakeS3) CreateMultipartUpload(_ context.Context, in *s3.CreateMultipartUploadInput, _ ...func(*s3.Options)) (*s3.CreateMultipartUploadOutput, error) {
 	defer f.track()()
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -251,7 +256,7 @@ func (f *fakeS3) CreateMultipartUpload(ctx context.Context, in *s3.CreateMultipa
 	return &s3.CreateMultipartUploadOutput{UploadId: aws.String(id)}, nil
 }
 
-func (f *fakeS3) UploadPart(ctx context.Context, in *s3.UploadPartInput, _ ...func(*s3.Options)) (*s3.UploadPartOutput, error) {
+func (f *fakeS3) UploadPart(_ context.Context, in *s3.UploadPartInput, _ ...func(*s3.Options)) (*s3.UploadPartOutput, error) {
 	defer f.track()()
 	if f.onUploadPart != nil {
 		if err := f.onUploadPart(*in.PartNumber); err != nil {
@@ -273,7 +278,7 @@ func (f *fakeS3) UploadPart(ctx context.Context, in *s3.UploadPartInput, _ ...fu
 	return &s3.UploadPartOutput{ETag: aws.String(f.partETag(data))}, nil
 }
 
-func (f *fakeS3) ListParts(ctx context.Context, in *s3.ListPartsInput, _ ...func(*s3.Options)) (*s3.ListPartsOutput, error) {
+func (f *fakeS3) ListParts(_ context.Context, in *s3.ListPartsInput, _ ...func(*s3.Options)) (*s3.ListPartsOutput, error) {
 	defer f.track()()
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -282,14 +287,18 @@ func (f *fakeS3) ListParts(ctx context.Context, in *s3.ListPartsInput, _ ...func
 	if !ok {
 		return nil, apiError("NoSuchUpload")
 	}
-	var nums []int
+	nums := make([]int32, 0, len(up.parts))
 	for n := range up.parts {
-		nums = append(nums, int(n))
+		nums = append(nums, n)
 	}
-	sort.Ints(nums)
-	marker := 0
+	slices.Sort(nums)
+	var marker int32
 	if in.PartNumberMarker != nil {
-		fmt.Sscanf(*in.PartNumberMarker, "%d", &marker)
+		m, err := strconv.ParseInt(*in.PartNumberMarker, 10, 32)
+		if err != nil {
+			return nil, err
+		}
+		marker = int32(m)
 	}
 	// two parts per page to exercise pagination
 	out := &s3.ListPartsOutput{}
@@ -302,13 +311,13 @@ func (f *fakeS3) ListParts(ctx context.Context, in *s3.ListPartsInput, _ ...func
 			out.NextPartNumberMarker = aws.String(strconv.Itoa(int(*out.Parts[1].PartNumber)))
 			break
 		}
-		data := up.parts[int32(n)]
-		out.Parts = append(out.Parts, types.Part{PartNumber: aws.Int32(int32(n)), Size: aws.Int64(int64(len(data))), ETag: aws.String(f.partETag(data))})
+		data := up.parts[n]
+		out.Parts = append(out.Parts, types.Part{PartNumber: aws.Int32(n), Size: aws.Int64(int64(len(data))), ETag: aws.String(f.partETag(data))})
 	}
 	return out, nil
 }
 
-func (f *fakeS3) CompleteMultipartUpload(ctx context.Context, in *s3.CompleteMultipartUploadInput, _ ...func(*s3.Options)) (*s3.CompleteMultipartUploadOutput, error) {
+func (f *fakeS3) CompleteMultipartUpload(_ context.Context, in *s3.CompleteMultipartUploadInput, _ ...func(*s3.Options)) (*s3.CompleteMultipartUploadOutput, error) {
 	defer f.track()()
 	if f.onCompleteBefore != nil {
 		if err := f.onCompleteBefore(); err != nil {
@@ -323,6 +332,7 @@ func (f *fakeS3) CompleteMultipartUpload(ctx context.Context, in *s3.CompleteMul
 		return nil, apiError("NoSuchUpload")
 	}
 	var buf bytes.Buffer
+	// #nosec G401 -- s3 etags are md5
 	sums := md5.New()
 	for i, p := range in.MultipartUpload.Parts {
 		if int(*p.PartNumber) != i+1 {
@@ -335,6 +345,7 @@ func (f *fakeS3) CompleteMultipartUpload(ctx context.Context, in *s3.CompleteMul
 			return nil, apiError("InvalidPart")
 		}
 		buf.Write(data)
+		// #nosec G401 -- s3 etags are md5
 		sum := md5.Sum(data)
 		sums.Write(sum[:])
 	}
@@ -350,7 +361,7 @@ func (f *fakeS3) CompleteMultipartUpload(ctx context.Context, in *s3.CompleteMul
 	return &s3.CompleteMultipartUploadOutput{}, nil
 }
 
-func (f *fakeS3) DeleteObject(ctx context.Context, in *s3.DeleteObjectInput, _ ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
+func (f *fakeS3) DeleteObject(_ context.Context, in *s3.DeleteObjectInput, _ ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
 	defer f.track()()
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -359,7 +370,7 @@ func (f *fakeS3) DeleteObject(ctx context.Context, in *s3.DeleteObjectInput, _ .
 	return &s3.DeleteObjectOutput{}, nil
 }
 
-func (f *fakeS3) AbortMultipartUpload(ctx context.Context, in *s3.AbortMultipartUploadInput, _ ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error) {
+func (f *fakeS3) AbortMultipartUpload(_ context.Context, in *s3.AbortMultipartUploadInput, _ ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error) {
 	defer f.track()()
 	f.mu.Lock()
 	defer f.mu.Unlock()

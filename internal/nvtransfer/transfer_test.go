@@ -45,25 +45,70 @@ func setup(t *testing.T) (*fakeS3, Volume) {
 
 func randomBytes(n int) []byte {
 	b := make([]byte, n)
+	// #nosec G404 G104 -- reproducible test data, not a secret; a math/rand Read never fails
 	rand.New(rand.NewSource(int64(n))).Read(b)
 	return b
 }
 
 func writeFile(t *testing.T, path string, data []byte) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
 
+// readFile returns the content of a test file.
+func readFile(t *testing.T, path string) []byte {
+	t.Helper()
+	// #nosec G304 -- a path the test built under t.TempDir
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+// setModTime stamps path. It reports with t.Errorf, not t.Fatal, so fake s3
+// hooks running on transfer goroutines can call it.
+func setModTime(t *testing.T, path string, at time.Time) {
+	t.Helper()
+	if err := os.Chtimes(path, at, at); err != nil {
+		t.Errorf("set time of %s: %v", path, err)
+	}
+}
+
+// rewrite replaces path's content and stamps it; safe from any goroutine.
+func rewrite(t *testing.T, path string, data []byte, at time.Time) {
+	t.Helper()
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Errorf("rewrite %s: %v", path, err)
+	}
+	setModTime(t, path, at)
+}
+
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
 func stateFiles(t *testing.T) []string {
 	t.Helper()
-	dir, _ := stateDir()
-	entries, _ := os.ReadDir(dir)
-	var names []string
+	dir, err := stateDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(entries))
 	for _, e := range entries {
 		names = append(names, e.Name())
 	}
@@ -94,8 +139,7 @@ func TestUploadDownloadRoundTripFile(t *testing.T) {
 		if _, err := vol.Download(ctx, "models/model.bin", dst); err != nil {
 			t.Fatalf("size %d: download: %v", size, err)
 		}
-		local, err := os.ReadFile(dst)
-		if err != nil || !bytes.Equal(local, data) {
+		if local := readFile(t, dst); !bytes.Equal(local, data) {
 			t.Fatalf("size %d: local content mismatch", size)
 		}
 	}
@@ -143,7 +187,7 @@ func TestUploadDirectorySkipsUnchanged(t *testing.T) {
 	// a changed file is sent again
 	future := time.Now().Add(time.Hour)
 	writeFile(t, filepath.Join(src, "a.txt"), []byte("ALPHA"))
-	os.Chtimes(filepath.Join(src, "a.txt"), future, future)
+	setModTime(t, filepath.Join(src, "a.txt"), future)
 	sum, err = vol.Upload(ctx, src, "")
 	if err != nil {
 		t.Fatal(err)
@@ -286,17 +330,15 @@ func TestDownloadKeepsCompletedFileWhenTimestampCannotBeSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer root.Close()
-	if err := os.WriteFile(filepath.Join(root.Name(), "file.rpdownload"), []byte("done"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	defer closeQuietly(root)
+	writeFile(t, filepath.Join(root.Name(), "file.rpdownload"), []byte("done"))
 	old := stampDownloadTime
 	stampDownloadTime = func(_ *os.Root, _ string, _ time.Time) error { return syscall.EPERM }
 	t.Cleanup(func() { stampDownloadTime = old })
 	f := remoteFile{name: "file", obj: remoteObject{size: 4, modified: time.Now().Add(-time.Hour)}}
 	warnings := &warnRecorder{}
-	if err := newRun(&Volume{Reporter: warnings}).finishDownload(root, "file.rpdownload", &f, ""); err != nil {
-		t.Fatal(err)
+	if ferr := newRun(&Volume{Reporter: warnings}).finishDownload(root, "file.rpdownload", &f, ""); ferr != nil {
+		t.Fatal(ferr)
 	}
 	if len(warnings.msgs) != 1 || !strings.Contains(warnings.msgs[0], "could not set its time") {
 		t.Fatalf("warnings = %q, want one time-stamp warning", warnings.msgs)
@@ -365,16 +407,14 @@ func TestSingleRequestUploadDetectsChangeAfterPut(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "small.txt")
 	writeFile(t, src, []byte("original"))
 	old := time.Now().Add(-time.Hour)
-	os.Chtimes(src, old, old)
+	setModTime(t, src, old)
 	var calls atomic.Int32
 	vol.Client = putHook{fakeS3: fake, after: func() {
 		if calls.Add(1) == 1 {
 			// a same-size edit right after the object was written, with an
 			// mtime older than the object, so the skip rule alone would keep
 			// the stale "original" on the volume
-			os.WriteFile(src, []byte("CHANGED!"), 0o644)
-			past := time.Now().Add(-30 * time.Minute)
-			os.Chtimes(src, past, past)
+			rewrite(t, src, []byte("CHANGED!"), time.Now().Add(-30*time.Minute))
 		}
 	}}
 	_, err := vol.Upload(context.Background(), src, "small.txt")
@@ -398,9 +438,7 @@ func TestFailedDeleteAfterLocalChangeAsksForForce(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "small.txt")
 	writeFile(t, src, []byte("original"))
 	vol.Client = putHook{fakeS3: fake, deleteErr: errForbidden, after: func() {
-		future := time.Now().Add(time.Hour)
-		os.WriteFile(src, []byte("CHANGED!"), 0o644)
-		os.Chtimes(src, future, future)
+		rewrite(t, src, []byte("CHANGED!"), time.Now().Add(time.Hour))
 	}}
 	_, err := vol.Upload(context.Background(), src, "small.txt")
 	if !errors.As(err, new(*RefusedError)) || !strings.Contains(err.Error(), "--force") {
@@ -412,7 +450,11 @@ func TestVanishedLocalFileKeepsTheUploadedObject(t *testing.T) {
 	fake, vol := setup(t)
 	src := filepath.Join(t.TempDir(), "small.txt")
 	writeFile(t, src, []byte("original"))
-	vol.Client = putHook{fakeS3: fake, after: func() { os.Remove(src) }}
+	vol.Client = putHook{fakeS3: fake, after: func() {
+		if err := os.Remove(src); err != nil {
+			t.Errorf("remove %s: %v", src, err)
+		}
+	}}
 	if _, err := vol.Upload(context.Background(), src, "small.txt"); err == nil {
 		t.Fatal("expected an error for the vanished file")
 	}
@@ -480,7 +522,7 @@ func TestDownloadRefusesSymlinkedWorkFiles(t *testing.T) {
 			if !errors.As(err, new(*RefusedError)) {
 				t.Fatalf("expected a refusal, got %v", err)
 			}
-			if got, _ := os.ReadFile(other); string(got) != "keep me" {
+			if got := readFile(t, other); string(got) != "keep me" {
 				t.Fatalf("the symlink target was overwritten: %q", got)
 			}
 		})
@@ -509,8 +551,8 @@ func TestUploadBodyIdleWatchCancelsAndSeekResets(t *testing.T) {
 	if ctx.Err() != nil {
 		t.Fatal("seek must reset the idle window")
 	}
-	if b, _ := io.ReadAll(r); string(b) != "abc" {
-		t.Fatalf("read %q", b)
+	if b, err := io.ReadAll(r); err != nil || string(b) != "abc" {
+		t.Fatalf("read %q, %v", b, err)
 	}
 	// eof ends the watch: a slow server reply is not a stalled body
 	time.Sleep(50 * time.Millisecond)
@@ -554,8 +596,8 @@ func TestForceTransfersUnchangedFiles(t *testing.T) {
 		t.Fatalf("force upload: %+v %v", sum, err)
 	}
 	dst := t.TempDir()
-	if _, err := vol.Download(context.Background(), "data/", dst); err != nil {
-		t.Fatal(err)
+	if _, dlErr := vol.Download(context.Background(), "data/", dst); dlErr != nil {
+		t.Fatal(dlErr)
 	}
 	sum, err = vol.Download(context.Background(), "data/", dst)
 	if err != nil || sum.FilesTransferred != 1 {
@@ -597,8 +639,8 @@ func TestDownloadIntoMissingFolderWithTrailingSlash(t *testing.T) {
 	if _, err := vol.Download(context.Background(), "w.bin", out); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := os.ReadFile(filepath.Join(out, "w.bin")); err != nil || string(got) != "w" {
-		t.Fatalf("expected out/w.bin, got %q %v", got, err)
+	if got := readFile(t, filepath.Join(out, "w.bin")); string(got) != "w" {
+		t.Fatalf("expected out/w.bin, got %q", got)
 	}
 }
 
@@ -627,7 +669,7 @@ func TestDownloadSidecarPinnedToETag(t *testing.T) {
 	fake.put("b.bin", data)
 	dst := filepath.Join(t.TempDir(), "b.bin")
 	writeFile(t, dst+partialSuffix, bytes.Repeat([]byte{'z'}, len(data)))
-	side, _ := json.Marshal(downloadState{Key: "b.bin", Size: int64(len(data)), ETag: "an-older-version", ChunkSize: chunkSize, Done: []int{0, 1, 2, 3}})
+	side := mustJSON(t, downloadState{Key: "b.bin", Size: int64(len(data)), ETag: "an-older-version", ChunkSize: chunkSize, Done: []int{0, 1, 2, 3}})
 	writeFile(t, dst+sidecarSuffix, side)
 	if _, err := vol.Download(context.Background(), "b.bin", dst); err != nil {
 		t.Fatal(err)
@@ -635,7 +677,7 @@ func TestDownloadSidecarPinnedToETag(t *testing.T) {
 	if fake.count("GetObject") != 4 {
 		t.Fatalf("chunks of another version were reused: %d gets", fake.count("GetObject"))
 	}
-	if got, _ := os.ReadFile(dst); !bytes.Equal(got, data) {
+	if got := readFile(t, dst); !bytes.Equal(got, data) {
 		t.Fatal("content mismatch")
 	}
 }
@@ -669,8 +711,11 @@ func TestSkipRulesCompareWholeSeconds(t *testing.T) {
 	writeFile(t, p, []byte("abc"))
 	stamp := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	// the local file carries sub-second precision, the server's date does not
-	os.Chtimes(p, stamp, stamp.Add(700*time.Millisecond))
-	info, _ := os.Stat(p)
+	setModTime(t, p, stamp.Add(700*time.Millisecond))
+	info, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
 	remote := remoteObject{size: 3, modified: stamp}
 	if !remoteUnchanged(info, remote) || !downloadUnchanged(info, remote) {
 		t.Fatal("a sub-second difference must not count as a change")
@@ -685,7 +730,7 @@ func TestSkipRulesCompareWholeSeconds(t *testing.T) {
 
 func TestIdleReaderCancelsStalledBody(t *testing.T) {
 	pr, pw := io.Pipe()
-	defer pw.Close()
+	defer closeQuietly(pw)
 	ctx, cancel := context.WithCancel(context.Background())
 	r := newIdleReader(pr, 20*time.Millisecond, cancel)
 	defer r.stop()
@@ -779,9 +824,7 @@ func TestLocalFileChangedDuringUploadAborts(t *testing.T) {
 	writeFile(t, src, randomBytes(3*(4<<10)))
 	fake.onUploadPart = func(part int32) error {
 		if part == 2 {
-			future := time.Now().Add(time.Hour)
-			os.WriteFile(src, bytes.Repeat([]byte{'n'}, 3*(4<<10)), 0o644)
-			os.Chtimes(src, future, future)
+			rewrite(t, src, bytes.Repeat([]byte{'n'}, 3*(4<<10)), time.Now().Add(time.Hour))
 		}
 		return nil
 	}
@@ -804,10 +847,16 @@ func TestUnsavableStateAbortsTheUpload(t *testing.T) {
 	}
 	// readable but not writable: no state is found, and none can be saved
 	readOnly := t.TempDir()
+	// #nosec G302 -- a test dir made read-only on purpose
 	if err := os.Chmod(readOnly, 0o500); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.Chmod(readOnly, 0o700) })
+	t.Cleanup(func() {
+		// #nosec G302 -- restores a test dir so t.TempDir can remove it
+		if err := os.Chmod(readOnly, 0o700); err != nil {
+			t.Error(err)
+		}
+	})
 	stateDir = func() (string, error) { return readOnly, nil }
 	src := filepath.Join(t.TempDir(), "big.bin")
 	writeFile(t, src, randomBytes(3*(4<<10)))
@@ -866,8 +915,7 @@ func TestDownloadResumesFromSidecar(t *testing.T) {
 	if fetched := fake.count("GetObject") - firstRun; fetched != 9-firstRun {
 		t.Fatalf("resume refetched finished chunks: %d gets after %d", fetched, firstRun)
 	}
-	got, err := os.ReadFile(dst)
-	if err != nil || !bytes.Equal(got, data) {
+	if got := readFile(t, dst); !bytes.Equal(got, data) {
 		t.Fatal("downloaded content mismatch")
 	}
 	for _, leftover := range []string{dst + partialSuffix, dst + sidecarSuffix} {
@@ -898,7 +946,7 @@ func TestDownloadRefetchesNewerSameSizeRemote(t *testing.T) {
 	if err != nil || sum.FilesTransferred != 1 {
 		t.Fatalf("expected a refetch, got %+v %v", sum, err)
 	}
-	if got, _ := os.ReadFile(dst); string(got) != "version-2" {
+	if got := readFile(t, dst); string(got) != "version-2" {
 		t.Fatalf("stale local copy kept: %q", got)
 	}
 }
@@ -911,12 +959,12 @@ func TestDownloadIgnoresSidecarOfAnotherKey(t *testing.T) {
 	dst := filepath.Join(dir, "x.bin")
 	// a partial download of a different key with the same size and etag
 	writeFile(t, dst+partialSuffix, bytes.Repeat([]byte{'z'}, len(data)))
-	side, _ := json.Marshal(downloadState{Key: "a.bin", Size: int64(len(data)), ETag: trimETag(etagOf(data)), ChunkSize: chunkSize, Done: []int{0, 1, 2, 3}})
+	side := mustJSON(t, downloadState{Key: "a.bin", Size: int64(len(data)), ETag: trimETag(etagOf(data)), ChunkSize: chunkSize, Done: []int{0, 1, 2, 3}})
 	writeFile(t, dst+sidecarSuffix, side)
 	if _, err := vol.Download(context.Background(), "b.bin", dst); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := os.ReadFile(dst); !bytes.Equal(got, data) {
+	if got := readFile(t, dst); !bytes.Equal(got, data) {
 		t.Fatal("chunks of another key were reused")
 	}
 }
@@ -980,7 +1028,7 @@ func TestDownloadRestartsWhenRemoteChanged(t *testing.T) {
 	if _, err := vol.Download(ctx, "f.bin", dst); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := os.ReadFile(dst); !bytes.Equal(got, replaced) {
+	if got := readFile(t, dst); !bytes.Equal(got, replaced) {
 		t.Fatal("stale chunks mixed into the new version")
 	}
 }
@@ -1003,11 +1051,11 @@ func TestDownloadDirectory(t *testing.T) {
 	if sum.FilesTransferred != 2 {
 		t.Fatalf("summary %+v", sum)
 	}
-	if got, _ := os.ReadFile(filepath.Join(dst, "a.txt")); string(got) != "alpha" {
+	if got := readFile(t, filepath.Join(dst, "a.txt")); string(got) != "alpha" {
 		t.Fatal("a.txt wrong")
 	}
 	want, _ := fake.get("data/sub/b.bin")
-	if got, _ := os.ReadFile(filepath.Join(dst, "sub", "b.bin")); !bytes.Equal(got, want) {
+	if got := readFile(t, filepath.Join(dst, "sub", "b.bin")); !bytes.Equal(got, want) {
 		t.Fatal("sub/b.bin wrong")
 	}
 	sum, err = vol.Download(ctx, "data/", dst)
@@ -1115,7 +1163,7 @@ func TestDiscardedChunksDropTheSidecarFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer root.Close()
+	defer closeQuietly(root)
 	f := remoteFile{key: "f.bin", name: "f.bin", obj: remoteObject{size: 3 * chunkSize, etag: "e"}}
 	// a sidecar that vouches for every chunk beside a partial of the wrong size
 	st := downloadState{Key: f.key, Size: f.obj.size, ETag: "e", ChunkSize: chunkSize, Done: []int{0, 1, 2}}
@@ -1128,7 +1176,9 @@ func TestDiscardedChunksDropTheSidecarFirst(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	d := &chunkedDownload{run: newRun(&vol), root: root, f: f, partial: f.name + partialSuffix, sidecar: f.name + sidecarSuffix}
-	_ = d.fetch(ctx)
+	if err := d.fetch(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("fetch = %v, want context.Canceled", err)
+	}
 	if _, err := os.Stat(filepath.Join(dir, f.name+sidecarSuffix)); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("the stale sidecar survived beside a resized partial: %v", err)
 	}
@@ -1150,7 +1200,7 @@ func TestDownloadRefetchesADroppedBody(t *testing.T) {
 	if got := fake.count("GetObject"); got != 4 {
 		t.Fatalf("expected 3 chunks plus one refetch, got %d gets", got)
 	}
-	if got, _ := os.ReadFile(dst); !bytes.Equal(got, data) {
+	if got := readFile(t, dst); !bytes.Equal(got, data) {
 		t.Fatal("content mismatch")
 	}
 }
@@ -1159,7 +1209,7 @@ func TestDownloadRefusesASymlinkedParentFolder(t *testing.T) {
 	fake, vol := setup(t)
 	fake.put("d/alias/x", []byte("a"))
 	dir := t.TempDir()
-	if err := os.Mkdir(filepath.Join(dir, "real"), 0o755); err != nil {
+	if err := os.Mkdir(filepath.Join(dir, "real"), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink("real", filepath.Join(dir, "alias")); err != nil {
@@ -1194,10 +1244,10 @@ func TestEditDuringCompleteRemovesTheObject(t *testing.T) {
 func TestUploadFollowsASymlinkedFolder(t *testing.T) {
 	fake, vol := setup(t)
 	dir := t.TempDir()
-	real := filepath.Join(dir, "real")
-	writeFile(t, filepath.Join(real, "a.txt"), []byte("a"))
+	target := filepath.Join(dir, "real")
+	writeFile(t, filepath.Join(target, "a.txt"), []byte("a"))
 	link := filepath.Join(dir, "link")
-	if err := os.Symlink(real, link); err != nil {
+	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	sum, err := vol.Upload(context.Background(), link, "data")

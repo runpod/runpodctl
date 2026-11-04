@@ -40,7 +40,7 @@ func s3Code(code string, status int) error {
 func TestCheckEndpointResolves(t *testing.T) {
 	oldLookup, oldProxy := lookupHost, proxyFor
 	t.Cleanup(func() { lookupHost, proxyFor = oldLookup, oldProxy })
-	proxyFor = func(*http.Request) (*url.URL, error) { return nil, nil }
+	proxyFor = func(*http.Request) (*url.URL, error) { return nil, nil } //nolint:nilnil // no proxy, the way http.ProxyFromEnvironment reports it
 	lookupResult := error(nil)
 	lookupHost = func(context.Context, string) ([]string, error) { return nil, lookupResult }
 
@@ -73,7 +73,7 @@ func TestTransferChecksEndpointBeforeS3Keys(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("RUNPOD_S3_ACCESS_KEY", "")
 	t.Setenv("RUNPOD_S3_SECRET_KEY", "")
-	proxyFor = func(*http.Request) (*url.URL, error) { return nil, nil }
+	proxyFor = func(*http.Request) (*url.URL, error) { return nil, nil } //nolint:nilnil // no proxy, the way http.ProxyFromEnvironment reports it
 	lookupHost = func(context.Context, string) ([]string, error) {
 		return nil, &net.DNSError{Name: "s3api-nope-1.runpod.io", IsNotFound: true}
 	}
@@ -152,9 +152,11 @@ func TestRejectedKeysNameTheFix(t *testing.T) {
 }
 
 func TestRejectedAPIKeyNamesTheFix(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"error":"Subject token is invalid or expired"}`))
+		if _, err := w.Write([]byte(`{"error":"Subject token is invalid or expired"}`)); err != nil {
+			t.Error(err)
+		}
 	}))
 	defer server.Close()
 	t.Setenv("HOME", t.TempDir())
