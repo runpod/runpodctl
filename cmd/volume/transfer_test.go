@@ -124,10 +124,10 @@ func TestTransferErrorCodes(t *testing.T) {
 			if !errors.As(err, &coder) || coder.ErrorCode() != c.code {
 				t.Fatalf("code = %v, want %s (%v)", coder, c.code, err)
 			}
-			var statuser interface{ HTTPStatus() int }
+			var stature interface{ HTTPStatus() int }
 			got := 0
-			if errors.As(err, &statuser) {
-				got = statuser.HTTPStatus()
+			if errors.As(err, &stature) {
+				got = stature.HTTPStatus()
 			}
 			if got != c.status {
 				t.Errorf("status = %d, want %d", got, c.status)

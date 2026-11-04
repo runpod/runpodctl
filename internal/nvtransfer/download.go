@@ -55,7 +55,7 @@ type remoteFile struct {
 // (downloads stamp the remote time on the file). Large files are
 // fetched in chunks into "<name>.rpdownload" with progress kept in
 // "<name>.rpdownload.json", so a rerun continues where it stopped.
-func (v Volume) Download(ctx context.Context, remotePath, localPath string) (*Summary, error) {
+func (v *Volume) Download(ctx context.Context, remotePath, localPath string) (*Summary, error) {
 	r := newRun(v)
 	key, err := cleanKey(remotePath)
 	if err != nil {
@@ -96,14 +96,16 @@ func (r *run) downloadFolder(ctx context.Context, prefix, localPath string) (*Su
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(localPath, 0o755); err != nil {
-		return nil, err
+	// a downloaded folder gets the usual permissions, as cp would give it
+	// #nosec G301 -- user data, not a secret
+	if mkErr := os.MkdirAll(localPath, 0o755); mkErr != nil {
+		return nil, mkErr
 	}
 	root, err := os.OpenRoot(localPath)
 	if err != nil {
 		return nil, err
 	}
-	defer root.Close()
+	defer closeQuietly(root)
 	return r.downloadAll(ctx, root, files)
 }
 
@@ -184,14 +186,15 @@ func (r *run) downloadOne(ctx context.Context, key string, obj remoteObject, loc
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		return nil, err
+	// #nosec G301 -- user data, not a secret
+	if mkErr := os.MkdirAll(filepath.Dir(abs), 0o755); mkErr != nil {
+		return nil, mkErr
 	}
 	root, err := os.OpenRoot(filepath.Dir(abs))
 	if err != nil {
 		return nil, err
 	}
-	defer root.Close()
+	defer closeQuietly(root)
 	return r.downloadAll(ctx, root, []remoteFile{{key: key, name: filepath.Base(abs), obj: obj}})
 }
 
@@ -202,8 +205,8 @@ func (r *run) downloadAll(ctx context.Context, root *os.Root, files []remoteFile
 	}
 	r.Reporter.Start(len(todo), total)
 	err = forEach(ctx, r.Concurrency, todo, func(ctx context.Context, f remoteFile) error {
-		if err := r.downloadFile(ctx, root, f); err != nil {
-			return fmt.Errorf("download %s: %w", f.key, err)
+		if ferr := r.downloadFile(ctx, root, &f); ferr != nil {
+			return fmt.Errorf("download %s: %w", f.key, ferr)
 		}
 		r.transferred(f.key)
 		return nil
@@ -232,7 +235,7 @@ func (r *run) planDownloads(root *os.Root, files []remoteFile) ([]remoteFile, in
 	return todo, total, nil
 }
 
-func (r *run) downloadFile(ctx context.Context, root *os.Root, f remoteFile) error {
+func (r *run) downloadFile(ctx context.Context, root *os.Root, f *remoteFile) error {
 	if dir := filepath.Dir(f.name); dir != "." {
 		if err := root.MkdirAll(dir, 0o755); err != nil {
 			return err
@@ -242,7 +245,7 @@ func (r *run) downloadFile(ctx context.Context, root *os.Root, f remoteFile) err
 	if f.obj.size <= chunkSize {
 		return r.downloadWhole(ctx, root, f, partial)
 	}
-	d := &chunkedDownload{run: r, root: root, f: f, partial: partial, sidecar: f.name + sidecarSuffix}
+	d := &chunkedDownload{run: r, root: root, f: *f, partial: partial, sidecar: f.name + sidecarSuffix}
 	return d.fetch(ctx)
 }
 
@@ -281,7 +284,7 @@ func refuseNonRegular(root *os.Root, name string) error {
 }
 
 // downloadWhole fetches a file that fits in one chunk.
-func (r *run) downloadWhole(ctx context.Context, root *os.Root, f remoteFile, partial string) error {
+func (r *run) downloadWhole(ctx context.Context, root *os.Root, f *remoteFile, partial string) error {
 	file, err := root.OpenFile(partial, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		return err
@@ -317,7 +320,7 @@ func (d *chunkedDownload) fetch(ctx context.Context) error {
 	if err := d.openPartial(len(done) > 0); err != nil {
 		return err
 	}
-	defer d.file.Close()
+	defer closeQuietly(d.file)
 
 	d.state = downloadState{Key: d.f.key, Size: d.f.obj.size, ETag: d.f.obj.etag, ChunkSize: chunkSize}
 	var missing []int
@@ -335,7 +338,7 @@ func (d *chunkedDownload) fetch(ctx context.Context) error {
 	if err := d.file.Close(); err != nil {
 		return err
 	}
-	return d.finishDownload(d.root, d.partial, d.f, d.sidecar)
+	return d.finishDownload(d.root, d.partial, &d.f, d.sidecar)
 }
 
 // completedChunks reads the chunks an earlier run finished, if the sidecar
@@ -373,8 +376,7 @@ func (d *chunkedDownload) openPartial(keep bool) error {
 		return err
 	}
 	if err := sizePartial(file, d.f.obj.size, keep); err != nil {
-		file.Close()
-		return err
+		return errors.Join(err, file.Close())
 	}
 	d.file = file
 	return nil
@@ -417,7 +419,7 @@ var stampDownloadTime = func(root *os.Root, name string, modified time.Time) err
 
 // finishDownload moves the completed partial file into place and stamps it with the
 // remote modification time, so uploading it back is recognized as unchanged.
-func (r *run) finishDownload(root *os.Root, partial string, f remoteFile, sidecar string) error {
+func (r *run) finishDownload(root *os.Root, partial string, f *remoteFile, sidecar string) error {
 	info, err := root.Stat(partial)
 	if err != nil {
 		return err
@@ -429,7 +431,8 @@ func (r *run) finishDownload(root *os.Root, partial string, f remoteFile, sideca
 		return err
 	}
 	if sidecar != "" {
-		_ = root.Remove(sidecar)
+		// #nosec G104 -- a leftover sidecar no longer matches the finished file, so a rerun ignores it
+		root.Remove(sidecar) //nolint:errcheck // see the #nosec reason above
 	}
 	if f.obj.modified.IsZero() {
 		return nil
@@ -472,7 +475,7 @@ func (r *run) readRange(ctx context.Context, file *os.File, key string, off, len
 	if err != nil {
 		return err
 	}
-	defer out.Body.Close()
+	defer closeQuietly(out.Body)
 	if got := trimETag(aws.ToString(out.ETag)); etag != "" && got != "" && got != etag {
 		return errRemoteChanged
 	}

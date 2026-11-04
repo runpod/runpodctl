@@ -2,6 +2,7 @@ package nvtransfer
 
 import (
 	"context"
+	// #nosec G501 -- s3 etags are md5, this is a checksum match, not a security control
 	"crypto/md5"
 	"encoding/hex"
 	"errors"
@@ -33,7 +34,7 @@ type localFile struct {
 // contents land under remotePath. Files whose remote copy has the same size
 // and is not older than the local file are skipped, so rerunning an
 // interrupted directory upload only sends what is missing.
-func (v Volume) Upload(ctx context.Context, localPath, remotePath string) (*Summary, error) {
+func (v *Volume) Upload(ctx context.Context, localPath, remotePath string) (*Summary, error) {
 	r := newRun(v)
 	abs, err := filepath.Abs(localPath)
 	if err != nil {
@@ -69,8 +70,8 @@ func (v Volume) Upload(ctx context.Context, localPath, remotePath string) (*Summ
 	}
 	r.Reporter.Start(len(todo), total)
 	err = forEach(ctx, r.Concurrency, todo, func(ctx context.Context, f localFile) error {
-		if err := r.uploadFile(ctx, f); err != nil {
-			return fmt.Errorf("upload %s: %w", f.key, err)
+		if ferr := r.uploadFile(ctx, f); ferr != nil {
+			return fmt.Errorf("upload %s: %w", f.key, ferr)
 		}
 		r.transferred(f.key)
 		return nil
@@ -177,7 +178,7 @@ func (r *run) uploadFile(ctx context.Context, f localFile) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer closeQuietly(file)
 	if f.info.Size() > singleRequestLimit {
 		return r.multipartUpload(ctx, file, f)
 	}
@@ -223,8 +224,8 @@ func (r *run) keepIfUnchanged(ctx context.Context, f localFile) error {
 	}
 	// the delete runs even after a first ctrl-c
 	err = r.call(context.WithoutCancel(ctx), listTimeout, func(ctx context.Context) error {
-		_, err := r.Client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(r.ID), Key: aws.String(f.key)})
-		return err
+		_, delErr := r.Client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(r.ID), Key: aws.String(f.key)})
+		return delErr
 	})
 	if err != nil {
 		return refusef("%s changed during upload and the remote copy could not be removed (%v); rerun with --force", f.path, err)
@@ -245,12 +246,14 @@ func partSizeFor(size int64) (int64, error) {
 }
 
 func partCount(size, partSize int64) int32 {
+	// partSize keeps the count within s3's 10,000 part limit
+	// #nosec G115 -- bounded by the part limit
 	return int32((size + partSize - 1) / partSize)
 }
 
 // partRange is the offset and length of 1-based part n.
-func partRange(n int32, size, partSize int64) (int64, int64) {
-	off := int64(n-1) * partSize
+func partRange(n int32, size, partSize int64) (off, length int64) {
+	off = int64(n-1) * partSize
 	return off, min(partSize, size-off)
 }
 
@@ -423,14 +426,16 @@ func (m *multipart) complete(ctx context.Context) error {
 	if err != nil && !m.completedAnyway(ctx, err, m.f.key, m.size, multipartETag(m.etags, m.n)) {
 		return fmt.Errorf("complete multipart upload: %w", err)
 	}
-	_ = os.Remove(m.statePath)
+	// #nosec G104 -- a stale state file names a finished upload, which the next run finds gone and drops
+	os.Remove(m.statePath) //nolint:errcheck // see the #nosec reason above
 	return nil
 }
 
 // abandon aborts the upload and forgets it.
 func (m *multipart) abandon(ctx context.Context) {
 	m.abort(ctx, m.f.key, m.state.UploadID)
-	_ = os.Remove(m.statePath)
+	// #nosec G104 -- a stale state file names an aborted upload, which the next run finds gone and drops
+	os.Remove(m.statePath) //nolint:errcheck // see the #nosec reason above
 }
 
 func (r *run) listParts(ctx context.Context, key, uploadID string) ([]types.Part, error) {
@@ -527,6 +532,7 @@ func (r *run) completedAnyway(ctx context.Context, err error, key string, size i
 // assembled from parts: the md5 of the parts' binary md5s, then "-<count>".
 // It is "" when a part etag is not an md5.
 func multipartETag(etags map[int32]string, n int32) string {
+	// #nosec G401 -- s3 etags are md5
 	h := md5.New()
 	for i := int32(1); i <= n; i++ {
 		sum, err := hex.DecodeString(trimETag(etags[i]))
@@ -557,6 +563,7 @@ func verifyParts(file *os.File, parts []types.Part, n int32, size, partSize int6
 		if !md5Hex.MatchString(want) {
 			continue
 		}
+		// #nosec G401 -- s3 etags are md5
 		h := md5.New()
 		if _, err := io.Copy(h, io.NewSectionReader(file, off, length)); err != nil {
 			return nil, err
@@ -572,7 +579,8 @@ func verifyParts(file *os.File, parts []types.Part, n int32, size, partSize int6
 // abort discards an upload that can no longer be resumed. Failure only leaves
 // orphaned parts behind, so it is not an error.
 func (r *run) abort(ctx context.Context, key, uploadID string) {
-	_ = r.call(ctx, listTimeout, func(ctx context.Context) error {
+	// #nosec G104 -- see the function comment
+	r.call(ctx, listTimeout, func(ctx context.Context) error { //nolint:errcheck // see the #nosec reason above
 		_, err := r.Client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
 			Bucket:   aws.String(r.ID),
 			Key:      aws.String(key),

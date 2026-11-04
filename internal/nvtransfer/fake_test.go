@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -234,7 +235,7 @@ func (f *fakeS3) ListObjectsV2(ctx context.Context, in *s3.ListObjectsV2Input, _
 	}
 	if end < len(keys) {
 		out.IsTruncated = aws.Bool(true)
-		out.NextContinuationToken = aws.String(fmt.Sprint(end))
+		out.NextContinuationToken = aws.String(strconv.Itoa(end))
 	}
 	return out, nil
 }
@@ -298,7 +299,7 @@ func (f *fakeS3) ListParts(ctx context.Context, in *s3.ListPartsInput, _ ...func
 		}
 		if len(out.Parts) == 2 {
 			out.IsTruncated = aws.Bool(true)
-			out.NextPartNumberMarker = aws.String(fmt.Sprint(*out.Parts[1].PartNumber))
+			out.NextPartNumberMarker = aws.String(strconv.Itoa(int(*out.Parts[1].PartNumber)))
 			break
 		}
 		data := up.parts[int32(n)]

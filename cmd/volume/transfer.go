@@ -92,7 +92,8 @@ func init() {
 		c.Flags().IntVar(&transferConcurrency, "concurrency", 4, "parallel requests (1-64)")
 		c.Flags().BoolVar(&transferForce, "force", false, "transfer every file, even ones the size and time check calls unchanged")
 		c.Flags().StringVar(&transferEndpointURL, "endpoint-url", "", "s3 endpoint url override")
-		c.Flags().MarkHidden("endpoint-url") //nolint:errcheck,gosec // the flag is defined on the line above, so MarkHidden cannot fail
+		// #nosec G104 -- the flag is defined on the line above, so MarkHidden cannot fail
+		c.Flags().MarkHidden("endpoint-url") //nolint:errcheck // see the #nosec reason above
 	}
 }
 
@@ -144,7 +145,7 @@ func runUpload(cmd *cobra.Command, args []string) error {
 	if _, err := os.Stat(args[1]); err != nil {
 		return clierr.Usagef("local path %s: %v", args[1], errors.Unwrap(err))
 	}
-	return runTransfer(cmd, args[0], args[1], remote, nvtransfer.Volume.Upload)
+	return runTransfer(cmd, args[0], args[1], remote, (*nvtransfer.Volume).Upload)
 }
 
 func runDownload(cmd *cobra.Command, args []string) error {
@@ -152,11 +153,11 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	if len(args) == 3 {
 		local = args[2]
 	}
-	return runTransfer(cmd, args[0], args[1], local, nvtransfer.Volume.Download)
+	return runTransfer(cmd, args[0], args[1], local, (*nvtransfer.Volume).Download)
 }
 
-// transferFunc is nvtransfer.Volume.Upload or nvtransfer.Volume.Download.
-type transferFunc func(v nvtransfer.Volume, ctx context.Context, src, dst string) (*nvtransfer.Summary, error)
+// transferFunc is (*nvtransfer.Volume).Upload or (*nvtransfer.Volume).Download.
+type transferFunc func(v *nvtransfer.Volume, ctx context.Context, src, dst string) (*nvtransfer.Summary, error)
 
 func runTransfer(cmd *cobra.Command, volumeID, src, dst string, transfer transferFunc) error {
 	if transferConcurrency < 1 || transferConcurrency > 64 {
@@ -186,7 +187,7 @@ func runTransfer(cmd *cobra.Command, volumeID, src, dst string, transfer transfe
 		Force:       transferForce,
 		Reporter:    progress,
 	}
-	summary, err := transfer(vol, ctx, src, dst)
+	summary, err := transfer(&vol, ctx, src, dst)
 	progress.stop()
 	if err != nil {
 		return transferError(ctx, err, summary)
@@ -227,7 +228,7 @@ func lookupDataCenter(volumeID string) (string, error) {
 	volume, err := client.GetNetworkVolume(volumeID)
 	var apiErr *api.APIError
 	if errors.As(err, &apiErr) && apiErr.Status == http.StatusUnauthorized {
-		return "", fmt.Errorf("%w: %v", errAPIKeyRejected, err)
+		return "", fmt.Errorf("%w: %w", errAPIKeyRejected, err)
 	}
 	if err != nil {
 		return "", fmt.Errorf("failed to get volume: %w", err)
@@ -252,7 +253,7 @@ func checkEndpointResolves(endpoint string) error {
 	if err != nil || u.Hostname() == "" {
 		return clierr.Usagef("invalid s3 endpoint %q", endpoint)
 	}
-	if proxy, err := proxyFor(&http.Request{URL: u}); err == nil && proxy != nil {
+	if proxy, perr := proxyFor(&http.Request{URL: u}); perr == nil && proxy != nil {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -343,9 +344,7 @@ func (p *progress) Start(files int, bytes int64) {
 	if p.tty {
 		interval = 500 * time.Millisecond
 	}
-	p.wg.Add(1)
-	go func() {
-		defer p.wg.Done()
+	p.wg.Go(func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -356,7 +355,7 @@ func (p *progress) Start(files int, bytes int64) {
 				return
 			}
 		}
-	}()
+	})
 }
 
 func (p *progress) Add(bytes int64) { p.done.Add(bytes) }
@@ -374,9 +373,9 @@ func (p *progress) Warn(msg string) {
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
 	if p.tty {
-		_, _ = fmt.Fprint(p.out, "\r\033[K")
+		p.write("\r\033[K")
 	}
-	_, _ = fmt.Fprintln(p.out, "warning: "+msg)
+	p.write("warning: " + msg + "\n")
 }
 
 func (p *progress) print() {
@@ -391,9 +390,9 @@ func (p *progress) print() {
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
 	if p.tty {
-		_, _ = fmt.Fprintf(p.out, "\r\033[K%s", line)
+		p.write("\r\033[K" + line)
 	} else {
-		_, _ = fmt.Fprintln(p.out, line)
+		p.write(line + "\n")
 	}
 }
 
@@ -404,10 +403,17 @@ func (p *progress) stop() {
 		if p.files.Load() > 0 {
 			p.print()
 			if p.tty {
-				_, _ = fmt.Fprintln(p.out)
+				p.write("\n")
 			}
 		}
 	})
+}
+
+// write prints progress, which is best effort: a closed stderr must not fail
+// the transfer.
+func (p *progress) write(s string) {
+	// #nosec G104 -- see the function comment
+	p.out.WriteString(s) //nolint:errcheck // see the #nosec reason above
 }
 
 func humanBytes(b float64) string {

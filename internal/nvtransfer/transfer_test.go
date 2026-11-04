@@ -295,7 +295,7 @@ func TestDownloadKeepsCompletedFileWhenTimestampCannotBeSet(t *testing.T) {
 	t.Cleanup(func() { stampDownloadTime = old })
 	f := remoteFile{name: "file", obj: remoteObject{size: 4, modified: time.Now().Add(-time.Hour)}}
 	warnings := &warnRecorder{}
-	if err := newRun(Volume{Reporter: warnings}).finishDownload(root, "file.rpdownload", f, ""); err != nil {
+	if err := newRun(&Volume{Reporter: warnings}).finishDownload(root, "file.rpdownload", &f, ""); err != nil {
 		t.Fatal(err)
 	}
 	if len(warnings.msgs) != 1 || !strings.Contains(warnings.msgs[0], "could not set its time") {
@@ -459,7 +459,7 @@ func (stuckPartsHook) ListParts(context.Context, *s3.ListPartsInput, ...func(*s3
 func TestListPartsStopsOnARepeatedMarker(t *testing.T) {
 	fake, vol := setup(t)
 	vol.Client = stuckPartsHook{fake}
-	if _, err := newRun(vol).listParts(context.Background(), "k", "u"); err == nil || !strings.Contains(err.Error(), "same page marker") {
+	if _, err := newRun(&vol).listParts(context.Background(), "k", "u"); err == nil || !strings.Contains(err.Error(), "same page marker") {
 		t.Fatalf("expected a repeated-marker error, got %v", err)
 	}
 }
@@ -642,7 +642,7 @@ func TestDownloadSidecarPinnedToETag(t *testing.T) {
 
 func TestCompletedAnywayNegatives(t *testing.T) {
 	fake, vol := setup(t)
-	r := newRun(vol)
+	r := newRun(&vol)
 	ctx := context.Background()
 	// nothing at the key
 	if r.completedAnyway(ctx, statusError(524), "k", 3, "x-1") {
@@ -728,7 +728,7 @@ func TestRequestsInFlightNeverExceedConcurrency(t *testing.T) {
 	vol.Concurrency = 2
 	fake.callDelay = 2 * time.Millisecond
 	src := filepath.Join(t.TempDir(), "data")
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		writeFile(t, filepath.Join(src, fmt.Sprintf("f%d.bin", i)), randomBytes(3*(4<<10)+i))
 		writeFile(t, filepath.Join(src, fmt.Sprintf("s%d.txt", i)), []byte("small"))
 	}
@@ -1127,7 +1127,7 @@ func TestDiscardedChunksDropTheSidecarFirst(t *testing.T) {
 	// stop before any chunk lands, so no new sidecar is written
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	d := &chunkedDownload{run: newRun(vol), root: root, f: f, partial: f.name + partialSuffix, sidecar: f.name + sidecarSuffix}
+	d := &chunkedDownload{run: newRun(&vol), root: root, f: f, partial: f.name + partialSuffix, sidecar: f.name + sidecarSuffix}
 	_ = d.fetch(ctx)
 	if _, err := os.Stat(filepath.Join(dir, f.name+sidecarSuffix)); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("the stale sidecar survived beside a resized partial: %v", err)

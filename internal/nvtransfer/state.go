@@ -48,6 +48,7 @@ func uploadStatePath(endpoint, volumeID, key, localPath string) (string, error) 
 
 // readJSON returns false with no error when the file does not exist.
 func readJSON(path string, v any) (bool, error) {
+	// #nosec G304 -- path is built under the cli's own state dir
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
@@ -57,7 +58,7 @@ func readJSON(path string, v any) (bool, error) {
 	}
 	if err := json.Unmarshal(data, v); err != nil {
 		// a torn or foreign file is treated as no state
-		return false, nil
+		return false, nil //nolint:nilerr // see above
 	}
 	return true, nil
 }
@@ -72,7 +73,7 @@ func writeJSON(path string, v any) error {
 	if err != nil {
 		return err
 	}
-	defer root.Close()
+	defer closeQuietly(root)
 	return writeJSONIn(root, filepath.Base(path), v, 0o600)
 }
 
@@ -90,12 +91,10 @@ func writeJSONIn(root *os.Root, name string, v any, perm os.FileMode) error {
 		return err
 	}
 	if _, err := f.Write(data); err != nil {
-		f.Close()
-		return err
+		return errors.Join(err, f.Close())
 	}
 	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
+		return errors.Join(err, f.Close())
 	}
 	if err := f.Close(); err != nil {
 		return err
@@ -106,8 +105,10 @@ func writeJSONIn(root *os.Root, name string, v any, perm os.FileMode) error {
 	// sync the directory too, so the rename survives a power loss. best
 	// effort: windows cannot sync a directory handle
 	if dir, err := root.Open(filepath.Dir(name)); err == nil {
-		_ = dir.Sync()
-		dir.Close()
+		// #nosec G104 -- best effort, see above
+		dir.Sync() //nolint:errcheck // see the #nosec reason above
+		// #nosec G104 -- best effort, see above
+		dir.Close() //nolint:errcheck // see the #nosec reason above
 	}
 	return nil
 }

@@ -1,3 +1,4 @@
+// Package configenv resolves settings from the environment, then the config file.
 package configenv
 
 import (
@@ -7,13 +8,16 @@ import (
 	"github.com/spf13/viper"
 )
 
+// Environment variables that override the config file.
 const (
+	// #nosec G101 -- an env var name, not a credential
 	APIKeyEnv      = "RUNPOD_API_KEY"
 	RESTURLEnv     = "RUNPOD_API_URL"
 	RESTV2URLEnv   = "RUNPOD_REST_V2_URL"
 	GraphQLURLEnv  = "RUNPOD_GRAPHQL_URL"
 	InvokeURLEnv   = "RUNPOD_INVOKE_URL"
 	S3AccessKeyEnv = "RUNPOD_S3_ACCESS_KEY"
+	// #nosec G101 -- an env var name, not a credential
 	S3SecretKeyEnv = "RUNPOD_S3_SECRET_KEY"
 )
 
@@ -33,10 +37,12 @@ func APIKey() string {
 	return ""
 }
 
+// RESTURL is the base url for the v1 rest api.
 func RESTURL() string {
 	return envOrConfig(RESTURLEnv, "restApiUrl")
 }
 
+// GraphQLURL is the graphql api url.
 func GraphQLURL() string {
 	return envOrConfig(GraphQLURLEnv, "apiUrl")
 }
@@ -63,6 +69,7 @@ func S3AccessKey() string {
 	return envOrConfig(S3AccessKeyEnv, "s3AccessKey")
 }
 
+// S3SecretKey is the secret half of the s3 api keys; see S3AccessKey.
 func S3SecretKey() string {
 	return envOrConfig(S3SecretKeyEnv, "s3SecretKey")
 }

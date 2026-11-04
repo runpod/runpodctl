@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -99,7 +101,16 @@ func (nopReporter) Reused(int64)     {}
 func (nopReporter) FileDone(string)  {}
 
 // Warn still prints, so a caller without a reporter does not lose warnings.
-func (nopReporter) Warn(msg string) { _, _ = fmt.Fprintln(os.Stderr, "warning: "+msg) }
+func (nopReporter) Warn(msg string) {
+	fmt.Fprintln(os.Stderr, "warning: "+msg)
+}
+
+// closeQuietly closes a handle that was only read, or one the success path
+// already closed and checked, so a close error has nothing left to report.
+func closeQuietly(c io.Closer) {
+	// #nosec G104 -- see the function comment
+	c.Close() //nolint:errcheck // see the #nosec reason above
+}
 
 // run is one transfer's shared state.
 type run struct {
@@ -110,7 +121,8 @@ type run struct {
 	summary Summary
 }
 
-func newRun(v Volume) *run {
+func newRun(vol *Volume) *run {
+	v := *vol
 	if v.Concurrency <= 0 {
 		v.Concurrency = 4
 	}
@@ -125,9 +137,9 @@ func newRun(v Volume) *run {
 // against it. The sdk retries inside fn.
 func (r *run) call(ctx context.Context, timeout time.Duration, fn func(ctx context.Context) error) error {
 	return r.request(ctx, func() error {
-		ctx, cancel := context.WithTimeout(ctx, timeout)
+		reqCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		return fn(ctx)
+		return fn(reqCtx)
 	})
 }
 
@@ -202,9 +214,7 @@ func forEach[T any](ctx context.Context, n int, items []T, fn func(ctx context.C
 		firstErr error
 	)
 	for i := 0; i < n && i < len(items); i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for item := range work {
 				// select picks at random between feeding and cancellation, so
 				// an item can still arrive after the first failure
@@ -215,7 +225,7 @@ func forEach[T any](ctx context.Context, n int, items []T, fn func(ctx context.C
 					once.Do(func() { firstErr = err; cancel() })
 				}
 			}
-		}()
+		})
 	}
 	feed(ctx, work, items)
 	wg.Wait()
@@ -236,10 +246,8 @@ func cleanKey(p string) (string, error) {
 	if p == "" || p == "." {
 		return "", nil
 	}
-	for _, seg := range strings.Split(strings.TrimSuffix(p, "/"), "/") {
-		if seg == ".." {
-			return "", fmt.Errorf("remote path %q must not contain '..': %w", p, ErrInvalidPath)
-		}
+	if slices.Contains(strings.Split(strings.TrimSuffix(p, "/"), "/"), "..") {
+		return "", fmt.Errorf("remote path %q must not contain '..': %w", p, ErrInvalidPath)
 	}
 	p = path.Clean(p)
 	if p == "." {
@@ -328,7 +336,7 @@ func (r *run) headObject(ctx context.Context, key string) (*remoteObject, error)
 		return err
 	})
 	if isNotFound(err) {
-		return nil, nil
+		return nil, nil //nolint:nilnil // a nil object is how callers learn it does not exist
 	}
 	if err != nil {
 		return nil, err

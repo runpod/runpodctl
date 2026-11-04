@@ -27,8 +27,7 @@ func transient(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
-	var transient transientError
-	if errors.As(err, &transient) {
+	if errors.As(err, new(transientError)) {
 		return true
 	}
 	if status := HTTPStatus(err); status != 0 {
@@ -42,12 +41,10 @@ func transient(err error) bool {
 func transportFailed(err error) bool {
 	// a local filesystem failure (a full disk, permissions) does not pass on
 	// its own; checked before net.Error, which syscall.Errno also satisfies
-	var pathErr *fs.PathError
-	if errors.As(err, &pathErr) {
+	if errors.As(err, new(*fs.PathError)) {
 		return false
 	}
-	var netErr net.Error
-	if errors.As(err, &netErr) {
+	if errors.As(err, new(net.Error)) {
 		return true
 	}
 	// a request that failed in transit, as opposed to one the sdk refused to
@@ -70,8 +67,7 @@ func Resumable(err error) bool {
 
 // HTTPStatus is the s3 response status behind err, or 0 when it never got one.
 func HTTPStatus(err error) int {
-	var respErr *awshttp.ResponseError
-	if errors.As(err, &respErr) {
+	if respErr, ok := errors.AsType[*awshttp.ResponseError](err); ok {
 		return respErr.HTTPStatusCode()
 	}
 	return 0
@@ -82,8 +78,7 @@ func isNotFound(err error) bool {
 	if HTTPStatus(err) == http.StatusNotFound {
 		return true
 	}
-	var apiErr smithy.APIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[smithy.APIError](err); ok {
 		switch apiErr.ErrorCode() {
 		case "NoSuchKey", "NoSuchUpload", "NotFound":
 			return true

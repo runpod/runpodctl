@@ -46,7 +46,7 @@ func TestIncompleteListingsFailWithoutLooping(t *testing.T) {
 		}{{"missing", nil}, {"empty", aws.String("")}, {"repeated", aws.String("1")}} {
 			t.Run(listing+"/"+token.name, func(t *testing.T) {
 				client := &stalledListing{t: t, next: token.next}
-				r := newRun(Volume{Client: client, ID: "vol"})
+				r := newRun(&Volume{Client: client, ID: "vol"})
 				var err error
 				if listing == "objects" {
 					_, err = r.listPrefix(context.Background(), "data/")
