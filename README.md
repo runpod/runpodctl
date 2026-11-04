@@ -410,7 +410,7 @@ command again.
   times. a transfer stopped by ctrl-c, a failure that
   outlasted the retries, or a file that changed mid-transfer exits with
   `transfer_incomplete`. a failure a rerun would hit again gets its own code
-  instead: `not_found`, `unauthorized`/`forbidden`, `bad_request`,
+  instead: `not_found`, `unauthorized`/`forbidden`, `volume_full`, `bad_request`,
   `usage_error` (bad path, unresolvable data center) or `cli_error` (local
   disk errors, names that would collide on disk).
 - a download refuses a folder whose files would share a local path: names
@@ -532,6 +532,7 @@ codes the cli generates:
 | `wait_timeout` | `--wait` gave up before the resource was usable. the resource **was created and still bills** — the last known state is in the message and the id is in `id` |
 | `wait_interrupted` | `--wait` was cancelled (ctrl-c / SIGTERM). same as above: the resource exists, and `id` names it |
 | `transfer_incomplete` | a `network-volume upload/download` stopped partway (interrupted, or a request kept failing). rerun the same command: it resumes |
+| `volume_full` | a `network-volume upload` filled the volume. parts of an unfinished multipart upload count toward its size. grow it with `network-volume update --size`, then rerun: it resumes |
 | `cli_error` | anything else local: validation, config, bad input (including a malformed `RUNPOD_API_URL`) |
 
 the api may also return its own code, which is passed through lowercased, so

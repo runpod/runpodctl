@@ -23,6 +23,7 @@ import (
 	"github.com/runpod/runpodctl/internal/output"
 	"github.com/runpod/runpodctl/internal/waitfor"
 
+	"github.com/aws/smithy-go"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -305,6 +306,14 @@ func clientError(err error) error {
 		return nil
 	}
 	msg := err.Error()
+	// runpod answers a full volume with 403 QuotaExceeded; the keys are fine
+	if apiErr, ok := errors.AsType[smithy.APIError](err); ok && apiErr.ErrorCode() == "QuotaExceeded" {
+		return &api.APIError{
+			Message: fmt.Sprintf("the network volume is full (parts of an unfinished multipart upload count toward its size too): expand it with runpodctl network-volume update <volume-id> --size <gb> and re-run to resume: %v", err),
+			Code:    "volume_full",
+			Status:  status,
+		}
+	}
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
 		msg = fmt.Sprintf("the volume's s3 api rejected the keys (%d): check --s3-access-key/--s3-secret-key, RUNPOD_S3_ACCESS_KEY/RUNPOD_S3_SECRET_KEY, or s3AccessKey/s3SecretKey in ~/.runpod/config.toml (create keys at %s): %v", status, s3KeysURL, err)
 	}

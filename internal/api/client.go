@@ -342,6 +342,8 @@ func (c *Client) Delete(endpoint string) ([]byte, error) {
 //	wait_interrupted          -- --wait was cancelled; resource exists (ditto)
 //	transfer_incomplete       -- a network volume upload/download stopped
 //	                             partway; rerunning resumes it (cmd/volume)
+//	volume_full               -- a network volume upload hit the volume's size
+//	                             (s3 QuotaExceeded); expand it, then rerun
 //	cli_error                 -- any other uncoded local failure (fallback)
 //
 // An explicit code returned by the API is passed through (lowercased) instead

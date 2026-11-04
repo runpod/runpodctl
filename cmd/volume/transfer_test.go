@@ -151,6 +151,18 @@ func TestRejectedKeysNameTheFix(t *testing.T) {
 	}
 }
 
+func TestFullVolumeIsNotRejectedKeys(t *testing.T) {
+	err := transferError(context.Background(), s3Code("QuotaExceeded", 403), nil)
+	var coder interface{ ErrorCode() string }
+	if !errors.As(err, &coder) || coder.ErrorCode() != "volume_full" {
+		t.Fatalf("code = %v, want volume_full (%v)", coder, err)
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "rejected the keys") || !strings.Contains(msg, "network-volume update") {
+		t.Errorf("message: %s", msg)
+	}
+}
+
 func TestRejectedAPIKeyNamesTheFix(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
