@@ -68,7 +68,7 @@ var downloadCmd = &cobra.Command{
 remote-path is a folder when it ends in "/" or has files under it. local-path
 defaults to the remote name; a file downloaded into an existing local folder
 keeps its name. local files with the remote size that are not older than the
-	remote copy are skipped. use "/" as remote-path to download the whole volume.`, s3KeysURL),
+remote copy are skipped. use "/" as remote-path to download the whole volume.`, s3KeysURL),
 	Example: `  runpodctl network-volume download abc123 models/model.safetensors
   runpodctl network-volume download abc123 outputs/ ./outputs`,
 	Args: cobra.RangeArgs(2, 3),
@@ -92,7 +92,7 @@ func init() {
 		c.Flags().IntVar(&transferConcurrency, "concurrency", 4, "parallel requests (1-64)")
 		c.Flags().BoolVar(&transferForce, "force", false, "transfer every file, even ones the size and time check calls unchanged")
 		c.Flags().StringVar(&transferEndpointURL, "endpoint-url", "", "s3 endpoint url override")
-		c.Flags().MarkHidden("endpoint-url") //nolint:errcheck
+		c.Flags().MarkHidden("endpoint-url") //nolint:errcheck,gosec // the flag is defined on the line above, so MarkHidden cannot fail
 	}
 }
 
@@ -322,9 +322,10 @@ type progress struct {
 	reused   atomic.Int64
 	finished atomic.Int64
 
-	once sync.Once
-	quit chan struct{}
-	wg   sync.WaitGroup
+	writeMu sync.Mutex // serializes redraws and warnings on out
+	once    sync.Once
+	quit    chan struct{}
+	wg      sync.WaitGroup
 }
 
 func newProgress(out *os.File) *progress {
@@ -368,6 +369,16 @@ func (p *progress) Reused(bytes int64) {
 }
 func (p *progress) FileDone(string) { p.finished.Add(1) }
 
+// Warn clears a redrawn progress line first, so the warning gets its own line.
+func (p *progress) Warn(msg string) {
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
+	if p.tty {
+		_, _ = fmt.Fprint(p.out, "\r\033[K")
+	}
+	_, _ = fmt.Fprintln(p.out, "warning: "+msg)
+}
+
 func (p *progress) print() {
 	done, total := p.done.Load(), p.total.Load()
 	pct := 100.0
@@ -377,10 +388,12 @@ func (p *progress) print() {
 	rate := float64(done-p.reused.Load()) / time.Since(p.started).Seconds()
 	line := fmt.Sprintf("%s / %s (%.1f%%) at %s/s, files %d/%d",
 		humanBytes(float64(done)), humanBytes(float64(total)), pct, humanBytes(rate), p.finished.Load(), p.files.Load())
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
 	if p.tty {
-		fmt.Fprintf(p.out, "\r\033[K%s", line)
+		_, _ = fmt.Fprintf(p.out, "\r\033[K%s", line)
 	} else {
-		fmt.Fprintln(p.out, line)
+		_, _ = fmt.Fprintln(p.out, line)
 	}
 }
 
@@ -391,7 +404,7 @@ func (p *progress) stop() {
 		if p.files.Load() > 0 {
 			p.print()
 			if p.tty {
-				fmt.Fprintln(p.out)
+				_, _ = fmt.Fprintln(p.out)
 			}
 		}
 	})

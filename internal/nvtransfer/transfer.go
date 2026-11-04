@@ -87,6 +87,8 @@ type Reporter interface {
 	// downloaded chunks a resume keeps.
 	Reused(bytes int64)
 	FileDone(name string)
+	// Warn reports a problem that does not fail the transfer.
+	Warn(msg string)
 }
 
 type nopReporter struct{}
@@ -95,6 +97,9 @@ func (nopReporter) Start(int, int64) {}
 func (nopReporter) Add(int64)        {}
 func (nopReporter) Reused(int64)     {}
 func (nopReporter) FileDone(string)  {}
+
+// Warn still prints, so a caller without a reporter does not lose warnings.
+func (nopReporter) Warn(msg string) { _, _ = fmt.Fprintln(os.Stderr, "warning: "+msg) }
 
 // run is one transfer's shared state.
 type run struct {

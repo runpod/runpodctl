@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -253,6 +254,9 @@ func TestUploadThatOutlastsRetriesResumes(t *testing.T) {
 		}
 		return nil
 	}
+	// One request at a time makes the first run deterministic: part 1 is
+	// stored, part 2 fails, and part 3 is never sent.
+	vol.Concurrency = 1
 	if _, err := vol.Upload(context.Background(), src, "big.bin"); HTTPStatus(err) != 524 {
 		t.Fatalf("expected the 524, got %v", err)
 	}
@@ -263,11 +267,14 @@ func TestUploadThatOutlastsRetriesResumes(t *testing.T) {
 		stored += len(upload.parts)
 	}
 	fake.mu.Unlock()
+	if stored != 1 {
+		t.Fatalf("the first run stored %d parts, want 1", stored)
+	}
 	if _, err := vol.Upload(context.Background(), src, "big.bin"); err != nil {
 		t.Fatal(err)
 	}
-	if again := fake.count("UploadPart") - sent; again != 3-stored {
-		t.Fatalf("the rerun sent %d parts; expected %d missing parts", again, 3-stored)
+	if again := fake.count("UploadPart") - sent; again != 2 {
+		t.Fatalf("the rerun sent %d parts; expected the 2 missing parts", again)
 	}
 	if got, _ := fake.get("big.bin"); !bytes.Equal(got, data) {
 		t.Fatal("content mismatch")
@@ -287,8 +294,12 @@ func TestDownloadKeepsCompletedFileWhenTimestampCannotBeSet(t *testing.T) {
 	stampDownloadTime = func(_ *os.Root, _ string, _ time.Time) error { return syscall.EPERM }
 	t.Cleanup(func() { stampDownloadTime = old })
 	f := remoteFile{name: "file", obj: remoteObject{size: 4, modified: time.Now().Add(-time.Hour)}}
-	if err := finishDownload(root, "file.rpdownload", f, ""); err != nil {
+	warnings := &warnRecorder{}
+	if err := newRun(Volume{Reporter: warnings}).finishDownload(root, "file.rpdownload", f, ""); err != nil {
 		t.Fatal(err)
+	}
+	if len(warnings.msgs) != 1 || !strings.Contains(warnings.msgs[0], "could not set its time") {
+		t.Fatalf("warnings = %q, want one time-stamp warning", warnings.msgs)
 	}
 	data, err := os.ReadFile(filepath.Join(root.Name(), "file"))
 	if err != nil || !bytes.Equal(data, []byte("done")) {
@@ -1196,4 +1207,17 @@ func TestUploadFollowsASymlinkedFolder(t *testing.T) {
 	if _, ok := fake.get("data/a.txt"); !ok {
 		t.Fatal("data/a.txt missing")
 	}
+}
+
+// warnRecorder is a Reporter that keeps the warnings it receives.
+type warnRecorder struct {
+	nopReporter
+	mu   sync.Mutex
+	msgs []string
+}
+
+func (w *warnRecorder) Warn(msg string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.msgs = append(w.msgs, msg)
 }

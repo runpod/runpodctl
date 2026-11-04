@@ -296,7 +296,7 @@ func (r *run) downloadWhole(ctx context.Context, root *os.Root, f remoteFile, pa
 	if err != nil {
 		return err
 	}
-	return finishDownload(root, partial, f, "")
+	return r.finishDownload(root, partial, f, "")
 }
 
 // chunkedDownload fetches a large file in chunks into its partial file,
@@ -335,7 +335,7 @@ func (d *chunkedDownload) fetch(ctx context.Context) error {
 	if err := d.file.Close(); err != nil {
 		return err
 	}
-	return finishDownload(d.root, d.partial, d.f, d.sidecar)
+	return d.finishDownload(d.root, d.partial, d.f, d.sidecar)
 }
 
 // completedChunks reads the chunks an earlier run finished, if the sidecar
@@ -417,7 +417,7 @@ var stampDownloadTime = func(root *os.Root, name string, modified time.Time) err
 
 // finishDownload moves the completed partial file into place and stamps it with the
 // remote modification time, so uploading it back is recognized as unchanged.
-func finishDownload(root *os.Root, partial string, f remoteFile, sidecar string) error {
+func (r *run) finishDownload(root *os.Root, partial string, f remoteFile, sidecar string) error {
 	info, err := root.Stat(partial)
 	if err != nil {
 		return err
@@ -437,7 +437,7 @@ func finishDownload(root *os.Root, partial string, f remoteFile, sidecar string)
 	// The file is complete and already in place. A filesystem that rejects
 	// timestamp changes must not make a folder download fail partway through.
 	if err := stampDownloadTime(root, f.name, f.obj.modified); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: downloaded %s but could not set its time: %v\n", f.name, err)
+		r.Reporter.Warn(fmt.Sprintf("downloaded %s but could not set its time: %v", f.name, err))
 	}
 	return nil
 }
