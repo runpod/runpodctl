@@ -59,7 +59,7 @@ in
 
   # Hash of the proxyVendor module cache (`goModules`). Any go.mod/go.sum
   # change invalidates it: run `nix run .#update-vendor-hash`.
-  vendorHash = "sha256-0xRsyNToZJWpT8MTdXstQXewWTLJNGxrknGUot6SdAg=";
+  vendorHash = "sha256-dy+N/VWjEWSvuB+8Ut2rkxiBnAkbwN77IfXr4OPI+aw=";
 
   # Identical to .goreleaser.yml, minus the version, which the package adds.
   ldflags = [

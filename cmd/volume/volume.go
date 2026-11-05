@@ -1,3 +1,4 @@
+// Package volume implements the network-volume commands.
 package volume
 
 import (
@@ -18,4 +19,6 @@ func init() {
 	Cmd.AddCommand(createCmd)
 	Cmd.AddCommand(updateCmd)
 	Cmd.AddCommand(deleteCmd)
+	Cmd.AddCommand(uploadCmd)
+	Cmd.AddCommand(downloadCmd)
 }
