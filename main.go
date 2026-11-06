@@ -11,7 +11,7 @@ import (
 // Version is set at build time via ldflags. release-please keeps this default
 // in step with the latest release, which is what the nix build stamps.
 // x-release-please-start-version
-var Version = "v3.0.1"
+var Version = "v3.1.0"
 
 // x-release-please-end
 
