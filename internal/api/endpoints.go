@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -34,8 +35,8 @@ type Endpoint struct {
 	ComputeType        string                  `json:"computeType,omitempty"`
 	ExecutionTimeoutMs int                     `json:"executionTimeoutMs"`
 	ModelReferences    []string                `json:"modelReferences,omitempty"`
-	Template           map[string]interface{}  `json:"template,omitempty"`
-	Workers            []interface{}           `json:"workers,omitempty"`
+	Template           map[string]any          `json:"template,omitempty"`
+	Workers            []any                   `json:"workers,omitempty"`
 	// URLs are the ready-to-call invoke urls, computed client-side from the id so
 	// an agent that just created an endpoint can call it without extra lookups.
 	URLs *EndpointInvokeURLs `json:"urls,omitempty"`
@@ -98,7 +99,7 @@ type EndpointListResponse struct {
 	Endpoints []Endpoint `json:"endpoints"`
 }
 
-// endpoint updates leave nil and empty string settings unchanged.
+// EndpointUpdateRequest leaves nil and empty string settings unchanged.
 type EndpointUpdateRequest struct {
 	Name        string `json:"name,omitempty"`
 	WorkersMin  *int   `json:"workersMin,omitempty"`
@@ -177,12 +178,13 @@ func (c *Client) GetEndpoint(endpointID string, includeTemplate, includeWorkers 
 	return &out, nil
 }
 
+// UpdateEndpoint applies the supplied settings through rest v2.
 func (c *Client) UpdateEndpoint(endpointID string, req *EndpointUpdateRequest) error {
-	body := map[string]interface{}{}
+	body := map[string]any{}
 	if req.Name != "" {
 		body["name"] = req.Name
 	}
-	workers := map[string]interface{}{}
+	workers := map[string]any{}
 	if req.WorkersMin != nil {
 		workers["min"] = *req.WorkersMin
 	}
@@ -220,16 +222,16 @@ func (c *Client) UpdateEndpoint(endpointID string, req *EndpointUpdateRequest) e
 		if req.ScalerValue != nil {
 			value = float64(*req.ScalerValue)
 		}
-		scaling := map[string]interface{}{"type": scalerType}
+		scaling := map[string]any{"type": scalerType}
 		switch scalerType {
 		case "QUEUE_DELAY":
 			if value < 0.5 {
-				return fmt.Errorf("queue delay must be at least 0.5 seconds, set --scale-threshold")
+				return errors.New("queue delay must be at least 0.5 seconds, set --scale-threshold")
 			}
 			scaling["queueDelay"] = value
 		case "REQUEST_COUNT":
 			if value < 1 || value != float64(int(value)) {
-				return fmt.Errorf("request count must be a positive integer, set --scale-threshold")
+				return errors.New("request count must be a positive integer, set --scale-threshold")
 			}
 			scaling["requestCount"] = int(value)
 		default:

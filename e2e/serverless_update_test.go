@@ -21,11 +21,11 @@ func TestE2E_ServerlessUpdateV2(t *testing.T) {
 		t.Fatal(err)
 	}
 	name := fmt.Sprintf("con-2158-%d", time.Now().UnixNano())
-	data, err := client.PostV2("/serverless", map[string]interface{}{
+	data, err := client.PostV2("/serverless", map[string]any{
 		"name": name, "image": mockWorkerImage, "type": "QUEUE",
-		"gpu":     map[string]interface{}{"pools": []string{"ADA_24"}, "count": 1},
-		"workers": map[string]interface{}{"min": 0, "max": 0, "idleTimeout": 5},
-		"scaling": map[string]interface{}{"type": "QUEUE_DELAY", "queueDelay": 0.5},
+		"gpu":     map[string]any{"pools": []string{"ADA_24"}, "count": 1},
+		"workers": map[string]any{"min": 0, "max": 0, "idleTimeout": 5},
+		"scaling": map[string]any{"type": "QUEUE_DELAY", "queueDelay": 0.5},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -41,7 +41,7 @@ func TestE2E_ServerlessUpdateV2(t *testing.T) {
 			t.Errorf("clean up endpoint %s: %v", created.ID, err)
 		}
 	})
-	update := func(flags ...string) map[string]interface{} {
+	update := func(flags ...string) map[string]any {
 		t.Helper()
 		args := append([]string{"serverless", "update", created.ID}, flags...)
 		result := runInvokeCLI(t, args...)
@@ -67,7 +67,7 @@ func TestE2E_ServerlessUpdateV2(t *testing.T) {
 		if result.exitCode != 0 {
 			t.Fatalf("%v failed: %s", args, result.stderr)
 		}
-		var endpoints []map[string]interface{}
+		var endpoints []map[string]any
 		if args[1] == "get" {
 			endpoints = append(endpoints, result.stdoutJSON(t))
 		} else if err := json.Unmarshal([]byte(result.stdout), &endpoints); err != nil {

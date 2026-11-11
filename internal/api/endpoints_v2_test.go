@@ -241,7 +241,7 @@ func (s *updateModelsStub) client(t *testing.T) *Client {
 		switch {
 		case strings.Contains(body.Query, "EndpointConfig"):
 			if s.configErr != "" {
-				_, _ = w.Write([]byte(`{"reflect":[{"message":"` + s.configErr + `"}]}`))
+				_, _ = w.Write([]byte(`{"errors":[{"message":"` + s.configErr + `"}]}`))
 				return
 			}
 			_, _ = w.Write([]byte(`{"data":{"myself":{"endpoint":` + s.config + `}}}`))
@@ -340,7 +340,7 @@ func TestUpdateEndpointModels_ConfigReadFailureSkipsWrite(t *testing.T) {
 	client := stub.client(t)
 
 	_, err := client.UpdateEndpointModels("ep-abc", nil)
-	if err == nil || !strings.Contains(err.Error(), "failed to fetch endpoint") {
+	if err == nil || !strings.Contains(err.Error(), "failed to fetch endpoint") || !strings.Contains(err.Error(), stub.configErr) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if stub.saveCalled {
@@ -467,7 +467,7 @@ func TestUpdateEndpoint_V2Patch(t *testing.T) {
 			if err := stub.client(t).UpdateEndpoint("ep-1", &tc.req); err != nil {
 				t.Fatal(err)
 			}
-			var want map[string]interface{}
+			var want map[string]any
 			if err := json.Unmarshal([]byte(tc.want), &want); err != nil {
 				t.Fatal(err)
 			}
@@ -528,7 +528,11 @@ func TestUpdateEndpoint_PreservesFractionalDelay(t *testing.T) {
 	if err := client.UpdateEndpoint("ep-1", &EndpointUpdateRequest{ScalerType: "QUEUE_DELAY"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := stub.patched["scaling"].(map[string]interface{})["queueDelay"]; got != 0.5 {
+	scaling, ok := stub.patched["scaling"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing scaling: %v", stub.patched)
+	}
+	if got := scaling["queueDelay"]; got != 0.5 {
 		t.Fatalf("queueDelay = %v, want 0.5", got)
 	}
 	stub.patched = nil
@@ -552,7 +556,9 @@ func TestUpdateEndpoint_V2Failures(t *testing.T) {
 					}
 					w.Header().Set("Retry-After", "0")
 					w.WriteHeader(status)
-					_, _ = fmt.Fprintf(w, `{"status":%d,"title":"request failed","detail":"test failure"}`, status)
+					if _, err := fmt.Fprintf(w, `{"status":%d,"title":"request failed","detail":"test failure"}`, status); err != nil {
+						t.Error(err)
+					}
 				}))
 				t.Cleanup(server.Close)
 				req := &EndpointUpdateRequest{Name: "renamed"}

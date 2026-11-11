@@ -84,7 +84,7 @@ func resetUpdateVars(t *testing.T) {
 
 type updateServer struct {
 	endpoint  string // raw v2 endpoint json
-	patchBody map[string]interface{}
+	patchBody map[string]any
 	gql       func(query string, body map[string]interface{}) string
 }
 
@@ -220,10 +220,10 @@ func TestRunUpdate_AllNumericFlagsAreWired(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	want := map[string]interface{}{
+	want := map[string]any{
 		"name":    "renamed",
-		"workers": map[string]interface{}{"min": float64(0), "max": float64(7), "idleTimeout": float64(30)},
-		"scaling": map[string]interface{}{"type": "QUEUE_DELAY", "queueDelay": float64(4)},
+		"workers": map[string]any{"min": float64(0), "max": float64(7), "idleTimeout": float64(30)},
+		"scaling": map[string]any{"type": "QUEUE_DELAY", "queueDelay": float64(4)},
 	}
 	if !reflect.DeepEqual(s.patchBody, want) {
 		t.Fatalf("body = %#v, want %#v", s.patchBody, want)
@@ -241,10 +241,14 @@ func TestRunUpdate_WorkersMinZeroIsSent(t *testing.T) {
 	}
 
 	// see issue #298.
-	if got, ok := s.patchBody["workers"].(map[string]interface{})["min"]; !ok || got != float64(0) {
+	workers, ok := s.patchBody["workers"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing workers: %v", s.patchBody)
+	}
+	if got, ok := workers["min"]; !ok || got != float64(0) {
 		t.Fatalf("expected workersMin 0, got %#v", s.patchBody)
 	}
-	if _, ok := s.patchBody["workers"].(map[string]interface{})["max"]; ok {
+	if _, ok := workers["max"]; ok {
 		t.Errorf("an unset workersMax must be omitted, got %#v", s.patchBody)
 	}
 }
@@ -291,7 +295,11 @@ func TestRunUpdate_RejectsOutOfRangeNumericFlags(t *testing.T) {
 			if tc.field == "requestCount" {
 				section = "scaling"
 			}
-			if got := s.patchBody[section].(map[string]interface{})[tc.field]; got != tc.wantValue {
+			fields, ok := s.patchBody[section].(map[string]any)
+			if !ok {
+				t.Fatalf("missing %s: %v", section, s.patchBody)
+			}
+			if got := fields[tc.field]; got != tc.wantValue {
 				t.Errorf("expected %s %v, got %#v", tc.field, tc.wantValue, s.patchBody)
 			}
 		})
@@ -406,7 +414,7 @@ func TestRunUpdate_InapplicableIdleTimeout(t *testing.T) {
 					t.Error(err)
 				}
 			})
-			var result map[string]interface{}
+			var result map[string]any
 			if err := yaml.Unmarshal([]byte(stdout), &result); err != nil {
 				t.Fatal(err)
 			}
