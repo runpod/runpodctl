@@ -65,7 +65,7 @@ func (s *v2EndpointStub) client(t *testing.T) *Client {
 		}
 	}))
 	t.Cleanup(server.Close)
-	t.Setenv("RUNPOD_REST_V2_URL", server.URL)
+	t.Setenv("RUNPOD_API_URL", server.URL)
 	client := newV2TestClient(t, server)
 	client.baseURL = server.URL
 	return client
@@ -262,8 +262,7 @@ func (s *updateModelsStub) client(t *testing.T) *Client {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	client.baseURL = "http://v1.invalid"
-	client.v2BaseURL = "http://v2.invalid"
+	client.baseURL = "http://rest.invalid"
 	return client
 }
 

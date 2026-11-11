@@ -122,7 +122,7 @@ func (s *updateServer) start(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	t.Setenv("RUNPOD_API_KEY", "test-key")
-	t.Setenv("RUNPOD_REST_V2_URL", server.URL)
+	t.Setenv("RUNPOD_API_URL", server.URL)
 	viper.Set("restApiUrl", server.URL)
 	viper.Set("apiUrl", server.URL)
 	t.Cleanup(func() {

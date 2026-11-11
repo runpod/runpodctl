@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strings"
 
 	"github.com/runpod/runpodctl/internal/configenv"
 	"github.com/spf13/viper"
@@ -15,15 +14,6 @@ import (
 // V2Client serves the v2 calls that need a per-call context: the log streams
 // (logs.go) and the worker listing. Ordinary v2 requests go through Client's
 // GetV2/PostV2/PatchV2/PutV2/DeleteV2 helpers.
-
-// restV2BaseURL resolves the v2 base url, falling back to prod.
-func restV2BaseURL() string {
-	baseURL := configenv.RESTV2URL()
-	if baseURL == "" {
-		baseURL = DefaultRESTV2BaseURL
-	}
-	return strings.TrimSuffix(baseURL, "/")
-}
 
 // V2Client makes ordinary (non-streaming) json requests against the v2 rest api.
 type V2Client struct {
@@ -46,7 +36,7 @@ func NewV2Client() (*V2Client, error) {
 	}
 
 	return &V2Client{
-		baseURL:    restV2BaseURL(),
+		baseURL:    restBaseURL(),
 		apiKey:     apiKey,
 		httpClient: &http.Client{Timeout: timeout},
 		userAgent:  buildUserAgent(),

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -71,20 +72,15 @@ type User struct {
 func (c *Client) graphqlRequest(query string, variables map[string]interface{}) ([]byte, error) {
 	apiURL := configenv.GraphQLURL()
 	if apiURL == "" {
-		apiURL = "https://api.runpod.io/graphql"
+		apiURL = DefaultGraphQLURL
 	}
-
-	// temporarily swap base URL for GraphQL
-	origBaseURL := c.baseURL
-	c.baseURL = apiURL
-	defer func() { c.baseURL = origBaseURL }()
 
 	body := map[string]interface{}{
 		"query":     query,
 		"variables": variables,
 	}
 
-	return c.Post("", body)
+	return c.requestURL(http.MethodPost, apiURL, body)
 }
 
 // v2CatalogGpu is a gpu type from GET /v2/catalog/gpus.

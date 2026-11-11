@@ -191,7 +191,7 @@ func CreatePod(podInput *CreatePodInput) (pod map[string]interface{}, err error)
 	return
 }
 
-// rp-migrate: keep-v1 -- rest v2 has no spot bids
+// StartSpotPod starts a spot pod with a bid through graphql.
 func StartSpotPod(id string, bidPerGpu float32, gpuCount int) (podBidResume map[string]interface{}, err error) {
 	input := Input{
 		Query: `

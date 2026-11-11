@@ -24,7 +24,7 @@ func TestGetRequestConstructionErrorDoesNotRetry(t *testing.T) {
 	withRetryBackoff(t, time.Second)
 	client := newTestClient(t, "http://bad url")
 	start := time.Now()
-	_, err := client.Get("/x", nil)
+	_, err := client.GetV2("/x", nil)
 	if !errors.Is(err, errRequestConstruction) {
 		t.Fatalf("expected request construction error, got %v", err)
 	}
@@ -50,7 +50,7 @@ func TestPermanentServerErrorsAreNotRetried(t *testing.T) {
 				attempts.Add(1)
 				return testResponse(status, ""), nil
 			})
-			if _, err := client.Get("/x", nil); err == nil {
+			if _, err := client.GetV2("/x", nil); err == nil {
 				t.Fatal("expected server error")
 			}
 			if got := attempts.Load(); got != 1 {
@@ -133,7 +133,7 @@ func TestGetRetriesTransient5xx(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	client := newTestClient(t, server.URL)
-	if _, err := client.Get("/x", nil); err != nil {
+	if _, err := client.GetV2("/x", nil); err != nil {
 		t.Fatalf("expected success after retries, got %v", err)
 	}
 	if got := n.Load(); got != 3 {
@@ -156,7 +156,7 @@ func TestGetRetries429(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	client := newTestClient(t, server.URL)
-	if _, err := client.Get("/x", nil); err != nil {
+	if _, err := client.GetV2("/x", nil); err != nil {
 		t.Fatalf("expected success after 429 retry, got %v", err)
 	}
 	if got := n.Load(); got != 2 {
@@ -175,10 +175,10 @@ func TestWritesAreNeverRetried(t *testing.T) {
 		status int
 		call   func(c *Client) error
 	}{
-		{"post 429", http.StatusTooManyRequests, func(c *Client) error { _, err := c.Post("/x", body); return err }},
-		{"post 503", http.StatusServiceUnavailable, func(c *Client) error { _, err := c.Post("/x", body); return err }},
-		{"patch 429", http.StatusTooManyRequests, func(c *Client) error { _, err := c.Patch("/x", body); return err }},
-		{"delete 429", http.StatusTooManyRequests, func(c *Client) error { _, err := c.Delete("/x"); return err }},
+		{"post 429", http.StatusTooManyRequests, func(c *Client) error { _, err := c.PostV2("/x", body); return err }},
+		{"post 503", http.StatusServiceUnavailable, func(c *Client) error { _, err := c.PostV2("/x", body); return err }},
+		{"patch 429", http.StatusTooManyRequests, func(c *Client) error { _, err := c.PatchV2("/x", body); return err }},
+		{"delete 429", http.StatusTooManyRequests, func(c *Client) error { _, err := c.DeleteV2("/x"); return err }},
 		{"v2 post 429", http.StatusTooManyRequests, func(c *Client) error { _, err := c.PostV2("/pods", body); return err }},
 		{"v2 put 429", http.StatusTooManyRequests, func(c *Client) error { _, err := c.PutV2("/x", body); return err }},
 	}
@@ -194,7 +194,7 @@ func TestWritesAreNeverRetried(t *testing.T) {
 			t.Cleanup(server.Close)
 
 			client := newTestClient(t, server.URL)
-			client.v2BaseURL = server.URL
+			client.baseURL = server.URL
 			if err := tt.call(client); err == nil {
 				t.Fatalf("expected error on %d", tt.status)
 			}
@@ -228,7 +228,7 @@ func TestRetriesShareOneDeadline(t *testing.T) {
 	client := newTestClient(t, server.URL)
 	client.httpClient.Timeout = timeout
 	start := time.Now()
-	if _, err := client.Get("/x", nil); err == nil {
+	if _, err := client.GetV2("/x", nil); err == nil {
 		t.Fatal("expected error on persistent 503")
 	}
 	// 200ms + 400ms of backoff without a shared deadline; with one, the second
@@ -255,7 +255,7 @@ func TestRetryAfterBeyondDeadlineGivesUp(t *testing.T) {
 	client := newTestClient(t, server.URL)
 	client.httpClient.Timeout = time.Second
 	start := time.Now()
-	_, err := client.Get("/x", nil)
+	_, err := client.GetV2("/x", nil)
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusTooManyRequests {
 		t.Fatalf("expected the 429 APIError, got %v", err)
@@ -286,7 +286,7 @@ func TestGet429WithTruncatedBodyIsRetried(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	client := newTestClient(t, server.URL)
-	if _, err := client.Get("/x", nil); err != nil {
+	if _, err := client.GetV2("/x", nil); err != nil {
 		t.Fatalf("expected success after truncated 429, got %v", err)
 	}
 	if got := n.Load(); got != 2 {
@@ -306,7 +306,7 @@ func TestRedirectIsNotRetried(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	client := newTestClient(t, server.URL)
-	if _, err := client.Get("/x", nil); err == nil {
+	if _, err := client.GetV2("/x", nil); err == nil {
 		t.Fatal("expected redirect error")
 	}
 	if got := n.Load(); got != 1 {

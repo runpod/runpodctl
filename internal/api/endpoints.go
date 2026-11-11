@@ -243,7 +243,6 @@ func (c *Client) UpdateEndpoint(endpointID string, req *EndpointUpdateRequest) e
 	return err
 }
 
-// rp-migrate: keep-v1 start
 // endpoint templates stay on graphql: rest v2 copies a template into a hidden
 // per-endpoint template, on create and on a templateId patch alike, so the
 // endpoint stops receiving later edits to the template. graphql links it.
@@ -288,15 +287,12 @@ func (c *Client) UpdateEndpointTemplate(endpointID, templateID string) error {
 	return nil
 }
 
-// rp-migrate: keep-v1 end
-
 // DeleteEndpoint deletes an endpoint
 func (c *Client) DeleteEndpoint(endpointID string) error {
 	_, err := c.DeleteV2("/serverless/" + url.PathEscape(endpointID))
 	return err
 }
 
-// rp-migrate: keep-v1 start
 // model references have no rest v2 field, so this whole round trip stays on
 // graphql.
 
@@ -474,8 +470,6 @@ func (c *Client) UpdateEndpointModels(endpointID string, modelRefs []string) (*E
 	return resp.Data.SaveEndpoint, nil
 }
 
-// rp-migrate: keep-v1 end
-
 // NetworkVolumeIDInput is a single multi-region network volume entry for the
 // graphql saveEndpoint mutation (rest uses a flat []string instead).
 type NetworkVolumeIDInput struct {
@@ -517,7 +511,6 @@ type EndpointTemplateInput struct {
 	Env               []*PodEnvVar `json:"env"`
 }
 
-// rp-migrate: keep-v1 start
 // CreateEndpointGQL creates an endpoint via GraphQL (saveEndpoint mutation).
 // rest v2 has no hubReleaseId or modelReferences, and it copies --template-id
 // into a hidden template instead of linking it, so creates stay here.
@@ -585,5 +578,3 @@ func (c *Client) CreateEndpointGQL(req *EndpointCreateGQLInput) (*Endpoint, erro
 
 	return resp.Data.SaveEndpoint, nil
 }
-
-// rp-migrate: keep-v1 end

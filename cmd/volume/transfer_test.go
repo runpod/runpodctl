@@ -173,7 +173,7 @@ func TestRejectedAPIKeyNamesTheFix(t *testing.T) {
 	defer server.Close()
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("RUNPOD_API_KEY", "rpa_invalid")
-	t.Setenv("RUNPOD_REST_V2_URL", server.URL+"/v2/")
+	t.Setenv("RUNPOD_API_URL", server.URL+"/v2/")
 
 	_, err := lookupDataCenter("vol1")
 	if !errors.Is(err, errAPIKeyRejected) {

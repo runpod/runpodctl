@@ -70,11 +70,7 @@ func formatDependentEndpoints(endpoints []DependentEndpoint) string {
 // pinned to a specific version hash. Pass hash="" to match any version of the
 // model (used when removing the whole model rather than a single version).
 //
-// This goes through the GraphQL api (api.Query), not internal/api's REST
-// client: verified live that REST GET /v1/endpoints and /v1/endpoints/{id}
-// never include modelReferences at all (confirmed by inspecting the raw REST
-// response for a real endpoint), so ListEndpoints() would silently find zero
-// dependents every time. modelReferences is exposed via GraphQL, e.g.
+// graphql exposes the modelReferences needed to find dependent endpoints via
 // myself { endpoints { modelReferences } }.
 func defaultListDependentEndpoints(owner, name, hash string) ([]DependentEndpoint, error) {
 	gqlInput := api.Input{

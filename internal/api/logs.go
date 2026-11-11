@@ -24,10 +24,6 @@ import (
 // routes would block until the pod died, so none of them can be reused here.
 
 const (
-	// DefaultRESTV2BaseURL is prod's v2 rest host. Note this is api.runpod.io,
-	// not the rest.runpod.io that DefaultBaseURL points at.
-	DefaultRESTV2BaseURL = "https://api.runpod.io/v2"
-
 	// LogTailMax is the largest `tail` the api accepts; more is a 422. Rejecting
 	// it locally turns an opaque server error into a usage error naming the limit.
 	LogTailMax = 5000
@@ -117,7 +113,7 @@ func NewLogClient() (*LogClient, error) {
 	}
 
 	return &LogClient{
-		baseURL: restV2BaseURL(),
+		baseURL: restBaseURL(),
 		apiKey:  apiKey,
 		// no client-wide timeout, and no per-call deadline either: a --follow
 		// stream is meant to outlive any timeout the user has configured. The

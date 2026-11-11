@@ -11,6 +11,22 @@ import (
 	"github.com/runpod/runpodctl/internal/api"
 )
 
+func TestE2E_RESTReadRouting(t *testing.T) {
+	invokeBinary(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	for _, args := range [][]string{{"gpu", "list"}, {"pod", "list"}} {
+		result := runInvokeCLI(t, args...)
+		if result.exitCode != 0 {
+			t.Fatalf("%v failed: %s", args, result.stderr)
+		}
+		if !json.Valid([]byte(result.stdout)) {
+			t.Fatalf("%v did not return json", args)
+		}
+	}
+}
+
 func TestE2E_ServerlessUpdateV2(t *testing.T) {
 	invokeBinary(t)
 	home := t.TempDir()
@@ -41,6 +57,7 @@ func TestE2E_ServerlessUpdateV2(t *testing.T) {
 			t.Errorf("clean up endpoint %s: %v", created.ID, err)
 		}
 	})
+	assertNoWorkerLogs(t, created.ID)
 	update := func(flags ...string) map[string]any {
 		t.Helper()
 		args := append([]string{"serverless", "update", created.ID}, flags...)
@@ -62,7 +79,7 @@ func TestE2E_ServerlessUpdateV2(t *testing.T) {
 	if got["scalerType"] != "REQUEST_COUNT" || got["scalerValue"] != float64(3) {
 		t.Fatalf("unexpected strategy update: %v", got)
 	}
-	for _, args := range [][]string{{"serverless", "get", created.ID}, {"serverless", "list"}} {
+	for _, args := range [][]string{{"serverless", "get", created.ID, "--include-workers"}, {"serverless", "list"}} {
 		result := runInvokeCLI(t, args...)
 		if result.exitCode != 0 {
 			t.Fatalf("%v failed: %s", args, result.stderr)
@@ -93,5 +110,13 @@ func TestE2E_ServerlessUpdateV2(t *testing.T) {
 	got = update("--scale-by", "delay", "--scale-threshold", "2", "--idle-timeout", "7")
 	if got["scalerType"] != "QUEUE_DELAY" || got["scalerValue"] != float64(2) || got["idleTimeout"] != float64(7) {
 		t.Fatalf("unexpected combined update: %v", got)
+	}
+}
+
+func assertNoWorkerLogs(t *testing.T, endpointID string) {
+	t.Helper()
+	logs := runInvokeCLI(t, "serverless", "logs", endpointID)
+	if logs.exitCode == 0 || logs.stderrError(t).Code != "conflict" {
+		t.Fatalf("expected no-worker log discovery conflict: %s", logs.stderr)
 	}
 }

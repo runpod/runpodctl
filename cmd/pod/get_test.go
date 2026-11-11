@@ -32,8 +32,7 @@ func TestRunGetPrintsIncludedNetworkVolume(t *testing.T) {
 	defer server.Close()
 
 	t.Setenv("RUNPOD_API_KEY", "test-key")
-	t.Setenv("RUNPOD_API_URL", "http://v1.invalid")
-	t.Setenv("RUNPOD_REST_V2_URL", server.URL)
+	t.Setenv("RUNPOD_API_URL", server.URL)
 	t.Setenv("RUNPOD_GRAPHQL_URL", "http://graphql.invalid")
 
 	oldIncludeMachine := getIncludeMachine
