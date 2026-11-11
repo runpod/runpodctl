@@ -16,6 +16,10 @@ var updateCmd = &cobra.Command{
 	Short: "update an endpoint",
 	Long: `update an existing serverless endpoint.
 
+setting only --scale-by preserves the current threshold. switching a fractional
+delay to requests requires an integer --scale-threshold. --idle-timeout is not
+applicable to queue-based endpoints using request-count scaling.
+
 model updates include the saved modelReferences in the output; clearing models
 returns an empty array.
 

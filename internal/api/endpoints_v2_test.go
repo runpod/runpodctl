@@ -3,23 +3,19 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/spf13/viper"
 )
 
-// v2EndpointStub is a fake control plane for the serverless reads and writes:
-// rest v2 /serverless, /serverless/{id}, /catalog/gpus (pool membership) and
-// the worker listing, plus rest v1 /endpoints for updates and idle timeouts.
 type v2EndpointStub struct {
 	endpoints map[string]string // id -> raw v2 json
 	patched   map[string]interface{}
-	v1Patched map[string]interface{} // the v1 update body
-	v1Idle    map[string]int         // id -> idleTimeout, as v1 reports it
-	v1Status  int                    // non-zero: v1's single-endpoint read fails with it
 	requests  []string
 }
 
@@ -42,25 +38,6 @@ func (s *v2EndpointStub) client(t *testing.T) *Client {
 				}
 			}
 			_, _ = w.Write([]byte(`{"endpoints":[` + strings.Join(items, ",") + `],"pagination":{"hasNextPage":false}}`))
-		case strings.HasPrefix(r.URL.Path, "/endpoints/") && r.Method == http.MethodPatch:
-			if err := json.NewDecoder(r.Body).Decode(&s.v1Patched); err != nil {
-				t.Errorf("decode v1 update body: %v", err)
-			}
-			_, _ = w.Write([]byte(`{}`))
-		case r.URL.Path == "/endpoints" && r.Method == http.MethodGet:
-			var items []map[string]interface{}
-			for id, idle := range s.v1Idle {
-				items = append(items, map[string]interface{}{"id": id, "idleTimeout": idle})
-			}
-			_ = json.NewEncoder(w).Encode(items)
-		case strings.HasPrefix(r.URL.Path, "/endpoints/") && r.Method == http.MethodGet:
-			id := strings.TrimPrefix(r.URL.Path, "/endpoints/")
-			if s.v1Status != 0 {
-				w.WriteHeader(s.v1Status)
-				_, _ = w.Write([]byte(`{"error":"endpoint not found"}`))
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": id, "idleTimeout": s.v1Idle[id]})
 		case strings.HasSuffix(r.URL.Path, "/workers"):
 			_, _ = w.Write([]byte(`{"workers":[{"id":"w-1","status":"RUNNING"}]}`))
 		case strings.HasPrefix(r.URL.Path, "/serverless/"):
@@ -90,7 +67,7 @@ func (s *v2EndpointStub) client(t *testing.T) *Client {
 	t.Cleanup(server.Close)
 	t.Setenv("RUNPOD_REST_V2_URL", server.URL)
 	client := newV2TestClient(t, server)
-	client.baseURL = server.URL // v1, for updates and idle timeouts
+	client.baseURL = server.URL
 	return client
 }
 
@@ -264,7 +241,7 @@ func (s *updateModelsStub) client(t *testing.T) *Client {
 		switch {
 		case strings.Contains(body.Query, "EndpointConfig"):
 			if s.configErr != "" {
-				_, _ = w.Write([]byte(`{"errors":[{"message":"` + s.configErr + `"}]}`))
+				_, _ = w.Write([]byte(`{"reflect":[{"message":"` + s.configErr + `"}]}`))
 				return
 			}
 			_, _ = w.Write([]byte(`{"data":{"myself":{"endpoint":` + s.config + `}}}`))
@@ -468,71 +445,138 @@ func TestListEndpoints_IncludeWorkers(t *testing.T) {
 	}
 }
 
-// every v2 patch of an endpoint renames its template, so an update is one v1
-// patch, in v1's flat shape, and never touches v2.
-func TestUpdateEndpoint_OneV1Patch(t *testing.T) {
-	stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": v2GpuEndpoint}}
-	client := stub.client(t)
-
-	five, thirty := 5, 30
-	req := &EndpointUpdateRequest{Name: "renamed", WorkersMax: &five, IdleTimeout: &thirty, ScalerType: "QUEUE_DELAY"}
-	if err := client.UpdateEndpoint("ep-1", req); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestUpdateEndpoint_V2Patch(t *testing.T) {
+	zero, five, thirty := 0, 5, 30
+	cases := []struct {
+		name  string
+		req   EndpointUpdateRequest
+		want  string
+		reads int
+	}{
+		{"name", EndpointUpdateRequest{Name: "renamed"}, `{"name":"renamed"}`, 0},
+		{"workers", EndpointUpdateRequest{WorkersMin: &zero, WorkersMax: &five, IdleTimeout: &thirty}, `{"workers":{"min":0,"max":5,"idleTimeout":30}}`, 0},
+		{"zero max", EndpointUpdateRequest{WorkersMax: &zero}, `{"workers":{"max":0}}`, 0},
+		{"delay", EndpointUpdateRequest{ScalerType: "QUEUE_DELAY", ScalerValue: &five}, `{"scaling":{"type":"QUEUE_DELAY","queueDelay":5}}`, 0},
+		{"requests", EndpointUpdateRequest{ScalerType: "REQUEST_COUNT", ScalerValue: &five}, `{"scaling":{"type":"REQUEST_COUNT","requestCount":5}}`, 0},
+		{"threshold only", EndpointUpdateRequest{ScalerValue: &five}, `{"scaling":{"type":"REQUEST_COUNT","requestCount":5}}`, 1},
+		{"type only", EndpointUpdateRequest{ScalerType: "QUEUE_DELAY"}, `{"scaling":{"type":"QUEUE_DELAY","queueDelay":4}}`, 1},
 	}
-	want := map[string]interface{}{"name": "renamed", "workersMax": float64(5), "idleTimeout": float64(30), "scalerType": "QUEUE_DELAY"}
-	if len(stub.v1Patched) != len(want) {
-		t.Errorf("v1 body = %v, want exactly %v", stub.v1Patched, want)
-	}
-	for k, v := range want {
-		if stub.v1Patched[k] != v {
-			t.Errorf("v1 body %s = %v, want %v", k, stub.v1Patched[k], v)
-		}
-	}
-	if stub.patched != nil || len(stub.requests) != 1 {
-		t.Errorf("an update must be a single v1 request, got %v (v2 body %v)", stub.requests, stub.patched)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": v2GpuEndpoint}}
+			if err := stub.client(t).UpdateEndpoint("ep-1", &tc.req); err != nil {
+				t.Fatal(err)
+			}
+			var want map[string]interface{}
+			if err := json.Unmarshal([]byte(tc.want), &want); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(stub.patched, want) {
+				t.Fatalf("body = %#v, want %#v", stub.patched, want)
+			}
+			wantRequests := []string{"PATCH /serverless/ep-1"}
+			if tc.reads == 1 {
+				wantRequests = append([]string{"GET /serverless/ep-1"}, wantRequests...)
+			}
+			if !reflect.DeepEqual(stub.requests, wantRequests) {
+				t.Fatalf("requests = %v, want %v", stub.requests, wantRequests)
+			}
+		})
 	}
 }
 
-// v2 leaves workers.idleTimeout out on request-count endpoints; get and list
-// read it from v1 rather than print 0.
-func TestEndpointReads_FillIdleTimeoutFromV1(t *testing.T) {
-	noIdle := strings.Replace(v2GpuEndpoint, `"workers":{"min":0,"max":3,"idleTimeout":7}`, `"workers":{"min":0,"max":3}`, 1)
-	if noIdle == v2GpuEndpoint {
-		t.Fatal("fixture did not change")
+func TestEndpointReads_NullIdleTimeout(t *testing.T) {
+	for _, idle := range []string{"", `,"idleTimeout":null`} {
+		t.Run(idle, func(t *testing.T) {
+			noIdle := strings.Replace(v2GpuEndpoint, `"workers":{"min":0,"max":3,"idleTimeout":7}`, `"workers":{"min":0,"max":3`+idle+`}`, 1)
+			stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": noIdle, "ep-2": v2CpuEndpoint}}
+			client := stub.client(t)
+			ep, err := client.GetEndpoint("ep-1", false, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ep.IdleTimeout != nil {
+				t.Fatalf("get idleTimeout = %v, want nil", ep.IdleTimeout)
+			}
+			data, err := json.Marshal(ep)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(data), `"idleTimeout":null`) {
+				t.Fatalf("expected explicit null: %s", data)
+			}
+			eps, err := client.ListEndpoints(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(eps) != 2 || eps[0].IdleTimeout != nil || eps[1].IdleTimeout == nil || *eps[1].IdleTimeout != 60 {
+				t.Fatalf("unexpected endpoints: %#v", eps)
+			}
+			for _, r := range stub.requests {
+				if strings.Contains(r, "/endpoints") {
+					t.Fatalf("unexpected v1 request: %s", r)
+				}
+			}
+		})
 	}
-	stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": noIdle, "ep-2": v2CpuEndpoint}, v1Idle: map[string]int{"ep-1": 50, "ep-2": 999}}
+}
+
+func TestUpdateEndpoint_PreservesFractionalDelay(t *testing.T) {
+	raw := strings.Replace(v2GpuEndpoint, `"scaling":{"type":"REQUEST_COUNT","requestCount":4}`, `"scaling":{"type":"QUEUE_DELAY","queueDelay":0.5}`, 1)
+	stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": raw}}
 	client := stub.client(t)
-
-	ep, err := client.GetEndpoint("ep-1", false, false)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if ep.IdleTimeout == nil || *ep.IdleTimeout != 50 {
-		t.Errorf("get idleTimeout = %v, want 50 from v1", ep.IdleTimeout)
-	}
-
-	eps, err := client.ListEndpoints(nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	got := map[string]int{}
-	for _, e := range eps {
-		if e.IdleTimeout != nil {
-			got[e.ID] = *e.IdleTimeout
-		}
-	}
-	// ep-2's v2 value stands; only the missing one comes from v1
-	if got["ep-1"] != 50 || got["ep-2"] != 60 {
-		t.Errorf("list idle timeouts = %v, want ep-1 50 (v1) and ep-2 60 (v2)", got)
-	}
-
-	stub.requests = nil
-	if _, err := client.GetEndpoint("ep-2", false, false); err != nil {
+	if err := client.UpdateEndpoint("ep-1", &EndpointUpdateRequest{ScalerType: "QUEUE_DELAY"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, r := range stub.requests {
-		if strings.HasPrefix(r, "GET /endpoints") {
-			t.Errorf("an endpoint v2 reports in full must not read v1: %v", stub.requests)
+	if got := stub.patched["scaling"].(map[string]interface{})["queueDelay"]; got != 0.5 {
+		t.Fatalf("queueDelay = %v, want 0.5", got)
+	}
+	stub.patched = nil
+	if err := client.UpdateEndpoint("ep-1", &EndpointUpdateRequest{ScalerType: "REQUEST_COUNT"}); err == nil || !strings.Contains(err.Error(), "--scale-threshold") {
+		t.Fatalf("expected an explicit integer threshold requirement: %v", err)
+	}
+	if stub.patched != nil {
+		t.Fatalf("invalid scaling must not write: %v", stub.patched)
+	}
+}
+
+func TestUpdateEndpoint_V2Failures(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusServiceUnavailable} {
+		for _, read := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%d/read=%t", status, read), func(t *testing.T) {
+				var methods []string
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					methods = append(methods, r.Method)
+					if r.URL.Path != "/serverless/ep-1" {
+						t.Errorf("unexpected path %s", r.URL.Path)
+					}
+					w.Header().Set("Retry-After", "0")
+					w.WriteHeader(status)
+					_, _ = fmt.Fprintf(w, `{"status":%d,"title":"request failed","detail":"test failure"}`, status)
+				}))
+				t.Cleanup(server.Close)
+				req := &EndpointUpdateRequest{Name: "renamed"}
+				method := http.MethodPatch
+				if read {
+					req.ScalerType = "QUEUE_DELAY"
+					method = http.MethodGet
+				}
+				err := newV2TestClient(t, server).UpdateEndpoint("ep-1", req)
+				var apiErr *APIError
+				if !errors.As(err, &apiErr) || apiErr.Status != status {
+					t.Fatalf("error = %v, want status %d", err, status)
+				}
+				want := []string{method}
+				if read && status == http.StatusServiceUnavailable {
+					want = make([]string, maxRetryAttempts)
+					for i := range want {
+						want[i] = method
+					}
+				}
+				if !reflect.DeepEqual(methods, want) {
+					t.Fatalf("requests = %v, want %v", methods, want)
+				}
+			})
 		}
 	}
 }
@@ -556,42 +600,6 @@ func TestGetEndpoint_FractionalDelayAndUnknownPool(t *testing.T) {
 	want := []string{"NVIDIA L4", "RETIRED_80"}
 	if strings.Join(ep.GpuTypeIDs, ",") != strings.Join(want, ",") {
 		t.Errorf("gpuTypeIds = %v, want %v", ep.GpuTypeIDs, want)
-	}
-}
-
-// an endpoint v1's list doesn't report (created or deleted between the two
-// reads) gets no idleTimeout, never 0, and doesn't fail the whole list
-func TestListEndpoints_MissingV1IdleTimeoutIsLeftOut(t *testing.T) {
-	noIdle := strings.Replace(v2GpuEndpoint, `"workers":{"min":0,"max":3,"idleTimeout":7}`, `"workers":{"min":0,"max":3}`, 1)
-	noIdleCPU := strings.Replace(v2CpuEndpoint, `"workers":{"min":1,"max":2,"idleTimeout":60}`, `"workers":{"min":1,"max":2}`, 1)
-	// two endpoints miss it, so the fill reads v1's list, which lacks ep-1
-	stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": noIdle, "ep-2": noIdleCPU}, v1Idle: map[string]int{"ep-2": 5}}
-	eps, err := stub.client(t).ListEndpoints(nil)
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	for _, e := range eps {
-		switch {
-		case e.ID == "ep-1" && e.IdleTimeout != nil:
-			t.Errorf("ep-1 idleTimeout = %d, want none", *e.IdleTimeout)
-		case e.ID == "ep-2" && (e.IdleTimeout == nil || *e.IdleTimeout != 5):
-			t.Errorf("ep-2 idleTimeout = %v, want 5 from v1", e.IdleTimeout)
-		}
-	}
-}
-
-// a failed v1 read fails the get, but never as not_found: v2 just returned
-// the endpoint
-func TestGetEndpoint_V1IdleTimeoutFailureIsNotNotFound(t *testing.T) {
-	noIdle := strings.Replace(v2GpuEndpoint, `"workers":{"min":0,"max":3,"idleTimeout":7}`, `"workers":{"min":0,"max":3}`, 1)
-	stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": noIdle}, v1Status: http.StatusNotFound}
-	_, err := stub.client(t).GetEndpoint("ep-1", false, false)
-	if err == nil || !strings.Contains(err.Error(), "failed to read the idle timeout") {
-		t.Fatalf("err = %v, want an idle timeout read error", err)
-	}
-	var coded interface{ ErrorCode() string }
-	if errors.As(err, &coded) && coded.ErrorCode() == "not_found" {
-		t.Fatalf("err code = not_found; the endpoint exists")
 	}
 }
 
@@ -622,33 +630,5 @@ func TestGetEndpoint_LocationsAndStartCmd(t *testing.T) {
 	cmd, _ := ep.Template["dockerStartCmd"].([]string)
 	if strings.Join(cmd, " ") != "python -u handler.py" {
 		t.Errorf("template dockerStartCmd = %#v", ep.Template["dockerStartCmd"])
-	}
-}
-
-// one endpoint missing its idle timeout, deleted before the v1 read: list
-// reads v1's collection, where it is simply absent, instead of a 404
-func TestListEndpoints_OneMissingIdleTimeoutReadsV1List(t *testing.T) {
-	noIdle := strings.Replace(v2GpuEndpoint, `"workers":{"min":0,"max":3,"idleTimeout":7}`, `"workers":{"min":0,"max":3}`, 1)
-	stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": noIdle, "ep-2": v2CpuEndpoint}, v1Status: http.StatusNotFound}
-	eps, err := stub.client(t).ListEndpoints(nil)
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	for _, e := range eps {
-		if e.ID == "ep-1" && e.IdleTimeout != nil {
-			t.Errorf("ep-1 idleTimeout = %d, want none", *e.IdleTimeout)
-		}
-	}
-}
-
-// a v1 failure other than a 404 keeps its code, so a 503 still reads as
-// retryable rather than cli_error
-func TestGetEndpoint_V1IdleTimeoutFailureKeepsCode(t *testing.T) {
-	noIdle := strings.Replace(v2GpuEndpoint, `"workers":{"min":0,"max":3,"idleTimeout":7}`, `"workers":{"min":0,"max":3}`, 1)
-	stub := &v2EndpointStub{endpoints: map[string]string{"ep-1": noIdle}, v1Status: http.StatusServiceUnavailable}
-	_, err := stub.client(t).GetEndpoint("ep-1", false, false)
-	var coded interface{ ErrorCode() string }
-	if !errors.As(err, &coded) || coded.ErrorCode() != "server_error" {
-		t.Fatalf("err = %v, want server_error kept", err)
 	}
 }

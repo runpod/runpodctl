@@ -4,7 +4,10 @@ list all endpoints
 
 ### Synopsis
 
-list all serverless endpoints in your account
+list all serverless endpoints in your account.
+
+idleTimeout is null when not applicable, including queue-based endpoints
+using request-count scaling.
 
 ```
 runpodctl serverless list [flags]
@@ -27,4 +30,3 @@ runpodctl serverless list [flags]
 ### SEE ALSO
 
 * [runpodctl serverless](runpodctl_serverless.md)	 - manage serverless endpoints
-

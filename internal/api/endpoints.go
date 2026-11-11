@@ -2,9 +2,7 @@ package api
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strings"
 
@@ -15,31 +13,29 @@ import (
 // omitempty: this struct is re-marshalled to render cli output, and 0 is a real
 // value for all of them.
 type Endpoint struct {
-	ID               string                  `json:"id"`
-	Name             string                  `json:"name"`
-	TemplateID       string                  `json:"templateId,omitempty"`
-	GpuIDs           string                  `json:"gpuIds,omitempty"`     // graphql only (read and write): pool ids with "-<type>" exclusions
-	GpuTypeIDs       []string                `json:"gpuTypeIds,omitempty"` // reads: gpu type ids, expanded from v2's pools
-	InstanceIDs      []string                `json:"instanceIds,omitempty"`
-	NetworkVolumeID  string                  `json:"networkVolumeId,omitempty"`
-	NetworkVolumeIDs []EndpointNetworkVolume `json:"networkVolumeIds,omitempty"`
-	Locations        string                  `json:"locations,omitempty"`
-	// IdleTimeout is nil only when neither v2 nor v1 reported one (an endpoint
-	// created or deleted between the two reads of a list)
-	IdleTimeout        *int                   `json:"idleTimeout,omitempty"`
-	ScalerType         string                 `json:"scalerType,omitempty"`
-	ScalerValue        float64                `json:"scalerValue"` // a queue delay is fractional (minimum 0.5)
-	WorkersMin         int                    `json:"workersMin"`
-	WorkersMax         int                    `json:"workersMax"`
-	GpuCount           int                    `json:"gpuCount"`
-	MinCudaVersion     string                 `json:"minCudaVersion,omitempty"`
-	Flashboot          *bool                  `json:"flashboot,omitempty"`
-	FlashBootType      string                 `json:"flashBootType,omitempty"`
-	ComputeType        string                 `json:"computeType,omitempty"`
-	ExecutionTimeoutMs int                    `json:"executionTimeoutMs"`
-	ModelReferences    []string               `json:"modelReferences,omitempty"`
-	Template           map[string]interface{} `json:"template,omitempty"`
-	Workers            []interface{}          `json:"workers,omitempty"`
+	ID                 string                  `json:"id"`
+	Name               string                  `json:"name"`
+	TemplateID         string                  `json:"templateId,omitempty"`
+	GpuIDs             string                  `json:"gpuIds,omitempty"`     // graphql only (read and write): pool ids with "-<type>" exclusions
+	GpuTypeIDs         []string                `json:"gpuTypeIds,omitempty"` // reads: gpu type ids, expanded from v2's pools
+	InstanceIDs        []string                `json:"instanceIds,omitempty"`
+	NetworkVolumeID    string                  `json:"networkVolumeId,omitempty"`
+	NetworkVolumeIDs   []EndpointNetworkVolume `json:"networkVolumeIds,omitempty"`
+	Locations          string                  `json:"locations,omitempty"`
+	IdleTimeout        *int                    `json:"idleTimeout"`
+	ScalerType         string                  `json:"scalerType,omitempty"`
+	ScalerValue        float64                 `json:"scalerValue"` // a queue delay is fractional (minimum 0.5)
+	WorkersMin         int                     `json:"workersMin"`
+	WorkersMax         int                     `json:"workersMax"`
+	GpuCount           int                     `json:"gpuCount"`
+	MinCudaVersion     string                  `json:"minCudaVersion,omitempty"`
+	Flashboot          *bool                   `json:"flashboot,omitempty"`
+	FlashBootType      string                  `json:"flashBootType,omitempty"`
+	ComputeType        string                  `json:"computeType,omitempty"`
+	ExecutionTimeoutMs int                     `json:"executionTimeoutMs"`
+	ModelReferences    []string                `json:"modelReferences,omitempty"`
+	Template           map[string]interface{}  `json:"template,omitempty"`
+	Workers            []interface{}           `json:"workers,omitempty"`
 	// URLs are the ready-to-call invoke urls, computed client-side from the id so
 	// an agent that just created an endpoint can call it without extra lookups.
 	URLs *EndpointInvokeURLs `json:"urls,omitempty"`
@@ -102,8 +98,7 @@ type EndpointListResponse struct {
 	Endpoints []Endpoint `json:"endpoints"`
 }
 
-// EndpointUpdateRequest is an endpoint update, in rest v1's wire shape; nil and
-// "" leave a setting unchanged.
+// endpoint updates leave nil and empty string settings unchanged.
 type EndpointUpdateRequest struct {
 	Name        string `json:"name,omitempty"`
 	WorkersMin  *int   `json:"workersMin,omitempty"`
@@ -141,9 +136,6 @@ func (c *Client) ListEndpoints(opts *EndpointListOptions) ([]Endpoint, error) {
 		}
 		endpoints = append(endpoints, out)
 	}
-	if err := c.fillIdleTimeouts(endpoints, v2Endpoints, true); err != nil {
-		return nil, err
-	}
 	return endpoints, nil
 }
 
@@ -161,47 +153,6 @@ func (c *Client) poolTypesFor(endpoints []v2Endpoint) (map[string][]string, erro
 		}
 	}
 	return nil, nil
-}
-
-// fillIdleTimeouts reads, over rest v1, the idle timeouts v2 leaves out (see
-// v1IdleTimeouts). out[i] is the mapping of v2[i]. a failed read is an error:
-// 0 would read as a real setting. an endpoint v1 doesn't list is an error too,
-// unless skipUnlisted: a list then leaves that row's idleTimeout out rather
-// than failing on an endpoint created or deleted between the two reads.
-func (c *Client) fillIdleTimeouts(out []Endpoint, v2 []v2Endpoint, skipUnlisted bool) error {
-	var missing []string
-	for i := range v2 {
-		if v2[i].Workers.IdleTimeout == nil {
-			missing = append(missing, v2[i].ID)
-		}
-	}
-	if len(missing) == 0 {
-		return nil
-	}
-	idle, err := c.v1IdleTimeouts(missing, skipUnlisted)
-	if err != nil {
-		// a v1 404 must not make an endpoint v2 just returned read as
-		// not_found; any other failure keeps its code (rate_limited,
-		// server_error, network_error), so an agent knows to retry
-		var apiErr *APIError
-		if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
-			return fmt.Errorf("failed to read the idle timeout: %v", err)
-		}
-		return fmt.Errorf("failed to read the idle timeout: %w", err)
-	}
-	for i := range out {
-		if v2[i].Workers.IdleTimeout == nil {
-			value, ok := idle[out[i].ID]
-			if !ok {
-				if skipUnlisted {
-					continue
-				}
-				return fmt.Errorf("failed to read the idle timeout: rest v1 did not report endpoint %s", out[i].ID)
-			}
-			out[i].IdleTimeout = &value
-		}
-	}
-	return nil
 }
 
 // GetEndpoint returns a single endpoint, from rest v2.
@@ -223,62 +174,72 @@ func (c *Client) GetEndpoint(endpointID string, includeTemplate, includeWorkers 
 	if err := c.decorateEndpoint(&out, e, opts, workers); err != nil {
 		return nil, err
 	}
-	outs := []Endpoint{out}
-	if err := c.fillIdleTimeouts(outs, []v2Endpoint{*e}, false); err != nil {
-		return nil, err
-	}
-	return &outs[0], nil
+	return &out, nil
 }
 
-// rp-migrate: keep-v1 start
-// UpdateEndpoint updates an endpoint over rest v1, in one patch. every v2 patch
-// of an endpoint, even one that only changes workers, also renames the
-// endpoint's template to "<endpoint name>-template", including a template
-// other endpoints share; v1 leaves the template alone.
 func (c *Client) UpdateEndpoint(endpointID string, req *EndpointUpdateRequest) error {
-	_, err := c.Patch("/endpoints/"+url.PathEscape(endpointID), req)
+	body := map[string]interface{}{}
+	if req.Name != "" {
+		body["name"] = req.Name
+	}
+	workers := map[string]interface{}{}
+	if req.WorkersMin != nil {
+		workers["min"] = *req.WorkersMin
+	}
+	if req.WorkersMax != nil {
+		workers["max"] = *req.WorkersMax
+	}
+	if req.IdleTimeout != nil {
+		workers["idleTimeout"] = *req.IdleTimeout
+	}
+	if len(workers) > 0 {
+		body["workers"] = workers
+	}
+	if req.ScalerType != "" || req.ScalerValue != nil {
+		scalerType := req.ScalerType
+		var value float64
+		if req.ScalerType == "" || req.ScalerValue == nil {
+			current, err := c.getV2Endpoint(endpointID)
+			if err != nil {
+				return err
+			}
+			if scalerType == "" {
+				scalerType = current.Scaling.Type
+			}
+			switch current.Scaling.Type {
+			case "QUEUE_DELAY":
+				if current.Scaling.QueueDelay != nil {
+					value = *current.Scaling.QueueDelay
+				}
+			case "REQUEST_COUNT":
+				if current.Scaling.RequestCount != nil {
+					value = float64(*current.Scaling.RequestCount)
+				}
+			}
+		}
+		if req.ScalerValue != nil {
+			value = float64(*req.ScalerValue)
+		}
+		scaling := map[string]interface{}{"type": scalerType}
+		switch scalerType {
+		case "QUEUE_DELAY":
+			if value < 0.5 {
+				return fmt.Errorf("queue delay must be at least 0.5 seconds, set --scale-threshold")
+			}
+			scaling["queueDelay"] = value
+		case "REQUEST_COUNT":
+			if value < 1 || value != float64(int(value)) {
+				return fmt.Errorf("request count must be a positive integer, set --scale-threshold")
+			}
+			scaling["requestCount"] = int(value)
+		default:
+			return fmt.Errorf("unsupported scaling type %q", scalerType)
+		}
+		body["scaling"] = scaling
+	}
+	_, err := c.PatchV2("/serverless/"+url.PathEscape(endpointID), body)
 	return err
 }
-
-// v1IdleTimeouts reads idle timeouts over rest v1, keyed by endpoint id. v2
-// leaves workers.idleTimeout out on request-count endpoints, though the
-// endpoint still has one.
-//
-// collection reads v1's list even for one id, so an endpoint deleted since the
-// v2 read is simply absent rather than a 404 that fails a whole list.
-func (c *Client) v1IdleTimeouts(endpointIDs []string, collection bool) (map[string]int, error) {
-	type v1Endpoint struct {
-		ID          string `json:"id"`
-		IdleTimeout int    `json:"idleTimeout"`
-	}
-	var endpoints []v1Endpoint
-	if len(endpointIDs) == 1 && !collection {
-		data, err := c.Get("/endpoints/"+url.PathEscape(endpointIDs[0]), nil)
-		if err != nil {
-			return nil, err
-		}
-		var e v1Endpoint
-		if err := json.Unmarshal(data, &e); err != nil {
-			return nil, fmt.Errorf("failed to parse response: %w", err)
-		}
-		endpoints = append(endpoints, e)
-	} else {
-		data, err := c.Get("/endpoints", nil)
-		if err != nil {
-			return nil, err
-		}
-		if err := json.Unmarshal(data, &endpoints); err != nil {
-			return nil, fmt.Errorf("failed to parse response: %w", err)
-		}
-	}
-	out := make(map[string]int, len(endpoints))
-	for _, e := range endpoints {
-		out[e.ID] = e.IdleTimeout
-	}
-	return out, nil
-}
-
-// rp-migrate: keep-v1 end
 
 // rp-migrate: keep-v1 start
 // endpoint templates stay on graphql: rest v2 copies a template into a hidden

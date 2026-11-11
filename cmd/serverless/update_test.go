@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -81,14 +82,9 @@ func resetUpdateVars(t *testing.T) {
 	})
 }
 
-// updateServer is a fake control plane for runUpdate: rest v1 takes the update
-// (PATCH /endpoints/ep-123) and reports idle timeouts, rest v2 serves the
-// endpoint read (GET /serverless/ep-123, plus the gpu catalog), graphql (POST
-// /) serves the template swap and the model-reference round trip.
 type updateServer struct {
-	endpoint  string                 // raw v2 endpoint json
-	patchBody map[string]interface{} // v2 patch body (must stay unused)
-	v1Body    map[string]interface{} // v1 update body
+	endpoint  string // raw v2 endpoint json
+	patchBody map[string]interface{}
 	gql       func(query string, body map[string]interface{}) string
 }
 
@@ -110,13 +106,6 @@ func (s *updateServer) start(t *testing.T) {
 				t.Errorf("decode patch body: %v", err)
 			}
 			_, _ = w.Write([]byte(s.endpoint))
-		case r.URL.Path == "/endpoints/ep-123" && r.Method == http.MethodGet:
-			_, _ = w.Write([]byte(`{"id":"ep-123","idleTimeout":42}`))
-		case r.URL.Path == "/endpoints/ep-123" && r.Method == http.MethodPatch:
-			if err := json.NewDecoder(r.Body).Decode(&s.v1Body); err != nil {
-				t.Errorf("decode v1 update body: %v", err)
-			}
-			_, _ = w.Write([]byte(`{}`))
 		case r.URL.Path == "/" && r.Method == http.MethodPost && s.gql != nil:
 			var body map[string]interface{}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -180,8 +169,8 @@ func TestRunUpdate_WarnsWhenTemplateSwapFailsAfterRESTUpdate(t *testing.T) {
 		runErr = runUpdate(jsonOutputCmd("json"), []string{"ep-123"})
 	})
 
-	if s.v1Body["name"] != "patched-name" {
-		t.Fatalf("expected name patched-name, got %#v", s.v1Body)
+	if s.patchBody["name"] != "patched-name" {
+		t.Fatalf("expected name patched-name, got %#v", s.patchBody)
 	}
 	if runErr == nil {
 		t.Fatal("expected error")
@@ -232,16 +221,12 @@ func TestRunUpdate_AllNumericFlagsAreWired(t *testing.T) {
 	}
 
 	want := map[string]interface{}{
-		"name": "renamed", "workersMin": float64(0), "workersMax": float64(7),
-		"idleTimeout": float64(30), "scalerType": "QUEUE_DELAY", "scalerValue": float64(4),
+		"name":    "renamed",
+		"workers": map[string]interface{}{"min": float64(0), "max": float64(7), "idleTimeout": float64(30)},
+		"scaling": map[string]interface{}{"type": "QUEUE_DELAY", "queueDelay": float64(4)},
 	}
-	for field, v := range want {
-		if got, ok := s.v1Body[field]; !ok || got != v {
-			t.Errorf("%s = %#v, want %v (body %#v)", field, got, v, s.v1Body)
-		}
-	}
-	if s.patchBody != nil {
-		t.Errorf("an update must not patch v2: %#v", s.patchBody)
+	if !reflect.DeepEqual(s.patchBody, want) {
+		t.Fatalf("body = %#v, want %#v", s.patchBody, want)
 	}
 }
 
@@ -256,11 +241,11 @@ func TestRunUpdate_WorkersMinZeroIsSent(t *testing.T) {
 	}
 
 	// see issue #298.
-	if got, ok := s.v1Body["workersMin"]; !ok || got != float64(0) {
-		t.Fatalf("expected workersMin 0, got %#v", s.v1Body)
+	if got, ok := s.patchBody["workers"].(map[string]interface{})["min"]; !ok || got != float64(0) {
+		t.Fatalf("expected workersMin 0, got %#v", s.patchBody)
 	}
-	if _, ok := s.v1Body["workersMax"]; ok {
-		t.Errorf("an unset workersMax must be omitted, got %#v", s.v1Body)
+	if _, ok := s.patchBody["workers"].(map[string]interface{})["max"]; ok {
+		t.Errorf("an unset workersMax must be omitted, got %#v", s.patchBody)
 	}
 }
 
@@ -286,7 +271,7 @@ func TestRunUpdate_RejectsOutOfRangeNumericFlags(t *testing.T) {
 	}{
 		{"idle timeout min", 1, -1, "idleTimeout", 1},
 		{"idle timeout max", 3600, -1, "idleTimeout", 3600},
-		{"scale threshold min", -1, 1, "scalerValue", 1},
+		{"scale threshold min", -1, 1, "requestCount", 1},
 	}
 
 	for _, tc := range accepted {
@@ -302,8 +287,12 @@ func TestRunUpdate_RejectsOutOfRangeNumericFlags(t *testing.T) {
 			if err := runUpdate(jsonOutputCmd("json"), []string{"ep-123"}); err != nil {
 				t.Fatalf("expected boundary value to be accepted, got %v", err)
 			}
-			if got := s.v1Body[tc.field]; got != tc.wantValue {
-				t.Errorf("expected %s %v, got %#v", tc.field, tc.wantValue, s.v1Body)
+			section := "workers"
+			if tc.field == "requestCount" {
+				section = "scaling"
+			}
+			if got := s.patchBody[section].(map[string]interface{})[tc.field]; got != tc.wantValue {
+				t.Errorf("expected %s %v, got %#v", tc.field, tc.wantValue, s.patchBody)
 			}
 		})
 	}
@@ -402,5 +391,28 @@ func TestRunUpdate_ModelReferences(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestRunUpdate_InapplicableIdleTimeout(t *testing.T) {
+	for _, format := range []string{"json", "yaml"} {
+		t.Run(format, func(t *testing.T) {
+			resetUpdateVars(t)
+			s := &updateServer{endpoint: `{"id":"ep-123","name":"my-endpoint","scaling":{"type":"REQUEST_COUNT","requestCount":9},"workers":{"min":0,"max":0}}`}
+			s.start(t)
+			setUpdateFlags(func() { updateWorkersMax = 0 })
+			stdout, _ := captureOutput(t, func() {
+				if err := runUpdate(jsonOutputCmd(format), []string{"ep-123"}); err != nil {
+					t.Error(err)
+				}
+			})
+			var result map[string]interface{}
+			if err := yaml.Unmarshal([]byte(stdout), &result); err != nil {
+				t.Fatal(err)
+			}
+			if idle, ok := result["idleTimeout"]; !ok || idle != nil {
+				t.Fatalf("expected explicit null idleTimeout: %s", stdout)
+			}
+		})
 	}
 }
