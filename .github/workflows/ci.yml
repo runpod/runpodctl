@@ -7,10 +7,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Test installer
         run: bash install_test.sh && bash install_tls_test.sh
-      - name: Setup Go 1.26.10
+      - name: Setup Go 1.26.11
         uses: actions/setup-go@v5
         with:
-          go-version: 1.26.10
+          go-version: 1.26.11
       # You can test your matrix by printing the current Go version
       - name: Display Go version
         run: go version

@@ -125,11 +125,11 @@ nix/
 
 The Go version is pinned in three places today (`go.mod`, `ci.yml`, `release.yml`). The flake must not become a fourth that drifts.
 
-- **nixpkgs lags Go point releases.** `versions.nix` takes nixpkgs' derivation for `go.mod`'s minor series (`go_1_26` for 1.26.x, so a minor bump moves it too) and pins it to **1.26.10**, including the `crypto/x509` fix for [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809). The source archive is fetched from `go.dev/dl` by hash:
+- **nixpkgs lags Go point releases.** `versions.nix` takes nixpkgs' derivation for `go.mod`'s minor series (`go_1_26` for 1.26.x, so a minor bump moves it too) and pins it to **1.26.11**, including the `crypto/x509` fix for [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809). The source archive is fetched from `go.dev/dl` by hash:
 
   ```nix
   pinnedGo = goBase.overrideAttrs (_old: rec {  # goBase = pkgs.go_1_26
-    version = "1.26.10";
+    version = "1.26.11";
     src = pkgs.fetchurl {
       url = "https://go.dev/dl/go${version}.src.tar.gz";
       hash = "sha256-…";
@@ -354,7 +354,7 @@ Each phase is one PR, small enough to review on its own:
 ## 13. Open questions and risks
 
 - **`vendorHash` ownership.** Who updates it, and do we automate it on Dependabot PRs? This is the main ongoing cost.
-- **Binary cache.** Cachix (shared with users, needs a token) or magic-nix-cache (CI only, no secrets)? Without one, every CI run rebuilds Go itself, because the 1.26.10 override isn't in `cache.nixos.org`.
+- **Binary cache.** Cachix (shared with users, needs a token) or magic-nix-cache (CI only, no secrets)? Without one, every CI run rebuilds Go itself, because the 1.26.11 override isn't in `cache.nixos.org`.
 - **Image publishing.** GHCR under `runpod/`, signing (cosign) and tags. Out of scope until someone needs the image.
 - **Darwin sandbox.** Loopback tests need `__darwinAllowLocalNetworking`. If the darwin sandbox still rejects them, the affected checks become linux-only, and the reason is written in the check file.
 - **`tools/upx`.** The committed 561 KB executable stays out of the Nix path. Nix images aren't upx-compressed, because stripping already gives most of the gain, and a compressed binary is slower to start and harder to scan.

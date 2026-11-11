@@ -70,7 +70,7 @@ in
   # Analysis tools come straight from nixpkgs (and so from cache.nixos.org).
   # They only need the same Go *language* version (1.26) as the module; the
   # pinned `go` above is first on PATH in every check, so package loading and
-  # govulncheck's standard-library check both see 1.26.10. A go.mod minor
+  # govulncheck's standard-library check both see 1.26.11. A go.mod minor
   # bump (1.27) also needs releases of these that read that Go's export data;
   # see nix/README.md §8.
   inherit (pkgs)
