@@ -343,6 +343,10 @@ func TestUpdateEndpointModels_ConfigReadFailureSkipsWrite(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "failed to fetch endpoint") || !strings.Contains(err.Error(), stub.configErr) {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	var gqlErr *GraphQLError
+	if !errors.As(err, &gqlErr) || gqlErr.Message != stub.configErr {
+		t.Fatalf("err = %v, want graphql error with message %q", err, stub.configErr)
+	}
 	if stub.saveCalled {
 		t.Error("saveEndpoint must not be called when the config read fails")
 	}
