@@ -561,17 +561,17 @@ its errors are json with a `code` and exit 1.
 | variable | default | what it sets |
 | --- | --- | --- |
 | `RUNPOD_API_KEY` | — | api key. also settable via `runpodctl doctor` or `~/.runpod/config.toml` (see config permissions below) |
-| `RUNPOD_API_URL` | `https://rest.runpod.io/v1` | rest v1, used for serverless updates and idle-timeout reads (config key `restApiUrl`) |
+| `RUNPOD_API_URL` | `https://api.runpod.io/v2` | rest v2, the main control plane: pods, serverless reads and updates, templates, volumes, registries, billing, the gpu/cpu/data center catalog, ssh keys and logs (config key `restApiUrl`) |
 | `RUNPOD_GRAPHQL_URL` | `https://api.runpod.io/graphql` | graphql, for what rest v2 does not cover yet: account info, the model repo, hub, serverless create and model references, template readmes and port labels, community templates, spot pods and `get cloud` (config key `apiUrl`) |
 | `RUNPOD_INVOKE_URL` | `https://api.runpod.ai/v2` | base for the serverless invoke urls reported by `serverless create/get/list/update`, and the host `serverless run/status/health` call (config key `invokeUrl`) |
-| `RUNPOD_REST_V2_URL` | `https://api.runpod.io/v2` | rest v2, the main control plane: pods, serverless reads and updates, templates, volumes, registries, billing, the gpu/cpu/data center catalog, ssh keys and logs (config key `restV2ApiUrl`) |
 | `RUNPOD_S3_ACCESS_KEY` / `RUNPOD_S3_SECRET_KEY` | — | s3 api keys for `network-volume upload/download` (config keys `s3AccessKey` / `s3SecretKey`) |
 | `RUNPOD_NO_UPDATE_CHECK` | — | any value turns off the update check and prompt |
 
 invoke is a separate service from the control plane: pointing `RUNPOD_API_URL`
 or `RUNPOD_GRAPHQL_URL` at a non-prod host does **not** move the invoke urls.
-override `RUNPOD_INVOKE_URL` explicitly when you need that. the three control
-planes are separate too: moving one does not move the others.
+override `RUNPOD_INVOKE_URL` explicitly when you need that. the two control
+planes (rest and graphql) are separate too: moving one does not move the other.
+`RUNPOD_REST_V2_URL` is no longer read: set `RUNPOD_API_URL` instead.
 
 ### config permissions
 
