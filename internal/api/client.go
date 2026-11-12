@@ -28,6 +28,7 @@ func buildUserAgent() string {
 const (
 	// DefaultBaseURL is the production rest control plane.
 	DefaultBaseURL = "https://api.runpod.io/v2"
+	// DefaultTimeout applies when no timeout is configured.
 	DefaultTimeout = 30 * time.Second
 )
 
