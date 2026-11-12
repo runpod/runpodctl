@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.1.1](https://github.com/runpod/runpodctl/compare/v3.1.0...v3.1.1) (2026-11-12)
+
+
+### Bug Fixes
+
+* route all REST commands through RUNPOD_API_URL & use rest V2 for everything (CON-2158) ([#400](https://github.com/runpod/runpodctl/issues/400)) ([ef760e7](https://github.com/runpod/runpodctl/commit/ef760e7af2912c0460efd9b5cbc731b5dc701829))
+
 ## [3.1.0](https://github.com/runpod/runpodctl/compare/v3.0.1...v3.1.0) (2026-11-05)
 
 
