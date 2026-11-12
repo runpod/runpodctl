@@ -43,8 +43,7 @@ func TestGetTemplateBackfillsPortsConfigFromGraphQL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
-	client.baseURL = "http://v1.invalid"
-	client.v2BaseURL = server.URL
+	client.baseURL = server.URL
 
 	tmpl, err := client.GetTemplate("tpl-1")
 	if err != nil {

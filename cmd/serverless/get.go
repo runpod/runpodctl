@@ -12,9 +12,12 @@ import (
 var getCmd = &cobra.Command{
 	Use:   "get <endpoint-id>",
 	Short: "get endpoint details",
-	Long:  "get details for a specific endpoint by id",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runGet,
+	Long: `get details for a specific endpoint by id.
+
+idleTimeout is null when not applicable, including queue-based endpoints
+using request-count scaling.`,
+	Args: cobra.ExactArgs(1),
+	RunE: runGet,
 }
 
 var (

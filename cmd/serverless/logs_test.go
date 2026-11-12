@@ -17,7 +17,7 @@ import (
 func withV2Server(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(handler)
-	t.Setenv(configenv.RESTV2URLEnv, server.URL)
+	t.Setenv(configenv.RESTURLEnv, server.URL)
 	t.Setenv(configenv.APIKeyEnv, "test-key")
 	// viper is a process global with no per-test scoping, so the previous value is
 	// restored rather than left overwritten -- 0 here means "fall back to

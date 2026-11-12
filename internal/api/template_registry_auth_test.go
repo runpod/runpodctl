@@ -28,7 +28,7 @@ func TestCreateTemplateIncludesRegistryAuthID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
-	client.v2BaseURL = server.URL
+	client.baseURL = server.URL
 
 	_, err = client.CreateTemplate(&TemplateCreateRequest{
 		Name:                    "private-template",
@@ -66,7 +66,7 @@ func TestUpdateTemplateCanClearRegistryAuthID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
-	client.v2BaseURL = server.URL
+	client.baseURL = server.URL
 
 	empty := ""
 	_, err = client.UpdateTemplate("tpl-123", &TemplateUpdateRequest{

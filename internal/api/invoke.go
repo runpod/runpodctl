@@ -33,7 +33,7 @@ const (
 
 // InvokeClient calls the serverless invoke service (api.runpod.ai/v2). It is
 // separate from Client on purpose: invoke is a different service from the
-// control plane (rest.runpod.io/v1), with its own host override
+// control plane (api.runpod.io/v2), with its own host override
 // (RUNPOD_INVOKE_URL) and its own timing profile. Deadlines are per call via
 // context instead of one client-wide timeout, because a single /runsync can
 // legitimately outlast the control-plane timeout. Auth header, User-Agent and

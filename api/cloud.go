@@ -12,8 +12,7 @@ type GetCloudInput struct {
 	TotalDisk     int   `json:"totalDisk,omitempty"`
 }
 
-// rp-migrate: keep-v1 -- the v2 catalog has no spot price and no per-count
-// minimum memory or vcpu, which is what this table prints.
+// GetCloud reads spot prices and per-count memory and vcpu minima through graphql.
 func GetCloud(in *GetCloudInput) (gpuTypes []interface{}, err error) {
 	input := Input{
 		Query: `

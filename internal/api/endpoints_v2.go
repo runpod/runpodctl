@@ -206,7 +206,7 @@ func (c *Client) workerClient(opts *EndpointListOptions) (*V2Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	v2.baseURL = c.v2URL()
+	v2.baseURL = c.baseURL
 	v2.httpClient = c.httpClient
 	return v2, nil
 }

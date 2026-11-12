@@ -4,7 +4,10 @@ get endpoint details
 
 ### Synopsis
 
-get details for a specific endpoint by id
+get details for a specific endpoint by id.
+
+idleTimeout is null when not applicable, including queue-based endpoints
+using request-count scaling.
 
 ```
 runpodctl serverless get <endpoint-id> [flags]
@@ -27,4 +30,3 @@ runpodctl serverless get <endpoint-id> [flags]
 ### SEE ALSO
 
 * [runpodctl serverless](runpodctl_serverless.md)	 - manage serverless endpoints
-

@@ -238,7 +238,6 @@ func (c *Client) ListTemplates() ([]Template, error) {
 	return templates, nil
 }
 
-// rp-migrate: keep-v1 start
 // backfillUserTemplateReadmes fills in readme, which rest v2 has no field for,
 // from one graphql read of the user's templates. best-effort: a failure leaves
 // the readmes empty rather than failing the listing.
@@ -271,8 +270,6 @@ func (c *Client) backfillUserTemplateReadmes(templates []Template) {
 		templates[i].Readme = readmes[templates[i].ID]
 	}
 }
-
-// rp-migrate: keep-v1 end
 
 // listOfficialTemplates reads runpod's official templates from the v2 catalog.
 func (c *Client) listOfficialTemplates() ([]Template, error) {
@@ -355,7 +352,6 @@ func (c *Client) ListAllTemplates(opts *TemplateListOptions) ([]Template, error)
 
 	// Fetch community templates SECOND. these stay on graphql: the v2 catalog's
 	// community set is a capped, curated ~100, against ~1,200 here.
-	// rp-migrate: keep-v1 start
 	if fetchCommunity && (opts == nil || opts.Type != TemplateTypeOfficial) {
 		variables := map[string]interface{}{
 			"input": map[string]interface{}{
@@ -374,7 +370,6 @@ func (c *Client) ListAllTemplates(opts *TemplateListOptions) ([]Template, error)
 			}
 		}
 	}
-	// rp-migrate: keep-v1 end
 
 	// Fetch user's own templates LAST
 	if fetchUser {
@@ -427,20 +422,17 @@ func (c *Client) GetTemplate(templateID string) (*Template, error) {
 		if !errors.As(err, &apiErr) || apiErr.Status != http.StatusNotFound {
 			return nil, err
 		}
-		// rp-migrate: keep-v1
 		return c.getTemplateByIDGraphQL(templateID)
 	}
 	template, err := parseV2Template(data)
 	if err != nil {
 		return nil, err
 	}
-	// rp-migrate: keep-v1 start
 	if gql, gqlErr := c.getTemplateByIDGraphQL(templateID); gqlErr == nil {
 		template.Readme = gql.Readme
 		template.PortsConfig = gql.PortsConfig
 		template.IsRunpod = gql.IsRunpod
 	}
-	// rp-migrate: keep-v1 end
 	return template, nil
 }
 

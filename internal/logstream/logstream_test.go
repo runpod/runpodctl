@@ -264,7 +264,7 @@ func sseServer(t *testing.T, framesPerWorker int) *httptest.Server {
 // runFanIn drives Run against a test server and returns what landed on stdout.
 func runFanIn(t *testing.T, server *httptest.Server, workers []string) (string, error) {
 	t.Helper()
-	t.Setenv(configenv.RESTV2URLEnv, server.URL)
+	t.Setenv(configenv.RESTURLEnv, server.URL)
 	t.Setenv(configenv.APIKeyEnv, "test-key")
 
 	client, err := api.NewLogClient()
@@ -447,7 +447,7 @@ func TestRunReportsWorkerFailureWhileOthersStillStream(t *testing.T) {
 		server.Close()
 	})
 
-	t.Setenv(configenv.RESTV2URLEnv, server.URL)
+	t.Setenv(configenv.RESTURLEnv, server.URL)
 	t.Setenv(configenv.APIKeyEnv, "test-key")
 	client, err := api.NewLogClient()
 	if err != nil {
@@ -542,7 +542,7 @@ func TestRunDiscoversWorkersThatAppearMidFollow(t *testing.T) {
 		server.Close()
 	})
 
-	t.Setenv(configenv.RESTV2URLEnv, server.URL)
+	t.Setenv(configenv.RESTURLEnv, server.URL)
 	t.Setenv(configenv.APIKeyEnv, "test-key")
 	client, err := api.NewLogClient()
 	if err != nil {
@@ -607,7 +607,7 @@ func TestRunStopsDiscoveringWhenEndpointIsGone(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	t.Setenv(configenv.RESTV2URLEnv, server.URL)
+	t.Setenv(configenv.RESTURLEnv, server.URL)
 	t.Setenv(configenv.APIKeyEnv, "test-key")
 	client, err := api.NewLogClient()
 	if err != nil {
@@ -649,7 +649,7 @@ func TestRunStopsDiscoveringWhenEndpointIsGone(t *testing.T) {
 // already open are still valid, so the command must keep going rather than die.
 func TestRunSurvivesDiscoveryRefreshFailure(t *testing.T) {
 	server := sseServer(t, 3)
-	t.Setenv(configenv.RESTV2URLEnv, server.URL)
+	t.Setenv(configenv.RESTURLEnv, server.URL)
 	t.Setenv(configenv.APIKeyEnv, "test-key")
 	client, err := api.NewLogClient()
 	if err != nil {
@@ -824,7 +824,7 @@ func TestRunCapCountsLiveStreamsNotSeenWorkers(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	t.Setenv(configenv.RESTV2URLEnv, server.URL)
+	t.Setenv(configenv.RESTURLEnv, server.URL)
 	t.Setenv(configenv.APIKeyEnv, "test-key")
 	client, err := api.NewLogClient()
 	if err != nil {

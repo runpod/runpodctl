@@ -27,7 +27,7 @@ func withModelStatusServer(t *testing.T, graphqlHandler http.HandlerFunc, restHa
 		restHandler(w, r)
 	}))
 	t.Setenv(configenv.GraphQLURLEnv, server.URL)
-	t.Setenv(configenv.RESTV2URLEnv, server.URL)
+	t.Setenv(configenv.RESTURLEnv, server.URL)
 	t.Setenv(configenv.APIKeyEnv, "test-key")
 	previousTimeout := viper.Get("timeout")
 	viper.Set("timeout", 0)

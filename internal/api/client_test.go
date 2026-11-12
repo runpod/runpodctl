@@ -82,7 +82,7 @@ func TestClient_Get(t *testing.T) {
 	}
 	client.baseURL = server.URL
 
-	data, err := client.Get("/test", nil)
+	data, err := client.GetV2("/test", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestClient_Post(t *testing.T) {
 	}
 	client.baseURL = server.URL
 
-	data, err := client.Post("/test", map[string]string{"name": "test"})
+	data, err := client.PostV2("/test", map[string]string{"name": "test"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestClient_Delete(t *testing.T) {
 	}
 	client.baseURL = server.URL
 
-	_, err = client.Delete("/test/123")
+	_, err = client.DeleteV2("/test/123")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestClient_ErrorResponse(t *testing.T) {
 	}
 	client.baseURL = server.URL
 
-	_, err = client.Get("/notfound", nil)
+	_, err = client.GetV2("/notfound", nil)
 	if err == nil {
 		t.Error("expected error for 404 response")
 	}
@@ -415,7 +415,7 @@ func TestParseAPIError_NeverEmitsANestedJSONBlob(t *testing.T) {
 	}
 }
 
-func TestRequestV2UsesV2BaseURL(t *testing.T) {
+func TestRequestV2UsesRESTBaseURL(t *testing.T) {
 	var gotPath, gotQuery, gotMethod string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod, gotPath, gotQuery = r.Method, r.URL.Path, r.URL.RawQuery
@@ -424,8 +424,7 @@ func TestRequestV2UsesV2BaseURL(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{
-		baseURL:    "http://v1.invalid",
-		v2BaseURL:  server.URL + "/v2/",
+		baseURL:    server.URL + "/v2/",
 		apiKey:     "test-key",
 		httpClient: server.Client(),
 	}
@@ -443,10 +442,10 @@ func TestRequestV2UsesV2BaseURL(t *testing.T) {
 	}
 }
 
-func TestV2URLFollowsConfig(t *testing.T) {
-	t.Setenv("RUNPOD_REST_V2_URL", "https://v2.example.test/v2/")
-	if got := (&Client{}).v2URL(); got != "https://v2.example.test/v2" {
-		t.Fatalf("v2URL = %q, want the configured url without a trailing slash", got)
+func TestRESTBaseURLFollowsConfig(t *testing.T) {
+	t.Setenv("RUNPOD_API_URL", "https://v2.example.test/v2/")
+	if got := restBaseURL(); got != "https://v2.example.test/v2" {
+		t.Fatalf("restBaseURL = %q, want the configured url without a trailing slash", got)
 	}
 }
 
@@ -524,7 +523,7 @@ func TestGetV2AllPagesFollowsCursorsAndStopsOnRepeat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.v2BaseURL = server.URL
+	client.baseURL = server.URL
 
 	var items []int
 	decode := func(data []byte) error {
@@ -561,14 +560,12 @@ func TestGetV2AllPagesFailsOnMissingCursor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.v2BaseURL = server.URL
+	client.baseURL = server.URL
 	if err := client.getV2AllPages("/things", nil, func([]byte) error { return nil }); err == nil {
 		t.Fatal("more pages without a cursor must be an error, not a partial list")
 	}
 }
 
-// newV2TestClient points a client's rest v2 traffic at server, and v1 at an
-// unroutable host so a missed migration fails instead of calling production.
 func newV2TestClient(t *testing.T, server *httptest.Server) *Client {
 	t.Helper()
 	t.Setenv("RUNPOD_API_KEY", "test-key")
@@ -576,7 +573,6 @@ func newV2TestClient(t *testing.T, server *httptest.Server) *Client {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.baseURL = "http://v1.invalid"
-	client.v2BaseURL = server.URL
+	client.baseURL = server.URL
 	return client
 }

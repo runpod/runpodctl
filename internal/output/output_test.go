@@ -307,7 +307,7 @@ func TestErrorFallbackCode(t *testing.T) {
 		{"wrapped plain error", fmt.Errorf("bad input: %w", errors.New("nope")), "cli_error"},
 		{"url error (connection refused)", &url.Error{
 			Op:  "Get",
-			URL: "http://127.0.0.1:9/v1/endpoints",
+			URL: "http://127.0.0.1:9/v2/serverless",
 			Err: &net.OpError{Op: "dial", Err: errors.New("connect: connection refused")},
 		}, "network_error"},
 		{"wrapped url error", fmt.Errorf("request failed: %w", &url.Error{

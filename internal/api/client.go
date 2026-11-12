@@ -26,7 +26,9 @@ func buildUserAgent() string {
 }
 
 const (
-	DefaultBaseURL = "https://rest.runpod.io/v1"
+	// DefaultBaseURL is the production rest control plane.
+	DefaultBaseURL = "https://api.runpod.io/v2"
+	// DefaultTimeout applies when no timeout is configured.
 	DefaultTimeout = 30 * time.Second
 )
 
@@ -38,9 +40,6 @@ type Client struct {
 	apiKey     string
 	httpClient *http.Client
 	userAgent  string
-	// v2BaseURL overrides the configured rest v2 base url (tests only); empty
-	// means resolve it per request, see v2URL.
-	v2BaseURL string
 }
 
 // NewClient creates a new REST API client
@@ -55,18 +54,13 @@ func NewClientWithAPIKey(apiKey string) (*Client, error) {
 		return nil, ErrNoCredentials
 	}
 
-	baseURL := configenv.RESTURL()
-	if baseURL == "" {
-		baseURL = DefaultBaseURL
-	}
-
 	timeout := viper.GetDuration("timeout")
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
 
 	return &Client{
-		baseURL:    baseURL,
+		baseURL:    restBaseURL(),
 		apiKey:     apiKey,
 		httpClient: &http.Client{Timeout: timeout, CheckRedirect: noRedirects},
 		userAgent:  buildUserAgent(),
@@ -80,13 +74,12 @@ func noRedirects(*http.Request, []*http.Request) error {
 	return http.ErrUseLastResponse
 }
 
-// request makes an HTTP request to the API
-func (c *Client) request(method, endpoint string, params url.Values, body interface{}) ([]byte, error) {
-	u := c.baseURL + endpoint
-	if params != nil && len(params) > 0 {
-		u += "?" + params.Encode()
+func restBaseURL() string {
+	baseURL := configenv.RESTURL()
+	if baseURL == "" {
+		baseURL = DefaultBaseURL
 	}
-	return c.requestURL(method, u, body)
+	return strings.TrimRight(baseURL, "/")
 }
 
 // requestURL is request against an already-built absolute url. It exists for the
@@ -193,15 +186,6 @@ func (c *Client) send(ctx context.Context, method, u string, jsonBody []byte) (*
 	return got, nil
 }
 
-// v2URL is the rest v2 base url: the client's override when set, otherwise the
-// configured one (RUNPOD_REST_V2_URL / restV2ApiUrl), resolved per request.
-func (c *Client) v2URL() string {
-	if c.v2BaseURL != "" {
-		return strings.TrimSuffix(c.v2BaseURL, "/")
-	}
-	return restV2BaseURL()
-}
-
 // requestV2 is request against the rest v2 api.
 func (c *Client) requestV2(method, endpoint string, params url.Values, body interface{}) ([]byte, error) {
 	// an empty id leaves an empty path segment ("/registries/"), which v2
@@ -223,7 +207,7 @@ func (c *Client) requestV2(method, endpoint string, params url.Values, body inte
 			return nil, clierr.Usagef("invalid resource id %q", decoded)
 		}
 	}
-	u := c.v2URL() + endpoint
+	u := strings.TrimRight(c.baseURL, "/") + endpoint
 	if len(params) > 0 {
 		u += "?" + params.Encode()
 	}
@@ -297,26 +281,6 @@ func (c *Client) getV2AllPages(endpoint string, params url.Values, decode func([
 		seen[*next] = true
 		query.Set("cursor", *next)
 	}
-}
-
-// Get makes a GET request
-func (c *Client) Get(endpoint string, params url.Values) ([]byte, error) {
-	return c.request(http.MethodGet, endpoint, params, nil)
-}
-
-// Post makes a POST request
-func (c *Client) Post(endpoint string, body interface{}) ([]byte, error) {
-	return c.request(http.MethodPost, endpoint, nil, body)
-}
-
-// Patch makes a PATCH request
-func (c *Client) Patch(endpoint string, body interface{}) ([]byte, error) {
-	return c.request(http.MethodPatch, endpoint, nil, body)
-}
-
-// Delete makes a DELETE request
-func (c *Client) Delete(endpoint string) ([]byte, error) {
-	return c.request(http.MethodDelete, endpoint, nil, nil)
 }
 
 // Error codes emitted by the cli via the ErrorCode() interface. These form the

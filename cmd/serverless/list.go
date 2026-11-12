@@ -10,9 +10,12 @@ import (
 var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "list all endpoints",
-	Long:  "list all serverless endpoints in your account",
-	Args:  cobra.NoArgs,
-	RunE:  runList,
+	Long: `list all serverless endpoints in your account.
+
+idleTimeout is null when not applicable, including queue-based endpoints
+using request-count scaling.`,
+	Args: cobra.NoArgs,
+	RunE: runList,
 }
 
 var (

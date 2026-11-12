@@ -20,7 +20,7 @@ var StartPodCmd = &cobra.Command{
 		var status string
 		var costPerHr float64
 		if bidPerGpu > 0 {
-			// rp-migrate: keep-v1 -- rest v2 has no spot bids
+			// graphql: rest v2 has no spot bids
 			pod, err := api.StartSpotPod(args[0], bidPerGpu, gpuCount)
 			cobra.CheckErr(err)
 			status, _ = pod["desiredStatus"].(string)
