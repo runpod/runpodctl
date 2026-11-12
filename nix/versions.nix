@@ -40,10 +40,10 @@ let
       or (throw "nix/versions.nix: nixpkgs has no ${goAttr} for go.mod's go ${goModVersion}; run `nix flake update nixpkgs`");
 
   pinnedGo = goBase.overrideAttrs (_old: rec {
-    version = "1.26.10";
+    version = "1.26.11";
     src = pkgs.fetchurl {
       url = "https://go.dev/dl/go${version}.src.tar.gz";
-      hash = "sha256-/WPog7ovK/ypPBZGsx6+9j4rHk0rMXyXidl2po2B828=";
+      hash = "sha256-1EEBsP8n7SpMda1GwXucdDWSCeLrLKfJ32y0/baOGWk=";
     };
   });
   # The assertion guards `go` alone, not the whole set: `nix run .#update-pins`
@@ -70,7 +70,7 @@ in
   # Analysis tools come straight from nixpkgs (and so from cache.nixos.org).
   # They only need the same Go *language* version (1.26) as the module; the
   # pinned `go` above is first on PATH in every check, so package loading and
-  # govulncheck's standard-library check both see 1.26.10. A go.mod minor
+  # govulncheck's standard-library check both see 1.26.11. A go.mod minor
   # bump (1.27) also needs releases of these that read that Go's export data;
   # see nix/README.md §8.
   inherit (pkgs)
