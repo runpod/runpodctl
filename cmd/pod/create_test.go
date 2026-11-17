@@ -824,3 +824,22 @@ func TestRunCreate_GPUWithoutGpuIDIsRefused(t *testing.T) {
 		t.Fatalf("err = %v, want a usage_error asking for --gpu-id", err)
 	}
 }
+
+func TestLegacyCreatePodEnvKeepsEqualsInValues(t *testing.T) {
+	got, err := legacyEnv([]string{"PADDED_B64=aGVsbG8=", "JAVA_OPTS=-Xmx2g -Dfile.encoding=UTF-8", "EMPTY="})
+	if err != nil {
+		t.Fatalf("legacyEnv: %v", err)
+	}
+	want := map[string]string{
+		"PADDED_B64": "aGVsbG8=",
+		"JAVA_OPTS":  "-Xmx2g -Dfile.encoding=UTF-8",
+		"EMPTY":      "",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("env = %q, want %q", got, want)
+	}
+
+	if _, err := legacyEnv([]string{"NO_EQUALS"}); err == nil {
+		t.Error("a value with no = was accepted")
+	}
+}
