@@ -58,3 +58,22 @@ type uncertain struct{ msg string }
 
 func (u uncertain) Error() string     { return u.msg }
 func (u uncertain) ErrorCode() string { return "create_uncertain" }
+
+func TestLegacyCreatePodsEnvKeepsEqualsInValues(t *testing.T) {
+	got, err := legacyEnv([]string{"PADDED_B64=aGVsbG8=", "JAVA_OPTS=-Xmx2g -Dfile.encoding=UTF-8", "EMPTY="})
+	if err != nil {
+		t.Fatalf("legacyEnv: %v", err)
+	}
+	want := map[string]string{
+		"PADDED_B64": "aGVsbG8=",
+		"JAVA_OPTS":  "-Xmx2g -Dfile.encoding=UTF-8",
+		"EMPTY":      "",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("env = %q, want %q", got, want)
+	}
+
+	if _, err := legacyEnv([]string{"NO_EQUALS"}); err == nil {
+		t.Error("a value with no = was accepted")
+	}
+}

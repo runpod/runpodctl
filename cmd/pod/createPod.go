@@ -71,14 +71,9 @@ var CreatePodCmd = &cobra.Command{
 		if len(ports) > 0 {
 			input.Ports = ports
 		}
-		input.Env = make(map[string]string, len(env))
-		for _, v := range env {
-			e := strings.Split(v, "=")
-			if len(e) != 2 {
-				cobra.CheckErr(fmt.Errorf("wrong env value: %s", e))
-			}
-			input.Env[e[0]] = e[1]
-		}
+		envVars, err := legacyEnv(env)
+		cobra.CheckErr(err)
+		input.Env = envVars
 		if secureCloud {
 			input.CloudType = "SECURE"
 		} else {
@@ -128,4 +123,17 @@ func init() {
 	CreatePodCmd.Flags().BoolVar(&startSSH, "startSSH", false, "enable SSH login")
 
 	CreatePodCmd.MarkFlagRequired("imageName") //nolint
+}
+
+// legacyEnv turns repeated --env KEY=VALUE flags into the env map.
+func legacyEnv(pairs []string) (map[string]string, error) {
+	out := make(map[string]string, len(pairs))
+	for _, v := range pairs {
+		e := strings.SplitN(v, "=", 2)
+		if len(e) != 2 {
+			return nil, fmt.Errorf("wrong env value: %s", e)
+		}
+		out[e[0]] = e[1]
+	}
+	return out, nil
 }
