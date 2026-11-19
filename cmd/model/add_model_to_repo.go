@@ -1922,11 +1922,12 @@ func redirectNote(resp *http.Response) string {
 	return ""
 }
 
-// validateModelUploadURL rejects a server-supplied upload url that is not https.
-// Plain http is accepted only for a loopback host, which is how a local
-// development stack or a test server is addressed; anywhere else it would send
-// the file, and the presigned credential in the query, in cleartext. The url
-// itself is never put in the error: it is presigned.
+// validateModelUploadURL rejects a server-supplied upload url that is not https,
+// unless plain http has been opted into (see modelUploadHTTPAllowed). The url
+// comes from the api response, so a compromised or misdirected response must not
+// be able to send the file, and the presigned credential in the query, in
+// cleartext to a host of its choosing, loopback included. The url itself is
+// never put in the error: it is presigned.
 func validateModelUploadURL(what, raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
@@ -1936,11 +1937,28 @@ func validateModelUploadURL(what, raw string) error {
 	case "https":
 		return nil
 	case "http":
-		if configenv.IsLoopbackHost(u.Hostname()) {
+		if modelUploadHTTPAllowed() {
 			return nil
 		}
 	}
-	return fmt.Errorf("refusing %s upload url with scheme %q on host %q: upload urls must be https", what, u.Scheme, u.Hostname())
+	return fmt.Errorf("refusing %s upload url with scheme %q on host %q: upload urls must be https; pass --insecure or set %s=1 to allow plain http (for example a local MinIO)",
+		what, u.Scheme, u.Hostname(), configenv.AllowInsecureAPIEnv)
+}
+
+// modelUploadHTTPAllowed reports whether plain-http upload urls are acceptable:
+// the user opted in (--insecure or RUNPOD_ALLOW_INSECURE_API), or the configured
+// api url is itself loopback, which means a local dev stack whose object storage
+// is local too. Nothing about the upload url itself can grant this.
+func modelUploadHTTPAllowed() bool {
+	if configenv.AllowInsecureAPI() {
+		return true
+	}
+	apiURL := configenv.GraphQLURL()
+	if apiURL == "" {
+		return false
+	}
+	u, err := url.Parse(apiURL)
+	return err == nil && configenv.IsLoopbackHost(u.Hostname())
 }
 
 // validateModelUploadPlan checks the server-supplied urls and part list before

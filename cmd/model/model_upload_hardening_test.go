@@ -26,51 +26,87 @@ func writeUploadArtifact(t *testing.T, content string) string {
 }
 
 func TestValidateModelUploadURL(t *testing.T) {
-	ok := []string{
-		"https://bucket.s3.amazonaws.com/key?X-Amz-Signature=abc",
-		"http://127.0.0.1:9000/key",
-		"http://localhost:9000/key",
-		"http://[::1]:9000/key",
+	const (
+		httpsAPI    = "https://api.runpod.io/graphql"
+		loopbackAPI = "http://localhost:4000/graphql"
+	)
+	cases := []struct {
+		name   string
+		url    string
+		optIn  bool
+		apiURL string
+		ok     bool
+	}{
+		{"https, no opt-in", "https://bucket.s3.amazonaws.com/key?X-Amz-Signature=abc", false, httpsAPI, true},
+		{"https, default api url", "https://bucket.s3.amazonaws.com/key", false, "", true},
+		{"http loopback upload url, https api url", "http://127.0.0.1:9000/key", false, httpsAPI, false},
+		{"http localhost upload url, default api url", "http://localhost:9000/key", false, "", false},
+		{"http loopback upload url, loopback api url (dev stack)", "http://127.0.0.1:9000/key", false, loopbackAPI, true},
+		{"http minio, loopback api url (dev stack)", "http://minio:9000/key", false, loopbackAPI, true},
+		{"http minio with opt-in", "http://minio:9000/key", true, httpsAPI, true},
+		{"http lan ip with opt-in", "http://192.168.1.10:9000/key", true, "", true},
+		{"http minio without opt-in", "http://minio:9000/key", false, httpsAPI, false},
+		{"http remote without opt-in", "http://bucket.s3.amazonaws.com/key?X-Amz-Signature=secretsig", false, httpsAPI, false},
+		{"ftp even with opt-in", "ftp://example.com/key", true, loopbackAPI, false},
+		{"file scheme", "file:///etc/passwd", true, loopbackAPI, false},
+		{"scheme-relative", "//example.com/key", true, loopbackAPI, false},
+		{"relative path", "/relative/path", true, loopbackAPI, false},
+		{"empty", "", true, loopbackAPI, false},
 	}
-	for _, u := range ok {
-		if err := validateModelUploadURL("part 1", u); err != nil {
-			t.Errorf("expected %q accepted, got %v", u, err)
-		}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setUploadHTTPPolicy(t, tc.optIn, tc.apiURL)
+			err := validateModelUploadURL("part 1", tc.url)
+			if tc.ok {
+				if err != nil {
+					t.Fatalf("expected accepted, got %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("expected refused")
+			}
+			if strings.Contains(err.Error(), "secretsig") {
+				t.Errorf("error leaks the url query: %v", err)
+			}
+		})
 	}
-	bad := []string{
-		"http://bucket.s3.amazonaws.com/key?X-Amz-Signature=secretsig",
-		"ftp://example.com/key",
-		"file:///etc/passwd",
-		"//example.com/key",
-		"/relative/path",
-		"",
-		"http://localhost.evil.example/key",
+}
+
+// TestValidateModelUploadURL_RefusalNamesTheOptIn pins that a refused http url
+// tells the user how to allow it.
+func TestValidateModelUploadURL_RefusalNamesTheOptIn(t *testing.T) {
+	setUploadHTTPPolicy(t, false, "https://api.runpod.io/graphql")
+	err := validateModelUploadURL("part 1", "http://minio:9000/key")
+	if err == nil {
+		t.Fatal("expected refused")
 	}
-	for _, u := range bad {
-		err := validateModelUploadURL("part 1", u)
-		if err == nil {
-			t.Errorf("expected %q refused", u)
-			continue
-		}
-		if strings.Contains(err.Error(), "secretsig") {
-			t.Errorf("error leaks the url query: %v", err)
+	for _, want := range []string{"--insecure", "RUNPOD_ALLOW_INSECURE_API=1"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q should mention %q", err, want)
 		}
 	}
 }
 
-// TestCompleteModelUpload_RefusesNonHTTPSUploadURL pins that a server-supplied
-// plain-http upload url on a non-loopback host is refused before any request.
-func TestCompleteModelUpload_RefusesNonHTTPSUploadURL(t *testing.T) {
+// TestCompleteModelUpload_RefusesHTTPUploadURLWithoutOptIn pins that a plain-http
+// part or completion url is refused before any request, including a loopback one
+// handed out by the api response while the api url is https.
+func TestCompleteModelUpload_RefusesHTTPUploadURLWithoutOptIn(t *testing.T) {
+	setUploadHTTPPolicy(t, false, "https://api.runpod.io/graphql")
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
+	defer server.Close()
+
 	artifact := writeUploadArtifact(t, "abcdef")
 	for name, upload := range map[string]*api.ModelRepoUpload{
 		"part": {
 			PartSizeBytes: 6,
 			CompleteURL:   "https://s3.example.com/complete",
-			Parts:         []*api.ModelRepoUploadPart{{PartNumber: 1, URL: "http://s3.example.com/part?sig=secretsig"}},
+			Parts:         []*api.ModelRepoUploadPart{{PartNumber: 1, URL: server.URL + "/part?sig=secretsig"}},
 		},
 		"complete": {
 			PartSizeBytes: 6,
-			CompleteURL:   "http://s3.example.com/complete?sig=secretsig",
+			CompleteURL:   server.URL + "/complete?sig=secretsig",
 			Parts:         []*api.ModelRepoUploadPart{{PartNumber: 1, URL: "https://s3.example.com/part"}},
 		},
 	} {
@@ -80,6 +116,9 @@ func TestCompleteModelUpload_RefusesNonHTTPSUploadURL(t *testing.T) {
 		} else if strings.Contains(err.Error(), "secretsig") {
 			t.Errorf("%s: error leaks signature: %v", name, err)
 		}
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("the loopback server received %d request(s); expected none", hits.Load())
 	}
 }
 
