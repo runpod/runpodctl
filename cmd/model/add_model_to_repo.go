@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/runpod/runpodctl/api"
 	internalapi "github.com/runpod/runpodctl/internal/api"
@@ -719,6 +721,10 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 			return err
 		}
 
+		if err := validateModelRelativePath(filepath.ToSlash(rel)); err != nil {
+			return err
+		}
+
 		files = append(files, modelFile{
 			AbsolutePath:   path,
 			ResolvedPath:   resolved,
@@ -745,6 +751,19 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 	})
 
 	return files, nil
+}
+
+// validateModelRelativePath rejects a file name that cannot be represented
+// faithfully in the upload manifest: control characters (newline included) and
+// backslashes are valid in a unix file name but are sent as typed and mean
+// something different to the server, other tools, and terminals that print them.
+func validateModelRelativePath(rel string) error {
+	for _, r := range rel {
+		if r == '\\' || unicode.IsControl(r) {
+			return fmt.Errorf("model-path contains a file whose name has a backslash or control character (%q); rename it before uploading", rel)
+		}
+	}
+	return nil
 }
 
 // modelContainmentRoots returns the directories a resolved file may live in:
@@ -1282,6 +1301,10 @@ func shellDoubleQuoteValue(value string) string {
 	return replacer.Replace(value)
 }
 
+// modelUploadSessionFailed is the terminal upload-session status the server
+// returns (with success: true) when it could not assemble the object.
+const modelUploadSessionFailed = "FAILED"
+
 // uploadModelFiles creates upload sessions for every file in files, modelRepoUploadBatchSize at
 // a time, then uploads their bytes. The first batch's response establishes modelVersionUUID and
 // every later batch is pinned to it, so a chunked manifest still lands on one model version.
@@ -1368,6 +1391,12 @@ func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInp
 			return fail(fmt.Errorf("expected %d completed sessions, got %d", len(uploadedFiles), len(completions)))
 		}
 		for i, completion := range completions {
+			if completion == nil {
+				return fail(fmt.Errorf("complete upload sessions: missing result for %s", uploadedFiles[i].RelativePath))
+			}
+			if strings.EqualFold(strings.TrimSpace(completion.Status), modelUploadSessionFailed) {
+				return fail(fmt.Errorf("upload of %s failed: the server finalized its session with status %s", uploadedFiles[i].RelativePath, completion.Status))
+			}
 			uploadedFiles[i].SessionID = completion.SessionID
 			uploadedFiles[i].Status = completion.Status
 		}
@@ -1504,7 +1533,13 @@ const modelUploadErrorBodyLimit = 4096
 // ResponseHeaderTimeout guards a stalled server once the body has been sent
 // without capping a legitimately long large-part upload; http.DefaultClient
 // (used before) had no timeouts at all, so a hung connection blocked forever.
+//
+// Redirects are never followed. The part/complete URLs are presigned and
+// server-supplied; go would replay a redirected PUT/POST as a body-less GET to
+// wherever the response points, which reports success for an upload that never
+// happened. The 3xx is returned and rejected by the status checks instead.
 var modelUploadHTTPClient = &http.Client{
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	Transport: &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -1621,6 +1656,9 @@ func doModelUploadRequest(ctx context.Context, what string, newReq func() (*http
 		resp, err := doGuardedModelUploadAttempt(ctx, newReq)
 		retryAfter := ""
 		switch {
+		case errors.Is(err, errUploadSourceShrank):
+			// the file changed under us; a retry re-reads the same short file.
+			return nil, fmt.Errorf("%s: %w", what, err)
 		case err != nil:
 			lastErr = fmt.Errorf("%s: %w", what, err)
 		case isRetryableUploadStatus(resp.StatusCode):
@@ -1816,6 +1854,83 @@ func doGuardedModelUploadAttempt(parent context.Context, newReq func() (*http.Re
 	return resp, nil
 }
 
+// errUploadSourceShrank means a part's source file held fewer bytes than the
+// upload plan declared, i.e. it was truncated after the directory scan.
+var errUploadSourceShrank = errors.New("file is shorter than when it was scanned (it changed during the upload)")
+
+// exactReader yields exactly want bytes or fails. io.SectionReader reports a
+// clean EOF when the file is shorter than the section, which would let the
+// request body end early; this turns that into errUploadSourceShrank.
+type exactReader struct {
+	r    io.Reader
+	want int64
+	read int64
+}
+
+func (e *exactReader) Read(p []byte) (int, error) {
+	n, err := e.r.Read(p)
+	e.read += int64(n)
+	if err == io.EOF && e.read < e.want {
+		return n, errUploadSourceShrank
+	}
+	return n, err
+}
+
+// redirectNote adds a hint to a status error when the response is a redirect
+// that the upload client deliberately did not follow.
+func redirectNote(resp *http.Response) string {
+	if resp.StatusCode >= http.StatusMultipleChoices && resp.StatusCode < http.StatusBadRequest {
+		return " (redirect not followed)"
+	}
+	return ""
+}
+
+// validateModelUploadURL rejects a server-supplied upload url that is not https.
+// Plain http is accepted only for a loopback host, which is how a local
+// development stack or a test server is addressed; anywhere else it would send
+// the file, and the presigned credential in the query, in cleartext. The url
+// itself is never put in the error: it is presigned.
+func validateModelUploadURL(what, raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("%s upload url is not a valid absolute url", what)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return nil
+	case "http":
+		if isLoopbackHost(u.Hostname()) {
+			return nil
+		}
+	}
+	return fmt.Errorf("refusing %s upload url with scheme %q on host %q: upload urls must be https", what, u.Scheme, u.Hostname())
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// validateModelUploadPlan checks the server-supplied urls and part list before
+// the first byte is sent (a null part would otherwise nil-deref in the sort).
+func validateModelUploadPlan(upload *api.ModelRepoUpload) error {
+	if err := validateModelUploadURL("completion", upload.CompleteURL); err != nil {
+		return err
+	}
+	for i, part := range upload.Parts {
+		if part == nil {
+			return fmt.Errorf("upload part list contains a null entry at index %d", i)
+		}
+		if err := validateModelUploadURL(fmt.Sprintf("part %d", part.PartNumber), part.URL); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func completeModelUploadWithProgress(upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
 	return completeModelUploadWithContext(context.Background(), upload, artifactPath, nil, progress)
 }
@@ -1847,6 +1962,10 @@ func completeModelUploadWithContext(ctx context.Context, upload *api.ModelRepoUp
 		return fmt.Errorf("upload does not contain any parts")
 	}
 
+	if validateErr := validateModelUploadPlan(upload); validateErr != nil {
+		return validateErr
+	}
+
 	parts := make([]*api.ModelRepoUploadPart, len(upload.Parts))
 	copy(parts, upload.Parts)
 	sort.Slice(parts, func(i, j int) bool {
@@ -1875,7 +1994,10 @@ func completeModelUploadWithContext(ctx context.Context, upload *api.ModelRepoUp
 		resp, err := doModelUploadRequest(ctx, fmt.Sprintf("upload part %d", part.PartNumber), func() (*http.Request, error) {
 			// fresh SectionReader per attempt so a retry re-reads the chunk.
 			// os.File.ReadAt (used by SectionReader) is safe for concurrent use.
-			req, reqErr := http.NewRequestWithContext(ctx, http.MethodPut, part.URL, io.NewSectionReader(file, offset, chunkSize))
+			// exactReader fails the request, rather than sending fewer bytes than
+			// the declared Content-Length, if the file shrank after the scan.
+			body := &exactReader{r: io.NewSectionReader(file, offset, chunkSize), want: chunkSize}
+			req, reqErr := http.NewRequestWithContext(ctx, http.MethodPut, part.URL, body)
 			if reqErr != nil {
 				return nil, fmt.Errorf("create request for part %d: %w", part.PartNumber, reqErr)
 			}
@@ -1887,9 +2009,9 @@ func completeModelUploadWithContext(ctx context.Context, upload *api.ModelRepoUp
 		}
 		defer resp.Body.Close()
 
-		// a non-retryable status reaches here (2xx ok, 4xx errors out).
+		// a non-retryable status reaches here (2xx ok, 3xx/4xx errors out).
 		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-			return fmt.Errorf("upload part %d failed: status %d: %s", part.PartNumber, resp.StatusCode, modelUploadErrorSnippet(resp.Body))
+			return fmt.Errorf("upload part %d failed: status %d%s: %s", part.PartNumber, resp.StatusCode, redirectNote(resp), modelUploadErrorSnippet(resp.Body))
 		}
 		etag := strings.Trim(resp.Header.Get("ETag"), "\"")
 		if etag == "" {
@@ -1941,7 +2063,7 @@ func completeModelUploadWithContext(ctx context.Context, upload *api.ModelRepoUp
 	defer resp.Body.Close()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("completion request failed: status %d: %s", resp.StatusCode, modelUploadErrorSnippet(resp.Body))
+		return fmt.Errorf("completion request failed: status %d%s: %s", resp.StatusCode, redirectNote(resp), modelUploadErrorSnippet(resp.Body))
 	}
 
 	return nil

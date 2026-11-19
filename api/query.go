@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"runtime"
 	"strings"
@@ -71,6 +72,21 @@ func Query(input Input) (res *http.Response, err error) {
 		timeout = 10 * time.Second
 	}
 
-	client := &http.Client{Timeout: timeout}
+	client := &http.Client{Timeout: timeout, CheckRedirect: refuseRedirect}
 	return client.Do(req)
+}
+
+// ErrRedirectRefused is returned (wrapped in a *url.Error by net/http) when the
+// graphql endpoint answers with a redirect. The client never follows one: it
+// carries the api key and a mutation body, and go would replay the request to
+// the new location (same-host-other-port forwards the Authorization header) or
+// downgrade a post to a get and report success. Matches the rest client, which
+// stops at the first response.
+var ErrRedirectRefused = errors.New("graphql endpoint responded with a redirect; refusing to follow it (check the configured api url)")
+
+// refuseRedirect fails the request instead of following a redirect. Returning an
+// error (rather than http.ErrUseLastResponse) means every caller of Query sees a
+// failure and none can mistake the 3xx for a result.
+func refuseRedirect(*http.Request, []*http.Request) error {
+	return ErrRedirectRefused
 }
