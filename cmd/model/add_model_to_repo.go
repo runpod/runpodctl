@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"github.com/runpod/runpodctl/api"
 	internalapi "github.com/runpod/runpodctl/internal/api"
 	"github.com/runpod/runpodctl/internal/output"
+	"github.com/runpod/runpodctl/internal/redact"
 
 	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
@@ -120,9 +122,26 @@ type completeMultipartUpload struct {
 }
 
 type modelFile struct {
+	// AbsolutePath is the path as found under --model-path. For a symlink it is
+	// the link itself, which is what --delete-my-model-files-after-upload removes.
 	AbsolutePath string
+	// ResolvedPath is the fully symlink-resolved path that was checked to be
+	// inside the containment roots; the upload opens this, never AbsolutePath.
+	// Empty means AbsolutePath is used as is.
+	ResolvedPath string
 	RelativePath string
 	Size         int64
+	// info is the scan-time lstat of ResolvedPath. The upload re-checks the
+	// opened file against it so a path swapped after the scan is refused.
+	info os.FileInfo
+}
+
+// uploadPath is the path the upload must open.
+func (f modelFile) uploadPath() string {
+	if f.ResolvedPath != "" {
+		return f.ResolvedPath
+	}
+	return f.AbsolutePath
 }
 
 type uploadedModelFile struct {
@@ -501,15 +520,30 @@ func validateAddModelFlags() error {
 	return nil
 }
 
+// collectModelFiles lists the regular files under dir. Symlinks are resolved and
+// must land inside the containment roots (see modelContainmentRoots): a link
+// pointing anywhere else is refused rather than silently uploading a file that
+// is not part of --model-path. Symlinked directories, FIFOs, devices and other
+// non-regular files are refused too.
 func collectModelFiles(dir string) ([]modelFile, error) {
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve model directory: %w", err)
+	}
+	root, err := filepath.EvalSymlinks(absDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve model directory: %w", err)
+	}
+	roots := modelContainmentRoots(root)
+
 	var files []modelFile
 
-	walkErr := filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
+	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 
-		if path == dir {
+		if path == root {
 			return nil
 		}
 
@@ -517,7 +551,19 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 			return nil
 		}
 
-		info, err := os.Stat(path)
+		resolved := path
+		if d.Type()&fs.ModeSymlink != 0 {
+			target, err := filepath.EvalSymlinks(path)
+			if err != nil {
+				return fmt.Errorf("resolve symlink %q: %w", path, err)
+			}
+			resolved = target
+		}
+		if !pathWithinAny(roots, resolved) {
+			return fmt.Errorf("model-path contains %q, which resolves to %q outside the model directory; refusing to upload files that are not under --model-path", path, resolved)
+		}
+
+		info, err := os.Lstat(resolved)
 		if err != nil {
 			return fmt.Errorf("stat file %q: %w", path, err)
 		}
@@ -530,15 +576,17 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 			return fmt.Errorf("model-path contains unsupported file type: %s", path)
 		}
 
-		rel, err := filepath.Rel(dir, path)
+		rel, err := filepath.Rel(root, path)
 		if err != nil {
 			return err
 		}
 
 		files = append(files, modelFile{
 			AbsolutePath: path,
+			ResolvedPath: resolved,
 			RelativePath: filepath.ToSlash(rel),
 			Size:         info.Size(),
+			info:         info,
 		})
 
 		return nil
@@ -553,6 +601,75 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 	})
 
 	return files, nil
+}
+
+// modelContainmentRoots returns the directories a resolved file may live in:
+// the (already resolved) model directory itself and, when it is a Hugging Face
+// cache snapshot (.../models--owner--name/snapshots/<rev>), the enclosing repo
+// directory. HF caches store every snapshot file as a relative symlink into the
+// repo's blobs/ directory (snapshots/<rev>/file -> ../../blobs/<sha>), so a
+// single root would refuse the whole layout.
+func modelContainmentRoots(resolvedRoot string) []string {
+	roots := []string{resolvedRoot}
+	snapshots := filepath.Dir(resolvedRoot)
+	if filepath.Base(snapshots) == "snapshots" {
+		repo := filepath.Dir(snapshots)
+		if strings.HasPrefix(filepath.Base(repo), "models--") {
+			roots = append(roots, repo)
+		}
+	}
+	return roots
+}
+
+// pathWithinAny reports whether path is at or below one of roots. Both must
+// already be absolute and symlink-resolved.
+func pathWithinAny(roots []string, path string) bool {
+	for _, root := range roots {
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			continue
+		}
+		if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// openScannedModelFile opens path for upload and verifies it is still the
+// regular file seen at scan time. A path that was swapped for a symlink (or
+// another file) after the scan is refused instead of followed. The lstat before
+// the open also keeps open from blocking on a FIFO swapped in; the fstat after
+// the open is authoritative, since it describes the file actually opened.
+// scanned may be nil (callers outside the directory scan), in which case only
+// the regular-file checks apply.
+func openScannedModelFile(path string, scanned os.FileInfo) (*os.File, os.FileInfo, error) {
+	pre, err := os.Lstat(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open artifact: %w", err)
+	}
+	if !pre.Mode().IsRegular() {
+		return nil, nil, fmt.Errorf("refusing to upload %q: it is no longer a regular file (changed since the model directory was scanned)", path)
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open artifact: %w", err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, nil, fmt.Errorf("stat artifact: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		file.Close()
+		return nil, nil, fmt.Errorf("refusing to upload %q: it is not a regular file", path)
+	}
+	if scanned != nil && !os.SameFile(scanned, info) {
+		file.Close()
+		return nil, nil, fmt.Errorf("refusing to upload %q: the file changed since the model directory was scanned", path)
+	}
+	return file, info, nil
 }
 
 func totalModelFileSize(files []modelFile) int64 {
@@ -1077,7 +1194,7 @@ func uploadModelFileChunk(chunk []modelFile, uploads []*api.ModelRepoUpload, pro
 	err := runBounded(context.Background(), len(chunk), modelRepoUploadConcurrency, func(ctx context.Context, i int) error {
 		file := chunk[i]
 		upload := uploads[i]
-		if err := completeModelUploadFile(ctx, upload, file.AbsolutePath, progress); err != nil {
+		if err := completeModelUploadFile(ctx, upload, file.uploadPath(), file.info, progress); err != nil {
 			return fmt.Errorf("upload %s: %w", file.RelativePath, err)
 		}
 		results[i] = uploadedModelFile{
@@ -1289,16 +1406,66 @@ func sleepCtx(ctx context.Context, d time.Duration) {
 }
 
 // modelUploadErrorSnippet reads at most modelUploadErrorBodyLimit bytes of an
-// error response body for the returned error message. The body is stall
-// guarded, so a server that stops sending mid-body cannot block this. A read
-// failure is reported inline since the status code is the actionable part.
+// error response body and returns a short, redacted summary for the returned
+// error message. The body is stall guarded, so a server that stops sending
+// mid-body cannot block this. A read failure is reported inline since the
+// status code is the actionable part.
+//
+// Storage error bodies echo the request (S3 includes the signature, access key
+// id and string-to-sign), so the raw body is never returned: an S3-style error
+// is reduced to its <Code> and <Message>, anything else to a bounded excerpt,
+// and both go through redact.Text.
 func modelUploadErrorSnippet(body io.Reader) string {
 	snippet, err := io.ReadAll(io.LimitReader(body, modelUploadErrorBodyLimit))
-	text := strings.TrimSpace(string(snippet))
+	text := summarizeStorageError(string(snippet))
 	if err != nil {
-		return fmt.Sprintf("%s (reading error body: %v)", text, err)
+		return fmt.Sprintf("%s (reading error body: %v)", text, redact.Error(err))
 	}
 	return text
+}
+
+var (
+	storageErrorCodePattern    = regexp.MustCompile(`<Code>\s*([^<]*?)\s*</Code>`)
+	storageErrorMessagePattern = regexp.MustCompile(`<Message>\s*([^<]*?)\s*</Message>`)
+)
+
+// modelUploadErrorExcerptRunes bounds each field of the error summary.
+const modelUploadErrorExcerptRunes = 256
+
+func summarizeStorageError(body string) string {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return ""
+	}
+	code := firstSubmatch(storageErrorCodePattern, body)
+	message := firstSubmatch(storageErrorMessagePattern, body)
+	switch {
+	case code != "" && message != "":
+		return boundedRedacted(code) + ": " + boundedRedacted(message)
+	case code != "":
+		return boundedRedacted(code)
+	case message != "":
+		return boundedRedacted(message)
+	}
+	return boundedRedacted(body)
+}
+
+func firstSubmatch(re *regexp.Regexp, s string) string {
+	if m := re.FindStringSubmatch(s); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+// boundedRedacted redacts before truncating so a signature cut in half by the
+// bound cannot slip past the patterns.
+func boundedRedacted(s string) string {
+	s = redact.Text(s)
+	runes := []rune(s)
+	if len(runes) > modelUploadErrorExcerptRunes {
+		return string(runes[:modelUploadErrorExcerptRunes]) + "..."
+	}
+	return s
 }
 
 // modelUploadRetryDelay returns how long to wait before the attempt after
@@ -1356,9 +1523,9 @@ func doGuardedModelUploadAttempt(parent context.Context, newReq func() (*http.Re
 		guard.disarm()
 		cancel()
 		if stalled {
-			return nil, fmt.Errorf("no progress for %s: %w", modelUploadStallTimeout, err)
+			return nil, fmt.Errorf("no progress for %s: %w", modelUploadStallTimeout, redact.Error(err))
 		}
-		return nil, err
+		return nil, redact.Error(err)
 	}
 	guard.startResponse()
 	resp.Body = &stallReader{r: resp.Body, guard: guard, response: true}
@@ -1366,23 +1533,23 @@ func doGuardedModelUploadAttempt(parent context.Context, newReq func() (*http.Re
 }
 
 func completeModelUploadWithProgress(upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
-	return completeModelUploadWithContext(context.Background(), upload, artifactPath, progress)
+	return completeModelUploadWithContext(context.Background(), upload, artifactPath, nil, progress)
 }
 
-func completeModelUploadWithContext(ctx context.Context, upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
+// completeModelUploadWithContext uploads artifactPath. scanned is the scan-time
+// FileInfo of the artifact (nil when unknown); see openScannedModelFile. Every
+// error it returns is redacted: the part and completion URLs are presigned, and
+// their signatures must not reach error output.
+func completeModelUploadWithContext(ctx context.Context, upload *api.ModelRepoUpload, artifactPath string, scanned os.FileInfo, progress modelUploadProgress) (retErr error) {
+	defer func() { retErr = redact.Error(retErr) }()
 	if upload == nil {
 		return fmt.Errorf("upload details are required")
 	}
-	file, err := os.Open(artifactPath)
+	file, fileInfo, err := openScannedModelFile(artifactPath, scanned)
 	if err != nil {
-		return fmt.Errorf("open artifact: %w", err)
+		return err
 	}
 	defer file.Close()
-
-	fileInfo, err := file.Stat()
-	if err != nil {
-		return fmt.Errorf("stat artifact: %w", err)
-	}
 
 	totalSize := fileInfo.Size()
 	if totalSize == 0 {

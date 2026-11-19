@@ -594,3 +594,49 @@ func TestGetModelRepoStorageUsageSurfacesGraphQLErrors(t *testing.T) {
 		t.Fatalf("expected error to surface, got %v", err)
 	}
 }
+
+// the batch response carries presigned part URLs; the error paths that echo it
+// (count mismatch, success=false without a message) must not print their signatures.
+func TestCreateModelRepoUploadBatchErrorEchoRedactsPresignedURLs(t *testing.T) {
+	const signed = "https://bucket.s3.amazonaws.com/key?partNumber=1&X-Amz-Credential=AKIAEXAMPLE&X-Amz-Signature=deadbeef0123456789"
+
+	cases := map[string]map[string]interface{}{
+		"upload count mismatch": {
+			"success": true,
+			"uploads": []interface{}{map[string]interface{}{"parts": []interface{}{map[string]interface{}{"partNumber": 1, "url": signed}}}},
+		},
+		"failure without message": {
+			"success": false,
+			"uploads": []interface{}{map[string]interface{}{"parts": []interface{}{map[string]interface{}{"partNumber": 1, "url": signed}}}},
+		},
+	}
+	for name, batch := range cases {
+		t.Run(name, func(t *testing.T) {
+			viper.Reset()
+			t.Cleanup(viper.Reset)
+			t.Setenv("RUNPOD_API_KEY", "test-key")
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"data": map[string]interface{}{"createModelRepoUploadBatch": batch},
+				})
+			}))
+			defer server.Close()
+			t.Setenv("RUNPOD_GRAPHQL_URL", server.URL)
+
+			_, err := CreateModelRepoUploadBatch(&CreateModelRepoUploadBatchInput{
+				Owner: "user-id",
+				Name:  "test-model",
+				Files: []ModelRepoUploadBatchFileInput{{FileName: "a.bin", FileSizeBytes: "1"}, {FileName: "b.bin", FileSizeBytes: "2"}},
+			})
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if strings.Contains(err.Error(), "deadbeef") || strings.Contains(err.Error(), "AKIAEXAMPLE") {
+				t.Fatalf("error leaks the presigned signature: %v", err)
+			}
+			if !strings.Contains(err.Error(), "https://bucket.s3.amazonaws.com/key") {
+				t.Fatalf("host/path should stay for diagnosis: %v", err)
+			}
+		})
+	}
+}
