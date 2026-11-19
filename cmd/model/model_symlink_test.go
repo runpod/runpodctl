@@ -383,3 +383,52 @@ func TestOpenScannedModelFile_RefusesSymlinkWithoutScanInfo(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 }
+
+// the scan-time FileInfo must have its identity loaded during the scan: on
+// Windows os.Lstat loads it lazily on the first os.SameFile call, which would
+// otherwise happen at upload time, after a swap.
+func TestCollectModelFiles_PinsFileIdentityAtScanTime(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "a.bin"), "a")
+	writeTestFile(t, filepath.Join(root, "b.bin"), "b")
+
+	orig := pinScanFileIdentity
+	t.Cleanup(func() { pinScanFileIdentity = orig })
+	var pinned []os.FileInfo
+	pinScanFileIdentity = func(info os.FileInfo) error {
+		pinned = append(pinned, info)
+		return orig(info)
+	}
+
+	files, err := collectModelFiles(root)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if len(pinned) != len(files) {
+		t.Fatalf("expected one identity pin per scanned file, got %d for %d files", len(pinned), len(files))
+	}
+	for _, f := range files {
+		found := false
+		for _, p := range pinned {
+			if p == f.info {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("the FileInfo kept for %s was not the one pinned at scan time", f.RelativePath)
+		}
+	}
+}
+
+func TestCollectModelFiles_IdentityFailureAbortsScan(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "a.bin"), "a")
+
+	orig := pinScanFileIdentity
+	t.Cleanup(func() { pinScanFileIdentity = orig })
+	pinScanFileIdentity = func(os.FileInfo) error { return errors.New("no file id") }
+
+	if _, err := collectModelFiles(root); err == nil || !strings.Contains(err.Error(), "no file id") {
+		t.Fatalf("expected the scan to fail when identity cannot be pinned, got %v", err)
+	}
+}

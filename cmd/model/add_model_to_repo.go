@@ -530,6 +530,21 @@ func validateAddModelFlags() error {
 	return nil
 }
 
+// pinScanFileIdentity forces the scan-time FileInfo to load its file identity
+// now. On Windows os.Lstat/os.Stat fill in the volume and file index lazily, on
+// the first os.SameFile call (os.loadFileId); without this the first call would
+// be the upload-time os.SameFile(scanned, opened), which reads the scanned
+// file's identity from whatever sits at the path by then, after any swap, and
+// compares the swapped file to itself. os.SameFile(info, info) triggers the
+// load at scan time; on Unix the identity comes with the stat result and this is
+// a cheap no-op. It is a var so tests can observe that the call happens.
+var pinScanFileIdentity = func(info os.FileInfo) error {
+	if !os.SameFile(info, info) {
+		return fmt.Errorf("unable to determine the identity of the file")
+	}
+	return nil
+}
+
 // errSymlinkOutsideModelPath is the sentinel for a symlink that resolves outside
 // the containment roots.
 var errSymlinkOutsideModelPath = errors.New("model-path contains a symlink that points outside it")
@@ -595,6 +610,10 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("model-path contains unsupported file type: %s", path)
+		}
+
+		if err := pinScanFileIdentity(info); err != nil {
+			return fmt.Errorf("scan %q: %w", path, err)
 		}
 
 		rel, err := filepath.Rel(root, path)
