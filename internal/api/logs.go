@@ -286,6 +286,10 @@ func (c *LogClient) stream(ctx context.Context, path string, opts LogStreamOptio
 		target += "?" + params.Encode()
 	}
 
+	if err := configenv.CheckAPIURL(target); err != nil {
+		return err
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)

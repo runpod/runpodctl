@@ -164,6 +164,10 @@ func (c *Client) send(ctx context.Context, method, u string, jsonBody []byte) (*
 		reqBody = bytes.NewReader(jsonBody) // fresh reader each attempt
 	}
 
+	if err := configenv.CheckAPIURL(u); err != nil {
+		return nil, fmt.Errorf("%w: %w", errRequestConstruction, err)
+	}
+
 	req, err := http.NewRequestWithContext(ctx, method, u, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", errRequestConstruction, err)

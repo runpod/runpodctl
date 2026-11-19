@@ -565,6 +565,7 @@ its errors are json with a `code` and exit 1.
 | `RUNPOD_GRAPHQL_URL` | `https://api.runpod.io/graphql` | graphql, for what rest v2 does not cover yet: account info, the model repo, hub, serverless create and model references, template readmes and port labels, community templates, spot pods and `get cloud` (config key `apiUrl`) |
 | `RUNPOD_INVOKE_URL` | `https://api.runpod.ai/v2` | base for the serverless invoke urls reported by `serverless create/get/list/update`, and the host `serverless run/status/health` call (config key `invokeUrl`) |
 | `RUNPOD_S3_ACCESS_KEY` / `RUNPOD_S3_SECRET_KEY` | — | s3 api keys for `network-volume upload/download` (config keys `s3AccessKey` / `s3SecretKey`) |
+| `RUNPOD_ALLOW_INSECURE_API` | — | `1` (or `true`) lets requests that carry the api key go to a non-loopback `http://` url, same as the global `--insecure` flag. off by default: the key would travel unencrypted. `https://` and loopback (`localhost`, `127.0.0.0/8`, `::1`) urls need no opt-in |
 | `RUNPOD_NO_UPDATE_CHECK` | — | any value turns off the update check and prompt |
 
 invoke is a separate service from the control plane: pointing `RUNPOD_API_URL`

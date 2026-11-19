@@ -23,6 +23,7 @@ import (
 
 	"github.com/runpod/runpodctl/api"
 	internalapi "github.com/runpod/runpodctl/internal/api"
+	"github.com/runpod/runpodctl/internal/configenv"
 	"github.com/runpod/runpodctl/internal/output"
 	"github.com/runpod/runpodctl/internal/redact"
 
@@ -1935,19 +1936,11 @@ func validateModelUploadURL(what, raw string) error {
 	case "https":
 		return nil
 	case "http":
-		if isLoopbackHost(u.Hostname()) {
+		if configenv.IsLoopbackHost(u.Hostname()) {
 			return nil
 		}
 	}
 	return fmt.Errorf("refusing %s upload url with scheme %q on host %q: upload urls must be https", what, u.Scheme, u.Hostname())
-}
-
-func isLoopbackHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 // validateModelUploadPlan checks the server-supplied urls and part list before

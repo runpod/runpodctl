@@ -68,6 +68,10 @@ func (c *GraphQLClient) Query(input GraphQLInput) ([]byte, error) {
 		return nil, err
 	}
 
+	if checkErr := configenv.CheckAPIURL(c.url); checkErr != nil {
+		return nil, checkErr
+	}
+
 	req, err := http.NewRequest("POST", c.url, bytes.NewBuffer(jsonValue))
 	if err != nil {
 		return nil, err

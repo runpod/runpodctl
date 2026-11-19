@@ -55,6 +55,10 @@ func Query(input Input) (res *http.Response, err error) {
 		return nil, ErrNoCredentials
 	}
 
+	if checkErr := configenv.CheckAPIURL(apiUrl); checkErr != nil {
+		return nil, checkErr
+	}
+
 	req, err := http.NewRequest("POST", apiUrl, bytes.NewBuffer(jsonValue))
 	if err != nil {
 		return
