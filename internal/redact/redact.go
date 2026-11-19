@@ -93,7 +93,8 @@ func Error(err error) error {
 		return err
 	}
 	msg := err.Error()
-	if ue, ok := errors.AsType[*url.Error](err); ok {
+	var ue *url.Error
+	if errors.As(err, &ue) {
 		// the quoted URL may contain characters (spaces from a malformed URL)
 		// that end the text patterns early, so swap in the typed rewrite first.
 		clean := &url.Error{Op: ue.Op, URL: URL(ue.URL), Err: ue.Err}

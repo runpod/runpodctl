@@ -76,12 +76,14 @@ func TestErrorRewritesURLError(t *testing.T) {
 	}
 
 	direct := Error(orig)
-	if _, ok := errors.AsType[*url.Error](direct); !ok {
+	var chainURLErr *url.Error
+	if !errors.As(direct, &chainURLErr) {
 		t.Fatal("expected a *url.Error in the chain")
 	}
 	// the typed error reachable from the result must not carry the signature either.
 	for e := direct; e != nil; e = errors.Unwrap(e) {
-		if u, ok := errors.AsType[*url.Error](e); ok {
+		var u *url.Error
+		if errors.As(e, &u) {
 			if strings.Contains(u.URL, "deadbeef") || strings.Contains(u.Error(), "deadbeef") {
 				t.Fatalf("typed url.Error still carries the signature: %s", u.URL)
 			}
