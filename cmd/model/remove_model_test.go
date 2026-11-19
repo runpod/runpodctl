@@ -2,9 +2,13 @@ package model
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/runpod/runpodctl/api"
+	internalapi "github.com/runpod/runpodctl/internal/api"
 )
 
 func TestFindModelVersion(t *testing.T) {
@@ -241,4 +245,27 @@ func TestCheckDependentEndpoints(t *testing.T) {
 			t.Fatal("expected an error, got nil")
 		}
 	})
+}
+
+// TestDefaultListDependentEndpointsRejectsOversizeResponse pins that the
+// dependent-endpoint lookup used before a removal bounds its response read.
+func TestDefaultListDependentEndpointsRejectsOversizeResponse(t *testing.T) {
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+	chunk := []byte(strings.Repeat("x", 1<<20))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if _, err := w.Write([]byte(`{"data":{"pad":"`)); err != nil {
+			return
+		}
+		for range (internalapi.MaxResponseBytes >> 20) + 2 {
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+	t.Setenv("RUNPOD_GRAPHQL_URL", server.URL)
+
+	if _, err := defaultListDependentEndpoints("owner", "name", "hash"); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("expected an over-limit error, got %v", err)
+	}
 }

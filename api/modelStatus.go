@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 )
@@ -54,7 +53,7 @@ func GetEndpointModelReferences(endpointID string) ([]string, error) {
 	}
 	defer res.Body.Close()
 
-	rawData, err := io.ReadAll(res.Body)
+	rawData, err := ReadBoundedResponse(res.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +117,7 @@ func GetPodModelVersions(podID string) ([]*PodModelVersion, error) {
 	}
 	defer res.Body.Close()
 
-	rawData, err := io.ReadAll(res.Body)
+	rawData, err := ReadBoundedResponse(res.Body)
 	if err != nil {
 		return nil, err
 	}

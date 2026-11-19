@@ -3,7 +3,6 @@ package api
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	"net/http"
 	"time"
 
@@ -87,7 +86,7 @@ func (c *GraphQLClient) Query(input GraphQLInput) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := ReadBounded(resp.Body)
 	if err != nil {
 		return nil, err
 	}

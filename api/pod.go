@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 )
 
@@ -114,7 +113,7 @@ func GetPods() (pods []*Pod, err error) {
 		return
 	}
 	defer res.Body.Close()
-	rawData, err := io.ReadAll(res.Body)
+	rawData, err := ReadBoundedResponse(res.Body)
 	if err != nil {
 		return
 	}

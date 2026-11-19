@@ -421,7 +421,7 @@ func AddModelToRepo(input *AddModelToRepoInput) (*Model, error) {
 	}
 	defer res.Body.Close()
 
-	rawData, err := readBoundedResponse(res.Body)
+	rawData, err := ReadBoundedResponse(res.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -499,7 +499,7 @@ func GetModels(input *GetModelsInput) ([]*Model, error) {
 	}
 	defer res.Body.Close()
 
-	rawData, err := readBoundedResponse(res.Body)
+	rawData, err := ReadBoundedResponse(res.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -611,7 +611,7 @@ func GetModel(input *GetModelInput) (*Model, error) {
 	}
 	defer res.Body.Close()
 
-	rawData, err := readBoundedResponse(res.Body)
+	rawData, err := ReadBoundedResponse(res.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -699,7 +699,7 @@ func RemoveModel(input *RemoveModelInput) (*ModelRepoMutationResult, error) {
 	}
 	defer res.Body.Close()
 
-	rawData, err := readBoundedResponse(res.Body)
+	rawData, err := ReadBoundedResponse(res.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -807,7 +807,7 @@ func CreateModelRepoUpload(input *CreateModelRepoUploadInput) (*ModelRepoMutatio
 	}
 	defer res.Body.Close()
 
-	rawData, err := readBoundedResponse(res.Body)
+	rawData, err := ReadBoundedResponse(res.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -935,7 +935,7 @@ func CreateModelRepoUploadBatch(input *CreateModelRepoUploadBatchInput) (*ModelR
 	}
 	defer res.Body.Close()
 
-	rawData, err := readBoundedResponse(res.Body)
+	rawData, err := ReadBoundedResponse(res.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -1005,7 +1005,7 @@ func GetModelRepoStorageUsage(owner string) (*ModelRepoStorageUsage, error) {
 	}
 	defer res.Body.Close()
 
-	rawData, err := readBoundedResponse(res.Body)
+	rawData, err := ReadBoundedResponse(res.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -1065,7 +1065,7 @@ func CompleteModelRepoUpload(sessionID string) (*CompleteModelRepoUploadResult, 
 	}
 	defer res.Body.Close()
 
-	rawData, err := readBoundedResponse(res.Body)
+	rawData, err := ReadBoundedResponse(res.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -1147,7 +1147,7 @@ func CompleteModelRepoUploadBatch(sessionIDs []string) ([]*CompleteModelRepoUplo
 	}
 	defer res.Body.Close()
 
-	rawData, err := readBoundedResponse(res.Body)
+	rawData, err := ReadBoundedResponse(res.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -1234,7 +1234,7 @@ func UpdateModelVersionStatusByIdentifier(input *UpdateModelVersionStatusInput) 
 	}
 	defer res.Body.Close()
 
-	rawData, err := readBoundedResponse(res.Body)
+	rawData, err := ReadBoundedResponse(res.Body)
 	if err != nil {
 		return nil, err
 	}

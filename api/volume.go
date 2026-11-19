@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 )
 
 type NetworkVolume struct {
@@ -38,7 +37,7 @@ func GetNetworkVolumes() (volumes []*NetworkVolume, err error) {
 		return
 	}
 	defer res.Body.Close()
-	rawData, err := io.ReadAll(res.Body)
+	rawData, err := ReadBoundedResponse(res.Body)
 	if err != nil {
 		return nil, err
 	}

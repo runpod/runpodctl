@@ -183,7 +183,7 @@ func (c *Client) send(ctx context.Context, method, u string, jsonBody []byte) (*
 	defer resp.Body.Close()
 
 	got := &response{status: resp.StatusCode, header: resp.Header}
-	got.body, err = io.ReadAll(resp.Body)
+	got.body, err = ReadBounded(resp.Body)
 	if err != nil {
 		return got, fmt.Errorf("failed to read response: %w", err)
 	}

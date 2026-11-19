@@ -103,8 +103,47 @@ func TestModelRepoResponseOverLimitIsError(t *testing.T) {
 }
 
 func TestReadBoundedResponseAtLimitSucceeds(t *testing.T) {
-	data, err := readBoundedResponse(strings.NewReader(strings.Repeat("a", maxModelResponseBytes)))
+	data, err := ReadBoundedResponse(strings.NewReader(strings.Repeat("a", maxModelResponseBytes)))
 	if err != nil || len(data) != maxModelResponseBytes {
 		t.Fatalf("expected exactly-at-limit body to be read, got len=%d err=%v", len(data), err)
+	}
+}
+
+// TestGraphQLCallsRejectOversizeResponses covers one representative of every
+// file that reads a graphql response body, so a new unbounded read in any of
+// them shows up here.
+func TestGraphQLCallsRejectOversizeResponses(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+
+	chunk := []byte(strings.Repeat("x", 1<<20))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if _, err := w.Write([]byte(`{"data":{"pad":"`)); err != nil {
+			return
+		}
+		for range (maxModelResponseBytes >> 20) + 2 {
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+	t.Setenv("RUNPOD_GRAPHQL_URL", server.URL)
+
+	for name, call := range map[string]func() error{
+		"pod.go":         func() error { _, err := GetPods(); return err },
+		"volume.go":      func() error { _, err := GetNetworkVolumes(); return err },
+		"endpoint.go":    func() error { _, err := GetEndpoints(); return err },
+		"envOverride.go": func() error { _, err := GetEndpointEnvOverride("ep"); return err },
+		"modelStatus.go": func() error { _, err := GetEndpointModelReferences("ep"); return err },
+		"modelStatus.go pod versions": func() error {
+			_, err := GetPodModelVersions("pod")
+			return err
+		},
+	} {
+		if err := call(); err == nil || !strings.Contains(err.Error(), "exceeds") {
+			t.Errorf("%s: expected an over-limit error, got %v", name, err)
+		}
 	}
 }

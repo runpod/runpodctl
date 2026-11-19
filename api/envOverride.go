@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 )
@@ -48,7 +47,7 @@ func GetEndpointEnvOverride(endpointID string) ([]EndpointEnvVar, error) {
 	}
 	defer res.Body.Close()
 
-	rawData, err := io.ReadAll(res.Body)
+	rawData, err := ReadBoundedResponse(res.Body)
 	if err != nil {
 		return nil, err
 	}

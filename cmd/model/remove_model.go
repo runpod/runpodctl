@@ -3,7 +3,6 @@ package model
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
@@ -93,7 +92,7 @@ func defaultListDependentEndpoints(owner, name, hash string) ([]DependentEndpoin
 	}
 	defer res.Body.Close()
 
-	rawData, err := io.ReadAll(res.Body)
+	rawData, err := api.ReadBoundedResponse(res.Body)
 	if err != nil {
 		return nil, err
 	}

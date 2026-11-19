@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	internalapi "github.com/runpod/runpodctl/internal/api"
 )
 
 // maxGraphQLBodyBytes bounds how much of a response is read, so a misbehaving
@@ -78,21 +80,12 @@ func parseGraphQLData(status int, body io.Reader) (gqldata map[string]any, rawDa
 	return gqldata, rawData, nil
 }
 
-// maxModelResponseBytes bounds a model-repo graphql response. A listing of many
-// models/versions is legitimately large, so the cap is far above any real
-// response; it exists so a hostile or broken server cannot make the CLI buffer
-// hundreds of MB (a 300 MB body measured ~800 MB RSS).
-const maxModelResponseBytes = 32 << 20
+// maxModelResponseBytes is the bound ReadBoundedResponse enforces.
+const maxModelResponseBytes = internalapi.MaxResponseBytes
 
-// readBoundedResponse reads body up to maxModelResponseBytes and fails if the
-// server sent more, rather than silently truncating into invalid json.
-func readBoundedResponse(body io.Reader) ([]byte, error) {
-	data, err := io.ReadAll(io.LimitReader(body, maxModelResponseBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > maxModelResponseBytes {
-		return nil, fmt.Errorf("graphql response exceeds %d MiB limit", maxModelResponseBytes>>20)
-	}
-	return data, nil
+// ReadBoundedResponse reads a graphql response body up to maxModelResponseBytes
+// and fails if the server sent more, rather than buffering hundreds of MB (a
+// 300 MB body measured ~800 MB RSS) or silently truncating into invalid json.
+func ReadBoundedResponse(body io.Reader) ([]byte, error) {
+	return internalapi.ReadBounded(body)
 }
