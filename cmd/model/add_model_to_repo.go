@@ -46,6 +46,7 @@ var (
 	addModelDirectoryPath       string
 	addModelMetadata            map[string]string
 	addModelWaitForHash         bool
+	addModelIncludeHidden       bool
 	addModelHashTimeout         time.Duration
 	addModelVerbose             bool
 	addModelDeleteAfterUpload   bool
@@ -312,6 +313,7 @@ func bindAddModelFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&addModelContentType, "content-type", "", "upload content type")
 	cmd.Flags().StringVar(&addModelDirectoryPath, "model-path", "", "directory containing model files to upload")
 	cmd.Flags().StringToStringVar(&addModelMetadata, "metadata", nil, "metadata key=value pairs")
+	cmd.Flags().BoolVar(&addModelIncludeHidden, "include-hidden", false, "also upload .git/ directories and .env / .env.* files from --model-path (skipped by default)")
 	cmd.Flags().BoolVar(&addModelWaitForHash, "wait-for-hash", false, "wait for completed model-path uploads to become deployable")
 	cmd.Flags().DurationVar(&addModelHashTimeout, "hash-timeout", modelHashWaitTimeout, "maximum duration to wait for --wait-for-hash (0 disables timeout)")
 	cmd.Flags().BoolVarP(&addModelVerbose, "verbose", "v", false, "include upload details in wait-for-hash output")
@@ -359,9 +361,12 @@ func runAddModel(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("model-path %q must be a directory", addModelDirectoryPath)
 		}
 
-		files, err := collectModelFiles(modelPath)
+		files, skipped, err := collectModelFilesWithOptions(modelPath, addModelIncludeHidden)
 		if err != nil {
 			return err
+		}
+		if skipped > 0 {
+			fmt.Fprintf(os.Stderr, "skipped %d sensitive entries (.git/ directories, .env and .env.* files) under --model-path; pass --include-hidden to upload them\n", skipped)
 		}
 		if len(files) == 0 {
 			return fmt.Errorf("model-path %q does not contain any files to upload", addModelDirectoryPath)
@@ -642,14 +647,37 @@ const symlinkOutsideModelPathHint = "To fix: copy the real files into the direct
 // pointing anywhere else is refused rather than silently uploading a file that
 // is not part of --model-path. Symlinked directories, FIFOs, devices and other
 // non-regular files are refused too.
+//
+// Version-control and secret files (see isSensitiveModelEntry) are skipped; use
+// collectModelFilesWithOptions to include them.
 func collectModelFiles(dir string) ([]modelFile, error) {
+	files, _, err := collectModelFilesWithOptions(dir, false)
+	return files, err
+}
+
+// isSensitiveModelEntry reports whether a directory entry is one that is almost
+// never part of a model and commonly holds credentials or history: a `.git`
+// entry (directory, or the gitfile of a worktree/submodule) and `.env` or
+// `.env.*` files. Other dotfiles, such as .gitattributes or .huggingface/, are
+// legitimate model content and are not matched.
+func isSensitiveModelEntry(name string, isDir bool) bool {
+	if name == ".git" {
+		return true
+	}
+	return !isDir && (name == ".env" || strings.HasPrefix(name, ".env."))
+}
+
+// collectModelFilesWithOptions is collectModelFiles with control over sensitive
+// entries. skipped counts the entries left out (a `.git` directory counts once),
+// so the caller can say something without listing names or contents.
+func collectModelFilesWithOptions(dir string, includeHidden bool) (files []modelFile, skipped int, err error) {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
-		return nil, fmt.Errorf("resolve model directory: %w", err)
+		return nil, 0, fmt.Errorf("resolve model directory: %w", err)
 	}
 	root, err := filepath.EvalSymlinks(absDir)
 	if err != nil {
-		return nil, fmt.Errorf("resolve model directory: %w", err)
+		return nil, 0, fmt.Errorf("resolve model directory: %w", err)
 	}
 	roots := newScanRoots(modelContainmentRoots(root))
 
@@ -660,14 +688,22 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 		return nil, fmt.Errorf("stat model directory: %w", err)
 	}
 
-	var files []modelFile
-
 	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 
 		if path == root {
+			return nil
+		}
+
+		// decided on the name alone and before symlink resolution, so a skipped
+		// entry is never followed or stat'ed.
+		if !includeHidden && isSensitiveModelEntry(d.Name(), d.IsDir()) {
+			skipped++
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 
@@ -743,14 +779,14 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 		walkErr = fmt.Errorf("close model directory: %w", closeErr)
 	}
 	if walkErr != nil {
-		return nil, fmt.Errorf("scan model directory: %w", walkErr)
+		return nil, 0, fmt.Errorf("scan model directory: %w", walkErr)
 	}
 
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].RelativePath < files[j].RelativePath
 	})
 
-	return files, nil
+	return files, skipped, nil
 }
 
 // validateModelRelativePath rejects a file name that cannot be represented
