@@ -456,7 +456,7 @@ func parseAPIError(body []byte, status int) *APIError {
 		apiErr.Message = fmt.Sprintf("api request failed with status %d", status)
 	}
 	if apiErr.Message == "" {
-		apiErr.Message = trimmedBody
+		apiErr.Message = ErrorBodyExcerpt([]byte(trimmedBody))
 	}
 	if apiErr.Message == "" {
 		apiErr.Message = fmt.Sprintf("api request failed with status %d", status)
@@ -496,7 +496,7 @@ func newGraphQLError(message string) *GraphQLError {
 func parseGraphQLHTTPError(body []byte, status int) *GraphQLError {
 	msg := extractGraphQLMessage(body)
 	if msg == "" {
-		msg = strings.TrimSpace(string(body))
+		msg = ErrorBodyExcerpt(bytes.TrimSpace(body))
 	}
 	if msg == "" {
 		msg = fmt.Sprintf("request failed with status %d", status)

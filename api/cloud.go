@@ -37,7 +37,7 @@ func GetCloud(in *GetCloudInput) (gpuTypes []interface{}, err error) {
 	}
 	gpuTypes, ok := gqldata["gpuTypes"].([]interface{})
 	if !ok || gpuTypes == nil {
-		err = fmt.Errorf("gpuTypes is nil: %s", string(rawData))
+		err = fmt.Errorf("gpuTypes is nil: %s", errorBodyExcerpt(rawData))
 		return
 	}
 	return

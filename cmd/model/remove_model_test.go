@@ -269,3 +269,26 @@ func TestDefaultListDependentEndpointsRejectsOversizeResponse(t *testing.T) {
 		t.Fatalf("expected an over-limit error, got %v", err)
 	}
 }
+
+// TestDefaultListDependentEndpointsBoundsErrorBody pins that a large non-200
+// body is cut in the error rather than echoed whole.
+func TestDefaultListDependentEndpointsBoundsErrorBody(t *testing.T) {
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+	payload := []byte(strings.Repeat("z", 3<<20))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		if _, err := w.Write(payload); err != nil {
+			return
+		}
+	}))
+	defer server.Close()
+	t.Setenv("RUNPOD_GRAPHQL_URL", server.URL)
+
+	_, err := defaultListDependentEndpoints("owner", "name", "hash")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if len(err.Error()) > internalapi.ErrorBodyExcerptBytes+256 || !strings.Contains(err.Error(), "truncated") {
+		t.Fatalf("expected a bounded error with a truncation marker, got %d bytes", len(err.Error()))
+	}
+}

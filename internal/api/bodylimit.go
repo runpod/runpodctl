@@ -3,6 +3,9 @@ package api
 import (
 	"fmt"
 	"io"
+	"strings"
+
+	"github.com/runpod/runpodctl/internal/redact"
 )
 
 // MaxResponseBytes bounds how much of an api response body the cli buffers. It
@@ -22,4 +25,34 @@ func ReadBounded(body io.Reader) ([]byte, error) {
 		return nil, fmt.Errorf("response exceeds %d MiB limit", MaxResponseBytes>>20)
 	}
 	return data, nil
+}
+
+// ErrorBodyExcerptBytes bounds how much of a response body is echoed into an
+// error message. The body itself may be up to MaxResponseBytes, which is far too
+// much to print.
+const ErrorBodyExcerptBytes = 4 << 10
+
+// errorBodyRedactWindow is how much of a body is run through redaction. It is
+// larger than the excerpt so a secret cut by the excerpt boundary has already
+// been redacted whole, while redaction never scans a multi-megabyte body.
+const errorBodyRedactWindow = 64 << 10
+
+// ErrorBodyExcerpt renders a response body for an error message: redacted (the
+// same redact.Text the model-repo errors use), then cut at ErrorBodyExcerptBytes
+// with a marker. Use it for every "<field> is nil: <body>" style message.
+func ErrorBodyExcerpt(body []byte) string {
+	window := body
+	if len(window) > errorBodyRedactWindow {
+		window = window[:errorBodyRedactWindow]
+	}
+	text := redact.Text(strings.ToValidUTF8(string(window), ""))
+	truncated := len(window) < len(body)
+	if len(text) > ErrorBodyExcerptBytes {
+		text = strings.ToValidUTF8(text[:ErrorBodyExcerptBytes], "")
+		truncated = true
+	}
+	if truncated {
+		text += "... (truncated)"
+	}
+	return text
 }

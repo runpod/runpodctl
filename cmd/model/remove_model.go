@@ -98,7 +98,7 @@ func defaultListDependentEndpoints(owner, name, hash string) ([]DependentEndpoin
 	}
 	if res.StatusCode != http.StatusOK {
 		return nil, &internalapi.GraphQLError{
-			Message: fmt.Sprintf("statuscode %d: %s", res.StatusCode, string(rawData)),
+			Message: fmt.Sprintf("statuscode %d: %s", res.StatusCode, internalapi.ErrorBodyExcerpt(rawData)),
 			Status:  res.StatusCode,
 		}
 	}
@@ -125,7 +125,7 @@ func defaultListDependentEndpoints(owner, name, hash string) ([]DependentEndpoin
 		return nil, &internalapi.GraphQLError{Message: data.Errors[0].Message}
 	}
 	if data.Data == nil || data.Data.Myself == nil {
-		return nil, fmt.Errorf("data is nil: %s", string(rawData))
+		return nil, fmt.Errorf("data is nil: %s", internalapi.ErrorBodyExcerpt(rawData))
 	}
 
 	var dependents []DependentEndpoint

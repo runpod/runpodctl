@@ -11,18 +11,13 @@ import (
 	internalapi "github.com/runpod/runpodctl/internal/api"
 )
 
-// errorBodyExcerptBytes bounds how much of a response body is echoed into an
-// error message. The body itself may be up to maxModelResponseBytes, which is far
-// too much to print.
-const errorBodyExcerptBytes = 4 << 10
+// errorBodyExcerptBytes is the bound errorBodyExcerpt enforces.
+const errorBodyExcerptBytes = internalapi.ErrorBodyExcerptBytes
 
-// errorBodyExcerpt is body as a string for an error message, cut at
-// errorBodyExcerptBytes.
+// errorBodyExcerpt is body, redacted and cut at errorBodyExcerptBytes, for an
+// error message. See internalapi.ErrorBodyExcerpt.
 func errorBodyExcerpt(body []byte) string {
-	if len(body) <= errorBodyExcerptBytes {
-		return string(body)
-	}
-	return string(body[:errorBodyExcerptBytes]) + "... (truncated)"
+	return internalapi.ErrorBodyExcerpt(body)
 }
 
 // firstGraphQLErrorMessage safely extracts the message of the first graphql

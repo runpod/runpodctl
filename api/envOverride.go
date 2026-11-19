@@ -52,7 +52,7 @@ func GetEndpointEnvOverride(endpointID string) ([]EndpointEnvVar, error) {
 		return nil, err
 	}
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
+		return nil, fmt.Errorf("statuscode %d: %s", res.StatusCode, errorBodyExcerpt(rawData))
 	}
 
 	var data struct {
