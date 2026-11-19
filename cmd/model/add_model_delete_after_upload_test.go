@@ -321,8 +321,9 @@ func TestDeleteVerifiedModelFilesCountsSymlinksSeparately(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(snapshot, "model.safetensors")); !os.IsNotExist(err) {
 		t.Fatalf("the link should be removed, lstat err: %v", err)
 	}
-	if got, err := os.ReadFile(blob); err != nil || string(got) != "weights-bytes" {
-		t.Fatalf("the link target must be kept: %q, %v", got, err)
+	got, readErr := os.ReadFile(blob) //nolint:gosec // G304: test-controlled temp path
+	if readErr != nil || string(got) != "weights-bytes" {
+		t.Fatalf("the link target must be kept: %q, %v", got, readErr)
 	}
 	if !strings.Contains(stderr, "deleted 1 verified model file(s) (3 bytes)") ||
 		!strings.Contains(stderr, "removed 1 symlink(s) (targets kept)") {

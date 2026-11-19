@@ -94,7 +94,8 @@ func Error(err error) error {
 	}
 	msg := err.Error()
 	var ue *url.Error
-	if errors.As(err, &ue) {
+	// errors.As, not errors.AsType: the nix golangci-lint/errcheck toolchain reports AsType results as unchecked.
+	if errors.As(err, &ue) { //nolint:modernize // see above
 		// the quoted URL may contain characters (spaces from a malformed URL)
 		// that end the text patterns early, so swap in the typed rewrite first.
 		clean := &url.Error{Op: ue.Op, URL: URL(ue.URL), Err: ue.Err}

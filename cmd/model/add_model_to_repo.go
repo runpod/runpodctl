@@ -540,7 +540,7 @@ func validateAddModelFlags() error {
 // a cheap no-op. It is a var so tests can observe that the call happens.
 var pinScanFileIdentity = func(info os.FileInfo) error {
 	if !os.SameFile(info, info) {
-		return fmt.Errorf("unable to determine the identity of the file")
+		return errors.New("unable to determine the identity of the file")
 	}
 	return nil
 }
@@ -612,8 +612,8 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 			return fmt.Errorf("model-path contains unsupported file type: %s", path)
 		}
 
-		if err := pinScanFileIdentity(info); err != nil {
-			return fmt.Errorf("scan %q: %w", path, err)
+		if pinErr := pinScanFileIdentity(info); pinErr != nil {
+			return fmt.Errorf("scan %q: %w", path, pinErr)
 		}
 
 		rel, err := filepath.Rel(root, path)
