@@ -51,7 +51,7 @@ func NewGraphQLClient() (*GraphQLClient, error) {
 	return &GraphQLClient{
 		url:        apiURL,
 		apiKey:     apiKey,
-		httpClient: &http.Client{Timeout: timeout},
+		httpClient: &http.Client{Timeout: timeout, CheckRedirect: RefuseRedirect},
 		userAgent:  buildUserAgent(),
 	}, nil
 }

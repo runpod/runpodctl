@@ -74,6 +74,21 @@ func noRedirects(*http.Request, []*http.Request) error {
 	return http.ErrUseLastResponse
 }
 
+// ErrRedirectRefused is what a graphql client returns, via RefuseRedirect, when
+// the api answers with a redirect. Every client that sends the api key refuses
+// redirects: go keeps the Authorization header on a redirect to the same host on
+// another port and replays the request as a get, so following one can hand the
+// key and body to a different listener or report a write as a read.
+var ErrRedirectRefused = errors.New("graphql endpoint responded with a redirect; refusing to follow it (check the configured api url)")
+
+// RefuseRedirect is a CheckRedirect that fails the request instead of following
+// a redirect. Use it where the caller has no 3xx handling of its own, so the
+// redirect surfaces as an error rather than a status nobody checks; clients whose
+// request path reports a 3xx itself use noRedirects.
+func RefuseRedirect(*http.Request, []*http.Request) error {
+	return ErrRedirectRefused
+}
+
 func restBaseURL() string {
 	baseURL := configenv.RESTURL()
 	if baseURL == "" {

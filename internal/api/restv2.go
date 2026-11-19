@@ -38,7 +38,7 @@ func NewV2Client() (*V2Client, error) {
 	return &V2Client{
 		baseURL:    restBaseURL(),
 		apiKey:     apiKey,
-		httpClient: &http.Client{Timeout: timeout},
+		httpClient: &http.Client{Timeout: timeout, CheckRedirect: noRedirects},
 		userAgent:  buildUserAgent(),
 	}, nil
 }

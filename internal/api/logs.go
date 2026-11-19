@@ -119,7 +119,7 @@ func NewLogClient() (*LogClient, error) {
 		// stream is meant to outlive any timeout the user has configured. The
 		// caller's context is the only thing that ends a read. Note this also
 		// means the viper `timeout` key deliberately does not apply here.
-		httpClient: &http.Client{},
+		httpClient: &http.Client{CheckRedirect: noRedirects},
 		userAgent:  buildUserAgent(),
 	}, nil
 }
@@ -309,6 +309,14 @@ func (c *LogClient) stream(ctx context.Context, path string, opts LogStreamOptio
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		// redirects are never followed (see noRedirects), so name it.
+		return &APIError{
+			Status:  resp.StatusCode,
+			Code:    codeForStatus(resp.StatusCode),
+			Message: fmt.Sprintf("api redirected (status %d); redirects are not followed", resp.StatusCode),
+		}
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// error bodies are small json documents, so reading to the end is safe
 		// here even though the success path must not.
