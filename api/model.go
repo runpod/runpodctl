@@ -30,9 +30,10 @@ func modelRepoHTTPError(status int, body []byte) error {
 // modelRepoGraphQLError wraps a graphql top-level error (how Model Repo
 // access failures surface: the resolver throws before returning data) as a
 // typed GraphQLError, giving it a stable "graphql_error" code instead of the
-// generic cli_error fallback.
+// generic cli_error fallback. The message is redacted: server errors can echo
+// a presigned URL.
 func modelRepoGraphQLError(gqlErr *GraphQLError) error {
-	return &internalapi.GraphQLError{Message: gqlErr.Message}
+	return &internalapi.GraphQLError{Message: redact.Text(gqlErr.Message)}
 }
 
 // Model represents a model stored in the RunPod model repository.
@@ -448,7 +449,7 @@ func AddModelToRepo(input *AddModelToRepoInput) (*Model, error) {
 	result := data.Data.AddModelToRepo
 	if !result.Success {
 		if result.Message != "" {
-			return nil, errors.New(result.Message)
+			return nil, errors.New(redact.Text(result.Message))
 		}
 		return nil, fmt.Errorf("model creation failed: %s", redact.Text(string(rawData)))
 	}
@@ -726,7 +727,7 @@ func RemoveModel(input *RemoveModelInput) (*ModelRepoMutationResult, error) {
 	result := data.Data.RemoveModelFromRepo
 	if !result.Success {
 		if result.Message != "" {
-			return nil, errors.New(result.Message)
+			return nil, errors.New(redact.Text(result.Message))
 		}
 		return nil, fmt.Errorf("model removal failed: %s", redact.Text(string(rawData)))
 	}
@@ -834,7 +835,7 @@ func CreateModelRepoUpload(input *CreateModelRepoUploadInput) (*ModelRepoMutatio
 	result := data.Data.CreateModelRepoUpload
 	if !result.Success {
 		if result.Message != "" {
-			return nil, errors.New(result.Message)
+			return nil, errors.New(redact.Text(result.Message))
 		}
 		return nil, fmt.Errorf("createModelRepoUpload failed: %s", redact.Text(string(rawData)))
 	}
@@ -962,7 +963,7 @@ func CreateModelRepoUploadBatch(input *CreateModelRepoUploadBatchInput) (*ModelR
 	result := data.Data.CreateModelRepoUploadBatch
 	if !result.Success {
 		if result.Message != "" {
-			return nil, errors.New(result.Message)
+			return nil, errors.New(redact.Text(result.Message))
 		}
 		return nil, fmt.Errorf("createModelRepoUploadBatch failed: %s", redact.Text(string(rawData)))
 	}
@@ -1092,7 +1093,7 @@ func CompleteModelRepoUpload(sessionID string) (*CompleteModelRepoUploadResult, 
 	result := data.Data.CompleteModelRepoUpload
 	if !result.Success {
 		if result.Message != "" {
-			return nil, errors.New(result.Message)
+			return nil, errors.New(redact.Text(result.Message))
 		}
 		return nil, fmt.Errorf("completeModelRepoUpload failed: %s", redact.Text(string(rawData)))
 	}
@@ -1173,7 +1174,7 @@ func CompleteModelRepoUploadBatch(sessionIDs []string) ([]*CompleteModelRepoUplo
 				continue
 			}
 			if alias, ok := gqlErr.Path[0].(string); ok {
-				failedByAlias[alias] = gqlErr.Message
+				failedByAlias[alias] = redact.Text(gqlErr.Message)
 			}
 		}
 		var failed []string
@@ -1204,7 +1205,7 @@ func CompleteModelRepoUploadBatch(sessionIDs []string) ([]*CompleteModelRepoUplo
 		}
 		if !result.Success {
 			if result.Message != "" {
-				return nil, fmt.Errorf("session %s: %s", sessionID, result.Message)
+				return nil, fmt.Errorf("session %s: %s", sessionID, redact.Text(result.Message))
 			}
 			return nil, fmt.Errorf("completeModelRepoUpload failed for session %s: %s", sessionID, redact.Text(string(rawData)))
 		}
@@ -1261,7 +1262,7 @@ func UpdateModelVersionStatusByIdentifier(input *UpdateModelVersionStatusInput) 
 	result := data.Data.UpdateModelVersionStatus
 	if !result.Success {
 		if result.Message != "" {
-			return nil, errors.New(result.Message)
+			return nil, errors.New(redact.Text(result.Message))
 		}
 		return nil, fmt.Errorf("updateModelVersionStatus failed: %s", redact.Text(string(rawData)))
 	}

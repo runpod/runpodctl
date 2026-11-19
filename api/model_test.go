@@ -642,3 +642,58 @@ func TestCreateModelRepoUploadBatchErrorEchoRedactsPresignedURLs(t *testing.T) {
 		})
 	}
 }
+
+// server-provided messages (top-level GraphQL errors and per-mutation
+// result.message) are echoed verbatim to the user, so a presigned URL inside
+// them must be redacted too.
+func TestCreateModelRepoUploadBatchServerMessagesRedactPresignedURLs(t *testing.T) {
+	const signed = "https://bucket.s3.amazonaws.com/key?X-Amz-Credential=AKIAEXAMPLE&X-Amz-Signature=deadbeef0123456789"
+
+	cases := map[string]map[string]any{
+		"graphql error message": {
+			"errors": []any{map[string]any{"message": "upload to " + signed + " was rejected"}},
+		},
+		"result message": {
+			"data": map[string]any{"createModelRepoUploadBatch": map[string]any{
+				"success": false,
+				"message": "cannot sign " + signed,
+			}},
+		},
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			viper.Reset()
+			t.Cleanup(viper.Reset)
+			t.Setenv("RUNPOD_API_KEY", "test-key")
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if err := json.NewEncoder(w).Encode(body); err != nil {
+					t.Errorf("encode response: %v", err)
+				}
+			}))
+			defer server.Close()
+			t.Setenv("RUNPOD_GRAPHQL_URL", server.URL)
+
+			_, err := CreateModelRepoUploadBatch(&CreateModelRepoUploadBatchInput{
+				Owner: "user-id",
+				Name:  "test-model",
+				Files: []ModelRepoUploadBatchFileInput{{FileName: "a.bin", FileSizeBytes: "1"}},
+			})
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if strings.Contains(err.Error(), "deadbeef") || strings.Contains(err.Error(), "AKIAEXAMPLE") {
+				t.Fatalf("server message leaks the presigned signature: %v", err)
+			}
+			if !strings.Contains(err.Error(), "https://bucket.s3.amazonaws.com/key") {
+				t.Fatalf("host/path should stay for diagnosis: %v", err)
+			}
+		})
+	}
+}
+
+func TestModelRepoGraphQLErrorRedactsMessage(t *testing.T) {
+	err := modelRepoGraphQLError(&GraphQLError{Message: "failed https://h.example/k?X-Amz-Signature=deadbeef0123456789"})
+	if strings.Contains(err.Error(), "deadbeef") {
+		t.Fatalf("leaks signature: %v", err)
+	}
+}
