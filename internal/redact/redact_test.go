@@ -27,7 +27,7 @@ func assertClean(t *testing.T, got string) {
 }
 
 func TestURLStripsQueryUserinfoFragment(t *testing.T) {
-	cases := map[string]string{
+	cases := map[string]string{ //nolint:gosec // G101: fake presigned-URL fixtures, not credentials
 		presigned:                                "https://bucket.s3.us-east-1.amazonaws.com/models/key.bin",
 		"https://user:pw@host.example/a/b?x=1#f": "https://host.example/a/b",
 		"https://host.example/plain":             "https://host.example/plain",
@@ -41,7 +41,7 @@ func TestURLStripsQueryUserinfoFragment(t *testing.T) {
 }
 
 func TestTextRedactsURLsAndParams(t *testing.T) {
-	cases := map[string]string{
+	cases := map[string]string{ //nolint:gosec // G101: fake presigned-URL fixtures, not credentials
 		"Put \"" + presigned + "\": dial tcp 127.0.0.1:1: connect: connection refused": "Put \"https://bucket.s3.us-east-1.amazonaws.com/models/key.bin\": dial tcp 127.0.0.1:1: connect: connection refused",
 		// JSON with \u0026 separators must not leave the query tail behind.
 		`{"url":"https://h.example/k?a=1\u0026X-Amz-Signature=deadbeef0123456789"}`: `{"url":"https://h.example/k"}`,
@@ -76,13 +76,12 @@ func TestErrorRewritesURLError(t *testing.T) {
 	}
 
 	direct := Error(orig)
-	var ue *url.Error
-	if !errors.As(direct, &ue) {
+	if _, ok := errors.AsType[*url.Error](direct); !ok {
 		t.Fatal("expected a *url.Error in the chain")
 	}
 	// the typed error reachable from the result must not carry the signature either.
-	for e := error(direct); e != nil; e = errors.Unwrap(e) {
-		if u, ok := e.(*url.Error); ok {
+	for e := direct; e != nil; e = errors.Unwrap(e) {
+		if u, ok := errors.AsType[*url.Error](e); ok {
 			if strings.Contains(u.URL, "deadbeef") || strings.Contains(u.Error(), "deadbeef") {
 				t.Fatalf("typed url.Error still carries the signature: %s", u.URL)
 			}
@@ -96,12 +95,15 @@ func TestErrorRewritesURLError(t *testing.T) {
 func TestErrorFromRealRequestFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, presigned, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, presigned, http.NoBody)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, doErr := http.DefaultClient.Do(req)
+	resp, doErr := http.DefaultClient.Do(req)
 	if doErr == nil {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
 		t.Fatal("expected an error")
 	}
 	got := Error(doErr)
@@ -112,7 +114,7 @@ func TestErrorFromRealRequestFailure(t *testing.T) {
 }
 
 func TestErrorFromParseFailure(t *testing.T) {
-	_, err := http.NewRequest(http.MethodPut, "https://bad host/k?X-Amz-Signature=deadbeef0123456789", nil)
+	_, err := http.NewRequestWithContext(context.Background(), http.MethodPut, "https://bad host/k?X-Amz-Signature=deadbeef0123456789", http.NoBody)
 	if err == nil {
 		t.Skip("URL unexpectedly parsed")
 	}
@@ -124,7 +126,7 @@ func TestErrorNilAndIdempotent(t *testing.T) {
 		t.Fatal("Error(nil) must be nil")
 	}
 	once := Error(errors.New("x " + presigned))
-	if Error(once) != once {
+	if !errors.Is(Error(once), once) || Error(once).Error() != once.Error() {
 		t.Fatal("redacting twice should be a no-op")
 	}
 }

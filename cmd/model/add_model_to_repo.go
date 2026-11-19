@@ -652,22 +652,19 @@ func openScannedModelFile(path string, scanned os.FileInfo) (*os.File, os.FileIn
 		return nil, nil, fmt.Errorf("refusing to upload %q: it is no longer a regular file (changed since the model directory was scanned)", path)
 	}
 
-	file, err := os.Open(path)
+	file, err := os.Open(path) //nolint:gosec // G304: path is the scan-verified model file; identity is re-checked below via fstat + os.SameFile
 	if err != nil {
 		return nil, nil, fmt.Errorf("open artifact: %w", err)
 	}
 	info, err := file.Stat()
 	if err != nil {
-		file.Close()
-		return nil, nil, fmt.Errorf("stat artifact: %w", err)
+		return nil, nil, errors.Join(fmt.Errorf("stat artifact: %w", err), file.Close())
 	}
 	if !info.Mode().IsRegular() {
-		file.Close()
-		return nil, nil, fmt.Errorf("refusing to upload %q: it is not a regular file", path)
+		return nil, nil, errors.Join(fmt.Errorf("refusing to upload %q: it is not a regular file", path), file.Close())
 	}
 	if scanned != nil && !os.SameFile(scanned, info) {
-		file.Close()
-		return nil, nil, fmt.Errorf("refusing to upload %q: the file changed since the model directory was scanned", path)
+		return nil, nil, errors.Join(fmt.Errorf("refusing to upload %q: the file changed since the model directory was scanned", path), file.Close())
 	}
 	return file, info, nil
 }

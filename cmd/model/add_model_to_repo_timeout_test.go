@@ -161,7 +161,7 @@ func TestRunAddModelPathWaitForHashPrintsCompactOutput(t *testing.T) {
 			Uploads: uploads,
 		}, nil
 	}
-	completeModelUploadFile = func(_ context.Context, upload *api.ModelRepoUpload, artifactPath string, _ os.FileInfo, progress modelUploadProgress) error {
+	completeModelUploadFile = func(_ context.Context, _ *api.ModelRepoUpload, _ string, _ os.FileInfo, _ modelUploadProgress) error {
 		return nil
 	}
 	completeModelRepoUploadAll = func(sessionIDs []string) ([]*api.CompleteModelRepoUploadResult, error) {
@@ -260,7 +260,7 @@ func TestRunAddModelPathWaitForHashVerbosePrintsFullOutput(t *testing.T) {
 			Uploads: uploads,
 		}, nil
 	}
-	completeModelUploadFile = func(_ context.Context, upload *api.ModelRepoUpload, artifactPath string, _ os.FileInfo, progress modelUploadProgress) error {
+	completeModelUploadFile = func(_ context.Context, _ *api.ModelRepoUpload, _ string, _ os.FileInfo, _ modelUploadProgress) error {
 		return nil
 	}
 	completeModelRepoUploadAll = func(sessionIDs []string) ([]*api.CompleteModelRepoUploadResult, error) {
@@ -605,7 +605,7 @@ func TestUploadModelFilesCreatesOneBatchWhenManifestFits(t *testing.T) {
 	var mu sync.Mutex
 	var events []string
 	var uploadedArtifacts []string
-	completeModelUploadFile = func(_ context.Context, upload *api.ModelRepoUpload, artifactPath string, _ os.FileInfo, progress modelUploadProgress) error {
+	completeModelUploadFile = func(_ context.Context, _ *api.ModelRepoUpload, artifactPath string, _ os.FileInfo, _ modelUploadProgress) error {
 		mu.Lock()
 		defer mu.Unlock()
 		events = append(events, "upload:"+artifactPath)
@@ -754,7 +754,7 @@ func TestUploadModelFilesChunksLargeManifestsAcrossMultipleBatches(t *testing.T)
 			Uploads: uploads,
 		}, nil
 	}
-	completeModelUploadFile = func(_ context.Context, upload *api.ModelRepoUpload, artifactPath string, _ os.FileInfo, progress modelUploadProgress) error {
+	completeModelUploadFile = func(_ context.Context, _ *api.ModelRepoUpload, _ string, _ os.FileInfo, _ modelUploadProgress) error {
 		return nil
 	}
 	completeModelRepoUploadAll = func(sessionIDs []string) ([]*api.CompleteModelRepoUploadResult, error) {
@@ -822,7 +822,7 @@ func TestUploadModelFilesFinalizesAllSessionsInOneBatchCall(t *testing.T) {
 			Uploads: uploads,
 		}, nil
 	}
-	completeModelUploadFile = func(_ context.Context, upload *api.ModelRepoUpload, artifactPath string, _ os.FileInfo, progress modelUploadProgress) error {
+	completeModelUploadFile = func(_ context.Context, _ *api.ModelRepoUpload, _ string, _ os.FileInfo, _ modelUploadProgress) error {
 		return nil
 	}
 
@@ -883,7 +883,7 @@ func TestUploadModelFileChunkUploadsConcurrentlyWithinBound(t *testing.T) {
 
 	var inFlight int32
 	var maxInFlight int32
-	completeModelUploadFile = func(_ context.Context, upload *api.ModelRepoUpload, artifactPath string, _ os.FileInfo, progress modelUploadProgress) error {
+	completeModelUploadFile = func(_ context.Context, _ *api.ModelRepoUpload, _ string, _ os.FileInfo, _ modelUploadProgress) error {
 		current := atomic.AddInt32(&inFlight, 1)
 		defer atomic.AddInt32(&inFlight, -1)
 		for {
@@ -938,7 +938,7 @@ func TestUploadModelFileChunkReturnsFailure(t *testing.T) {
 	}
 
 	// b.bin fails while a.bin and c.bin succeed; report b.bin's error.
-	completeModelUploadFile = func(_ context.Context, upload *api.ModelRepoUpload, artifactPath string, _ os.FileInfo, progress modelUploadProgress) error {
+	completeModelUploadFile = func(_ context.Context, _ *api.ModelRepoUpload, artifactPath string, _ os.FileInfo, _ modelUploadProgress) error {
 		switch artifactPath {
 		case "/tmp/a.bin":
 			time.Sleep(15 * time.Millisecond)

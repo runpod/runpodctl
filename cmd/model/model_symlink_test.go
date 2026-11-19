@@ -15,7 +15,7 @@ import (
 
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
@@ -25,7 +25,7 @@ func writeTestFile(t *testing.T, path, content string) {
 
 func symlinkOrSkip(t *testing.T, target, link string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(link), 0o750); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	if err := os.Symlink(target, link); err != nil {
@@ -226,22 +226,24 @@ func TestCollectModelFiles_BlobsLayoutOutsideHuggingFaceRepoRefused(t *testing.T
 	}
 }
 
-// completeModelUploadWithContext must refuse a path swapped after the scan
-// before any request is made.
-func newUnreachableUploadServer(t *testing.T) (*httptest.Server, func() int) {
+// newUnreachableUploadServer counts the requests it receives: completeModelUploadFile
+// must refuse a path swapped after the scan before any request is made.
+func newUnreachableUploadServer(t *testing.T) (server *httptest.Server, hits func() int) {
 	t.Helper()
 	var mu sync.Mutex
-	hits := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	count := 0
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
-		hits++
+		count++
 		mu.Unlock()
-		_, _ = io.Copy(io.Discard, r.Body)
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			t.Errorf("drain request body: %v", err)
+		}
 		w.Header().Set("ETag", `"etag"`)
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(server.Close)
-	return server, func() int { mu.Lock(); defer mu.Unlock(); return hits }
+	return server, func() int { mu.Lock(); defer mu.Unlock(); return count }
 }
 
 func uploadFor(serverURL string) *api.ModelRepoUpload {
@@ -265,8 +267,8 @@ func TestUpload_SwapToSymlinkAfterScanRefused(t *testing.T) {
 	file := files[0]
 
 	// swap: the scanned file is replaced by a symlink to a file outside the root.
-	if err := os.Remove(file.ResolvedPath); err != nil {
-		t.Fatal(err)
+	if rmErr := os.Remove(file.ResolvedPath); rmErr != nil {
+		t.Fatal(rmErr)
 	}
 	symlinkOrSkip(t, outside, file.ResolvedPath)
 
@@ -296,8 +298,8 @@ func TestUpload_SwapToDifferentRegularFileAfterScanRefused(t *testing.T) {
 	// different inode) and renamed over it, as an editor or attacker would.
 	replacement := filepath.Join(root, "replacement.tmp")
 	writeTestFile(t, replacement, "different")
-	if err := os.Rename(replacement, file.ResolvedPath); err != nil {
-		t.Fatal(err)
+	if renameErr := os.Rename(replacement, file.ResolvedPath); renameErr != nil {
+		t.Fatal(renameErr)
 	}
 
 	server, hits := newUnreachableUploadServer(t)
@@ -325,7 +327,10 @@ func TestUpload_SymlinkedHuggingFaceFileUploadsBlobContent(t *testing.T) {
 	var mu sync.Mutex
 	var uploaded string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
+		body, readErr := io.ReadAll(r.Body)
+		if readErr != nil {
+			t.Errorf("read request body: %v", readErr)
+		}
 		if r.Method == http.MethodPut {
 			mu.Lock()
 			uploaded = string(body)
@@ -353,12 +358,18 @@ func TestOpenScannedModelFile_RefusesSymlinkWithoutScanInfo(t *testing.T) {
 	symlinkOrSkip(t, "real.bin", filepath.Join(root, "link.bin"))
 
 	if f, _, err := openScannedModelFile(filepath.Join(root, "link.bin"), nil); err == nil {
-		f.Close()
+		t.Cleanup(func() {
+			if closeErr := f.Close(); closeErr != nil {
+				t.Errorf("close: %v", closeErr)
+			}
+		})
 		t.Fatal("the upload path must never be a symlink")
 	}
 	f, _, err := openScannedModelFile(filepath.Join(root, "real.bin"), nil)
 	if err != nil {
 		t.Fatalf("regular file should open: %v", err)
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
 }

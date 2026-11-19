@@ -54,10 +54,7 @@ func stripURLText(s string) string {
 	}
 	if scheme := strings.Index(s, "://"); scheme >= 0 {
 		rest := s[scheme+3:]
-		authority := rest
-		if slash := strings.IndexByte(rest, '/'); slash >= 0 {
-			authority = rest[:slash]
-		}
+		authority, _, _ := strings.Cut(rest, "/")
 		if at := strings.LastIndexByte(authority, '@'); at >= 0 {
 			s = s[:scheme+3] + rest[at+1:]
 		}
@@ -75,8 +72,8 @@ func Text(s string) string {
 	s = urlPattern.ReplaceAllStringFunc(s, func(m string) string {
 		// keep a trailing JSON escape ("\") that is not part of the URL.
 		suffix := ""
-		if strings.HasSuffix(m, `\`) {
-			m = strings.TrimSuffix(m, `\`)
+		if trimmed, ok := strings.CutSuffix(m, `\`); ok {
+			m = trimmed
 			suffix = `\`
 		}
 		return stripURLText(m) + suffix
@@ -96,8 +93,7 @@ func Error(err error) error {
 		return err
 	}
 	msg := err.Error()
-	var ue *url.Error
-	if errors.As(err, &ue) {
+	if ue, ok := errors.AsType[*url.Error](err); ok {
 		// the quoted URL may contain characters (spaces from a malformed URL)
 		// that end the text patterns early, so swap in the typed rewrite first.
 		clean := &url.Error{Op: ue.Op, URL: URL(ue.URL), Err: ue.Err}

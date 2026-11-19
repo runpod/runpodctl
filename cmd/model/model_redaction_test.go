@@ -73,10 +73,17 @@ const s3ErrorBody = `<?xml version="1.0" encoding="UTF-8"?>
 	`<AWSAccessKeyId>AKIAEXAMPLE</AWSAccessKeyId><StringToSign>AWS4-HMAC-SHA256 deadbeef0123456789</StringToSign>` +
 	`<SignatureProvided>deadbeef0123456789</SignatureProvided><RequestId>R1</RequestId></Error>`
 
+func writeS3ErrorBody(t *testing.T, w http.ResponseWriter) {
+	t.Helper()
+	if _, err := w.Write([]byte(s3ErrorBody)); err != nil {
+		t.Errorf("write error body: %v", err)
+	}
+}
+
 func TestCompleteModelUpload_StorageErrorBodyIsSummarized(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
-		_, _ = w.Write([]byte(s3ErrorBody))
+		writeS3ErrorBody(t, w)
 	}))
 	t.Cleanup(server.Close)
 
@@ -110,7 +117,7 @@ func TestCompleteModelUpload_CompletionErrorBodyIsSummarized(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(s3ErrorBody))
+		writeS3ErrorBody(t, w)
 	}))
 	t.Cleanup(server.Close)
 

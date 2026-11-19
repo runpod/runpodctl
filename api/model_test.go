@@ -600,14 +600,14 @@ func TestGetModelRepoStorageUsageSurfacesGraphQLErrors(t *testing.T) {
 func TestCreateModelRepoUploadBatchErrorEchoRedactsPresignedURLs(t *testing.T) {
 	const signed = "https://bucket.s3.amazonaws.com/key?partNumber=1&X-Amz-Credential=AKIAEXAMPLE&X-Amz-Signature=deadbeef0123456789"
 
-	cases := map[string]map[string]interface{}{
+	cases := map[string]map[string]any{
 		"upload count mismatch": {
 			"success": true,
-			"uploads": []interface{}{map[string]interface{}{"parts": []interface{}{map[string]interface{}{"partNumber": 1, "url": signed}}}},
+			"uploads": []any{map[string]any{"parts": []any{map[string]any{"partNumber": 1, "url": signed}}}},
 		},
 		"failure without message": {
 			"success": false,
-			"uploads": []interface{}{map[string]interface{}{"parts": []interface{}{map[string]interface{}{"partNumber": 1, "url": signed}}}},
+			"uploads": []any{map[string]any{"parts": []any{map[string]any{"partNumber": 1, "url": signed}}}},
 		},
 	}
 	for name, batch := range cases {
@@ -615,10 +615,12 @@ func TestCreateModelRepoUploadBatchErrorEchoRedactsPresignedURLs(t *testing.T) {
 			viper.Reset()
 			t.Cleanup(viper.Reset)
 			t.Setenv("RUNPOD_API_KEY", "test-key")
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				_ = json.NewEncoder(w).Encode(map[string]interface{}{
-					"data": map[string]interface{}{"createModelRepoUploadBatch": batch},
-				})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if err := json.NewEncoder(w).Encode(map[string]any{
+					"data": map[string]any{"createModelRepoUploadBatch": batch},
+				}); err != nil {
+					t.Errorf("encode response: %v", err)
+				}
 			}))
 			defer server.Close()
 			t.Setenv("RUNPOD_GRAPHQL_URL", server.URL)

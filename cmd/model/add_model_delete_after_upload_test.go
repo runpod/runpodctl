@@ -90,7 +90,7 @@ func stubAddModelUploadSeams(t *testing.T) {
 			Uploads: uploads,
 		}, nil
 	}
-	completeModelUploadFile = func(_ context.Context, upload *api.ModelRepoUpload, artifactPath string, _ os.FileInfo, progress modelUploadProgress) error {
+	completeModelUploadFile = func(_ context.Context, _ *api.ModelRepoUpload, _ string, _ os.FileInfo, _ modelUploadProgress) error {
 		return nil
 	}
 	completeModelRepoUploadAll = func(sessionIDs []string) ([]*api.CompleteModelRepoUploadResult, error) {

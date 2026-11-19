@@ -42,8 +42,8 @@ func TestUpload_SwapToFIFOAfterScanRefusedWithoutBlocking(t *testing.T) {
 		t.Fatalf("collect: %v %+v", err, files)
 	}
 	file := files[0]
-	if err := removeAndMkfifo(file.ResolvedPath); err != nil {
-		t.Skipf("mkfifo unavailable: %v", err)
+	if fifoErr := removeAndMkfifo(file.ResolvedPath); fifoErr != nil {
+		t.Skipf("mkfifo unavailable: %v", fifoErr)
 	}
 
 	server, hits := newUnreachableUploadServer(t)
