@@ -136,6 +136,11 @@ type modelFile struct {
 	info os.FileInfo
 }
 
+// isSymlink reports whether the scanned entry was a symlink to its target.
+func (f modelFile) isSymlink() bool {
+	return f.ResolvedPath != "" && f.ResolvedPath != f.AbsolutePath
+}
+
 // uploadPath is the path the upload must open.
 func (f modelFile) uploadPath() string {
 	if f.ResolvedPath != "" {
@@ -160,6 +165,10 @@ type modelAddOutput struct {
 	ModelURL               string               `json:"modelUrl,omitempty"`
 	DeletedModelFiles      int                  `json:"deletedModelFiles,omitempty"`
 	DeletedModelFilesBytes int64                `json:"deletedModelFilesBytes,omitempty"`
+	// RemovedSymlinks counts symlinks removed by --delete-my-model-files-after-upload.
+	// Only the link is removed; its target (e.g. a Hugging Face blob) is kept, so
+	// these are not part of DeletedModelFiles/DeletedModelFilesBytes.
+	RemovedSymlinks int `json:"removedSymlinks,omitempty"`
 }
 
 type compactModelAddOutput struct {
@@ -449,9 +458,10 @@ func runAddModel(cmd *cobra.Command, args []string) error {
 			printModelReadyURL(ready.ModelURL)
 
 			if addModelDeleteAfterUpload {
-				deletedCount, deletedBytes, deleteErr := deleteVerifiedModelFiles(modelFiles)
+				deletedCount, deletedBytes, removedSymlinks, deleteErr := deleteVerifiedModelFiles(modelFiles)
 				result.DeletedModelFiles = deletedCount
 				result.DeletedModelFilesBytes = deletedBytes
+				result.RemovedSymlinks = removedSymlinks
 				if deleteErr != nil {
 					// the upload and hash are already confirmed above, so this is
 					// reported as its own failure rather than folded into a generic
@@ -711,7 +721,7 @@ func modelUploadRequestedBytes(modelFiles []modelFile) (bytes int64, ok bool) {
 // function does not itself re-check either condition. It never
 // deletes anything else in --model-path: only the exact absolute paths that
 // were part of this run's verified upload, never a directory-wide wipe.
-func deleteVerifiedModelFiles(files []modelFile) (deletedCount int, deletedBytes int64, err error) {
+func deleteVerifiedModelFiles(files []modelFile) (deletedCount int, deletedBytes int64, removedSymlinks int, err error) {
 	var failures []string
 
 	for _, file := range files {
@@ -719,19 +729,29 @@ func deleteVerifiedModelFiles(files []modelFile) (deletedCount int, deletedBytes
 			failures = append(failures, fmt.Sprintf("%s: %v", file.RelativePath, removeErr))
 			continue
 		}
+		// os.Remove on a symlink removes the link, not the target, so a link frees
+		// no bytes: count it separately instead of adding the target's size.
+		if file.isSymlink() {
+			removedSymlinks++
+			continue
+		}
 		deletedCount++
 		deletedBytes += file.Size
 	}
 
-	if deletedCount > 0 {
-		fmt.Fprintf(os.Stderr, "deleted %d verified model file(s) (%d bytes) from %s\n", deletedCount, deletedBytes, addModelDirectoryPath)
+	if deletedCount > 0 || removedSymlinks > 0 {
+		msg := fmt.Sprintf("deleted %d verified model file(s) (%d bytes) from %s", deletedCount, deletedBytes, addModelDirectoryPath)
+		if removedSymlinks > 0 {
+			msg += fmt.Sprintf(" and removed %d symlink(s) (targets kept)", removedSymlinks)
+		}
+		fmt.Fprintln(os.Stderr, msg)
 	}
 
 	if len(failures) > 0 {
-		return deletedCount, deletedBytes, fmt.Errorf("upload and hash are confirmed, but failed to delete %d of %d model file(s) from %s: %s", len(failures), len(files), addModelDirectoryPath, strings.Join(failures, "; "))
+		return deletedCount, deletedBytes, removedSymlinks, fmt.Errorf("upload and hash are confirmed, but failed to delete %d of %d model file(s) from %s: %s", len(failures), len(files), addModelDirectoryPath, strings.Join(failures, "; "))
 	}
 
-	return deletedCount, deletedBytes, nil
+	return deletedCount, deletedBytes, removedSymlinks, nil
 }
 
 func stderrIsTerminal() bool {

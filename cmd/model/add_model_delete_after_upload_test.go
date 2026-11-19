@@ -234,7 +234,7 @@ func TestDeleteVerifiedModelFilesReturnsNonZeroOnPartialFailure(t *testing.T) {
 		{AbsolutePath: "/tmp/model/c.bin", RelativePath: "c.bin", Size: 30},
 	}
 
-	deletedCount, deletedBytes, err := deleteVerifiedModelFiles(files)
+	deletedCount, deletedBytes, _, err := deleteVerifiedModelFiles(files)
 
 	if err == nil {
 		t.Fatal("expected error when one of the files fails to delete")
@@ -270,7 +270,7 @@ func TestDeleteVerifiedModelFilesSucceedsWhenAllRemoved(t *testing.T) {
 		{AbsolutePath: "/tmp/model/a.bin", RelativePath: "a.bin", Size: 5},
 	}
 
-	deletedCount, deletedBytes, err := deleteVerifiedModelFiles(files)
+	deletedCount, deletedBytes, _, err := deleteVerifiedModelFiles(files)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -279,5 +279,53 @@ func TestDeleteVerifiedModelFilesSucceedsWhenAllRemoved(t *testing.T) {
 	}
 	if len(removed) != 1 || removed[0] != "/tmp/model/a.bin" {
 		t.Fatalf("expected removeModelFile called with absolute path, got %#v", removed)
+	}
+}
+
+// deleting a symlinked entry removes the link only; the target (an HF blob)
+// stays, and its size must not be reported as freed bytes.
+func TestDeleteVerifiedModelFilesCountsSymlinksSeparately(t *testing.T) {
+	cache := t.TempDir()
+	repo := filepath.Join(cache, "models--owner--name")
+	blob := filepath.Join(repo, "blobs", "sha-weights")
+	writeTestFile(t, blob, "weights-bytes")
+	snapshot := filepath.Join(repo, "snapshots", "rev")
+	writeTestFile(t, filepath.Join(snapshot, "config.json"), "cfg")
+	symlinkOrSkip(t, filepath.Join("..", "..", "blobs", "sha-weights"), filepath.Join(snapshot, "model.safetensors"))
+
+	files, err := collectModelFiles(snapshot)
+	if err != nil || len(files) != 2 {
+		t.Fatalf("collect: %v %+v", err, files)
+	}
+
+	oldDir := addModelDirectoryPath
+	addModelDirectoryPath = snapshot
+	t.Cleanup(func() { addModelDirectoryPath = oldDir })
+
+	var deletedCount, removedLinks int
+	var deletedBytes int64
+	_, stderr := captureStdStreams(t, func() {
+		var delErr error
+		deletedCount, deletedBytes, removedLinks, delErr = deleteVerifiedModelFiles(files)
+		if delErr != nil {
+			t.Fatalf("delete: %v", delErr)
+		}
+	})
+
+	if deletedCount != 1 || deletedBytes != int64(len("cfg")) {
+		t.Fatalf("only the regular file counts as deleted: got %d file(s), %d bytes", deletedCount, deletedBytes)
+	}
+	if removedLinks != 1 {
+		t.Fatalf("expected 1 symlink removed, got %d", removedLinks)
+	}
+	if _, err := os.Lstat(filepath.Join(snapshot, "model.safetensors")); !os.IsNotExist(err) {
+		t.Fatalf("the link should be removed, lstat err: %v", err)
+	}
+	if got, err := os.ReadFile(blob); err != nil || string(got) != "weights-bytes" {
+		t.Fatalf("the link target must be kept: %q, %v", got, err)
+	}
+	if !strings.Contains(stderr, "deleted 1 verified model file(s) (3 bytes)") ||
+		!strings.Contains(stderr, "removed 1 symlink(s) (targets kept)") {
+		t.Fatalf("stderr should report files and symlinks separately, got %q", stderr)
 	}
 }
