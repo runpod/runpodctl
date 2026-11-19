@@ -17,14 +17,21 @@ func writeHiddenFixture(t *testing.T) string {
 		".huggingface/config.json":       "{}",
 		".git/config":                    "[core]",
 		"sub/.git/HEAD":                  "ref",
-		".env":                           "KEY=secret",
-		".env.local":                     "KEY=secret",
-		"sub/.env.production":            "KEY=secret",
+		".env":                           "x",
+		".env.local":                     "x",
+		"sub/.env.production":            "x",
 		"envfile.txt":                    "not hidden",
 		"sub/.environment-notes.md":      "not an env file",
 		"nested/.envrc-like/readme.md":   "dir name merely resembles",
 		"nested/.env.d/keep.txt":         "directory named .env.d is not a file",
 		"nested/.git-keep-not-git/x.txt": "x",
+		"wt/.git":                        "gitdir: /elsewhere/.git/worktrees/wt",
+		"up/.ENV":                        "x",
+		"sub/.Env.Local":                 "x",
+		".envrc":                         "x",
+		".git-credentials":               "x",
+		"sub/.netrc":                     "x",
+		"up/.GIT/config":                 "[core]",
 	} {
 		writeTestFile(t, filepath.Join(root, filepath.FromSlash(name)), content)
 	}
@@ -39,7 +46,7 @@ func TestCollectModelFiles_SkipsGitAndEnvByDefault(t *testing.T) {
 		t.Fatalf("collect: %v", err)
 	}
 	got := strings.Join(collectedNames(files), ",")
-	for _, banned := range []string{".git/config", "sub/.git/HEAD", ".env", ".env.local", "sub/.env.production"} {
+	for _, banned := range []string{".git/config", "sub/.git/HEAD", ".env", ".env.local", "sub/.env.production", "wt/.git", "up/.ENV", "sub/.Env.Local", ".envrc", ".git-credentials", "sub/.netrc", "up/.GIT/config"} {
 		if containsName(files, banned) {
 			t.Errorf("expected %q skipped, got %s", banned, got)
 		}
@@ -49,9 +56,10 @@ func TestCollectModelFiles_SkipsGitAndEnvByDefault(t *testing.T) {
 			t.Errorf("expected %q kept, got %s", kept, got)
 		}
 	}
-	// two .git dirs + .env + .env.local + sub/.env.production
-	if skipped != 5 {
-		t.Errorf("expected 5 skipped entries, got %d", skipped)
+	// .git dir, sub/.git dir, .GIT dir, wt/.git gitfile, .env, .env.local, .ENV,
+	// sub/.env.production, sub/.Env.Local, .envrc, .git-credentials, sub/.netrc
+	if skipped != 12 {
+		t.Errorf("expected 12 skipped entries, got %d", skipped)
 	}
 }
 
@@ -65,7 +73,7 @@ func TestCollectModelFiles_IncludeHiddenKeepsEverything(t *testing.T) {
 	if skipped != 0 {
 		t.Errorf("expected nothing skipped with includeHidden, got %d", skipped)
 	}
-	for _, name := range []string{".git/config", "sub/.git/HEAD", ".env", ".env.local", "sub/.env.production", ".gitattributes"} {
+	for _, name := range []string{".git/config", "sub/.git/HEAD", ".env", ".env.local", "sub/.env.production", ".gitattributes", "wt/.git", "up/.ENV", "sub/.Env.Local", ".envrc", ".git-credentials", "sub/.netrc", "up/.GIT/config"} {
 		if !containsName(files, name) {
 			t.Errorf("expected %q included, got %s", name, strings.Join(collectedNames(files), ","))
 		}
@@ -130,7 +138,7 @@ func TestRunAddModel_HiddenFilesSkippedUnlessIncluded(t *testing.T) {
 		writeTestFile(t, filepath.Join(dir, "weights.bin"), "w")
 		writeTestFile(t, filepath.Join(dir, ".gitattributes"), "x")
 		writeTestFile(t, filepath.Join(dir, ".git", "config"), "[core]")
-		writeTestFile(t, filepath.Join(dir, ".env.local"), "KEY=secret")
+		writeTestFile(t, filepath.Join(dir, ".env.local"), "CONTENTMARKER")
 
 		addModelOwner = "user-id"
 		addModelName = "test-model"
@@ -159,7 +167,7 @@ func TestRunAddModel_HiddenFilesSkippedUnlessIncluded(t *testing.T) {
 		if !strings.Contains(joined, ".gitattributes") || !strings.Contains(joined, "weights.bin") {
 			t.Errorf("default: expected weights.bin and .gitattributes uploaded, sent %s", joined)
 		}
-		if !strings.Contains(stderr, "skipped 2 sensitive entries") || strings.Contains(stderr, "KEY=secret") || strings.Contains(stderr, ".env.local") {
+		if !strings.Contains(stderr, "skipped 2 sensitive entries") || strings.Contains(stderr, "CONTENTMARKER") || strings.Contains(stderr, ".env.local") {
 			t.Errorf("default: unexpected notice %q", stderr)
 		}
 	}

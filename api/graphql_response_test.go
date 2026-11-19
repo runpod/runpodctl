@@ -86,8 +86,9 @@ func TestParseGraphQLData_LargeValidResponseParses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected a >64 KiB response to parse, got %v", err)
 	}
-	if got, _ := data["pad"].(string); len(got) != len(pad) {
-		t.Errorf("pad length = %d, want %d", len(got), len(pad))
+	got, ok := data["pad"].(string)
+	if !ok || len(got) != len(pad) {
+		t.Errorf("pad length = %d (ok=%v), want %d", len(got), ok, len(pad))
 	}
 	if len(raw) != len(body) {
 		t.Errorf("raw length = %d, want %d", len(raw), len(body))

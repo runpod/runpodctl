@@ -314,7 +314,7 @@ func bindAddModelFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&addModelContentType, "content-type", "", "upload content type")
 	cmd.Flags().StringVar(&addModelDirectoryPath, "model-path", "", "directory containing model files to upload")
 	cmd.Flags().StringToStringVar(&addModelMetadata, "metadata", nil, "metadata key=value pairs")
-	cmd.Flags().BoolVar(&addModelIncludeHidden, "include-hidden", false, "also upload .git/ directories and .env / .env.* files from --model-path (skipped by default)")
+	cmd.Flags().BoolVar(&addModelIncludeHidden, "include-hidden", false, "also upload .git, .env, .env.*, .envrc, .git-credentials and .netrc entries from --model-path (skipped by default)")
 	cmd.Flags().BoolVar(&addModelWaitForHash, "wait-for-hash", false, "wait for completed model-path uploads to become deployable")
 	cmd.Flags().DurationVar(&addModelHashTimeout, "hash-timeout", modelHashWaitTimeout, "maximum duration to wait for --wait-for-hash (0 disables timeout)")
 	cmd.Flags().BoolVarP(&addModelVerbose, "verbose", "v", false, "include upload details in wait-for-hash output")
@@ -367,7 +367,7 @@ func runAddModel(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		if skipped > 0 {
-			fmt.Fprintf(os.Stderr, "skipped %d sensitive entries (.git/ directories, .env and .env.* files) under --model-path; pass --include-hidden to upload them\n", skipped)
+			fmt.Fprintf(os.Stderr, "skipped %d sensitive entries (.git, .env, .env.*, .envrc, .git-credentials, .netrc) under --model-path; pass --include-hidden to upload them\n", skipped)
 		}
 		if len(files) == 0 {
 			return fmt.Errorf("model-path %q does not contain any files to upload", addModelDirectoryPath)
@@ -657,15 +657,27 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 }
 
 // isSensitiveModelEntry reports whether a directory entry is one that is almost
-// never part of a model and commonly holds credentials or history: a `.git`
-// entry (directory, or the gitfile of a worktree/submodule) and `.env` or
-// `.env.*` files. Other dotfiles, such as .gitattributes or .huggingface/, are
-// legitimate model content and are not matched.
+// never part of a model and commonly holds credentials or history: a `.git` entry
+// (directory, or the gitfile of a worktree/submodule), and these files: `.env`,
+// `.env.*`, `.envrc` (direnv, often exports tokens), `.git-credentials` and
+// `.netrc`. Names are compared lowercased, since on a case-insensitive volume
+// `.ENV` is the same file as `.env`. Other dotfiles, such as .gitattributes or
+// .huggingface/, are legitimate model content and are not matched; a directory
+// that merely has an env-like name (`.env.d/`, a virtualenv `.env/`) is not
+// matched either.
 func isSensitiveModelEntry(name string, isDir bool) bool {
+	name = strings.ToLower(name)
 	if name == ".git" {
 		return true
 	}
-	return !isDir && (name == ".env" || strings.HasPrefix(name, ".env."))
+	if isDir {
+		return false
+	}
+	switch name {
+	case ".env", ".envrc", ".git-credentials", ".netrc":
+		return true
+	}
+	return strings.HasPrefix(name, ".env.")
 }
 
 // collectModelFilesWithOptions is collectModelFiles with control over sensitive
