@@ -11,9 +11,19 @@ import (
 	internalapi "github.com/runpod/runpodctl/internal/api"
 )
 
-// maxGraphQLBodyBytes bounds how much of a response is read, so a misbehaving
-// server cannot make the CLI buffer an unbounded body.
-const maxGraphQLBodyBytes = 64 << 10
+// errorBodyExcerptBytes bounds how much of a response body is echoed into an
+// error message. The body itself may be up to maxModelResponseBytes, which is far
+// too much to print.
+const errorBodyExcerptBytes = 4 << 10
+
+// errorBodyExcerpt is body as a string for an error message, cut at
+// errorBodyExcerptBytes.
+func errorBodyExcerpt(body []byte) string {
+	if len(body) <= errorBodyExcerptBytes {
+		return string(body)
+	}
+	return string(body[:errorBodyExcerptBytes]) + "... (truncated)"
+}
 
 // firstGraphQLErrorMessage safely extracts the message of the first graphql
 // error, tolerating a missing or non-string message rather than panicking on an
@@ -52,16 +62,16 @@ func queryGraphQLData(input Input) (gqldata map[string]any, rawData []byte, err 
 // parseGraphQLData decodes a graphql HTTP response and returns its "data" object.
 // It returns an error carrying the first graphql error message when the payload
 // reports errors, or the status code and body for non-200 responses. The raw
-// body (bounded by maxGraphQLBodyBytes) is returned so callers can include it in
-// "<field> is nil" diagnostics.
+// body (bounded by maxModelResponseBytes; a larger response is an error) is returned
+// so callers can include it in "<field> is nil" diagnostics.
 func parseGraphQLData(status int, body io.Reader) (gqldata map[string]any, rawData []byte, err error) {
-	rawData, err = io.ReadAll(io.LimitReader(body, maxGraphQLBodyBytes))
+	rawData, err = ReadBoundedResponse(body)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	if status != http.StatusOK {
-		return nil, rawData, fmt.Errorf("statuscode %d: %s", status, string(rawData))
+		return nil, rawData, fmt.Errorf("statuscode %d: %s", status, errorBodyExcerpt(rawData))
 	}
 
 	data := make(map[string]any)
@@ -75,7 +85,7 @@ func parseGraphQLData(status int, body io.Reader) (gqldata map[string]any, rawDa
 
 	gqldata, ok := data["data"].(map[string]any)
 	if !ok || gqldata == nil {
-		return nil, rawData, fmt.Errorf("data is nil: %s", string(rawData))
+		return nil, rawData, fmt.Errorf("data is nil: %s", errorBodyExcerpt(rawData))
 	}
 	return gqldata, rawData, nil
 }
