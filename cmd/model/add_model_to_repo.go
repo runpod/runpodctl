@@ -520,6 +520,17 @@ func validateAddModelFlags() error {
 	return nil
 }
 
+// errSymlinkOutsideModelPath is the sentinel for a symlink that resolves outside
+// the containment roots.
+var errSymlinkOutsideModelPath = errors.New("model-path contains a symlink that points outside it")
+
+// symlinkOutsideModelPathHint tells the user how to fix a refused symlink. Links
+// into ~/.cache/huggingface (older `huggingface-cli download --local-dir`
+// layouts) used to be followed silently, so the hint names them explicitly.
+const symlinkOutsideModelPathHint = "To fix: copy the real files into the directory (`cp -rL <src> <dst>` or `rsync -rL <src>/ <dst>/`) and point --model-path at the copy, " +
+	"or point --model-path at the Hugging Face snapshot directory itself (models--<org>--<name>/snapshots/<rev>), whose links into the same repo's blobs/ are allowed. " +
+	"Directories created by older `huggingface-cli download --local-dir` runs contain links into ~/.cache/huggingface and need the same treatment"
+
 // collectModelFiles lists the regular files under dir. Symlinks are resolved and
 // must land inside the containment roots (see modelContainmentRoots): a link
 // pointing anywhere else is refused rather than silently uploading a file that
@@ -560,7 +571,7 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 			resolved = target
 		}
 		if !pathWithinAny(roots, resolved) {
-			return fmt.Errorf("model-path contains %q, which resolves to %q outside the model directory; refusing to upload files that are not under --model-path", path, resolved)
+			return fmt.Errorf("%w: %q resolves to %q, outside the model directory (--model-path); refusing to upload files that are not under --model-path. %s", errSymlinkOutsideModelPath, path, resolved, symlinkOutsideModelPathHint)
 		}
 
 		info, err := os.Lstat(resolved)

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -78,6 +79,15 @@ func TestCollectModelFiles_AbsoluteSymlinkOutsideRootRefused(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "outside the model directory") || !strings.Contains(err.Error(), "leak.bin") {
 		t.Fatalf("error should name the offending link and the reason: %v", err)
+	}
+	if !errors.Is(err, errSymlinkOutsideModelPath) {
+		t.Fatalf("error should wrap errSymlinkOutsideModelPath: %v", err)
+	}
+	// the message must tell the user how to fix it, not just that it was refused.
+	for _, want := range []string{"cp -rL", "rsync -rL", "--model-path", "models--<org>--<name>/snapshots/<rev>", "huggingface-cli download --local-dir", filepath.Base(outside)} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should mention %q: %v", want, err)
+		}
 	}
 }
 
