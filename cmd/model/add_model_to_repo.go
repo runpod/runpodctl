@@ -147,12 +147,12 @@ type modelFile struct {
 }
 
 // isSymlink reports whether the scanned entry was a symlink to its target.
-func (f modelFile) isSymlink() bool {
+func (f *modelFile) isSymlink() bool {
 	return f.ResolvedPath != "" && f.ResolvedPath != f.AbsolutePath
 }
 
 // uploadPath is the path the upload must open.
-func (f modelFile) uploadPath() string {
+func (f *modelFile) uploadPath() string {
 	if f.ResolvedPath != "" {
 		return f.ResolvedPath
 	}
