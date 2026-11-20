@@ -427,8 +427,12 @@ func TestCollectModelFiles_PinsFileIdentityAtScanTime(t *testing.T) {
 	}
 	for _, f := range files {
 		found := false
+		scanned, isScanned := f.info.(*scannedModelInfo)
+		if !isScanned {
+			t.Fatalf("%s: unexpected FileInfo type %T", f.RelativePath, f.info)
+		}
 		for _, p := range pinned {
-			if p == f.info.(*scannedModelInfo).FileInfo {
+			if p == scanned.FileInfo {
 				found = true
 			}
 		}
@@ -452,8 +456,8 @@ func TestCollectModelFiles_IdentityFailureAbortsScan(t *testing.T) {
 }
 
 // swapDirForOutsideLink replaces dir with a symlink to a fresh directory that
-// holds a same-named file with secret content, and returns the outside file.
-func swapDirForOutsideLink(t *testing.T, dir, name string) string {
+// holds a same-named file with secret content.
+func swapDirForOutsideLink(t *testing.T, dir, name string) {
 	t.Helper()
 	outsideDir := t.TempDir()
 	outside := filepath.Join(outsideDir, name)
@@ -462,7 +466,6 @@ func swapDirForOutsideLink(t *testing.T, dir, name string) string {
 		t.Fatal(err)
 	}
 	symlinkOrSkip(t, outsideDir, dir)
-	return outside
 }
 
 // an ancestor directory swapped for a symlink to an outside directory after the
@@ -538,7 +541,9 @@ func TestOpenScannedModelFile_AncestorSymlinkEscapeRefused(t *testing.T) {
 
 	f, _, err := openScannedModelFile(file.uploadPath(), file.info)
 	if err == nil {
-		_ = f.Close()
+		if closeErr := f.Close(); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
 		t.Fatal("the open escaped the model directory")
 	}
 }
@@ -553,14 +558,16 @@ func TestOpenScannedModelFile_RootReplacedAfterScanRefused(t *testing.T) {
 		t.Fatalf("collect: %v %+v", err, files)
 	}
 	file := files[0]
-	if err := os.Rename(root, root+".orig"); err != nil {
-		t.Fatal(err)
+	if renameErr := os.Rename(root, root+".orig"); renameErr != nil {
+		t.Fatal(renameErr)
 	}
 	writeTestFile(t, filepath.Join(root, "model.bin"), "original")
 
 	f, _, err := openScannedModelFile(file.uploadPath(), file.info)
 	if err == nil {
-		_ = f.Close()
+		if closeErr := f.Close(); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
 		t.Fatal("expected a replaced model directory to be refused")
 	}
 }

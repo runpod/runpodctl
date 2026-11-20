@@ -572,10 +572,10 @@ func newScanRoots(dirs []string) *scanRoots {
 }
 
 // locate returns the index of the root containing path and path relative to it.
-func (s *scanRoots) locate(path string) (int, string, bool) {
+func (s *scanRoots) locate(path string) (idx int, rel string, ok bool) {
 	for i, dir := range s.dirs {
-		if rel, ok := relWithin(dir, path); ok {
-			return i, rel, true
+		if r, within := relWithin(dir, path); within {
+			return i, r, true
 		}
 	}
 	return 0, "", false
@@ -600,12 +600,14 @@ func (s *scanRoots) open(i int) (*os.Root, os.FileInfo, error) {
 	return handle, info, nil
 }
 
-func (s *scanRoots) close() {
+func (s *scanRoots) close() error {
+	var errs []error
 	for _, h := range s.handles {
 		if h != nil {
-			_ = h.Close()
+			errs = append(errs, h.Close())
 		}
 	}
+	return errors.Join(errs...)
 }
 
 // afterScanEntryHook, when set, runs in the scan after an entry is read and
@@ -638,7 +640,6 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 		return nil, fmt.Errorf("resolve model directory: %w", err)
 	}
 	roots := newScanRoots(modelContainmentRoots(root))
-	defer roots.close()
 
 	var files []modelFile
 
@@ -712,6 +713,9 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 		return nil
 	})
 
+	if closeErr := roots.close(); walkErr == nil && closeErr != nil {
+		walkErr = fmt.Errorf("close model directory: %w", closeErr)
+	}
 	if walkErr != nil {
 		return nil, fmt.Errorf("scan model directory: %w", walkErr)
 	}
@@ -742,17 +746,6 @@ func modelContainmentRoots(resolvedRoot string) []string {
 		}
 	}
 	return roots
-}
-
-// pathWithinAny reports whether path is at or below one of roots. Both must
-// already be absolute and symlink-resolved.
-func pathWithinAny(roots []string, path string) bool {
-	for _, root := range roots {
-		if _, ok := relWithin(root, path); ok {
-			return true
-		}
-	}
-	return false
 }
 
 // relWithin returns path relative to root, and whether path is at or below it.
@@ -790,7 +783,7 @@ func openScannedModelFile(path string, scanned os.FileInfo) (*os.File, os.FileIn
 		if err != nil {
 			return nil, nil, fmt.Errorf("open artifact: %w", err)
 		}
-		defer root.Close()
+		defer root.Close() //nolint:errcheck // read-only directory handle; the opened file stays valid and a failed close leaves nothing to recover
 		rootInfo, err := root.Stat(".")
 		if err != nil {
 			return nil, nil, fmt.Errorf("open artifact: %w", err)
@@ -814,7 +807,7 @@ func openScannedModelFile(path string, scanned os.FileInfo) (*os.File, os.FileIn
 		return nil, nil, fmt.Errorf("refusing to upload %q: it is no longer a regular file (changed since the model directory was scanned)", path)
 	}
 
-	file, err := open(openName) //nolint:gosec // G304: openName is the scan-verified model file (opened beneath its root when scanned); identity is re-checked below via fstat + os.SameFile
+	file, err := open(openName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open artifact: %w", err)
 	}
