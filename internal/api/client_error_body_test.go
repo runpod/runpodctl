@@ -13,7 +13,7 @@ import (
 func writeOversized(t *testing.T, w http.ResponseWriter) {
 	t.Helper()
 	chunk := make([]byte, 1<<20)
-	for i := 0; i < (MaxResponseBytes>>20)+1; i++ {
+	for range (MaxResponseBytes >> 20) + 1 {
 		if _, err := w.Write(chunk); err != nil {
 			return // the client stops reading once over the limit
 		}
@@ -54,8 +54,8 @@ func TestRejectedStatusKeepsStatusWhenBodyUnreadable(t *testing.T) {
 
 					client := newTestClient(t, server.URL)
 					_, err := client.requestURL(method, server.URL+"/x", nil)
-					var apiErr *APIError
-					if !errors.As(err, &apiErr) {
+					apiErr, ok := errors.AsType[*APIError](err)
+					if !ok {
 						t.Fatalf("expected an *APIError, got %T: %v", err, err)
 					}
 					if apiErr.Status != status {
@@ -90,8 +90,7 @@ func TestSuccessStatusWithUnreadableBodyStaysReadError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected a read error")
 	}
-	var apiErr *APIError
-	if errors.As(err, &apiErr) {
+	if _, ok := errors.AsType[*APIError](err); ok {
 		t.Fatalf("a 2xx read failure must not be an APIError: %v", err)
 	}
 }

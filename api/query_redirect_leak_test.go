@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/viper"
 )
 
+//nolint:gosec // G101: fake credential fixtures
 const (
 	leakSignature = "0123456789abcdef0123456789abcdef"
 	leakToken     = "tok-leak-9f8e7d6c"
@@ -51,7 +52,9 @@ func TestQueryRedirectToPresignedURLLeaksNoQueryCredentials(t *testing.T) {
 
 	res, qerr := Query(Input{Query: "query test"})
 	if qerr == nil {
-		_ = res.Body.Close()
+		if closeErr := res.Body.Close(); closeErr != nil {
+			t.Errorf("close body: %v", closeErr)
+		}
 		t.Fatal("expected Query to fail on a redirect")
 	}
 	for _, text := range []string{qerr.Error(), fmt.Sprintf("%+v", qerr)} {

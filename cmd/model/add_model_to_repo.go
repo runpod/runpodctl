@@ -618,6 +618,25 @@ func (s *scanRoots) open(i int) (*os.Root, os.FileInfo, error) {
 	return handle, info, nil
 }
 
+// lstat stats name (relative to root i) through the root, not the path: a
+// directory swapped for a symlink after the walk read the entry at path is
+// refused by the root instead of being followed to a file outside it. It
+// returns the root's scan-time identity along with the file's.
+func (s *scanRoots) lstat(path string, i int, name string) (info, rootInfo os.FileInfo, err error) {
+	if afterScanEntryHook != nil {
+		afterScanEntryHook(path)
+	}
+	handle, rootInfo, err := s.open(i)
+	if err != nil {
+		return nil, nil, err
+	}
+	info, err = handle.Lstat(name)
+	if err != nil {
+		return nil, nil, err
+	}
+	return info, rootInfo, nil
+}
+
 func (s *scanRoots) close() error {
 	var errs []error
 	for _, h := range s.handles {
@@ -737,18 +756,7 @@ func collectModelFilesWithOptions(dir string, includeHidden bool) (files []model
 			return fmt.Errorf("%w: %q resolves to %q, outside the model directory (--model-path); refusing to upload files that are not under --model-path. %s", errSymlinkOutsideModelPath, path, resolved, symlinkOutsideModelPathHint)
 		}
 
-		if afterScanEntryHook != nil {
-			afterScanEntryHook(path)
-		}
-
-		// stat through the root, not the path: a directory swapped for a symlink
-		// after the walk read this entry is refused by the root instead of being
-		// followed to a file outside it.
-		handle, rootInfo, err := roots.open(rootIdx)
-		if err != nil {
-			return fmt.Errorf("stat file %q: %w", path, err)
-		}
-		info, err := handle.Lstat(rootRel)
+		info, rootInfo, err := roots.lstat(path, rootIdx, rootRel)
 		if err != nil {
 			return fmt.Errorf("stat file %q: %w", path, err)
 		}

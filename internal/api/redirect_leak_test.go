@@ -16,6 +16,8 @@ import (
 
 // presignedLocation carries the credentials a redirect to a presigned url would:
 // a SigV4 signature and a bearer token in the query.
+//
+//nolint:gosec // G101: fake credential fixtures
 const (
 	leakSignature = "0123456789abcdef0123456789abcdef"
 	leakToken     = "tok-leak-9f8e7d6c"
@@ -62,8 +64,7 @@ func assertNoQueryCredentials(t *testing.T, err error) {
 		}
 	}
 	walk(err)
-	var ue *url.Error
-	if errors.As(err, &ue) {
+	if ue, ok := errors.AsType[*url.Error](err); ok {
 		renderings["errors.As url.Error.URL"] = ue.URL
 	}
 	for how, text := range renderings {
