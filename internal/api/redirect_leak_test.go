@@ -26,16 +26,30 @@ const (
 
 func leakingRedirectServer(t *testing.T) string {
 	t.Helper()
+	return redirectServerTo(t, leakLocation)
+}
+
+// redirectServerTo starts a server that answers every request with a 307 whose
+// Location header is exactly location (http.Redirect would rewrite some forms).
+func redirectServerTo(t *testing.T, location string) string {
+	t.Helper()
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, leakLocation, http.StatusTemporaryRedirect)
+		w.Header().Set("Location", location)
+		w.WriteHeader(http.StatusTemporaryRedirect)
 	}))
 	t.Cleanup(s.Close)
 	return s.URL
 }
 
-// assertNoQueryCredentials checks every rendering of err, and every *url.Error
-// reachable through its chain, for the secret query values.
+// assertNoQueryCredentials checks err for the secret query values of leakLocation.
 func assertNoQueryCredentials(t *testing.T, err error) {
+	t.Helper()
+	assertNoSecrets(t, err, leakSignature, leakToken, "X-Amz-Signature", "access_token")
+}
+
+// assertNoSecrets checks every rendering of err, and every *url.Error reachable
+// through its chain, for the given secret strings.
+func assertNoSecrets(t *testing.T, err error, secretValues ...string) {
 	t.Helper()
 	if err == nil {
 		t.Fatal("expected an error for a redirected request")
@@ -69,7 +83,7 @@ func assertNoQueryCredentials(t *testing.T, err error) {
 		renderings["errors.As url.Error.URL"] = ue.URL
 	}
 	for how, text := range renderings {
-		for _, secret := range []string{leakSignature, leakToken, "X-Amz-Signature", "access_token"} {
+		for _, secret := range secretValues {
 			if strings.Contains(text, secret) {
 				t.Errorf("%s leaks %q: %s", how, secret, text)
 			}
@@ -77,11 +91,10 @@ func assertNoQueryCredentials(t *testing.T, err error) {
 	}
 }
 
-// TestRedirectToPresignedURLLeaksNoQueryCredentials sends every api-key client
-// at a server that redirects to a presigned url and checks that nothing in the
-// resulting error carries the url's query.
-func TestRedirectToPresignedURLLeaksNoQueryCredentials(t *testing.T) {
-	for name, call := range map[string]func(t *testing.T, base string) error{
+// redirectCallers maps each api-key client to a call that makes one request
+// against the server at base and returns the resulting error.
+func redirectCallers() map[string]func(t *testing.T, base string) error {
+	return map[string]func(t *testing.T, base string) error{
 		"graphql client": func(t *testing.T, base string) error {
 			t.Setenv("RUNPOD_GRAPHQL_URL", base+"/graphql")
 			c, err := NewGraphQLClient()
@@ -135,12 +148,45 @@ func TestRedirectToPresignedURLLeaksNoQueryCredentials(t *testing.T) {
 			}
 			return c.Snapshot(context.Background(), "/pods/p/logs", LogStreamOptions{}, time.Second, func(LogEntry) error { return nil })
 		},
-	} {
+	}
+}
+
+// TestRedirectToPresignedURLLeaksNoQueryCredentials sends every api-key client
+// at a server that redirects to a presigned url and checks that nothing in the
+// resulting error carries the url's query.
+func TestRedirectToPresignedURLLeaksNoQueryCredentials(t *testing.T) {
+	for name, call := range redirectCallers() {
 		t.Run(name, func(t *testing.T) {
 			viper.Reset()
 			t.Cleanup(viper.Reset)
 			t.Setenv("RUNPOD_API_KEY", "super-secret-key")
 			assertNoQueryCredentials(t, call(t, leakingRedirectServer(t)))
 		})
+	}
+}
+
+// TestRedirectToNetworkPathLeaksNoUserinfo redirects every api-key client to a
+// network-path reference ("//user:pw@host/...") and a presigned absolute url
+// with userinfo: neither the error text nor a typed *url.Error may carry the
+// userinfo or the query.
+func TestRedirectToNetworkPathLeaksNoUserinfo(t *testing.T) {
+	//nolint:gosec // G101: fake credential fixtures
+	locations := map[string]string{
+		"network path userinfo":           "//user:pw@example.test/x",
+		"network path user and query":     "//user@example.test/x?token=abc#frag",
+		"absolute with signature":         "https://user:pw@host.test/x?X-Amz-Signature=deadbeef",
+		"network path with signature":     "//user:pw@host.test/x?X-Amz-Signature=deadbeef",
+		"network path with port and path": "//user:pw@host.test:8443/a/b?token=abc",
+	}
+	secretValues := []string{"pw", "deadbeef", "abc", "user:", "user@", "token=", "frag", "X-Amz-Signature"}
+	for lname, location := range locations {
+		for name, call := range redirectCallers() {
+			t.Run(lname+"/"+name, func(t *testing.T) {
+				viper.Reset()
+				t.Cleanup(viper.Reset)
+				t.Setenv("RUNPOD_API_KEY", "super-secret-key")
+				assertNoSecrets(t, call(t, redirectServerTo(t, location)), secretValues...)
+			})
+		}
 	}
 }

@@ -32,10 +32,56 @@ func TestURLStripsQueryUserinfoFragment(t *testing.T) {
 		"https://user:pw@host.example/a/b?x=1#f": "https://host.example/a/b",
 		"https://host.example/plain":             "https://host.example/plain",
 		"host.example/p?X-Amz-Signature=abc":     "host.example/p",
+		// network-path references keep no userinfo, query or fragment and stay scheme-relative.
+		"//user:pw@example.test/x":                             "//example.test/x",
+		"//user@example.test/x?token=abc#frag":                 "//example.test/x",
+		"//user:pw@example.test:8443/a/b?token=abc":            "//example.test:8443/a/b",
+		"https://user:pw@host/x?X-Amz-Signature=deadbeef":      "https://host/x",
+		"//example.test":                                       "//example.test",
+		"/path?token=abc":                                      "/path",
+		"/path?token=abc#frag":                                 "/path",
+		"relative/path#frag":                                   "relative/path",
+		"//user:pw@exa mple.test/x?token=abc":                  "//exa mple.test/x",
+		"//user:pw@example.test:badport/x?token=abc#frag":      "//example.test:badport/x",
+		"https://user:pw@exa mple.test/x?X-Amz-Signature=beef": "https://exa mple.test/x",
 	}
 	for in, want := range cases {
-		if got := URL(in); got != want {
+		got := URL(in)
+		if got != want {
 			t.Errorf("URL(%q) = %q, want %q", in, got, want)
+		}
+		for _, secret := range []string{"pw", "deadbeef", "abc", "user:", "frag", "beef"} {
+			if strings.Contains(got, secret) {
+				t.Errorf("URL(%q) = %q still contains %q", in, got, secret)
+			}
+		}
+	}
+}
+
+// A network-path url.Error (what net/http reports for a refused redirect to
+// "//user:pw@host/...") must lose its userinfo and query in every rendering and
+// in the typed URL field.
+func TestErrorScrubsNetworkPathURLError(t *testing.T) {
+	for _, raw := range []string{
+		"//user:pw@example.test/x",
+		"//user@example.test/x?token=abc#frag",
+		"https://user:pw@host/x?X-Amz-Signature=deadbeef",
+		"/path?token=abc",
+	} {
+		orig := &url.Error{Op: "Post", URL: raw, Err: errors.New("refused")}
+		got := Error(fmt.Errorf("request failed: %w", orig))
+		var ue *url.Error
+		if !errors.As(got, &ue) { //nolint:modernize // errors.As, not AsType: nix errcheck flags AsType
+			t.Fatalf("%q: no *url.Error in chain", raw)
+		}
+		for how, text := range map[string]string{
+			"Error()": got.Error(), "%v": fmt.Sprintf("%v", got), "%+v": fmt.Sprintf("%+v", got), "URL": ue.URL,
+		} {
+			for _, secret := range []string{"pw", "deadbeef", "abc", "user:", "user@", "frag"} {
+				if strings.Contains(text, secret) {
+					t.Errorf("%q: %s contains %q: %s", raw, how, secret, text)
+				}
+			}
 		}
 	}
 }

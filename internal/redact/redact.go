@@ -30,11 +30,14 @@ var secretParamPattern = regexp.MustCompile(
 		`|X-Goog-(?:Signature|Credential)|AWSAccessKeyId|Signature)=[^&\s"'<>\\]*`)
 
 // URL returns raw reduced to scheme://host/path: userinfo, query string and
-// fragment are dropped. A value that does not parse as an absolute URL is
-// returned with everything from the first '?', '#' or userinfo removed on a
-// best-effort basis, never unchanged if it carried a query.
+// fragment are dropped. A network-path reference ("//user:pw@host/p?q") is
+// reduced the same way and stays scheme-relative ("//host/p"); a Location header
+// may hold one, and net/http resolves it against the request's scheme. A value
+// with no host is returned with everything from the first '?' or '#' removed,
+// and with userinfo removed on a best-effort basis, never unchanged if it
+// carried a query.
 func URL(raw string) string {
-	if u, err := url.Parse(raw); err == nil && u.Scheme != "" && u.Host != "" {
+	if u, err := url.Parse(raw); err == nil && u.Host != "" {
 		u.User = nil
 		u.RawQuery = ""
 		u.ForceQuery = false
@@ -46,16 +49,23 @@ func URL(raw string) string {
 }
 
 // stripURLText removes userinfo, query and fragment from a URL-shaped string
-// without parsing it.
+// without parsing it. It handles an absolute URL ("scheme://authority/...") and
+// a network-path reference ("//authority/...").
 func stripURLText(s string) string {
 	if i := strings.IndexAny(s, "?#"); i >= 0 {
 		s = s[:i]
 	}
+	start := -1
 	if scheme := strings.Index(s, "://"); scheme >= 0 {
-		rest := s[scheme+3:]
+		start = scheme + 3
+	} else if strings.HasPrefix(s, "//") {
+		start = 2
+	}
+	if start >= 0 {
+		rest := s[start:]
 		authority, _, _ := strings.Cut(rest, "/")
 		if at := strings.LastIndexByte(authority, '@'); at >= 0 {
-			s = s[:scheme+3] + rest[at+1:]
+			s = s[:start] + rest[at+1:]
 		}
 	}
 	return s
