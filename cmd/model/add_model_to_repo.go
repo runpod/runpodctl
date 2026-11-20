@@ -753,6 +753,13 @@ func collectModelFilesWithOptions(dir string, includeHidden bool) (files []model
 			return fmt.Errorf("stat file %q: %w", path, err)
 		}
 
+		// the entry name alone is not enough: a benign-looking link to .env or
+		// into .git would otherwise upload the excluded file under its alias.
+		if !includeHidden && resolved != path && resolvesToSensitiveEntry(roots, resolved, info.IsDir()) {
+			skipped++
+			return nil
+		}
+
 		if info.IsDir() {
 			return fmt.Errorf("encountered directory %q while collecting files", path)
 		}
@@ -800,6 +807,28 @@ func collectModelFilesWithOptions(dir string, includeHidden bool) (files []model
 	})
 
 	return files, skipped, nil
+}
+
+// resolvesToSensitiveEntry reports whether a symlink's resolved target (a file,
+// or a directory when isDir) is, or sits under, an entry that
+// isSensitiveModelEntry excludes. The target's path relative to the containment
+// root that holds it is walked component by component, so `alias.bin -> .env`
+// and `alias.bin -> sub/.git/config` are both caught.
+func resolvesToSensitiveEntry(roots []string, resolved string, isDir bool) bool {
+	for _, root := range roots {
+		rel, err := filepath.Rel(root, resolved)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		parts := strings.Split(rel, string(filepath.Separator))
+		for i, part := range parts {
+			if isSensitiveModelEntry(part, i < len(parts)-1 || isDir) {
+				return true
+			}
+		}
+		return false
+	}
+	return false
 }
 
 // validateModelRelativePath rejects a file name that cannot be represented
@@ -1903,6 +1932,10 @@ func doGuardedModelUploadAttempt(parent context.Context, newReq func() (*http.Re
 	return resp, nil
 }
 
+// errUploadSourceSizeChanged means the file's size at upload time differs from
+// the size seen by the directory scan, which the upload plan was built from.
+var errUploadSourceSizeChanged = errors.New("file size differs from the scan")
+
 // errUploadSourceShrank means a part's source file held fewer bytes than the
 // upload plan declared, i.e. it was truncated after the directory scan.
 var errUploadSourceShrank = errors.New("file is shorter than when it was scanned (it changed during the upload)")
@@ -2008,6 +2041,14 @@ func completeModelUploadWithContext(ctx context.Context, upload *api.ModelRepoUp
 		return err
 	}
 	defer file.Close()
+
+	// the upload batch was planned from the scan-time size; a file that shrank
+	// (or grew) since would otherwise be uploaded truncated, with every PUT and
+	// the completion succeeding. exactReader below still catches a truncation
+	// that happens after this point.
+	if scanned != nil && fileInfo.Size() != scanned.Size() {
+		return fmt.Errorf("refusing to upload %q: its size changed since the model directory was scanned (%d bytes then, %d now): %w", artifactPath, scanned.Size(), fileInfo.Size(), errUploadSourceSizeChanged)
+	}
 
 	totalSize := fileInfo.Size()
 	if totalSize == 0 {

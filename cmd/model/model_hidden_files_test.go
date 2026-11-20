@@ -102,6 +102,62 @@ func TestCollectModelFiles_SkippedSymlinkIsNeverResolved(t *testing.T) {
 	}
 }
 
+// TestCollectModelFiles_SensitiveSymlinkTargetIsSkipped pins that the sensitive
+// check follows an in-root link to its target: a benign alias name must not
+// carry an excluded file (or anything under .git) into the upload.
+func TestCollectModelFiles_SensitiveSymlinkTargetIsSkipped(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "weights.bin"), "w")
+	writeTestFile(t, filepath.Join(root, ".env"), "SECRET")
+	writeTestFile(t, filepath.Join(root, ".git", "config"), "[core]")
+	writeTestFile(t, filepath.Join(root, "sub", ".git", "HEAD"), "ref")
+	writeTestFile(t, filepath.Join(root, "up", ".ENV.Local"), "SECRET")
+	writeTestFile(t, filepath.Join(root, "sub", "plain.txt"), "plain")
+	symlinkOrSkip(t, ".env", filepath.Join(root, "alias.bin"))
+	symlinkOrSkip(t, filepath.Join(".git", "config"), filepath.Join(root, "gitalias.bin"))
+	symlinkOrSkip(t, filepath.Join("..", "sub", ".git", "HEAD"), filepath.Join(root, "nested", "headalias.bin"))
+	symlinkOrSkip(t, filepath.Join("..", "up", ".ENV.Local"), filepath.Join(root, "nested", "envlocal.bin"))
+	symlinkOrSkip(t, ".git", filepath.Join(root, "gitdir-alias"))
+	symlinkOrSkip(t, filepath.Join("..", "sub", "plain.txt"), filepath.Join(root, "nested", "ok.txt"))
+	// a chain of links ends at the same secret
+	symlinkOrSkip(t, "alias.bin", filepath.Join(root, "chain.bin"))
+
+	files, skipped, err := collectModelFilesWithOptions(root, false)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	got := strings.Join(collectedNames(files), ",")
+	for _, f := range files {
+		if strings.Contains(f.ResolvedPath, ".env") || strings.Contains(strings.ToLower(f.ResolvedPath), ".git") {
+			t.Errorf("%s resolves to an excluded file: %s", f.RelativePath, f.ResolvedPath)
+		}
+	}
+	// real entries are skipped by name (.env, .git dir, sub/.git dir, up/.ENV.Local)
+	// plus the six aliases above
+	if want := "nested/ok.txt,sub/plain.txt,weights.bin"; got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+	if skipped != 4+6 {
+		t.Errorf("expected 10 skipped entries, got %d", skipped)
+	}
+}
+
+func TestCollectModelFiles_SensitiveSymlinkTargetIncludedWithIncludeHidden(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, ".env"), "SECRET")
+	writeTestFile(t, filepath.Join(root, "sub", ".git", "HEAD"), "ref")
+	symlinkOrSkip(t, ".env", filepath.Join(root, "alias.bin"))
+	symlinkOrSkip(t, filepath.Join("sub", ".git", "HEAD"), filepath.Join(root, "head.bin"))
+
+	files, skipped, err := collectModelFilesWithOptions(root, true)
+	if err != nil || skipped != 0 {
+		t.Fatalf("collect: skipped=%d err=%v", skipped, err)
+	}
+	if !containsName(files, "alias.bin") || !containsName(files, "head.bin") {
+		t.Fatalf("aliases should be uploaded with --include-hidden, got %v", collectedNames(files))
+	}
+}
+
 func containsName(files []modelFile, name string) bool {
 	for _, f := range files {
 		if f.RelativePath == name {

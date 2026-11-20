@@ -244,6 +244,42 @@ func TestCompleteModelUpload_ShrunkFileIsError(t *testing.T) {
 	}
 }
 
+// TestCompleteModelUpload_SizeChangedSinceScanIsRefused pins that a single-part
+// file whose size differs from the scan (shrunk, emptied or grown) is refused
+// before any request, instead of being uploaded with chunk sizes derived from
+// the new size.
+func TestCompleteModelUpload_SizeChangedSinceScanIsRefused(t *testing.T) {
+	for name, newContent := range map[string]string{
+		"shrunk":  "abc",
+		"emptied": "",
+		"grown":   "abcdefghijkl",
+	} {
+		t.Run(name, func(t *testing.T) {
+			artifact := writeUploadArtifact(t, "abcdef")
+			scanned, err := os.Lstat(artifact)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if writeErr := os.WriteFile(artifact, []byte(newContent), 0o600); writeErr != nil {
+				t.Fatal(writeErr)
+			}
+
+			server, hits := newUnreachableUploadServer(t)
+			err = completeModelUploadWithContext(context.Background(), &api.ModelRepoUpload{
+				PartSizeBytes: 6,
+				CompleteURL:   server.URL,
+				Parts:         []*api.ModelRepoUploadPart{{PartNumber: 1, URL: server.URL}},
+			}, artifact, scanned, nil)
+			if !errors.Is(err, errUploadSourceSizeChanged) || !strings.Contains(err.Error(), "size changed since") {
+				t.Fatalf("expected the size change to be refused, got %v", err)
+			}
+			if hits() != 0 {
+				t.Fatalf("nothing may be sent, server saw %d request(s)", hits())
+			}
+		})
+	}
+}
+
 func TestExactReader_ShortSourceFails(t *testing.T) {
 	r := &exactReader{r: strings.NewReader("abc"), want: 5}
 	buf := make([]byte, 16)
