@@ -502,6 +502,73 @@ func TestRequestV2RefusesEmptyIDAndRedirects(t *testing.T) {
 	}
 }
 
+// the Location of a refused redirect can carry a presigned url or a token, so
+// the error names only where it points, never a credential.
+func TestRefusedRedirectErrorRedactsLocation(t *testing.T) {
+	for name, tc := range map[string]struct {
+		location string
+		secrets  []string
+		want     string
+	}{
+		"presigned url": {
+			location: "https://bucket.s3.us-east-1.amazonaws.com/key?X-Amz-Signature=deadbeef&X-Amz-Credential=abc",
+			secrets:  []string{"deadbeef", "X-Amz-Credential", "abc"},
+			want:     "https://bucket.s3.us-east-1.amazonaws.com/key",
+		},
+		"bearer token": {
+			location: "Bearer rpa_secret123",
+			secrets:  []string{"rpa_secret123"},
+		},
+		"relative with token query": {
+			location: "/next?token=rpa_secret123",
+			secrets:  []string{"rpa_secret123"},
+			want:     "/next",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Location", tc.location)
+				w.WriteHeader(http.StatusFound)
+			}))
+			defer server.Close()
+			client := newV2TestClient(t, server)
+
+			_, err := client.GetV2("/registries", nil)
+			if err == nil {
+				t.Fatal("a redirect must fail")
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, "redirected (status 302)") {
+				t.Errorf("error = %q, want the status named", msg)
+			}
+			for _, secret := range tc.secrets {
+				if strings.Contains(msg, secret) {
+					t.Errorf("error %q leaks %q", msg, secret)
+				}
+			}
+			if tc.want != "" && !strings.Contains(msg, tc.want) {
+				t.Errorf("error = %q, want the redacted location %q", msg, tc.want)
+			}
+		})
+	}
+}
+
+// a transport failure quotes the request url in a *url.Error; its query string
+// must not reach the message.
+func TestTransportErrorRedactsRequestURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	client := newV2TestClient(t, server)
+	server.Close()
+
+	_, err := client.GetV2("/registries", url.Values{"X-Amz-Signature": {"deadbeef"}})
+	if err == nil {
+		t.Fatal("a closed server must fail")
+	}
+	if strings.Contains(err.Error(), "deadbeef") {
+		t.Errorf("error %q leaks the query string", err)
+	}
+}
+
 func TestGetV2AllPagesFollowsCursorsAndStopsOnRepeat(t *testing.T) {
 	var cursors []string
 	repeat := false

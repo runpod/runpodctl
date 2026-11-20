@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 )
 
 type CreateTemplateInput struct {
@@ -90,12 +89,12 @@ func CreateTemplate(templateInput *CreateTemplateInput) (templateId string, err 
 	}
 	template, ok := gqldata["saveTemplate"].(map[string]interface{})
 	if !ok || template == nil {
-		err = fmt.Errorf("template is nil: %s", string(rawData))
+		err = fmt.Errorf("template is nil: %s", errorBodyExcerpt(rawData))
 		return
 	}
 	templateId, ok = template["id"].(string)
 	if !ok {
-		err = fmt.Errorf("template id is not a string: %s", string(rawData))
+		err = fmt.Errorf("template id is not a string: %s", errorBodyExcerpt(rawData))
 	}
 	return
 }
@@ -128,12 +127,12 @@ func CreateEndpoint(endpointInput *CreateEndpointInput) (endpointId string, err 
 	}
 	endpoint, ok := gqldata["saveEndpoint"].(map[string]interface{})
 	if !ok || endpoint == nil {
-		err = fmt.Errorf("endpoint is nil: %s", string(rawData))
+		err = fmt.Errorf("endpoint is nil: %s", errorBodyExcerpt(rawData))
 		return
 	}
 	endpointId, ok = endpoint["id"].(string)
 	if !ok {
-		err = fmt.Errorf("endpoint id is not a string: %s", string(rawData))
+		err = fmt.Errorf("endpoint id is not a string: %s", errorBodyExcerpt(rawData))
 	}
 	return
 }
@@ -206,7 +205,7 @@ func GetEndpoints() (endpoints []*Endpoint, err error) {
 		return
 	}
 	defer res.Body.Close()
-	rawData, err := io.ReadAll(res.Body)
+	rawData, err := readResponseBody(res)
 	if err != nil {
 		return
 	}
@@ -215,11 +214,11 @@ func GetEndpoints() (endpoints []*Endpoint, err error) {
 		return
 	}
 	if len(data.Errors) > 0 {
-		err = errors.New(data.Errors[0].Message)
+		err = errors.New(errorMessageExcerpt(data.Errors[0].Message))
 		return
 	}
 	if data == nil || data.Data == nil || data.Data.Myself == nil || data.Data.Myself.Endpoints == nil {
-		err = fmt.Errorf("data is nil: %s", string(rawData))
+		err = fmt.Errorf("data is nil: %s", errorBodyExcerpt(rawData))
 		return
 	}
 	endpoints = data.Data.Myself.Endpoints

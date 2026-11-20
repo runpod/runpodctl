@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 )
@@ -48,12 +47,12 @@ func GetEndpointEnvOverride(endpointID string) ([]EndpointEnvVar, error) {
 	}
 	defer res.Body.Close()
 
-	rawData, err := io.ReadAll(res.Body)
+	rawData, err := readResponseBody(res)
 	if err != nil {
 		return nil, err
 	}
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("statuscode %d: %s", res.StatusCode, string(rawData))
+		return nil, fmt.Errorf("statuscode %d: %s", res.StatusCode, errorBodyExcerpt(rawData))
 	}
 
 	var data struct {
@@ -70,7 +69,7 @@ func GetEndpointEnvOverride(endpointID string) ([]EndpointEnvVar, error) {
 		return nil, err
 	}
 	if len(data.Errors) > 0 {
-		return nil, errors.New(data.Errors[0].Message)
+		return nil, errors.New(errorMessageExcerpt(data.Errors[0].Message))
 	}
 	if data.Data == nil || data.Data.Myself == nil || data.Data.Myself.Endpoint == nil {
 		return nil, fmt.Errorf("endpoint %s not found", id)

@@ -11,6 +11,7 @@ import (
 	"github.com/runpod/runpodctl/internal/agent"
 	internalapi "github.com/runpod/runpodctl/internal/api"
 	"github.com/runpod/runpodctl/internal/configenv"
+	"github.com/runpod/runpodctl/internal/redact"
 	"github.com/spf13/viper"
 )
 
@@ -54,6 +55,10 @@ func Query(input Input) (res *http.Response, err error) {
 		return nil, ErrNoCredentials
 	}
 
+	if checkErr := configenv.CheckAPIURL(apiUrl); checkErr != nil {
+		return nil, checkErr
+	}
+
 	req, err := http.NewRequest("POST", apiUrl, bytes.NewBuffer(jsonValue))
 	if err != nil {
 		return
@@ -71,6 +76,18 @@ func Query(input Input) (res *http.Response, err error) {
 		timeout = 10 * time.Second
 	}
 
-	client := &http.Client{Timeout: timeout}
-	return client.Do(req)
+	client := &http.Client{Timeout: timeout, CheckRedirect: internalapi.RefuseRedirect}
+	res, err = client.Do(req)
+	if err != nil {
+		return res, redact.Error(err)
+	}
+	return res, nil
 }
+
+// ErrRedirectRefused is returned (wrapped in a *url.Error by net/http) when the
+// graphql endpoint answers with a redirect. The client never follows one: it
+// carries the api key and a mutation body, and go would replay the request to
+// the new location (same-host-other-port forwards the Authorization header) or
+// downgrade a post to a get and report success. Every client that sends the key
+// refuses redirects; this is the same sentinel internal/api returns.
+var ErrRedirectRefused = internalapi.ErrRedirectRefused

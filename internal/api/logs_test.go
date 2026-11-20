@@ -9,8 +9,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/spf13/viper"
 )
 
 // collect runs the decoder over a literal stream and returns what a sink saw.
@@ -439,6 +442,55 @@ func TestFollowDoesNotRetryFatalErrors(t *testing.T) {
 	}
 }
 
+// A server that redirects on every request is a misconfigured api url: the
+// redirect is refused, so every reconnect would meet the same answer. Follow must
+// return the error after one attempt rather than reconnecting forever.
+func TestFollowDoesNotRetryRedirects(t *testing.T) {
+	for _, status := range []int{http.StatusMovedPermanently, http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var attempts atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				attempts.Add(1)
+				http.Redirect(w, r, "/elsewhere", status)
+			}))
+			defer server.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			// the real constructor, so the client under test refuses redirects
+			// the way the shipped one does.
+			viper.Reset()
+			t.Cleanup(viper.Reset)
+			t.Setenv("RUNPOD_API_KEY", "test-key")
+			t.Setenv("RUNPOD_API_URL", server.URL)
+			client, clientErr := NewLogClient()
+			if clientErr != nil {
+				t.Fatalf("NewLogClient: %v", clientErr)
+			}
+
+			var notices []string
+			err := client.Follow(ctx, "/pods/p/logs", LogStreamOptions{}, func(LogEntry) error {
+				return nil
+			}, func(msg string) { notices = append(notices, msg) })
+
+			var apiErr *APIError
+			if !errors.As(err, &apiErr) || apiErr.HTTPStatus() != status {
+				t.Fatalf("expected the %d redirect refusal to be returned, got %v", status, err)
+			}
+			if got := attempts.Load(); got != 1 {
+				t.Errorf("attempts = %d, want 1 (a refused redirect must not be retried)", got)
+			}
+			if len(notices) != 0 {
+				t.Errorf("no reconnect notice expected, got %v", notices)
+			}
+			if ctx.Err() != nil {
+				t.Error("Follow should return promptly, not run into the test deadline")
+			}
+		})
+	}
+}
+
 // Ctrl-c during a follow is the normal way out and must not look like a failure.
 func TestFollowReturnsNilOnContextCancel(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -684,6 +736,10 @@ func TestIsFatalLogStreamError(t *testing.T) {
 		{"401 is fatal", &APIError{Status: 401}, true},
 		{"422 is fatal", &APIError{Status: 422}, true},
 		{"no credentials is fatal", ErrNoCredentials, true},
+		{"301 redirect is fatal", &APIError{Status: 301}, true},
+		{"307 redirect is fatal", &APIError{Status: 307}, true},
+		{"308 redirect is fatal", &APIError{Status: 308}, true},
+		{"redirect refusal from stream is fatal", &APIError{Status: 302, Code: codeForStatus(302)}, true},
 		{"429 is transient", &APIError{Status: 429}, false},
 		{"500 is transient", &APIError{Status: 500}, false},
 		{"transport failure is transient", errors.New("connection reset"), false},
