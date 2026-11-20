@@ -760,14 +760,23 @@ func relWithin(root, path string) (string, bool) {
 	return rel, true
 }
 
+// betweenLstatAndOpenHook, when set, runs in openScannedModelFile after the
+// lstat check and before the open. Tests use it to swap the file in exactly that
+// window; it is nil in production.
+var betweenLstatAndOpenHook func(path string)
+
 // openScannedModelFile opens path for upload and verifies it is still the
 // regular file seen at scan time. A path that was swapped for a symlink (or
-// another file) after the scan is refused instead of followed. The lstat before
-// the open also keeps open from blocking on a FIFO swapped in; the fstat after
-// the open is authoritative, since it describes the file actually opened.
-// scanned may be nil (callers outside the directory scan), in which case only
-// the regular-file checks apply. When scanned carries the scan-time root (see
-// scannedModelInfo) the file is opened beneath that root instead of by path.
+// another file) after the scan is refused instead of followed. The lstat is
+// only an early, readable refusal: it cannot make the open safe, because the
+// file can be replaced between the two calls. The open itself therefore uses
+// O_NONBLOCK (a FIFO swapped in cannot park it waiting for a writer, before any
+// stall guard exists), and the fstat of the opened descriptor is authoritative:
+// it describes the file actually opened and must be a regular file with the scan
+// identity. scanned may be nil (callers outside the directory scan), in which
+// case only the regular-file checks apply. When scanned carries the scan-time
+// root (see scannedModelInfo) the file is opened beneath that root instead of by
+// path.
 func openScannedModelFile(path string, scanned os.FileInfo) (*os.File, os.FileInfo, error) {
 	var (
 		root     *os.Root
@@ -794,9 +803,17 @@ func openScannedModelFile(path string, scanned os.FileInfo) (*os.File, os.FileIn
 		openName = rooted.name
 		identity = rooted.FileInfo
 	}
-	lstat, open := os.Lstat, os.Open
+	lstat := os.Lstat
+	// a path open also refuses a symlink at the final component; a root open
+	// is confined by the root and keeps following links that stay inside it.
+	open := func(name string) (*os.File, error) {
+		return os.OpenFile(name, os.O_RDONLY|openNonblockFlag|openNoFollowFlag, 0)
+	}
 	if root != nil {
-		lstat, open = root.Lstat, root.Open
+		lstat = root.Lstat
+		open = func(name string) (*os.File, error) {
+			return root.OpenFile(name, os.O_RDONLY|openNonblockFlag, 0)
+		}
 	}
 
 	pre, err := lstat(openName)
@@ -807,6 +824,9 @@ func openScannedModelFile(path string, scanned os.FileInfo) (*os.File, os.FileIn
 		return nil, nil, fmt.Errorf("refusing to upload %q: it is no longer a regular file (changed since the model directory was scanned)", path)
 	}
 
+	if betweenLstatAndOpenHook != nil {
+		betweenLstatAndOpenHook(path)
+	}
 	file, err := open(openName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open artifact: %w", err)
