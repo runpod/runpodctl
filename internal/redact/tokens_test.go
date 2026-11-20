@@ -9,9 +9,9 @@ import (
 )
 
 // fake credentials, not real ones.
-const ( //nolint:gosec // G101: fake credential fixtures
+const (
 	fakeRPAKey     = "rpa_ABCDEF0123456789abcdef-_XYZ"
-	fakeBearer     = "eyJhbGciOiJIUzI1NiJ9.payload.sig-nature"
+	fakeBearer     = "eyJhbGciOiJIUzI1NiJ9.payload.sig-nature" //nolint:gosec // G101: fake credential fixture
 	fakeConfigured = "cfgkey-0123456789-abcdef"
 )
 
