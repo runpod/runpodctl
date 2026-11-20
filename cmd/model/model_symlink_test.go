@@ -215,6 +215,24 @@ func TestCollectModelFiles_HuggingFaceLayoutDoesNotWidenTrustBeyondRepo(t *testi
 			t.Fatal(err)
 		}
 	})
+	t.Run("refs and other revisions of the same repo", func(t *testing.T) {
+		writeTestFile(t, filepath.Join(repo, "refs", "main"), "abc123")
+		writeTestFile(t, filepath.Join(repo, "snapshots", "other-rev", "private.bin"), "other revision")
+		for name, target := range map[string]string{
+			"refs.bin":  filepath.Join("..", "..", "refs", "main"),
+			"other.bin": filepath.Join("..", "other-rev", "private.bin"),
+		} {
+			link := filepath.Join(snapshot, name)
+			symlinkOrSkip(t, target, link)
+			_, err := collectModelFiles(snapshot)
+			if err == nil || !errors.Is(err, errSymlinkOutsideModelPath) {
+				t.Fatalf("a link to %s inside the repo but outside blobs/ must be refused, got %v", target, err)
+			}
+			if rmErr := os.Remove(link); rmErr != nil {
+				t.Fatal(rmErr)
+			}
+		}
+	})
 	t.Run("cache root", func(t *testing.T) {
 		symlinkOrSkip(t, filepath.Join("..", "..", "..", "secret.txt"), filepath.Join(snapshot, "secret.bin"))
 		if _, err := collectModelFiles(snapshot); err == nil {

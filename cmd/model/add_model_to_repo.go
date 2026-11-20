@@ -645,17 +645,20 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 
 // modelContainmentRoots returns the directories a resolved file may live in:
 // the (already resolved) model directory itself and, when it is a Hugging Face
-// cache snapshot (.../models--owner--name/snapshots/<rev>), the enclosing repo
-// directory. HF caches store every snapshot file as a relative symlink into the
-// repo's blobs/ directory (snapshots/<rev>/file -> ../../blobs/<sha>), so a
-// single root would refuse the whole layout.
+// cache snapshot (.../models--owner--name/snapshots/<rev>), that repo's blobs/
+// directory and nothing else of the repo. HF caches store every snapshot file as
+// a relative symlink into the repo's blobs/ directory
+// (snapshots/<rev>/file -> ../../blobs/<sha>), so a single root would refuse the
+// whole layout. refs/ and the other revisions' snapshots/ stay outside the
+// allowance: a link into them would upload content that is neither in the
+// selected snapshot nor a blob.
 func modelContainmentRoots(resolvedRoot string) []string {
 	roots := []string{resolvedRoot}
 	snapshots := filepath.Dir(resolvedRoot)
 	if filepath.Base(snapshots) == "snapshots" {
 		repo := filepath.Dir(snapshots)
 		if strings.HasPrefix(filepath.Base(repo), "models--") {
-			roots = append(roots, repo)
+			roots = append(roots, filepath.Join(repo, "blobs"))
 		}
 	}
 	return roots
@@ -1471,21 +1474,27 @@ func modelUploadErrorSnippet(body io.Reader) string {
 	return text
 }
 
-var (
-	storageErrorCodePattern    = regexp.MustCompile(`<Code>\s*([^<]*?)\s*</Code>`)
-	storageErrorMessagePattern = regexp.MustCompile(`<Message>\s*([^<]*?)\s*</Message>`)
-)
-
 // modelUploadErrorExcerptRunes bounds each field of the error summary.
 const modelUploadErrorExcerptRunes = 256
+
+// unrecognizedXMLErrorText stands in for an XML body that has no <Code> or
+// <Message>: such a body is never echoed, because storage error documents carry
+// the signature, access key id and string-to-sign in arbitrary other elements.
+const unrecognizedXMLErrorText = "unrecognized XML error response"
+
+// xmlLikePattern spots markup anywhere in a body, so a prefix cannot hide an
+// XML document from the structured path and route it to the plain-text one.
+var xmlLikePattern = regexp.MustCompile(`<[A-Za-z?!/]`)
 
 func summarizeStorageError(body string) string {
 	body = strings.TrimSpace(body)
 	if body == "" {
 		return ""
 	}
-	code := firstSubmatch(storageErrorCodePattern, body)
-	message := firstSubmatch(storageErrorMessagePattern, body)
+	if !xmlLikePattern.MatchString(body) {
+		return boundedRedacted(body)
+	}
+	code, message := parseStorageErrorXML(body)
 	switch {
 	case code != "" && message != "":
 		return boundedRedacted(code) + ": " + boundedRedacted(message)
@@ -1494,14 +1503,42 @@ func summarizeStorageError(body string) string {
 	case message != "":
 		return boundedRedacted(message)
 	}
-	return boundedRedacted(body)
+	return unrecognizedXMLErrorText
 }
 
-func firstSubmatch(re *regexp.Regexp, s string) string {
-	if m := re.FindStringSubmatch(s); m != nil {
-		return m[1]
+// parseStorageErrorXML decodes body structurally and returns only the text of
+// the first <Code> and <Message> elements, whatever their namespace or nesting;
+// every other element and attribute is ignored. A body that stops being
+// well-formed keeps whatever was decoded before the failure.
+func parseStorageErrorXML(body string) (code, message string) {
+	dec := xml.NewDecoder(strings.NewReader(body))
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return code, message
+		}
+		start, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		var target *string
+		switch start.Name.Local {
+		case "Code":
+			target = &code
+		case "Message":
+			target = &message
+		default:
+			continue
+		}
+		if *target != "" {
+			continue
+		}
+		var text string
+		if err := dec.DecodeElement(&text, &start); err != nil {
+			return code, message
+		}
+		*target = strings.TrimSpace(text)
 	}
-	return ""
 }
 
 // boundedRedacted redacts before truncating so a signature cut in half by the

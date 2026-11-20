@@ -146,6 +146,19 @@ func TestModelUploadErrorSnippet(t *testing.T) {
 			"bad request for https://h.example/k", []string{"deadbeef", "AKIAEXAMPLE"}},
 		{"truncated mid-signature", "see https://h.example/k?X-Amz-Signature=deadbeef01", "see https://h.example/k", []string{"deadbeef"}},
 		{"unterminated xml", "<Error><Code>Slow</Code><Message>cut off", "Slow", nil},
+		{"namespaced code beside an unrecognized element",
+			`<Code xmlns="urn:x">AccessDenied</Code><SignatureProvided>deadbeef</SignatureProvided>`,
+			"AccessDenied", []string{"deadbeef", "SignatureProvided"}},
+		{"namespaced error document", `<?xml version="1.0"?><Error xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Code>SignatureDoesNotMatch</Code><Message>bad signature</Message><AWSAccessKeyId>AKIAEXAMPLE</AWSAccessKeyId><StringToSign>deadbeef</StringToSign></Error>`,
+			"SignatureDoesNotMatch: bad signature", []string{"deadbeef", "AKIAEXAMPLE", "StringToSign"}},
+		{"xml without code or message", `<Error><SignatureProvided>deadbeef</SignatureProvided></Error>`,
+			unrecognizedXMLErrorText, []string{"deadbeef", "SignatureProvided"}},
+		{"xml behind a plain-text prefix", `oops <Error><StringToSign>deadbeef</StringToSign></Error>`,
+			unrecognizedXMLErrorText, []string{"deadbeef"}},
+		{"malformed xml without code or message", `<Error><StringToSign>deadbeef</Str`,
+			unrecognizedXMLErrorText, []string{"deadbeef"}},
+		{"code text carrying a signed url", `<Error><Code>Bad</Code><Message>see https://h.example/k` + strings.ReplaceAll(testPresignedQuery, "&", "&amp;") + `</Message></Error>`,
+			"Bad: see https://h.example/k", []string{"deadbeef", "AKIAEXAMPLE"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
