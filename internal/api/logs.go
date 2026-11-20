@@ -582,6 +582,12 @@ func IsPermanentStreamError(err error) bool {
 		http.StatusNotFound, http.StatusUnprocessableEntity:
 		return true
 	}
+	// a redirect is refused, never followed, so the same request meets the same
+	// answer on every reconnect: a misconfigured api url must end the follow,
+	// not retry it forever.
+	if status := apiErr.HTTPStatus(); status >= http.StatusMultipleChoices && status < http.StatusBadRequest {
+		return true
+	}
 	switch apiErr.ErrorCode() {
 	case "bad_request", "unauthorized", "forbidden", "not_found", "no_credentials":
 		return true
