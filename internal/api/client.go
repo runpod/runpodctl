@@ -133,7 +133,7 @@ func (c *Client) requestURLContext(ctx context.Context, method, u string, body a
 		if retryableStatus(method, resp.status) && waitToRetry(ctx, resp.header, attempt) {
 			continue
 		}
-		if err != nil {
+		if err != nil && resp.status >= 200 && resp.status < 300 {
 			return nil, err
 		}
 
@@ -144,6 +144,16 @@ func (c *Client) requestURLContext(ctx context.Context, method, u string, body a
 				Status:  resp.status,
 				Code:    codeForStatus(resp.status),
 				Message: fmt.Sprintf("api redirected (status %d) to %q; redirects are not followed", resp.status, redact.URL(redact.Text(resp.header.Get("Location")))),
+			}
+		}
+		if err != nil {
+			// a rejected status whose body was oversized or cut short: the
+			// response itself was received, so keep its status and stable code
+			// rather than the bare read error. Retries were handled above.
+			return nil, &APIError{
+				Status:  resp.status,
+				Code:    codeForStatus(resp.status),
+				Message: fmt.Sprintf("api request failed with status %d (the error body could not be read: %v)", resp.status, redact.Error(errors.Unwrap(err))),
 			}
 		}
 		if resp.status < 200 || resp.status >= 300 {
