@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/runpod/runpodctl/internal/configenv"
+	"github.com/runpod/runpodctl/internal/redact"
 )
 
 // This file is the cli's only streaming transport. The log routes
@@ -305,7 +306,7 @@ func (c *LogClient) stream(ctx context.Context, path string, opts LogStreamOptio
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
+		return fmt.Errorf("request failed: %w", redact.Error(err))
 	}
 	defer resp.Body.Close()
 

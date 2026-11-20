@@ -16,6 +16,7 @@ import (
 	"github.com/runpod/runpodctl/internal/agent"
 	"github.com/runpod/runpodctl/internal/clierr"
 	"github.com/runpod/runpodctl/internal/configenv"
+	"github.com/runpod/runpodctl/internal/redact"
 	"github.com/spf13/viper"
 )
 
@@ -142,7 +143,7 @@ func (c *Client) requestURLContext(ctx context.Context, method, u string, body a
 			return nil, &APIError{
 				Status:  resp.status,
 				Code:    codeForStatus(resp.status),
-				Message: fmt.Sprintf("api redirected (status %d) to %q; redirects are not followed", resp.status, resp.header.Get("Location")),
+				Message: fmt.Sprintf("api redirected (status %d) to %q; redirects are not followed", resp.status, redact.URL(redact.Text(resp.header.Get("Location")))),
 			}
 		}
 		if resp.status < 200 || resp.status >= 300 {
@@ -193,7 +194,7 @@ func (c *Client) send(ctx context.Context, method, u string, jsonBody []byte) (*
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		return nil, fmt.Errorf("request failed: %w", redact.Error(err))
 	}
 	defer resp.Body.Close()
 

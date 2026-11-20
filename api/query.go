@@ -11,6 +11,7 @@ import (
 	"github.com/runpod/runpodctl/internal/agent"
 	internalapi "github.com/runpod/runpodctl/internal/api"
 	"github.com/runpod/runpodctl/internal/configenv"
+	"github.com/runpod/runpodctl/internal/redact"
 	"github.com/spf13/viper"
 )
 
@@ -76,7 +77,11 @@ func Query(input Input) (res *http.Response, err error) {
 	}
 
 	client := &http.Client{Timeout: timeout, CheckRedirect: internalapi.RefuseRedirect}
-	return client.Do(req)
+	res, err = client.Do(req)
+	if err != nil {
+		return res, redact.Error(err)
+	}
+	return res, nil
 }
 
 // ErrRedirectRefused is returned (wrapped in a *url.Error by net/http) when the

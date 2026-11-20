@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/runpod/runpodctl/internal/configenv"
+	"github.com/runpod/runpodctl/internal/redact"
 	"github.com/spf13/viper"
 )
 
@@ -82,7 +83,7 @@ func (c *GraphQLClient) Query(input GraphQLInput) ([]byte, error) {
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, redact.Error(err)
 	}
 	defer resp.Body.Close()
 
