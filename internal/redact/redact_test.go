@@ -94,6 +94,96 @@ func TestErrorRewritesURLError(t *testing.T) {
 	}
 }
 
+// assertNoSignedURLInChain fails if any node of err's chain, found by walking
+// Unwrap() error and Unwrap() []error by hand and through errors.As, still
+// exposes the signature as a *url.Error.
+func assertNoSignedURLInChain(t *testing.T, err error) int {
+	t.Helper()
+	seen := 0
+	var walk func(error)
+	walk = func(e error) {
+		if e == nil {
+			return
+		}
+		if u, ok := e.(*url.Error); ok { //nolint:errorlint // walking the chain by hand
+			seen++
+			if strings.Contains(u.URL, "deadbeef") || strings.Contains(u.Error(), "deadbeef") {
+				t.Fatalf("typed url.Error still carries the signature: %s", u.URL)
+			}
+		}
+		switch w := e.(type) { //nolint:errorlint // walking the chain by hand
+		case interface{ Unwrap() error }:
+			walk(w.Unwrap())
+		case interface{ Unwrap() []error }:
+			for _, c := range w.Unwrap() {
+				walk(c)
+			}
+		}
+	}
+	walk(err)
+	var u *url.Error
+	if errors.As(err, &u) { //nolint:modernize // errors.As, not AsType: nix errcheck flags AsType
+		if strings.Contains(u.URL, "deadbeef") || strings.Contains(u.Error(), "deadbeef") {
+			t.Fatalf("errors.As recovered the signed URL: %s", u.URL)
+		}
+	}
+	return seen
+}
+
+type customWrapError struct{ err error }
+
+func (e *customWrapError) Error() string { return "custom: " + e.err.Error() }
+func (e *customWrapError) Unwrap() error { return e.err }
+
+func TestErrorSanitizesURLErrorBehindWrappers(t *testing.T) {
+	cause := errors.New("connection refused")
+	orig := &url.Error{Op: "Put", URL: presigned, Err: cause}
+	other := errors.New("other failure")
+
+	cases := map[string]error{
+		"fmt wrapped":         fmt.Errorf("upload part 1: %w", orig),
+		"double wrapped":      fmt.Errorf("outer: %w", fmt.Errorf("inner: %w", orig)),
+		"custom wrapper":      &customWrapError{err: orig},
+		"errors.Join":         errors.Join(other, orig),
+		"multi-%w":            fmt.Errorf("two: %w and %w", other, orig),
+		"joined then wrapped": fmt.Errorf("ctx: %w", errors.Join(other, fmt.Errorf("deep: %w", orig))),
+	}
+	for name, in := range cases {
+		t.Run(name, func(t *testing.T) {
+			if !strings.Contains(in.Error(), "deadbeef") {
+				t.Fatal("test premise: the input must quote the signature")
+			}
+			got := Error(in)
+			assertClean(t, got.Error())
+			if n := assertNoSignedURLInChain(t, got); n == 0 {
+				t.Fatal("the typed url.Error should stay reachable (with a clean URL)")
+			}
+			if !errors.Is(got, cause) {
+				t.Fatal("errors.Is on the cause must keep working")
+			}
+			var u *url.Error
+			if !errors.As(got, &u) || u.URL != "https://bucket.s3.us-east-1.amazonaws.com/models/key.bin" { //nolint:modernize // errors.As, not AsType: nix errcheck flags AsType
+				t.Fatalf("errors.As should return the sanitized url.Error, got %+v", u)
+			}
+		})
+	}
+
+	t.Run("sibling cause survives errors.Is", func(t *testing.T) {
+		got := Error(errors.Join(other, orig))
+		if !errors.Is(got, other) || !errors.Is(got, cause) {
+			t.Fatal("every cause of a joined error must stay reachable")
+		}
+	})
+
+	t.Run("chain without a url.Error is kept as is", func(t *testing.T) {
+		in := fmt.Errorf("wrap: %w", other)
+		got := Error(in)
+		if errors.Unwrap(got) != in {
+			t.Fatal("a chain with no url.Error should not be rebuilt")
+		}
+	})
+}
+
 func TestErrorFromRealRequestFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

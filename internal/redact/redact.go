@@ -9,7 +9,6 @@
 package redact
 
 import (
-	"errors"
 	"net/url"
 	"regexp"
 	"strings"
@@ -82,9 +81,14 @@ func Text(s string) string {
 }
 
 // Error returns an error that carries the same chain as err (errors.Is and
-// errors.As still work) but whose message has been redacted. A *url.Error has
-// its URL field rewritten to scheme://host/path as well, so the signature is not
-// reachable through the typed error either. Error(nil) is nil.
+// errors.As still work for its causes) but whose message has been redacted.
+// Every *url.Error anywhere in the chain, including behind fmt.Errorf("%w") and
+// errors.Join wrappers, has its URL field rewritten to scheme://host/path, so
+// neither the message nor a typed errors.As lookup can recover the signature.
+// A wrapper that sits above a *url.Error is replaced by a plain wrapper that
+// keeps its (redacted) message and its causes, so errors.As to the wrapper's own
+// concrete type no longer succeeds; wrappers with no *url.Error beneath them are
+// kept as they are. Error(nil) is nil.
 func Error(err error) error {
 	if err == nil {
 		return nil
@@ -92,19 +96,73 @@ func Error(err error) error {
 	if _, ok := err.(*redactedError); ok { //nolint:errorlint // only an already-redacted outermost error is reused
 		return err
 	}
+	clean, _ := sanitizeChain(err)
+	return &redactedError{msg: errorText(err), err: clean}
+}
+
+// errorText renders err with the URL of every *url.Error in its chain reduced
+// first (the quoted URL may contain characters, such as the spaces of a malformed
+// URL, that end the text patterns early), then redacts the whole text.
+func errorText(err error) string {
 	msg := err.Error()
-	var ue *url.Error
-	// errors.As, not errors.AsType: the nix golangci-lint/errcheck toolchain reports AsType results as unchecked.
-	if errors.As(err, &ue) { //nolint:modernize // see above
-		// the quoted URL may contain characters (spaces from a malformed URL)
-		// that end the text patterns early, so swap in the typed rewrite first.
-		clean := &url.Error{Op: ue.Op, URL: URL(ue.URL), Err: ue.Err}
-		msg = strings.ReplaceAll(msg, ue.Error(), clean.Error())
-		if err == error(ue) { //nolint:errorlint // outermost *url.Error: hand back the rewritten typed error
-			return &redactedError{msg: Text(msg), err: &url.Error{Op: ue.Op, URL: clean.URL, Err: Error(ue.Err)}}
+	walkChain(err, func(e error) {
+		if ue, ok := e.(*url.Error); ok { //nolint:errorlint // every node of the chain is inspected on purpose
+			clean := &url.Error{Op: ue.Op, URL: URL(ue.URL), Err: ue.Err}
+			msg = strings.ReplaceAll(msg, ue.Error(), clean.Error())
+		}
+	})
+	return Text(msg)
+}
+
+// walkChain calls fn on err and on every error reachable through Unwrap() error
+// and Unwrap() []error, depth first.
+func walkChain(err error, fn func(error)) {
+	if err == nil {
+		return
+	}
+	fn(err)
+	switch u := err.(type) { //nolint:errorlint // walking the chain by hand
+	case interface{ Unwrap() error }:
+		walkChain(u.Unwrap(), fn)
+	case interface{ Unwrap() []error }:
+		for _, c := range u.Unwrap() {
+			walkChain(c, fn)
 		}
 	}
-	return &redactedError{msg: Text(msg), err: err}
+}
+
+// sanitizeChain returns err with every *url.Error in its chain replaced by a
+// copy whose URL is redacted; changed is false (and err is returned as is) when
+// the chain holds none.
+func sanitizeChain(err error) (clean error, changed bool) {
+	switch e := err.(type) { //nolint:errorlint // walking the chain by hand
+	case nil:
+		return nil, false
+	case *url.Error:
+		// Error(e.Err) also redacts the cause's own message, which can quote a URL.
+		return &url.Error{Op: e.Op, URL: URL(e.URL), Err: Error(e.Err)}, true
+	case interface{ Unwrap() error }:
+		inner := e.Unwrap()
+		cleanInner, ch := sanitizeChain(inner)
+		if !ch {
+			return err, false
+		}
+		return &wrapError{msg: errorText(err), err: cleanInner}, true
+	case interface{ Unwrap() []error }:
+		children := e.Unwrap()
+		cleaned := make([]error, len(children))
+		found := false
+		for i, c := range children {
+			var ch bool
+			cleaned[i], ch = sanitizeChain(c)
+			found = found || ch
+		}
+		if !found {
+			return err, false
+		}
+		return &joinError{msg: errorText(err), errs: cleaned}, true
+	}
+	return err, false
 }
 
 type redactedError struct {
@@ -114,3 +172,21 @@ type redactedError struct {
 
 func (e *redactedError) Error() string { return e.msg }
 func (e *redactedError) Unwrap() error { return e.err }
+
+// wrapError stands in for a single-cause wrapper above a sanitized *url.Error.
+type wrapError struct {
+	msg string
+	err error
+}
+
+func (e *wrapError) Error() string { return e.msg }
+func (e *wrapError) Unwrap() error { return e.err }
+
+// joinError stands in for a multi-cause wrapper above a sanitized *url.Error.
+type joinError struct {
+	msg  string
+	errs []error
+}
+
+func (e *joinError) Error() string   { return e.msg }
+func (e *joinError) Unwrap() []error { return e.errs }
