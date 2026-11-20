@@ -807,7 +807,7 @@ func openScannedModelFile(path string, scanned os.FileInfo) (*os.File, os.FileIn
 	// a path open also refuses a symlink at the final component; a root open
 	// is confined by the root and keeps following links that stay inside it.
 	open := func(name string) (*os.File, error) {
-		return os.OpenFile(name, os.O_RDONLY|openNonblockFlag|openNoFollowFlag, 0)
+		return os.OpenFile(name, os.O_RDONLY|openNonblockFlag|openNoFollowFlag, 0) //nolint:gosec // G304: the path is the scanned model file, checked by lstat before and by fstat after
 	}
 	if root != nil {
 		lstat = root.Lstat

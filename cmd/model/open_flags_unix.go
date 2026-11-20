@@ -1,5 +1,6 @@
 //go:build unix
 
+// Package model implements the runpodctl model repository commands.
 package model
 
 import "syscall"

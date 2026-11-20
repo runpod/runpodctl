@@ -111,7 +111,7 @@ func TestUpload_SwapToFIFOBetweenLstatAndOpenDoesNotHang(t *testing.T) {
 					t.Fatal("hook did not run")
 				}
 				if res.err == nil {
-					_ = res.f.Close()
+					_ = res.f.Close() //nolint:errcheck // already failing the test; nothing to recover
 					t.Fatal("expected the swapped-in FIFO to be refused")
 				}
 				if !strings.Contains(res.err.Error(), "regular file") {
@@ -121,7 +121,7 @@ func TestUpload_SwapToFIFOBetweenLstatAndOpenDoesNotHang(t *testing.T) {
 				// release a blocked open (a read-write open of a FIFO needs no peer) so
 				// the goroutine does not outlive the test.
 				if unblock, openErr := os.OpenFile(file.uploadPath(), os.O_RDWR, 0); openErr == nil {
-					_ = unblock.Close()
+					_ = unblock.Close() //nolint:errcheck // releasing a blocked open so the goroutine ends; nothing to recover
 				}
 				t.Fatal("open blocked on the FIFO swapped in after the lstat")
 			}
