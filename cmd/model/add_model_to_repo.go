@@ -538,12 +538,79 @@ func validateAddModelFlags() error {
 // compares the swapped file to itself. os.SameFile(info, info) triggers the
 // load at scan time; on Unix the identity comes with the stat result and this is
 // a cheap no-op. It is a var so tests can observe that the call happens.
-var pinScanFileIdentity = func(info os.FileInfo) error {
+var pinScanFileIdentity = pinFileIdentity
+
+func pinFileIdentity(info os.FileInfo) error {
 	if !os.SameFile(info, info) {
 		return errors.New("unable to determine the identity of the file")
 	}
 	return nil
 }
+
+// scannedModelInfo is the FileInfo kept for a scanned model file. Besides the
+// scan-time lstat it records where the file was found: the containment root it
+// lives under (with that root's scan-time identity) and its name relative to
+// that root. The upload reopens the root and opens the file through it
+// (os.Root), so a directory swapped for a symlink after the scan can never lead
+// the open outside the root.
+type scannedModelInfo struct {
+	os.FileInfo
+	rootDir  string
+	rootInfo os.FileInfo
+	name     string
+}
+
+// scanRoots lazily opens the containment roots for the duration of one scan.
+type scanRoots struct {
+	dirs    []string
+	handles []*os.Root
+	infos   []os.FileInfo
+}
+
+func newScanRoots(dirs []string) *scanRoots {
+	return &scanRoots{dirs: dirs, handles: make([]*os.Root, len(dirs)), infos: make([]os.FileInfo, len(dirs))}
+}
+
+// locate returns the index of the root containing path and path relative to it.
+func (s *scanRoots) locate(path string) (int, string, bool) {
+	for i, dir := range s.dirs {
+		if rel, ok := relWithin(dir, path); ok {
+			return i, rel, true
+		}
+	}
+	return 0, "", false
+}
+
+func (s *scanRoots) open(i int) (*os.Root, os.FileInfo, error) {
+	if s.handles[i] != nil {
+		return s.handles[i], s.infos[i], nil
+	}
+	handle, err := os.OpenRoot(s.dirs[i])
+	if err != nil {
+		return nil, nil, fmt.Errorf("open %q as a root: %w", s.dirs[i], err)
+	}
+	info, err := handle.Stat(".")
+	if err == nil {
+		err = pinFileIdentity(info)
+	}
+	if err != nil {
+		return nil, nil, errors.Join(fmt.Errorf("stat root %q: %w", s.dirs[i], err), handle.Close())
+	}
+	s.handles[i], s.infos[i] = handle, info
+	return handle, info, nil
+}
+
+func (s *scanRoots) close() {
+	for _, h := range s.handles {
+		if h != nil {
+			_ = h.Close()
+		}
+	}
+}
+
+// afterScanEntryHook, when set, runs in the scan after an entry is read and
+// before it is statted. Tests use it to swap paths inside that window.
+var afterScanEntryHook func(path string)
 
 // errSymlinkOutsideModelPath is the sentinel for a symlink that resolves outside
 // the containment roots.
@@ -570,7 +637,8 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve model directory: %w", err)
 	}
-	roots := modelContainmentRoots(root)
+	roots := newScanRoots(modelContainmentRoots(root))
+	defer roots.close()
 
 	var files []modelFile
 
@@ -595,11 +663,23 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 			}
 			resolved = target
 		}
-		if !pathWithinAny(roots, resolved) {
+		rootIdx, rootRel, within := roots.locate(resolved)
+		if !within {
 			return fmt.Errorf("%w: %q resolves to %q, outside the model directory (--model-path); refusing to upload files that are not under --model-path. %s", errSymlinkOutsideModelPath, path, resolved, symlinkOutsideModelPathHint)
 		}
 
-		info, err := os.Lstat(resolved)
+		if afterScanEntryHook != nil {
+			afterScanEntryHook(path)
+		}
+
+		// stat through the root, not the path: a directory swapped for a symlink
+		// after the walk read this entry is refused by the root instead of being
+		// followed to a file outside it.
+		handle, rootInfo, err := roots.open(rootIdx)
+		if err != nil {
+			return fmt.Errorf("stat file %q: %w", path, err)
+		}
+		info, err := handle.Lstat(rootRel)
 		if err != nil {
 			return fmt.Errorf("stat file %q: %w", path, err)
 		}
@@ -626,7 +706,7 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 			ResolvedPath: resolved,
 			RelativePath: filepath.ToSlash(rel),
 			Size:         info.Size(),
-			info:         info,
+			info:         &scannedModelInfo{FileInfo: info, rootDir: roots.dirs[rootIdx], rootInfo: rootInfo, name: rootRel},
 		})
 
 		return nil
@@ -668,15 +748,23 @@ func modelContainmentRoots(resolvedRoot string) []string {
 // already be absolute and symlink-resolved.
 func pathWithinAny(roots []string, path string) bool {
 	for _, root := range roots {
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			continue
-		}
-		if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		if _, ok := relWithin(root, path); ok {
 			return true
 		}
 	}
 	return false
+}
+
+// relWithin returns path relative to root, and whether path is at or below it.
+func relWithin(root, path string) (string, bool) {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return "", false
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return rel, true
 }
 
 // openScannedModelFile opens path for upload and verifies it is still the
@@ -685,9 +773,40 @@ func pathWithinAny(roots []string, path string) bool {
 // the open also keeps open from blocking on a FIFO swapped in; the fstat after
 // the open is authoritative, since it describes the file actually opened.
 // scanned may be nil (callers outside the directory scan), in which case only
-// the regular-file checks apply.
+// the regular-file checks apply. When scanned carries the scan-time root (see
+// scannedModelInfo) the file is opened beneath that root instead of by path.
 func openScannedModelFile(path string, scanned os.FileInfo) (*os.File, os.FileInfo, error) {
-	pre, err := os.Lstat(path)
+	var (
+		root     *os.Root
+		openName = path
+		identity = scanned
+	)
+	if rooted, ok := scanned.(*scannedModelInfo); ok {
+		// open beneath the scan-time root: the root itself must still be the same
+		// directory, and every component below it is resolved by the root, which
+		// refuses a symlink that leads out of it.
+		var err error
+		root, err = os.OpenRoot(rooted.rootDir)
+		if err != nil {
+			return nil, nil, fmt.Errorf("open artifact: %w", err)
+		}
+		defer root.Close()
+		rootInfo, err := root.Stat(".")
+		if err != nil {
+			return nil, nil, fmt.Errorf("open artifact: %w", err)
+		}
+		if !os.SameFile(rooted.rootInfo, rootInfo) {
+			return nil, nil, fmt.Errorf("refusing to upload %q: its directory changed since the model directory was scanned", path)
+		}
+		openName = rooted.name
+		identity = rooted.FileInfo
+	}
+	lstat, open := os.Lstat, os.Open
+	if root != nil {
+		lstat, open = root.Lstat, root.Open
+	}
+
+	pre, err := lstat(openName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open artifact: %w", err)
 	}
@@ -695,7 +814,7 @@ func openScannedModelFile(path string, scanned os.FileInfo) (*os.File, os.FileIn
 		return nil, nil, fmt.Errorf("refusing to upload %q: it is no longer a regular file (changed since the model directory was scanned)", path)
 	}
 
-	file, err := os.Open(path) //nolint:gosec // G304: path is the scan-verified model file; identity is re-checked below via fstat + os.SameFile
+	file, err := open(openName) //nolint:gosec // G304: openName is the scan-verified model file (opened beneath its root when scanned); identity is re-checked below via fstat + os.SameFile
 	if err != nil {
 		return nil, nil, fmt.Errorf("open artifact: %w", err)
 	}
@@ -706,7 +825,7 @@ func openScannedModelFile(path string, scanned os.FileInfo) (*os.File, os.FileIn
 	if !info.Mode().IsRegular() {
 		return nil, nil, errors.Join(fmt.Errorf("refusing to upload %q: it is not a regular file", path), file.Close())
 	}
-	if scanned != nil && !os.SameFile(scanned, info) {
+	if identity != nil && !os.SameFile(identity, info) {
 		return nil, nil, errors.Join(fmt.Errorf("refusing to upload %q: the file changed since the model directory was scanned", path), file.Close())
 	}
 	return file, info, nil

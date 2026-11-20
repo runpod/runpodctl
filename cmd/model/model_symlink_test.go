@@ -428,7 +428,7 @@ func TestCollectModelFiles_PinsFileIdentityAtScanTime(t *testing.T) {
 	for _, f := range files {
 		found := false
 		for _, p := range pinned {
-			if p == f.info {
+			if p == f.info.(*scannedModelInfo).FileInfo {
 				found = true
 			}
 		}
@@ -448,5 +448,119 @@ func TestCollectModelFiles_IdentityFailureAbortsScan(t *testing.T) {
 
 	if _, err := collectModelFiles(root); err == nil || !strings.Contains(err.Error(), "no file id") {
 		t.Fatalf("expected the scan to fail when identity cannot be pinned, got %v", err)
+	}
+}
+
+// swapDirForOutsideLink replaces dir with a symlink to a fresh directory that
+// holds a same-named file with secret content, and returns the outside file.
+func swapDirForOutsideLink(t *testing.T, dir, name string) string {
+	t.Helper()
+	outsideDir := t.TempDir()
+	outside := filepath.Join(outsideDir, name)
+	writeTestFile(t, outside, "secret")
+	if err := os.Rename(dir, dir+".orig"); err != nil {
+		t.Fatal(err)
+	}
+	symlinkOrSkip(t, outsideDir, dir)
+	return outside
+}
+
+// an ancestor directory swapped for a symlink to an outside directory after the
+// walk read the entry but before it is statted must not pin the outside file.
+func TestCollectModelFiles_AncestorSwappedDuringScanRefused(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "sub", "model.bin"), "original")
+	// resolve like the scan does so the hook compares against the walked path
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(resolvedRoot, "sub")
+
+	orig := afterScanEntryHook
+	t.Cleanup(func() { afterScanEntryHook = orig })
+	swapped := false
+	afterScanEntryHook = func(path string) {
+		if swapped || path != filepath.Join(sub, "model.bin") {
+			return
+		}
+		swapped = true
+		swapDirForOutsideLink(t, sub, "model.bin")
+	}
+
+	files, err := collectModelFiles(root)
+	if !swapped {
+		t.Fatal("hook did not run")
+	}
+	if err == nil {
+		t.Fatalf("expected the swapped ancestor to be refused, collected %+v", files)
+	}
+	if len(files) != 0 {
+		t.Fatalf("nothing may be collected, got %+v", files)
+	}
+}
+
+// the same swap after a successful scan, before the upload opens the file: the
+// outside file must not be uploaded.
+func TestUpload_AncestorSwappedAfterScanNotUploaded(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "sub", "model.bin"), "original")
+
+	files, err := collectModelFiles(root)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("collect: %v %+v", err, files)
+	}
+	file := files[0]
+	swapDirForOutsideLink(t, filepath.Dir(file.AbsolutePath), "model.bin")
+
+	server, hits := newUnreachableUploadServer(t)
+	err = completeModelUploadFile(t.Context(), uploadFor(server.URL), file.uploadPath(), file.info, nil)
+	if err == nil {
+		t.Fatal("expected the file beneath a swapped ancestor to be refused")
+	}
+	if hits() != 0 {
+		t.Fatalf("nothing may be sent, server saw %d request(s)", hits())
+	}
+}
+
+// openScannedModelFile must refuse an ancestor swapped for a symlink to an
+// outside directory even when the outside file has the scanned content (and
+// would therefore pass a content check), and must not hand back its descriptor.
+func TestOpenScannedModelFile_AncestorSymlinkEscapeRefused(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "sub", "model.bin"), "secret")
+	files, err := collectModelFiles(root)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("collect: %v %+v", err, files)
+	}
+	file := files[0]
+	swapDirForOutsideLink(t, filepath.Dir(file.AbsolutePath), "model.bin")
+
+	f, _, err := openScannedModelFile(file.uploadPath(), file.info)
+	if err == nil {
+		_ = f.Close()
+		t.Fatal("the open escaped the model directory")
+	}
+}
+
+// replacing the model directory itself after the scan is refused too.
+func TestOpenScannedModelFile_RootReplacedAfterScanRefused(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "model")
+	writeTestFile(t, filepath.Join(root, "model.bin"), "original")
+	files, err := collectModelFiles(root)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("collect: %v %+v", err, files)
+	}
+	file := files[0]
+	if err := os.Rename(root, root+".orig"); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(root, "model.bin"), "original")
+
+	f, _, err := openScannedModelFile(file.uploadPath(), file.info)
+	if err == nil {
+		_ = f.Close()
+		t.Fatal("expected a replaced model directory to be refused")
 	}
 }
