@@ -864,6 +864,11 @@ func modelUploadRequestedBytes(modelFiles []modelFile) (bytes int64, ok bool) {
 // were part of this run's verified upload, never a directory-wide wipe.
 func deleteVerifiedModelFiles(files []modelFile) (deletedCount int, deletedBytes int64, removedSymlinks int, err error) {
 	var failures []string
+	// regular entries deleted in this run, and the resolved targets of removed
+	// links: an in-root link's target is itself a collected entry and is deleted
+	// too, so "targets kept" only holds for links whose target survived.
+	deleted := make(map[string]bool)
+	var removedLinkTargets []string
 
 	for _, file := range files {
 		if removeErr := removeModelFile(file.AbsolutePath); removeErr != nil {
@@ -874,8 +879,10 @@ func deleteVerifiedModelFiles(files []modelFile) (deletedCount int, deletedBytes
 		// no bytes: count it separately instead of adding the target's size.
 		if file.isSymlink() {
 			removedSymlinks++
+			removedLinkTargets = append(removedLinkTargets, file.ResolvedPath)
 			continue
 		}
+		deleted[file.AbsolutePath] = true
 		deletedCount++
 		deletedBytes += file.Size
 	}
@@ -883,7 +890,19 @@ func deleteVerifiedModelFiles(files []modelFile) (deletedCount int, deletedBytes
 	if deletedCount > 0 || removedSymlinks > 0 {
 		msg := fmt.Sprintf("deleted %d verified model file(s) (%d bytes) from %s", deletedCount, deletedBytes, addModelDirectoryPath)
 		if removedSymlinks > 0 {
-			msg += fmt.Sprintf(" and removed %d symlink(s) (targets kept)", removedSymlinks)
+			msg += fmt.Sprintf(" and removed %d symlink(s)", removedSymlinks)
+			kept := 0
+			for _, target := range removedLinkTargets {
+				if !deleted[target] {
+					kept++
+				}
+			}
+			switch {
+			case kept == removedSymlinks:
+				msg += " (targets kept)"
+			case kept > 0:
+				msg += fmt.Sprintf(" (%d target(s) kept)", kept)
+			}
 		}
 		fmt.Fprintln(os.Stderr, msg)
 	}

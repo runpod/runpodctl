@@ -330,3 +330,72 @@ func TestDeleteVerifiedModelFilesCountsSymlinksSeparately(t *testing.T) {
 		t.Fatalf("stderr should report files and symlinks separately, got %q", stderr)
 	}
 }
+
+// an in-root link's target is itself a collected entry and is deleted by the
+// same run, so the summary must not claim the target was kept.
+func TestDeleteVerifiedModelFilesDoesNotClaimDeletedInternalTargetKept(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "real", "weights.bin"), "weights")
+	symlinkOrSkip(t, filepath.Join("real", "weights.bin"), filepath.Join(root, "alias.bin"))
+
+	files, err := collectModelFiles(root)
+	if err != nil || len(files) != 2 {
+		t.Fatalf("collect: %v %+v", err, files)
+	}
+
+	oldDir := addModelDirectoryPath
+	addModelDirectoryPath = root
+	t.Cleanup(func() { addModelDirectoryPath = oldDir })
+
+	var removedLinks int
+	_, stderr := captureStdStreams(t, func() {
+		var delErr error
+		_, _, removedLinks, delErr = deleteVerifiedModelFiles(files)
+		if delErr != nil {
+			t.Fatalf("delete: %v", delErr)
+		}
+	})
+
+	if _, statErr := os.Lstat(filepath.Join(root, "real", "weights.bin")); !os.IsNotExist(statErr) {
+		t.Fatalf("the in-root target is a collected entry and should be deleted, lstat err: %v", statErr)
+	}
+	if removedLinks != 1 {
+		t.Fatalf("expected 1 symlink removed, got %d", removedLinks)
+	}
+	if strings.Contains(stderr, "targets kept") || strings.Contains(stderr, "target(s) kept") {
+		t.Fatalf("stderr must not claim a deleted target was kept, got %q", stderr)
+	}
+	if !strings.Contains(stderr, "removed 1 symlink(s)") {
+		t.Fatalf("stderr should still report the removed link, got %q", stderr)
+	}
+}
+
+// with one HF-style link into blobs/ (kept) and one in-root link whose target is
+// deleted, only the surviving target is reported.
+func TestDeleteVerifiedModelFilesCountsOnlySurvivingTargetsAsKept(t *testing.T) {
+	cache := t.TempDir()
+	repo := filepath.Join(cache, "models--owner--name")
+	writeTestFile(t, filepath.Join(repo, "blobs", "sha"), "blob")
+	snapshot := filepath.Join(repo, "snapshots", "rev")
+	writeTestFile(t, filepath.Join(snapshot, "real.bin"), "real")
+	symlinkOrSkip(t, filepath.Join("..", "..", "blobs", "sha"), filepath.Join(snapshot, "hf.bin"))
+	symlinkOrSkip(t, "real.bin", filepath.Join(snapshot, "internal.bin"))
+
+	files, err := collectModelFiles(snapshot)
+	if err != nil || len(files) != 3 {
+		t.Fatalf("collect: %v %+v", err, files)
+	}
+
+	oldDir := addModelDirectoryPath
+	addModelDirectoryPath = snapshot
+	t.Cleanup(func() { addModelDirectoryPath = oldDir })
+
+	_, stderr := captureStdStreams(t, func() {
+		if _, _, _, delErr := deleteVerifiedModelFiles(files); delErr != nil {
+			t.Fatalf("delete: %v", delErr)
+		}
+	})
+	if !strings.Contains(stderr, "removed 2 symlink(s) (1 target(s) kept)") {
+		t.Fatalf("expected only the surviving blob target to be reported kept, got %q", stderr)
+	}
+}
