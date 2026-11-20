@@ -162,7 +162,7 @@ func TestErrorSanitizesURLErrorBehindWrappers(t *testing.T) {
 				t.Fatal("errors.Is on the cause must keep working")
 			}
 			var u *url.Error
-			if !errors.As(got, &u) || u.URL != "https://bucket.s3.us-east-1.amazonaws.com/models/key.bin" { //nolint:modernize // errors.As, not AsType: nix errcheck flags AsType
+			if !errors.As(got, &u) || u.URL != "https://bucket.s3.us-east-1.amazonaws.com/models/key.bin" {
 				t.Fatalf("errors.As should return the sanitized url.Error, got %+v", u)
 			}
 		})
@@ -178,7 +178,7 @@ func TestErrorSanitizesURLErrorBehindWrappers(t *testing.T) {
 	t.Run("chain without a url.Error is kept as is", func(t *testing.T) {
 		in := fmt.Errorf("wrap: %w", other)
 		got := Error(in)
-		if errors.Unwrap(got) != in {
+		if !errors.Is(errors.Unwrap(got), in) {
 			t.Fatal("a chain with no url.Error should not be rebuilt")
 		}
 	})

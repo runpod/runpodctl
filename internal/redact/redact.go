@@ -96,7 +96,7 @@ func Error(err error) error {
 	if _, ok := err.(*redactedError); ok { //nolint:errorlint // only an already-redacted outermost error is reused
 		return err
 	}
-	clean, _ := sanitizeChain(err)
+	_, clean := sanitizeChain(err)
 	return &redactedError{msg: errorText(err), err: clean}
 }
 
@@ -134,35 +134,35 @@ func walkChain(err error, fn func(error)) {
 // sanitizeChain returns err with every *url.Error in its chain replaced by a
 // copy whose URL is redacted; changed is false (and err is returned as is) when
 // the chain holds none.
-func sanitizeChain(err error) (clean error, changed bool) {
+func sanitizeChain(err error) (changed bool, clean error) {
 	switch e := err.(type) { //nolint:errorlint // walking the chain by hand
 	case nil:
-		return nil, false
+		return false, nil
 	case *url.Error:
 		// Error(e.Err) also redacts the cause's own message, which can quote a URL.
-		return &url.Error{Op: e.Op, URL: URL(e.URL), Err: Error(e.Err)}, true
+		return true, &url.Error{Op: e.Op, URL: URL(e.URL), Err: Error(e.Err)}
 	case interface{ Unwrap() error }:
 		inner := e.Unwrap()
-		cleanInner, ch := sanitizeChain(inner)
+		ch, cleanInner := sanitizeChain(inner)
 		if !ch {
-			return err, false
+			return false, err
 		}
-		return &wrapError{msg: errorText(err), err: cleanInner}, true
+		return true, &wrapError{msg: errorText(err), err: cleanInner}
 	case interface{ Unwrap() []error }:
 		children := e.Unwrap()
 		cleaned := make([]error, len(children))
 		found := false
 		for i, c := range children {
 			var ch bool
-			cleaned[i], ch = sanitizeChain(c)
+			ch, cleaned[i] = sanitizeChain(c)
 			found = found || ch
 		}
 		if !found {
-			return err, false
+			return false, err
 		}
-		return &joinError{msg: errorText(err), errs: cleaned}, true
+		return true, &joinError{msg: errorText(err), errs: cleaned}
 	}
-	return err, false
+	return false, err
 }
 
 type redactedError struct {
