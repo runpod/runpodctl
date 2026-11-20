@@ -755,7 +755,7 @@ func collectModelFilesWithOptions(dir string, includeHidden bool) (files []model
 
 		// the entry name alone is not enough: a benign-looking link to .env or
 		// into .git would otherwise upload the excluded file under its alias.
-		if !includeHidden && resolved != path && resolvesToSensitiveEntry(roots, resolved, info.IsDir()) {
+		if !includeHidden && resolved != path && resolvesToSensitiveEntry(roots.dirs, resolved, info.IsDir()) {
 			skipped++
 			return nil
 		}
