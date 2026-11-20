@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -290,5 +291,40 @@ func TestDefaultListDependentEndpointsBoundsErrorBody(t *testing.T) {
 	}
 	if len(err.Error()) > internalapi.ErrorBodyExcerptBytes+256 || !strings.Contains(err.Error(), "truncated") {
 		t.Fatalf("expected a bounded error with a truncation marker, got %d bytes", len(err.Error()))
+	}
+}
+
+// TestDefaultListDependentEndpointsBoundsAndRedactsGraphQLErrorMessage pins that
+// a top-level graphql error message from the dependent-endpoint lookup is
+// bounded and redacted: it reaches stderr through checkDependentEndpoints.
+func TestDefaultListDependentEndpointsBoundsAndRedactsGraphQLErrorMessage(t *testing.T) {
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+	const signature = "deadbeefcafe0123456789"
+	msg := "lookup failed https://bucket.s3.amazonaws.com/key?X-Amz-Credential=AKIAEXAMPLE&X-Amz-Signature=" + signature + " " + strings.Repeat("m", 3<<20)
+	payload, marshalErr := json.Marshal(map[string]any{"errors": []map[string]any{{"message": msg}}})
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if _, err := w.Write(payload); err != nil {
+			return
+		}
+	}))
+	defer server.Close()
+	t.Setenv("RUNPOD_GRAPHQL_URL", server.URL)
+
+	_, err := defaultListDependentEndpoints("owner", "name", "hash")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	var coder interface{ ErrorCode() string }
+	if !errors.As(err, &coder) || coder.ErrorCode() != "graphql_error" {
+		t.Fatalf("expected a graphql_error, got %#v", err)
+	}
+	if len(err.Error()) > internalapi.ErrorBodyExcerptBytes+256 || !strings.Contains(err.Error(), "truncated") {
+		t.Fatalf("expected a bounded message with a truncation marker, got %d bytes", len(err.Error()))
+	}
+	if strings.Contains(err.Error(), signature) {
+		t.Fatalf("message leaks the presigned signature: %.200q", err.Error())
 	}
 }

@@ -122,7 +122,7 @@ func defaultListDependentEndpoints(owner, name, hash string) ([]DependentEndpoin
 		// Same graphql top-level error shape as api/model.go; wrap as a typed
 		// GraphQLError so it keeps the "graphql_error" code through
 		// checkDependentEndpoints' %w wrap.
-		return nil, &internalapi.GraphQLError{Message: data.Errors[0].Message}
+		return nil, &internalapi.GraphQLError{Message: internalapi.ErrorMessageExcerpt(data.Errors[0].Message)}
 	}
 	if data.Data == nil || data.Data.Myself == nil {
 		return nil, fmt.Errorf("data is nil: %s", internalapi.ErrorBodyExcerpt(rawData))
