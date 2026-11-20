@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -97,7 +98,7 @@ func TestErrorBodyExcerpt(t *testing.T) {
 	)
 	padding := errorBodyExcerptBytes - len(straddlePrefix) - len(straddleValue)/2
 	straddle := []byte(strings.Repeat("a", padding) + straddlePrefix + straddleValue + strings.Repeat("b", 100))
-	valueStart := strings.Index(string(straddle), straddleValue)
+	valueStart := bytes.Index(straddle, []byte(straddleValue))
 	if valueStart >= errorBodyExcerptBytes || valueStart+len(straddleValue) <= errorBodyExcerptBytes {
 		t.Fatalf("test premise: the signature value [%d,%d) must cross the cut at %d", valueStart, valueStart+len(straddleValue), errorBodyExcerptBytes)
 	}
