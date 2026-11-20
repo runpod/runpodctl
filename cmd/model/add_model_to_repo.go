@@ -1596,6 +1596,11 @@ func sleepCtx(ctx context.Context, d time.Duration) {
 // id and string-to-sign), so the raw body is never returned: an S3-style error
 // is reduced to its <Code> and <Message>, anything else to a bounded excerpt,
 // and both go through redact.Text.
+//
+// The read limit cuts the body before any redaction, so a configured key can
+// reach redact.Text half-written at the end of the text; redact.Text masks such
+// a trailing prefix of the key, which keeps it from surviving the later excerpt
+// bound when a shortened URL pulls it into range.
 func modelUploadErrorSnippet(body io.Reader) string {
 	snippet, err := io.ReadAll(io.LimitReader(body, modelUploadErrorBodyLimit))
 	text := summarizeStorageError(string(snippet))

@@ -148,10 +148,11 @@ type wrapped struct{ msg string }
 
 func (e *wrapped) Error() string { return e.msg }
 
-// TestTextTokensStraddlingACut pins that a token is masked before any later cut
-// at a fixed byte offset, so a cut inside the original token cannot leave a
-// prefix of it behind. The padding is computed from the lengths so the cut
-// (byte 4096 of the raw text) falls in the middle of each token.
+// TestTextTokensStraddlingACut pins the production order: the body is cut at a
+// fixed byte offset first (the error-body read limit) and only then redacted, so
+// the text that reaches Text ends with a half-written token. No fragment of the
+// token may survive. The padding is computed from the lengths so the cut (byte
+// 4096 of the raw text) falls in the middle of each token.
 func TestTextTokensStraddlingACut(t *testing.T) {
 	const cut = 4096
 	isolateAPIKey(t, fakeConfigured)
@@ -167,18 +168,34 @@ func TestTextTokensStraddlingACut(t *testing.T) {
 			if start >= cut || start+len(tc.token) <= cut {
 				t.Fatalf("test premise: token [%d,%d) must cross the cut at %d", start, start+len(tc.token), cut)
 			}
-			got := Text(raw)
-			if len(got) > cut {
-				got = got[:cut]
-			}
-			for _, fragment := range []string{tc.token[:6], tc.token[len(tc.token)-6:], tc.token[:len(tc.token)/2]} {
-				if strings.Contains(got, fragment) {
-					t.Errorf("cut text leaks token fragment %q: %q", fragment, got[len(got)-60:])
+			got := Text(raw[:cut])
+			for n := minKeyPrefixMaskLen; n < len(tc.token); n++ {
+				if strings.Contains(got, tc.token[:n]) && tc.token[:n] != "rpa_" {
+					t.Errorf("cut text leaks token prefix %q: %q", tc.token[:n], got[len(got)-60:])
 				}
 			}
-			if strings.Count(Text(raw), "REDACTED") != 1 {
-				t.Errorf("expected exactly one mask in the output")
+			if strings.Count(got, "REDACTED") != 1 {
+				t.Errorf("expected exactly one mask in the output: %q", got[len(got)-60:])
 			}
 		})
+	}
+}
+
+// TestTextMasksTrailingConfiguredKeyPrefix covers every length of a cut-off
+// configured key at the end of the text, and leaves shorter fragments alone.
+func TestTextMasksTrailingConfiguredKeyPrefix(t *testing.T) {
+	isolateAPIKey(t, fakeConfigured)
+	for n := minKeyPrefixMaskLen; n < len(fakeConfigured); n++ {
+		got := Text("key=" + fakeConfigured[:n])
+		if got != "key=[REDACTED]" {
+			t.Errorf("prefix of %d bytes: got %q", n, got)
+		}
+	}
+	short := fakeConfigured[:minKeyPrefixMaskLen-1]
+	if got := Text("key=" + short); got != "key="+short {
+		t.Errorf("fragment below the minimum was altered: %q", got)
+	}
+	if got := Text(fakeConfigured[:8] + " is not at the end"); got != fakeConfigured[:8]+" is not at the end" {
+		t.Errorf("mid-text fragment was altered: %q", got)
 	}
 }

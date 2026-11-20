@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/runpod/runpodctl/api"
+	"github.com/runpod/runpodctl/internal/configenv"
+	"github.com/spf13/viper"
 )
 
 const testPresignedQuery = "?partNumber=1&uploadId=U1&X-Amz-Algorithm=AWS4-HMAC-SHA256" +
@@ -180,4 +183,50 @@ func TestModelUploadErrorSnippet(t *testing.T) {
 			t.Fatalf("excerpt not bounded: %d runes", len([]rune(got)))
 		}
 	})
+}
+
+// TestModelUploadErrorSnippetKeyStraddlingTheReadLimit drives the production
+// path: the body is cut at modelUploadErrorBodyLimit bytes before any redaction,
+// so a configured key (one without an rpa_ prefix) that straddles the limit
+// reaches redaction as a bare prefix. No prefix of it may survive, including
+// when an earlier long URL shrinks during redaction and pulls that prefix inside
+// the excerpt bound.
+func TestModelUploadErrorSnippetKeyStraddlingTheReadLimit(t *testing.T) {
+	const key = "cfgkey-0123456789-abcdef-ZZ"
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	t.Setenv(configenv.APIKeyEnv, key)
+
+	// the padding before the key is either plain filler or one long url whose
+	// query redaction drops, shrinking the text so the cut-off key prefix moves
+	// inside the 256-rune excerpt.
+	longURL := func(n int) string {
+		const base = "see https://h.example/k?"
+		return base + strings.Repeat("q", n-len(base)-1) + " "
+	}
+	plain := func(n int) string { return strings.Repeat("x", n) }
+	cases := map[string]func(n int) string{
+		"plain filler": plain,
+		"long url":     longURL,
+	}
+	for name, pad := range cases {
+		for _, inside := range []int{1, 5, len(key) / 2, len(key) - 1} {
+			t.Run(fmt.Sprintf("%s/%d bytes before the limit", name, inside), func(t *testing.T) {
+				// place the key so exactly `inside` of its bytes fall before the limit.
+				body := pad(modelUploadErrorBodyLimit-inside) + key + " and more"
+				if idx := strings.Index(body, key); idx+inside != modelUploadErrorBodyLimit {
+					t.Fatalf("test premise: key at %d, want %d bytes before the limit", idx, inside)
+				}
+				got := modelUploadErrorSnippet(strings.NewReader(body))
+				for n := 4; n < len(key); n++ {
+					if strings.Contains(got, key[:n]) {
+						t.Fatalf("output keeps the key prefix %q: %q", key[:n], got)
+					}
+				}
+				if name == "long url" && !strings.HasPrefix(got, "see https://h.example/k ") {
+					t.Fatalf("premise: the long url should have been shortened, got %q", got)
+				}
+			})
+		}
+	}
 }
