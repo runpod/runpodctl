@@ -149,7 +149,7 @@ func sanitizeChain(err error) (changed bool, clean error) {
 		if !ch {
 			return false, err
 		}
-		return true, &wrapError{msg: errorText(err), err: cleanInner}
+		return true, &redactedError{msg: errorText(err), err: cleanInner}
 	case interface{ Unwrap() []error }:
 		children := e.Unwrap()
 		cleaned := make([]error, len(children))
@@ -167,6 +167,8 @@ func sanitizeChain(err error) (changed bool, clean error) {
 	return false, err
 }
 
+// redactedError carries an already-redacted message and the (sanitized) cause. It
+// also stands in for a single-cause wrapper above a sanitized *url.Error.
 type redactedError struct {
 	msg string
 	err error
@@ -174,15 +176,6 @@ type redactedError struct {
 
 func (e *redactedError) Error() string { return e.msg }
 func (e *redactedError) Unwrap() error { return e.err }
-
-// wrapError stands in for a single-cause wrapper above a sanitized *url.Error.
-type wrapError struct {
-	msg string
-	err error
-}
-
-func (e *wrapError) Error() string { return e.msg }
-func (e *wrapError) Unwrap() error { return e.err }
 
 // joinError stands in for a multi-cause wrapper above a sanitized *url.Error.
 type joinError struct {
