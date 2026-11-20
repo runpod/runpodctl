@@ -9,6 +9,8 @@
 package redact
 
 import (
+	"errors"
+	"net"
 	"net/url"
 	"regexp"
 	"strings"
@@ -109,7 +111,7 @@ func Error(err error) error {
 		return err
 	}
 	_, clean := sanitizeChain(err)
-	return &redactedError{msg: errorText(err), err: clean}
+	return wrapCause(errorText(err), clean)
 }
 
 // errorText renders err with the URL of every *url.Error in its chain reduced
@@ -159,7 +161,7 @@ func sanitizeChain(err error) (changed bool, clean error) {
 		if !ch {
 			return false, err
 		}
-		return true, &redactedError{msg: errorText(err), err: cleanInner}
+		return true, wrapCause(errorText(err), cleanInner)
 	case interface{ Unwrap() []error }:
 		children := e.Unwrap()
 		cleaned := make([]error, len(children))
@@ -172,7 +174,7 @@ func sanitizeChain(err error) (changed bool, clean error) {
 		if !found {
 			return false, err
 		}
-		return true, &joinError{msg: errorText(err), errs: cleaned}
+		return true, wrapCauses(errorText(err), cleaned)
 	}
 	return false, err
 }
@@ -195,3 +197,66 @@ type joinError struct {
 
 func (e *joinError) Error() string   { return e.msg }
 func (e *joinError) Unwrap() []error { return e.errs }
+
+// A *url.Error answers Timeout and Temporary by asking its Err, and callers
+// (retry logic, errors.As to net.Error) rely on both, so a wrapper that sits in
+// a chain holding such an error has to keep answering them. A wrapper that does
+// not sit above one must not gain the methods: it would then satisfy net.Error
+// and look like a network failure to errors.As.
+
+// timeoutError is a redactedError above a cause that reports Timeout/Temporary.
+type timeoutError struct{ redactedError }
+
+func (e *timeoutError) Timeout() bool   { return timeoutOf(e.err) }
+func (e *timeoutError) Temporary() bool { return temporaryOf(e.err) }
+
+// joinTimeoutError is a joinError above causes that report Timeout/Temporary.
+type joinTimeoutError struct{ joinError }
+
+func (e *joinTimeoutError) Timeout() bool   { return timeoutOf(errors.Join(e.errs...)) }
+func (e *joinTimeoutError) Temporary() bool { return temporaryOf(errors.Join(e.errs...)) }
+
+// wrapCause returns a wrapper carrying msg over cause, which answers
+// Timeout/Temporary like cause does when something in cause's chain does.
+func wrapCause(msg string, cause error) error {
+	if hasNetMethods(cause) {
+		return &timeoutError{redactedError{msg: msg, err: cause}}
+	}
+	return &redactedError{msg: msg, err: cause}
+}
+
+// wrapCauses is wrapCause for a multi-cause wrapper.
+func wrapCauses(msg string, causes []error) error {
+	if hasNetMethods(errors.Join(causes...)) {
+		return &joinTimeoutError{joinError{msg: msg, errs: causes}}
+	}
+	return &joinError{msg: msg, errs: causes}
+}
+
+type (
+	timeouter  interface{ Timeout() bool }
+	temporizer interface{ Temporary() bool }
+)
+
+func hasNetMethods(err error) bool {
+	var to timeouter
+	var tmp temporizer
+	return errors.As(err, &to) || errors.As(err, &tmp)
+}
+
+// timeoutOf reports Timeout() of the first error in err's chain that has it.
+func timeoutOf(err error) bool {
+	var to timeouter
+	return errors.As(err, &to) && to.Timeout()
+}
+
+// temporaryOf reports Temporary() of the first error in err's chain that has it.
+func temporaryOf(err error) bool {
+	var tmp temporizer
+	return errors.As(err, &tmp) && tmp.Temporary() //nolint:staticcheck // Temporary is deprecated, but callers still ask for it and the wrapper must answer like the original
+}
+
+var (
+	_ net.Error = (*timeoutError)(nil)
+	_ net.Error = (*joinTimeoutError)(nil)
+)

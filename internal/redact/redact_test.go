@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 const presigned = "https://bucket.s3.us-east-1.amazonaws.com/models/key.bin?partNumber=1&uploadId=U1" +
@@ -266,5 +270,133 @@ func TestErrorNilAndIdempotent(t *testing.T) {
 	once := Error(errors.New("x " + presigned))
 	if !errors.Is(Error(once), once) || Error(once).Error() != once.Error() {
 		t.Fatal("redacting twice should be a no-op")
+	}
+}
+
+// timeoutNetError is a net.Error whose Timeout and Temporary answers are set by
+// the test.
+type timeoutNetError struct{ timeout, temporary bool }
+
+func (e *timeoutNetError) Error() string   { return "i/o timeout" }
+func (e *timeoutNetError) Timeout() bool   { return e.timeout }
+func (e *timeoutNetError) Temporary() bool { return e.temporary }
+
+// Sanitizing must not change how a failure classifies: a timeout stays a
+// timeout (errors.As to net.Error, Timeout(), Temporary(), errors.Is on the
+// deadline sentinels) while the URL is scrubbed.
+func TestErrorKeepsTimeoutClassification(t *testing.T) {
+	const rawURL = "https://user:pw@host.test/x?X-Amz-Signature=deadbeef"
+	scrubbed := []string{"pw", "deadbeef", "user:", "X-Amz-Signature"}
+
+	wrapped := func(cause error) error {
+		return &url.Error{Op: "Get", URL: rawURL, Err: cause}
+	}
+	cases := []struct {
+		name      string
+		err       error
+		timeout   bool
+		temporary bool
+	}{
+		{"net timeout", wrapped(&timeoutNetError{timeout: true}), true, false},
+		{"net temporary", wrapped(&timeoutNetError{temporary: true}), false, true},
+		{"net timeout and temporary", wrapped(&timeoutNetError{timeout: true, temporary: true}), true, true},
+		{"net non-timeout", wrapped(&timeoutNetError{}), false, false},
+		{"context deadline", wrapped(context.DeadlineExceeded), true, true},
+		{"os deadline", wrapped(os.ErrDeadlineExceeded), true, true},
+		{"op error timeout", wrapped(&net.OpError{Op: "dial", Net: "tcp", Err: &timeoutNetError{timeout: true}}), true, false},
+		{"plain refusal", wrapped(errors.New("connection refused")), false, false},
+		{"behind fmt.Errorf", fmt.Errorf("request failed: %w", wrapped(&timeoutNetError{timeout: true})), true, false},
+		{"behind errors.Join", errors.Join(errors.New("other"), fmt.Errorf("x: %w", wrapped(context.DeadlineExceeded))), true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Error(tc.err)
+
+			for _, secret := range scrubbed {
+				if strings.Contains(got.Error(), secret) {
+					t.Errorf("Error() contains %q: %s", secret, got)
+				}
+			}
+			var ue *url.Error
+			if !errors.As(got, &ue) { //nolint:modernize // errors.As, not AsType: nix errcheck flags AsType
+				t.Fatal("no *url.Error in chain")
+			}
+			for _, secret := range scrubbed {
+				if strings.Contains(ue.URL, secret) {
+					t.Errorf("url.Error.URL contains %q: %s", secret, ue.URL)
+				}
+			}
+			if ue.Timeout() != tc.timeout || ue.Temporary() != tc.temporary { //nolint:staticcheck // Temporary is deprecated, but callers still ask for it
+				t.Errorf("url.Error Timeout/Temporary = %v/%v, want %v/%v", ue.Timeout(), ue.Temporary(), tc.timeout, tc.temporary) //nolint:staticcheck // see above
+			}
+
+			var netErr net.Error
+			if !errors.As(got, &netErr) { //nolint:modernize // errors.As, not AsType: nix errcheck flags AsType
+				t.Fatal("errors.As to net.Error failed")
+			}
+			if netErr.Timeout() != tc.timeout || netErr.Temporary() != tc.temporary { //nolint:staticcheck // see above
+				t.Errorf("net.Error Timeout/Temporary = %v/%v, want %v/%v", netErr.Timeout(), netErr.Temporary(), tc.timeout, tc.temporary) //nolint:staticcheck // see above
+			}
+			// the sentinels answer exactly as they did before sanitizing.
+			for _, sentinel := range []error{context.DeadlineExceeded, os.ErrDeadlineExceeded} {
+				if errors.Is(got, sentinel) != errors.Is(tc.err, sentinel) {
+					t.Errorf("errors.Is(%v) = %v, want %v", sentinel, errors.Is(got, sentinel), errors.Is(tc.err, sentinel))
+				}
+			}
+			// idempotent: redacting a redacted error keeps the classification.
+			again := Error(got)
+			if !errors.As(again, &netErr) || netErr.Timeout() != tc.timeout { //nolint:modernize // errors.As, not AsType: nix errcheck flags AsType
+				t.Errorf("classification lost on second Error()")
+			}
+		})
+	}
+}
+
+// An error chain with nothing network-shaped in it must not start to look like
+// a net.Error after sanitizing.
+func TestErrorWrapperIsNotANetErrorWithoutOne(t *testing.T) {
+	wrapped := fmt.Errorf("custom: %w", &customWrapError{err: &url.Error{Op: "Get", URL: "https://u:pw@h/x", Err: errors.New("boom")}})
+	got := Error(errors.New("plain, no url"))
+	var netErr net.Error
+	if errors.As(got, &netErr) { //nolint:modernize // errors.As, not AsType: nix errcheck flags AsType
+		t.Errorf("plain error became a net.Error: %v", netErr)
+	}
+	// a url.Error is a net.Error already; its answer must stay "not a timeout".
+	if errors.As(Error(wrapped), &netErr) && netErr.Timeout() {
+		t.Error("non-timeout url.Error reports Timeout()")
+	}
+}
+
+// A real client timeout, as net/http produces it, still classifies as a timeout
+// after the request URL has been scrubbed.
+func TestErrorKeepsRealClientTimeout(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
+	t.Cleanup(func() { close(release); srv.Close() })
+
+	target := strings.Replace(srv.URL, "http://", "http://user:pw@", 1) + "/x?token=abc&X-Amz-Signature=deadbeef"
+	_, err := (&http.Client{Timeout: 50 * time.Millisecond}).Get(target) //nolint:noctx,bodyclose // the request fails by design
+	if err == nil {
+		t.Fatal("expected a timeout")
+	}
+	got := Error(fmt.Errorf("request failed: %w", err))
+
+	var netErr net.Error
+	if !errors.As(got, &netErr) || !netErr.Timeout() { //nolint:modernize // errors.As, not AsType: nix errcheck flags AsType
+		t.Fatalf("timeout classification lost: %v", got)
+	}
+	var ue *url.Error
+	if !errors.As(got, &ue) || !ue.Timeout() { //nolint:modernize // errors.As, not AsType: nix errcheck flags AsType
+		t.Fatalf("url.Error no longer reports Timeout(): %v", got)
+	}
+	if !errors.Is(got, context.DeadlineExceeded) {
+		t.Errorf("errors.Is(DeadlineExceeded) lost: %v", got)
+	}
+	for _, text := range []string{got.Error(), ue.URL} {
+		for _, secret := range []string{"pw", "abc", "deadbeef", "user"} {
+			if strings.Contains(text, secret) {
+				t.Errorf("contains %q: %s", secret, text)
+			}
+		}
 	}
 }
