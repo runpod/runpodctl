@@ -61,13 +61,15 @@ func stripURLText(s string) string {
 	return s
 }
 
-// Text redacts the secrets in free-form text: every http(s) URL is reduced to
+// Text redacts the secrets in free-form text: bearer tokens, rpa_ API keys and
+// the configured API key are masked, every http(s) URL is reduced to
 // scheme://host/path, and any leftover signing parameter keeps its name but
 // loses its value.
 func Text(s string) string {
 	if s == "" {
 		return s
 	}
+	s = maskTokens(s)
 	s = urlPattern.ReplaceAllStringFunc(s, func(m string) string {
 		// keep a trailing JSON escape ("\") that is not part of the URL.
 		suffix := ""
