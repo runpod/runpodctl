@@ -717,7 +717,7 @@ func collectModelFilesWithOptions(dir string, includeHidden bool) (files []model
 	// delete re-checks it before removing anything.
 	deleteRootInfo, err := os.Lstat(root)
 	if err != nil {
-		return nil, fmt.Errorf("stat model directory: %w", err)
+		return nil, 0, fmt.Errorf("stat model directory: %w", err)
 	}
 
 	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
