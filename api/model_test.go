@@ -594,3 +594,106 @@ func TestGetModelRepoStorageUsageSurfacesGraphQLErrors(t *testing.T) {
 		t.Fatalf("expected error to surface, got %v", err)
 	}
 }
+
+// the batch response carries presigned part URLs; the error paths that echo it
+// (count mismatch, success=false without a message) must not print their signatures.
+func TestCreateModelRepoUploadBatchErrorEchoRedactsPresignedURLs(t *testing.T) {
+	const signed = "https://bucket.s3.amazonaws.com/key?partNumber=1&X-Amz-Credential=AKIAEXAMPLE&X-Amz-Signature=deadbeef0123456789"
+
+	cases := map[string]map[string]any{
+		"upload count mismatch": {
+			"success": true,
+			"uploads": []any{map[string]any{"parts": []any{map[string]any{"partNumber": 1, "url": signed}}}},
+		},
+		"failure without message": {
+			"success": false,
+			"uploads": []any{map[string]any{"parts": []any{map[string]any{"partNumber": 1, "url": signed}}}},
+		},
+	}
+	for name, batch := range cases {
+		t.Run(name, func(t *testing.T) {
+			viper.Reset()
+			t.Cleanup(viper.Reset)
+			t.Setenv("RUNPOD_API_KEY", "test-key")
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if err := json.NewEncoder(w).Encode(map[string]any{
+					"data": map[string]any{"createModelRepoUploadBatch": batch},
+				}); err != nil {
+					t.Errorf("encode response: %v", err)
+				}
+			}))
+			defer server.Close()
+			t.Setenv("RUNPOD_GRAPHQL_URL", server.URL)
+
+			_, err := CreateModelRepoUploadBatch(&CreateModelRepoUploadBatchInput{
+				Owner: "user-id",
+				Name:  "test-model",
+				Files: []ModelRepoUploadBatchFileInput{{FileName: "a.bin", FileSizeBytes: "1"}, {FileName: "b.bin", FileSizeBytes: "2"}},
+			})
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if strings.Contains(err.Error(), "deadbeef") || strings.Contains(err.Error(), "AKIAEXAMPLE") {
+				t.Fatalf("error leaks the presigned signature: %v", err)
+			}
+			if !strings.Contains(err.Error(), "https://bucket.s3.amazonaws.com/key") {
+				t.Fatalf("host/path should stay for diagnosis: %v", err)
+			}
+		})
+	}
+}
+
+// server-provided messages (top-level GraphQL errors and per-mutation
+// result.message) are echoed verbatim to the user, so a presigned URL inside
+// them must be redacted too.
+func TestCreateModelRepoUploadBatchServerMessagesRedactPresignedURLs(t *testing.T) {
+	const signed = "https://bucket.s3.amazonaws.com/key?X-Amz-Credential=AKIAEXAMPLE&X-Amz-Signature=deadbeef0123456789"
+
+	cases := map[string]map[string]any{
+		"graphql error message": {
+			"errors": []any{map[string]any{"message": "upload to " + signed + " was rejected"}},
+		},
+		"result message": {
+			"data": map[string]any{"createModelRepoUploadBatch": map[string]any{
+				"success": false,
+				"message": "cannot sign " + signed,
+			}},
+		},
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			viper.Reset()
+			t.Cleanup(viper.Reset)
+			t.Setenv("RUNPOD_API_KEY", "test-key")
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if err := json.NewEncoder(w).Encode(body); err != nil {
+					t.Errorf("encode response: %v", err)
+				}
+			}))
+			defer server.Close()
+			t.Setenv("RUNPOD_GRAPHQL_URL", server.URL)
+
+			_, err := CreateModelRepoUploadBatch(&CreateModelRepoUploadBatchInput{
+				Owner: "user-id",
+				Name:  "test-model",
+				Files: []ModelRepoUploadBatchFileInput{{FileName: "a.bin", FileSizeBytes: "1"}},
+			})
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if strings.Contains(err.Error(), "deadbeef") || strings.Contains(err.Error(), "AKIAEXAMPLE") {
+				t.Fatalf("server message leaks the presigned signature: %v", err)
+			}
+			if !strings.Contains(err.Error(), "https://bucket.s3.amazonaws.com/key") {
+				t.Fatalf("host/path should stay for diagnosis: %v", err)
+			}
+		})
+	}
+}
+
+func TestModelRepoGraphQLErrorRedactsMessage(t *testing.T) {
+	err := modelRepoGraphQLError(&GraphQLError{Message: "failed https://h.example/k?X-Amz-Signature=deadbeef0123456789"})
+	if strings.Contains(err.Error(), "deadbeef") {
+		t.Fatalf("leaks signature: %v", err)
+	}
+}

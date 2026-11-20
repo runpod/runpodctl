@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	internalapi "github.com/runpod/runpodctl/internal/api"
+	"github.com/runpod/runpodctl/internal/redact"
 )
 
 // ErrModelRepoNotImplemented is retained for backwards compatibility with callers that
@@ -21,7 +22,7 @@ var ErrModelRepoNotImplemented = errors.New("model repository functionality not 
 // "graphql_error" code and preserving the http status.
 func modelRepoHTTPError(status int, body []byte) error {
 	return &internalapi.GraphQLError{
-		Message: fmt.Sprintf("statuscode %d: %s", status, string(body)),
+		Message: fmt.Sprintf("statuscode %d: %s", status, redact.Text(string(body))),
 		Status:  status,
 	}
 }
@@ -29,9 +30,10 @@ func modelRepoHTTPError(status int, body []byte) error {
 // modelRepoGraphQLError wraps a graphql top-level error (how Model Repo
 // access failures surface: the resolver throws before returning data) as a
 // typed GraphQLError, giving it a stable "graphql_error" code instead of the
-// generic cli_error fallback.
+// generic cli_error fallback. The message is redacted: server errors can echo
+// a presigned URL.
 func modelRepoGraphQLError(gqlErr *GraphQLError) error {
-	return &internalapi.GraphQLError{Message: gqlErr.Message}
+	return &internalapi.GraphQLError{Message: redact.Text(gqlErr.Message)}
 }
 
 // Model represents a model stored in the RunPod model repository.
@@ -441,18 +443,18 @@ func AddModelToRepo(input *AddModelToRepoInput) (*Model, error) {
 		return nil, modelRepoGraphQLError(data.Errors[0])
 	}
 	if data.Data == nil || data.Data.AddModelToRepo == nil {
-		return nil, fmt.Errorf("data is nil: %s", string(rawData))
+		return nil, fmt.Errorf("data is nil: %s", redact.Text(string(rawData)))
 	}
 
 	result := data.Data.AddModelToRepo
 	if !result.Success {
 		if result.Message != "" {
-			return nil, errors.New(result.Message)
+			return nil, errors.New(redact.Text(result.Message))
 		}
-		return nil, fmt.Errorf("model creation failed: %s", string(rawData))
+		return nil, fmt.Errorf("model creation failed: %s", redact.Text(string(rawData)))
 	}
 	if result.Model == nil {
-		return nil, fmt.Errorf("model is nil: %s", string(rawData))
+		return nil, fmt.Errorf("model is nil: %s", redact.Text(string(rawData)))
 	}
 
 	return result.Model, nil
@@ -519,7 +521,7 @@ func GetModels(input *GetModelsInput) ([]*Model, error) {
 		return nil, modelRepoGraphQLError(data.Errors[0])
 	}
 	if data.Data == nil {
-		return nil, fmt.Errorf("data is nil: %s", string(rawData))
+		return nil, fmt.Errorf("data is nil: %s", redact.Text(string(rawData)))
 	}
 
 	models := data.Data.MyModels
@@ -631,7 +633,7 @@ func GetModel(input *GetModelInput) (*Model, error) {
 		return nil, modelRepoGraphQLError(data.Errors[0])
 	}
 	if data.Data == nil || data.Data.MyModel == nil {
-		return nil, fmt.Errorf("data is nil: %s", string(rawData))
+		return nil, fmt.Errorf("data is nil: %s", redact.Text(string(rawData)))
 	}
 
 	return data.Data.MyModel, nil
@@ -719,15 +721,15 @@ func RemoveModel(input *RemoveModelInput) (*ModelRepoMutationResult, error) {
 		return nil, modelRepoGraphQLError(data.Errors[0])
 	}
 	if data.Data == nil || data.Data.RemoveModelFromRepo == nil {
-		return nil, fmt.Errorf("data is nil: %s", string(rawData))
+		return nil, fmt.Errorf("data is nil: %s", redact.Text(string(rawData)))
 	}
 
 	result := data.Data.RemoveModelFromRepo
 	if !result.Success {
 		if result.Message != "" {
-			return nil, errors.New(result.Message)
+			return nil, errors.New(redact.Text(result.Message))
 		}
-		return nil, fmt.Errorf("model removal failed: %s", string(rawData))
+		return nil, fmt.Errorf("model removal failed: %s", redact.Text(string(rawData)))
 	}
 
 	return result, nil
@@ -827,19 +829,19 @@ func CreateModelRepoUpload(input *CreateModelRepoUploadInput) (*ModelRepoMutatio
 		return nil, modelRepoGraphQLError(data.Errors[0])
 	}
 	if data.Data == nil || data.Data.CreateModelRepoUpload == nil {
-		return nil, fmt.Errorf("data is nil: %s", string(rawData))
+		return nil, fmt.Errorf("data is nil: %s", redact.Text(string(rawData)))
 	}
 
 	result := data.Data.CreateModelRepoUpload
 	if !result.Success {
 		if result.Message != "" {
-			return nil, errors.New(result.Message)
+			return nil, errors.New(redact.Text(result.Message))
 		}
-		return nil, fmt.Errorf("createModelRepoUpload failed: %s", string(rawData))
+		return nil, fmt.Errorf("createModelRepoUpload failed: %s", redact.Text(string(rawData)))
 	}
 
 	if result.Upload == nil {
-		return nil, fmt.Errorf("upload is nil: %s", string(rawData))
+		return nil, fmt.Errorf("upload is nil: %s", redact.Text(string(rawData)))
 	}
 
 	return result, nil
@@ -955,19 +957,19 @@ func CreateModelRepoUploadBatch(input *CreateModelRepoUploadBatchInput) (*ModelR
 		return nil, modelRepoGraphQLError(data.Errors[0])
 	}
 	if data.Data == nil || data.Data.CreateModelRepoUploadBatch == nil {
-		return nil, fmt.Errorf("data is nil: %s", string(rawData))
+		return nil, fmt.Errorf("data is nil: %s", redact.Text(string(rawData)))
 	}
 
 	result := data.Data.CreateModelRepoUploadBatch
 	if !result.Success {
 		if result.Message != "" {
-			return nil, errors.New(result.Message)
+			return nil, errors.New(redact.Text(result.Message))
 		}
-		return nil, fmt.Errorf("createModelRepoUploadBatch failed: %s", string(rawData))
+		return nil, fmt.Errorf("createModelRepoUploadBatch failed: %s", redact.Text(string(rawData)))
 	}
 
 	if len(result.Uploads) != len(input.Files) {
-		return nil, fmt.Errorf("expected %d upload sessions, got %d: %s", len(input.Files), len(result.Uploads), string(rawData))
+		return nil, fmt.Errorf("expected %d upload sessions, got %d: %s", len(input.Files), len(result.Uploads), redact.Text(string(rawData)))
 	}
 
 	return result, nil
@@ -1025,7 +1027,7 @@ func GetModelRepoStorageUsage(owner string) (*ModelRepoStorageUsage, error) {
 		return nil, modelRepoGraphQLError(data.Errors[0])
 	}
 	if data.Data == nil || data.Data.ModelRepoStorageUsage == nil {
-		return nil, fmt.Errorf("data is nil: %s", string(rawData))
+		return nil, fmt.Errorf("data is nil: %s", redact.Text(string(rawData)))
 	}
 
 	return data.Data.ModelRepoStorageUsage, nil
@@ -1085,15 +1087,15 @@ func CompleteModelRepoUpload(sessionID string) (*CompleteModelRepoUploadResult, 
 		return nil, modelRepoGraphQLError(data.Errors[0])
 	}
 	if data.Data == nil || data.Data.CompleteModelRepoUpload == nil {
-		return nil, fmt.Errorf("data is nil: %s", string(rawData))
+		return nil, fmt.Errorf("data is nil: %s", redact.Text(string(rawData)))
 	}
 
 	result := data.Data.CompleteModelRepoUpload
 	if !result.Success {
 		if result.Message != "" {
-			return nil, errors.New(result.Message)
+			return nil, errors.New(redact.Text(result.Message))
 		}
-		return nil, fmt.Errorf("completeModelRepoUpload failed: %s", string(rawData))
+		return nil, fmt.Errorf("completeModelRepoUpload failed: %s", redact.Text(string(rawData)))
 	}
 
 	return result, nil
@@ -1172,7 +1174,7 @@ func CompleteModelRepoUploadBatch(sessionIDs []string) ([]*CompleteModelRepoUplo
 				continue
 			}
 			if alias, ok := gqlErr.Path[0].(string); ok {
-				failedByAlias[alias] = gqlErr.Message
+				failedByAlias[alias] = redact.Text(gqlErr.Message)
 			}
 		}
 		var failed []string
@@ -1192,20 +1194,20 @@ func CompleteModelRepoUploadBatch(sessionIDs []string) ([]*CompleteModelRepoUplo
 		)
 	}
 	if data.Data == nil {
-		return nil, fmt.Errorf("data is nil: %s", string(rawData))
+		return nil, fmt.Errorf("data is nil: %s", redact.Text(string(rawData)))
 	}
 
 	results := make([]*CompleteModelRepoUploadResult, len(sessionIDs))
 	for i, sessionID := range sessionIDs {
 		result := data.Data[fmt.Sprintf("c%d", i)]
 		if result == nil {
-			return nil, fmt.Errorf("missing result for session %s: %s", sessionID, string(rawData))
+			return nil, fmt.Errorf("missing result for session %s: %s", sessionID, redact.Text(string(rawData)))
 		}
 		if !result.Success {
 			if result.Message != "" {
-				return nil, fmt.Errorf("session %s: %s", sessionID, result.Message)
+				return nil, fmt.Errorf("session %s: %s", sessionID, redact.Text(result.Message))
 			}
-			return nil, fmt.Errorf("completeModelRepoUpload failed for session %s: %s", sessionID, string(rawData))
+			return nil, fmt.Errorf("completeModelRepoUpload failed for session %s: %s", sessionID, redact.Text(string(rawData)))
 		}
 		results[i] = result
 	}
@@ -1254,18 +1256,18 @@ func UpdateModelVersionStatusByIdentifier(input *UpdateModelVersionStatusInput) 
 		return nil, modelRepoGraphQLError(data.Errors[0])
 	}
 	if data.Data == nil || data.Data.UpdateModelVersionStatus == nil {
-		return nil, fmt.Errorf("data is nil: %s", string(rawData))
+		return nil, fmt.Errorf("data is nil: %s", redact.Text(string(rawData)))
 	}
 
 	result := data.Data.UpdateModelVersionStatus
 	if !result.Success {
 		if result.Message != "" {
-			return nil, errors.New(result.Message)
+			return nil, errors.New(redact.Text(result.Message))
 		}
-		return nil, fmt.Errorf("updateModelVersionStatus failed: %s", string(rawData))
+		return nil, fmt.Errorf("updateModelVersionStatus failed: %s", redact.Text(string(rawData)))
 	}
 	if result.ModelVersion == nil {
-		return nil, fmt.Errorf("modelVersion is nil: %s", string(rawData))
+		return nil, fmt.Errorf("modelVersion is nil: %s", redact.Text(string(rawData)))
 	}
 
 	return result.ModelVersion, nil

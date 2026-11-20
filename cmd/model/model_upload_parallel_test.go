@@ -263,7 +263,7 @@ func TestUploadModelFileChunkCancelsInFlightFiles(t *testing.T) {
 	t.Cleanup(func() { completeModelUploadFile = old })
 
 	started := make(chan struct{})
-	completeModelUploadFile = func(ctx context.Context, _ *api.ModelRepoUpload, path string, _ modelUploadProgress) error {
+	completeModelUploadFile = func(ctx context.Context, _ *api.ModelRepoUpload, path string, _ os.FileInfo, _ modelUploadProgress) error {
 		if path == "second" {
 			close(started)
 			<-ctx.Done()
@@ -294,7 +294,7 @@ func TestCompleteModelUploadWithContextStopsCanceledParts(t *testing.T) {
 		PartSizeBytes: 1,
 		CompleteURL:   "http://127.0.0.1:1",
 		Parts:         []*api.ModelRepoUploadPart{{PartNumber: 1, URL: "http://127.0.0.1:1"}},
-	}, path, nil)
+	}, path, nil, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected cancellation, got %v", err)
 	}
