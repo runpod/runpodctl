@@ -9,9 +9,12 @@ import (
 	"testing"
 )
 
-// writeOversized sends MaxResponseBytes+2 bytes, which ReadBounded rejects.
-func writeOversized(t *testing.T, w http.ResponseWriter) {
+// writeOversized sends status and then MaxResponseBytes+2 bytes, which
+// ReadBounded rejects.
+func writeOversized(t *testing.T, w http.ResponseWriter, status int) {
 	t.Helper()
+	w.Header().Set("Retry-After", "0")
+	w.WriteHeader(status)
 	chunk := make([]byte, 1<<20)
 	for range (MaxResponseBytes >> 20) + 1 {
 		if _, err := w.Write(chunk); err != nil {
@@ -20,10 +23,13 @@ func writeOversized(t *testing.T, w http.ResponseWriter) {
 	}
 }
 
-// writeTruncated promises more bytes than it sends and drops the connection.
-func writeTruncated(t *testing.T, w http.ResponseWriter) {
+// writeTruncated sends status, promises more bytes than it sends and drops the
+// connection. Content-Length must be set before WriteHeader or it is ignored.
+func writeTruncated(t *testing.T, w http.ResponseWriter, status int) {
 	t.Helper()
+	w.Header().Set("Retry-After", "0")
 	w.Header().Set("Content-Length", "100000")
+	w.WriteHeader(status)
 	if _, err := w.Write([]byte(`{"error":"cut`)); err != nil {
 		t.Errorf("write: %v", err)
 	}
@@ -33,7 +39,7 @@ func writeTruncated(t *testing.T, w http.ResponseWriter) {
 // body is oversized or cut short must still surface as an APIError carrying the
 // status and its stable code, after the usual retries.
 func TestRejectedStatusKeepsStatusWhenBodyUnreadable(t *testing.T) {
-	bodies := map[string]func(*testing.T, http.ResponseWriter){
+	bodies := map[string]func(*testing.T, http.ResponseWriter, int){
 		"oversized": writeOversized,
 		"truncated": writeTruncated,
 	}
@@ -46,9 +52,7 @@ func TestRejectedStatusKeepsStatusWhenBodyUnreadable(t *testing.T) {
 					var n atomic.Int32
 					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 						n.Add(1)
-						w.Header().Set("Retry-After", "0")
-						w.WriteHeader(status)
-						write(t, w)
+						write(t, w, status)
 					}))
 					t.Cleanup(server.Close)
 
@@ -81,7 +85,7 @@ func TestRejectedStatusKeepsStatusWhenBodyUnreadable(t *testing.T) {
 func TestSuccessStatusWithUnreadableBodyStaysReadError(t *testing.T) {
 	withFastRetry(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		writeTruncated(t, w)
+		writeTruncated(t, w, http.StatusOK)
 	}))
 	t.Cleanup(server.Close)
 
