@@ -10,7 +10,6 @@ package redact
 
 import (
 	"errors"
-	"net"
 	"net/url"
 	"regexp"
 	"strings"
@@ -253,10 +252,5 @@ func timeoutOf(err error) bool {
 // temporaryOf reports Temporary() of the first error in err's chain that has it.
 func temporaryOf(err error) bool {
 	var tmp temporizer
-	return errors.As(err, &tmp) && tmp.Temporary() //nolint:staticcheck // Temporary is deprecated, but callers still ask for it and the wrapper must answer like the original
+	return errors.As(err, &tmp) && tmp.Temporary()
 }
-
-var (
-	_ net.Error = (*timeoutError)(nil)
-	_ net.Error = (*joinTimeoutError)(nil)
-)

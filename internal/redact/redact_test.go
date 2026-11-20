@@ -75,7 +75,7 @@ func TestErrorScrubsNetworkPathURLError(t *testing.T) {
 		orig := &url.Error{Op: "Post", URL: raw, Err: errors.New("refused")}
 		got := Error(fmt.Errorf("request failed: %w", orig))
 		var ue *url.Error
-		if !errors.As(got, &ue) { //nolint:modernize // errors.As, not AsType: nix errcheck flags AsType
+		if !errors.As(got, &ue) {
 			t.Fatalf("%q: no *url.Error in chain", raw)
 		}
 		for how, text := range map[string]string{
@@ -285,7 +285,7 @@ func (e *timeoutNetError) Temporary() bool { return e.temporary }
 // timeout (errors.As to net.Error, Timeout(), Temporary(), errors.Is on the
 // deadline sentinels) while the URL is scrubbed.
 func TestErrorKeepsTimeoutClassification(t *testing.T) {
-	const rawURL = "https://user:pw@host.test/x?X-Amz-Signature=deadbeef"
+	const rawURL = "https://user:pw@host.test/x?X-Amz-Signature=deadbeef" //nolint:gosec // G101: fake credential fixture
 	scrubbed := []string{"pw", "deadbeef", "user:", "X-Amz-Signature"}
 
 	wrapped := func(cause error) error {
@@ -318,7 +318,7 @@ func TestErrorKeepsTimeoutClassification(t *testing.T) {
 				}
 			}
 			var ue *url.Error
-			if !errors.As(got, &ue) { //nolint:modernize // errors.As, not AsType: nix errcheck flags AsType
+			if !errors.As(got, &ue) {
 				t.Fatal("no *url.Error in chain")
 			}
 			for _, secret := range scrubbed {
@@ -326,12 +326,12 @@ func TestErrorKeepsTimeoutClassification(t *testing.T) {
 					t.Errorf("url.Error.URL contains %q: %s", secret, ue.URL)
 				}
 			}
-			if ue.Timeout() != tc.timeout || ue.Temporary() != tc.temporary { //nolint:staticcheck // Temporary is deprecated, but callers still ask for it
-				t.Errorf("url.Error Timeout/Temporary = %v/%v, want %v/%v", ue.Timeout(), ue.Temporary(), tc.timeout, tc.temporary) //nolint:staticcheck // see above
+			if ue.Timeout() != tc.timeout || ue.Temporary() != tc.temporary {
+				t.Errorf("url.Error Timeout/Temporary = %v/%v, want %v/%v", ue.Timeout(), ue.Temporary(), tc.timeout, tc.temporary)
 			}
 
 			var netErr net.Error
-			if !errors.As(got, &netErr) { //nolint:modernize // errors.As, not AsType: nix errcheck flags AsType
+			if !errors.As(got, &netErr) {
 				t.Fatal("errors.As to net.Error failed")
 			}
 			if netErr.Timeout() != tc.timeout || netErr.Temporary() != tc.temporary { //nolint:staticcheck // see above
@@ -345,7 +345,7 @@ func TestErrorKeepsTimeoutClassification(t *testing.T) {
 			}
 			// idempotent: redacting a redacted error keeps the classification.
 			again := Error(got)
-			if !errors.As(again, &netErr) || netErr.Timeout() != tc.timeout { //nolint:modernize // errors.As, not AsType: nix errcheck flags AsType
+			if !errors.As(again, &netErr) || netErr.Timeout() != tc.timeout {
 				t.Errorf("classification lost on second Error()")
 			}
 		})
@@ -355,10 +355,10 @@ func TestErrorKeepsTimeoutClassification(t *testing.T) {
 // An error chain with nothing network-shaped in it must not start to look like
 // a net.Error after sanitizing.
 func TestErrorWrapperIsNotANetErrorWithoutOne(t *testing.T) {
-	wrapped := fmt.Errorf("custom: %w", &customWrapError{err: &url.Error{Op: "Get", URL: "https://u:pw@h/x", Err: errors.New("boom")}})
+	wrapped := fmt.Errorf("custom: %w", &customWrapError{err: &url.Error{Op: "Get", URL: "https://u:pw@h/x", Err: errors.New("boom")}}) //nolint:gosec // G101: fake credential fixture
 	got := Error(errors.New("plain, no url"))
 	var netErr net.Error
-	if errors.As(got, &netErr) { //nolint:modernize // errors.As, not AsType: nix errcheck flags AsType
+	if errors.As(got, &netErr) {
 		t.Errorf("plain error became a net.Error: %v", netErr)
 	}
 	// a url.Error is a net.Error already; its answer must stay "not a timeout".
@@ -382,11 +382,11 @@ func TestErrorKeepsRealClientTimeout(t *testing.T) {
 	got := Error(fmt.Errorf("request failed: %w", err))
 
 	var netErr net.Error
-	if !errors.As(got, &netErr) || !netErr.Timeout() { //nolint:modernize // errors.As, not AsType: nix errcheck flags AsType
+	if !errors.As(got, &netErr) || !netErr.Timeout() {
 		t.Fatalf("timeout classification lost: %v", got)
 	}
 	var ue *url.Error
-	if !errors.As(got, &ue) || !ue.Timeout() { //nolint:modernize // errors.As, not AsType: nix errcheck flags AsType
+	if !errors.As(got, &ue) || !ue.Timeout() {
 		t.Fatalf("url.Error no longer reports Timeout(): %v", got)
 	}
 	if !errors.Is(got, context.DeadlineExceeded) {

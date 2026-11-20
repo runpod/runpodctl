@@ -33,7 +33,7 @@ func leakingRedirectServer(t *testing.T) string {
 // Location header is exactly location (http.Redirect would rewrite some forms).
 func redirectServerTo(t *testing.T, location string) string {
 	t.Helper()
-	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Location", location)
 		w.WriteHeader(http.StatusTemporaryRedirect)
 	}))
