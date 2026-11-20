@@ -64,7 +64,8 @@ func assertNoQueryCredentials(t *testing.T, err error) {
 		}
 	}
 	walk(err)
-	if ue, ok := errors.AsType[*url.Error](err); ok {
+	var ue *url.Error
+	if errors.As(err, &ue) { //nolint:modernize // errors.As, not AsType: nix errcheck flags AsType
 		renderings["errors.As url.Error.URL"] = ue.URL
 	}
 	for how, text := range renderings {

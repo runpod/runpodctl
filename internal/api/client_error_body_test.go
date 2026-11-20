@@ -54,8 +54,8 @@ func TestRejectedStatusKeepsStatusWhenBodyUnreadable(t *testing.T) {
 
 					client := newTestClient(t, server.URL)
 					_, err := client.requestURL(method, server.URL+"/x", nil)
-					apiErr, ok := errors.AsType[*APIError](err)
-					if !ok {
+					var apiErr *APIError
+					if !errors.As(err, &apiErr) {
 						t.Fatalf("expected an *APIError, got %T: %v", err, err)
 					}
 					if apiErr.Status != status {
@@ -90,7 +90,8 @@ func TestSuccessStatusWithUnreadableBodyStaysReadError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected a read error")
 	}
-	if _, ok := errors.AsType[*APIError](err); ok {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) { //nolint:modernize // errors.As, not AsType: nix errcheck flags AsType
 		t.Fatalf("a 2xx read failure must not be an APIError: %v", err)
 	}
 }
