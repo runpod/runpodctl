@@ -427,9 +427,9 @@ func parseAPIError(body []byte, status int) *APIError {
 		if err := json.Unmarshal(trimmed, &envelope); err == nil {
 			switch {
 			case envelope.Error != "":
-				apiErr.Message = envelope.Error
+				apiErr.Message = ErrorMessageExcerpt(envelope.Error)
 			case envelope.Message != "":
-				apiErr.Message = envelope.Message
+				apiErr.Message = ErrorMessageExcerpt(envelope.Message)
 			case envelope.Detail != "":
 				// fastapi-style bodies use "detail"; without this the whole blob
 				// used to become the message.
@@ -441,6 +441,8 @@ func parseAPIError(body []byte, status int) *APIError {
 				if json.Unmarshal(envelope.Errors, &details) == nil && len(details) > 0 {
 					apiErr.Message += " " + strings.Join(details, "; ")
 				}
+				// bound the joined text as a whole, after the parts are combined.
+				apiErr.Message = ErrorMessageExcerpt(apiErr.Message)
 			}
 			// normalize an explicit api code to the lowercase vocabulary.
 			apiErr.Code = strings.ToLower(envelope.Code)
@@ -487,7 +489,7 @@ func (e *GraphQLError) HTTPStatus() int { return e.Status }
 
 // newGraphQLError wraps an already-unwrapped graphql message.
 func newGraphQLError(message string) *GraphQLError {
-	return &GraphQLError{Message: message}
+	return &GraphQLError{Message: ErrorMessageExcerpt(message)}
 }
 
 // parseGraphQLHTTPError builds a GraphQLError from a non-200 graphql HTTP
@@ -523,10 +525,10 @@ func extractGraphQLMessage(body []byte) string {
 		return ""
 	}
 	if len(env.Errors) > 0 && env.Errors[0].Message != "" {
-		return env.Errors[0].Message
+		return ErrorMessageExcerpt(env.Errors[0].Message)
 	}
 	if env.Error != "" {
-		return env.Error
+		return ErrorMessageExcerpt(env.Error)
 	}
-	return env.Message
+	return ErrorMessageExcerpt(env.Message)
 }

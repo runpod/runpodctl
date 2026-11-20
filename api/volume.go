@@ -46,7 +46,7 @@ func GetNetworkVolumes() (volumes []*NetworkVolume, err error) {
 		return nil, err
 	}
 	if len(data.Errors) > 0 {
-		err = errors.New(data.Errors[0].Message)
+		err = errors.New(errorMessageExcerpt(data.Errors[0].Message))
 		return nil, err
 	}
 	if data == nil || data.Data == nil || data.Data.Myself == nil || data.Data.Myself.NetworkVolumes == nil {

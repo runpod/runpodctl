@@ -56,3 +56,12 @@ func ErrorBodyExcerpt(body []byte) string {
 	}
 	return text
 }
+
+// ErrorMessageExcerpt bounds and redacts a message extracted from an error
+// response (an "error"/"message"/"detail" field, an errors[] entry or a graphql
+// error message). The envelope can be valid JSON of tens of megabytes with a
+// presigned URL inside one field, so extraction does not make the text safe to
+// print on its own.
+func ErrorMessageExcerpt(msg string) string {
+	return ErrorBodyExcerpt([]byte(msg))
+}

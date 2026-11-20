@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -86,15 +87,84 @@ func TestErrorBodyExcerpt(t *testing.T) {
 		t.Errorf("excerpt leaks a presigned signature: %q", got)
 	}
 
-	// a signature straddling the cut must already be redacted whole.
-	straddle := []byte(strings.Repeat("a", errorBodyExcerptBytes-10) + "https://b.s3.amazonaws.com/k?" + sig + strings.Repeat("b", 100))
-	if got := errorBodyExcerpt(straddle); strings.Contains(got, "abcdef") {
-		t.Errorf("excerpt leaks a signature cut by the boundary: %q", got[len(got)-60:])
+	// a signature straddling the cut must already be redacted whole. The padding
+	// is computed from the real prefix and signature lengths so that the cut
+	// (byte errorBodyExcerptBytes of the raw body) falls in the middle of the
+	// signature value, not before or after it.
+	const (
+		straddlePrefix = "https://b.s3.amazonaws.com/k?X-Amz-Signature="
+		straddleValue  = "abcdef0123456789"
+	)
+	padding := errorBodyExcerptBytes - len(straddlePrefix) - len(straddleValue)/2
+	straddle := []byte(strings.Repeat("a", padding) + straddlePrefix + straddleValue + strings.Repeat("b", 100))
+	valueStart := strings.Index(string(straddle), straddleValue)
+	if valueStart >= errorBodyExcerptBytes || valueStart+len(straddleValue) <= errorBodyExcerptBytes {
+		t.Fatalf("test premise: the signature value [%d,%d) must cross the cut at %d", valueStart, valueStart+len(straddleValue), errorBodyExcerptBytes)
+	}
+	got := errorBodyExcerpt(straddle)
+	if len(got) > errorBodyExcerptBytes+len("... (truncated)") {
+		t.Errorf("excerpt is %d bytes, want at most %d", len(got), errorBodyExcerptBytes+len("... (truncated)"))
+	}
+	for _, fragment := range []string{"abcdef", "0123456789", straddleValue[:4]} {
+		if strings.Contains(got, fragment) {
+			t.Errorf("excerpt leaks signature fragment %q cut by the boundary: %q", fragment, got[max(0, len(got)-80):])
+		}
 	}
 
 	// multi-byte text cut mid-rune stays valid utf-8.
 	multi := []byte(strings.Repeat("é", errorBodyExcerptBytes))
 	if got := errorBodyExcerpt(multi); !strings.HasSuffix(got, "... (truncated)") || strings.ContainsRune(got, '\uFFFD') {
 		t.Errorf("expected valid truncated text, got suffix %q", got[len(got)-40:])
+	}
+}
+
+// TestGraphQLErrorMessagesAreBoundedAndRedacted pins that a valid graphql
+// {"errors":[{"message":...}]} reply with a multi-MB message is bounded and
+// redacted on every path that surfaces errors[0].message.
+func TestGraphQLErrorMessagesAreBoundedAndRedacted(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+
+	const signature = "deadbeef0123456789"
+	huge := "failed https://bucket.s3.amazonaws.com/k?X-Amz-Signature=" + signature + " " + strings.Repeat("m", 3<<20)
+	payload, err := json.Marshal(map[string]any{
+		"errors": []map[string]any{{"message": huge, "path": []string{"c0"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if _, writeErr := w.Write(payload); writeErr != nil {
+			return
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("RUNPOD_GRAPHQL_URL", server.URL)
+
+	for name, call := range map[string]func() error{
+		"pod.go":                func() error { _, err := GetPods(); return err },
+		"volume.go":             func() error { _, err := GetNetworkVolumes(); return err },
+		"endpoint.go":           func() error { _, err := GetEndpoints(); return err },
+		"envOverride.go":        func() error { _, err := GetEndpointEnvOverride("ep"); return err },
+		"modelStatus.go (refs)": func() error { _, err := GetEndpointModelReferences("ep"); return err },
+		"graphql_response.go":   func() error { _, _, err := queryGraphQLData(Input{Query: "q"}); return err },
+		"model.go":              func() error { _, err := CompleteModelRepoUploadBatch([]string{"s"}); return err },
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := call()
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if len(err.Error()) > excerptLimit {
+				t.Fatalf("error message is %d bytes; expected a bound near %d", len(err.Error()), errorBodyExcerptBytes)
+			}
+			if !strings.Contains(err.Error(), "truncated") {
+				t.Errorf("expected a truncation marker, got %.200q", err.Error())
+			}
+			if strings.Contains(err.Error(), signature) {
+				t.Errorf("message leaks the signature: %.200q", err.Error())
+			}
+		})
 	}
 }

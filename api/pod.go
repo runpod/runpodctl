@@ -122,7 +122,7 @@ func GetPods() (pods []*Pod, err error) {
 		return
 	}
 	if len(data.Errors) > 0 {
-		err = errors.New(data.Errors[0].Message)
+		err = errors.New(errorMessageExcerpt(data.Errors[0].Message))
 		return
 	}
 	if data == nil || data.Data == nil || data.Data.Myself == nil || data.Data.Myself.Pods == nil {

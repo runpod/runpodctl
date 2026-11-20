@@ -20,6 +20,12 @@ func errorBodyExcerpt(body []byte) string {
 	return internalapi.ErrorBodyExcerpt(body)
 }
 
+// errorMessageExcerpt is msg, redacted and bounded, for a message extracted from
+// an error response. See internalapi.ErrorMessageExcerpt.
+func errorMessageExcerpt(msg string) string {
+	return internalapi.ErrorMessageExcerpt(msg)
+}
+
 // firstGraphQLErrorMessage safely extracts the message of the first graphql
 // error, tolerating a missing or non-string message rather than panicking on an
 // unchecked type assertion.
@@ -33,7 +39,7 @@ func firstGraphQLErrorMessage(gqlErrors []any) string {
 		return fallback
 	}
 	if msg, ok := first["message"].(string); ok && msg != "" {
-		return msg
+		return errorMessageExcerpt(msg)
 	}
 	return fallback
 }

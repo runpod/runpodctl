@@ -69,7 +69,7 @@ func GetEndpointEnvOverride(endpointID string) ([]EndpointEnvVar, error) {
 		return nil, err
 	}
 	if len(data.Errors) > 0 {
-		return nil, errors.New(data.Errors[0].Message)
+		return nil, errors.New(errorMessageExcerpt(data.Errors[0].Message))
 	}
 	if data.Data == nil || data.Data.Myself == nil || data.Data.Myself.Endpoint == nil {
 		return nil, fmt.Errorf("endpoint %s not found", id)
