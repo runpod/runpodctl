@@ -33,6 +33,7 @@ runpodctl model add [flags]
       --hash-timeout duration                maximum duration to wait for --wait-for-hash (0 disables timeout) (default 30m0s)
   -h, --help                                 help for add
       --huggingface-model string             hugging face model to mirror (owner/repo)
+      --include-hidden                       also upload .git, .env, .env.*, .envrc, .git-credentials and .netrc entries from --model-path (skipped by default)
       --metadata stringToString              metadata key=value pairs (default [])
       --model-path string                    directory containing model files to upload
       --model-status string                  initial model status
@@ -46,6 +47,7 @@ runpodctl model add [flags]
 ### Options inherited from parent commands
 
 ```
+      --insecure        allow a non-loopback http:// api url, which sends the api key unencrypted (or set RUNPOD_ALLOW_INSECURE_API=1)
   -o, --output string   output format (json, yaml) (default "json")
 ```
 
