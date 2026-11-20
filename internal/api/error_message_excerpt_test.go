@@ -144,7 +144,7 @@ func TestErrorExcerptsMaskTokens(t *testing.T) {
 	const (
 		configured = "cfgkey-0123456789-abcdef"
 		rpaKey     = "rpa_ABCDEF0123456789abcdef"
-		bearer     = "eyJhbGciOiJIUzI1NiJ9.payload.sig-nature"
+		bearer     = "eyJhbGciOiJIUzI1NiJ9.payload.sig-nature" //nolint:gosec // G101: fake credential fixture
 	)
 	t.Setenv("RUNPOD_API_KEY", configured)
 	secrets := []string{configured, rpaKey, bearer, "ABCDEF0123", "payload"}
