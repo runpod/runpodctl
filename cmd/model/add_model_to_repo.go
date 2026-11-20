@@ -134,6 +134,16 @@ type modelFile struct {
 	// info is the scan-time lstat of ResolvedPath. The upload re-checks the
 	// opened file against it so a path swapped after the scan is refused.
 	info os.FileInfo
+	// deleteRootDir is the scanned (symlink-resolved) --model-path directory and
+	// deleteRootInfo its scan-time stat. The post-upload delete re-opens the
+	// directory (os.Root) and refuses to run when it is no longer the same
+	// directory, so a directory swapped for a symlink after the scan cannot
+	// redirect a removal outside it; deleteName is the removed entry's path
+	// relative to deleteRootDir (the link itself for a symlink, never its
+	// target).
+	deleteRootDir  string
+	deleteRootInfo os.FileInfo
+	deleteName     string
 }
 
 // isSymlink reports whether the scanned entry was a symlink to its target.
@@ -205,7 +215,7 @@ var (
 	getModelsForAdd            = api.GetModels
 	getModelRepoStorageUsage   = api.GetModelRepoStorageUsage
 	sleepModelHashPoll         = waitModelHashPoll
-	removeModelFile            = os.Remove
+	removeModelFileInRoot      = func(root *os.Root, name string) error { return root.Remove(name) }
 )
 
 // modelRepoUploadBatchSize caps the files per createModelRepoUploadBatch request, bounding both
@@ -641,6 +651,13 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 	}
 	roots := newScanRoots(modelContainmentRoots(root))
 
+	// the resolved --model-path directory's scan-time identity: the post-upload
+	// delete re-checks it before removing anything.
+	deleteRootInfo, err := os.Lstat(root)
+	if err != nil {
+		return nil, fmt.Errorf("stat model directory: %w", err)
+	}
+
 	var files []modelFile
 
 	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
@@ -703,11 +720,14 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 		}
 
 		files = append(files, modelFile{
-			AbsolutePath: path,
-			ResolvedPath: resolved,
-			RelativePath: filepath.ToSlash(rel),
-			Size:         info.Size(),
-			info:         &scannedModelInfo{FileInfo: info, rootDir: roots.dirs[rootIdx], rootInfo: rootInfo, name: rootRel},
+			AbsolutePath:   path,
+			ResolvedPath:   resolved,
+			RelativePath:   filepath.ToSlash(rel),
+			Size:           info.Size(),
+			info:           &scannedModelInfo{FileInfo: info, rootDir: roots.dirs[rootIdx], rootInfo: rootInfo, name: rootRel},
+			deleteRootDir:  root,
+			deleteRootInfo: deleteRootInfo,
+			deleteName:     rel,
 		})
 
 		return nil
@@ -873,9 +893,33 @@ func modelUploadRequestedBytes(modelFiles []modelFile) (bytes int64, ok bool) {
 // (uploadModelFiles returned without error) and (b) been confirmed deployable
 // server-side (waitForUploadedModelHash returned without error). This
 // function does not itself re-check either condition. It never
-// deletes anything else in --model-path: only the exact absolute paths that
-// were part of this run's verified upload, never a directory-wide wipe.
+// deletes anything else in --model-path: only the exact entries that were
+// part of this run's verified upload, never a directory-wide wipe.
+//
+// Every removal goes through an *os.Root (Root.Remove) opened on the scanned
+// --model-path directory, after re-checking that directory's identity against
+// the scan: the upload and the server-side hash take as long as the network
+// and the server do, and a directory -- or --model-path itself -- swapped for
+// a symlink during that window must not redirect a removal outside
+// --model-path.
 func deleteVerifiedModelFiles(files []modelFile) (deletedCount int, deletedBytes int64, removedSymlinks int, err error) {
+	if len(files) == 0 {
+		return 0, 0, 0, nil
+	}
+
+	root, err := os.OpenRoot(files[0].deleteRootDir)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("upload and hash are confirmed, but the local model files were not deleted: open model directory: %w", err)
+	}
+	defer root.Close() //nolint:errcheck // directory handle; the removals above it already happened or failed, and a failed close leaves nothing to recover
+	rootInfo, err := root.Stat(".")
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("upload and hash are confirmed, but the local model files were not deleted: stat model directory: %w", err)
+	}
+	if !os.SameFile(files[0].deleteRootInfo, rootInfo) {
+		return 0, 0, 0, fmt.Errorf("upload and hash are confirmed, but refusing to delete the local model files from %s: the directory changed since it was scanned", addModelDirectoryPath)
+	}
+
 	var failures []string
 	// regular entries deleted in this run, and the resolved targets of removed
 	// links: an in-root link's target is itself a collected entry and is deleted
@@ -884,7 +928,7 @@ func deleteVerifiedModelFiles(files []modelFile) (deletedCount int, deletedBytes
 	var removedLinkTargets []string
 
 	for _, file := range files {
-		if removeErr := removeModelFile(file.AbsolutePath); removeErr != nil {
+		if removeErr := removeModelFileInRoot(root, file.deleteName); removeErr != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", file.RelativePath, removeErr))
 			continue
 		}

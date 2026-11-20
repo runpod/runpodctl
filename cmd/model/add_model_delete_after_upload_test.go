@@ -216,22 +216,28 @@ func TestRunAddModelDeleteAfterUploadLeavesFilesWhenHashConfirmationFails(t *tes
 }
 
 func TestDeleteVerifiedModelFilesReturnsNonZeroOnPartialFailure(t *testing.T) {
-	oldRemove := removeModelFile
-	t.Cleanup(func() { removeModelFile = oldRemove })
+	oldRemove := removeModelFileInRoot
+	t.Cleanup(func() { removeModelFileInRoot = oldRemove })
+
+	modelDir := t.TempDir()
+	rootInfo, err := os.Lstat(modelDir)
+	if err != nil {
+		t.Fatalf("stat model dir: %v", err)
+	}
 
 	var removed []string
-	removeModelFile = func(path string) error {
-		if strings.HasSuffix(path, "b.bin") {
+	removeModelFileInRoot = func(_ *os.Root, name string) error {
+		if strings.HasSuffix(name, "b.bin") {
 			return errors.New("permission denied")
 		}
-		removed = append(removed, path)
+		removed = append(removed, name)
 		return nil
 	}
 
 	files := []modelFile{
-		{AbsolutePath: "/tmp/model/a.bin", RelativePath: "a.bin", Size: 10},
-		{AbsolutePath: "/tmp/model/b.bin", RelativePath: "b.bin", Size: 20},
-		{AbsolutePath: "/tmp/model/c.bin", RelativePath: "c.bin", Size: 30},
+		{AbsolutePath: filepath.Join(modelDir, "a.bin"), RelativePath: "a.bin", Size: 10, deleteRootDir: modelDir, deleteRootInfo: rootInfo, deleteName: "a.bin"},
+		{AbsolutePath: filepath.Join(modelDir, "b.bin"), RelativePath: "b.bin", Size: 20, deleteRootDir: modelDir, deleteRootInfo: rootInfo, deleteName: "b.bin"},
+		{AbsolutePath: filepath.Join(modelDir, "c.bin"), RelativePath: "c.bin", Size: 30, deleteRootDir: modelDir, deleteRootInfo: rootInfo, deleteName: "c.bin"},
 	}
 
 	deletedCount, deletedBytes, _, err := deleteVerifiedModelFiles(files)
@@ -257,17 +263,23 @@ func TestDeleteVerifiedModelFilesReturnsNonZeroOnPartialFailure(t *testing.T) {
 }
 
 func TestDeleteVerifiedModelFilesSucceedsWhenAllRemoved(t *testing.T) {
-	oldRemove := removeModelFile
-	t.Cleanup(func() { removeModelFile = oldRemove })
+	oldRemove := removeModelFileInRoot
+	t.Cleanup(func() { removeModelFileInRoot = oldRemove })
+
+	modelDir := t.TempDir()
+	rootInfo, err := os.Lstat(modelDir)
+	if err != nil {
+		t.Fatalf("stat model dir: %v", err)
+	}
 
 	var removed []string
-	removeModelFile = func(path string) error {
-		removed = append(removed, path)
+	removeModelFileInRoot = func(_ *os.Root, name string) error {
+		removed = append(removed, name)
 		return nil
 	}
 
 	files := []modelFile{
-		{AbsolutePath: "/tmp/model/a.bin", RelativePath: "a.bin", Size: 5},
+		{AbsolutePath: filepath.Join(modelDir, "a.bin"), RelativePath: "a.bin", Size: 5, deleteRootDir: modelDir, deleteRootInfo: rootInfo, deleteName: "a.bin"},
 	}
 
 	deletedCount, deletedBytes, _, err := deleteVerifiedModelFiles(files)
@@ -277,8 +289,8 @@ func TestDeleteVerifiedModelFilesSucceedsWhenAllRemoved(t *testing.T) {
 	if deletedCount != 1 || deletedBytes != 5 {
 		t.Fatalf("expected 1 file / 5 bytes deleted, got %d/%d", deletedCount, deletedBytes)
 	}
-	if len(removed) != 1 || removed[0] != "/tmp/model/a.bin" {
-		t.Fatalf("expected removeModelFile called with absolute path, got %#v", removed)
+	if len(removed) != 1 || removed[0] != "a.bin" {
+		t.Fatalf("expected removeModelFileInRoot called with the root-relative scanned name, got %#v", removed)
 	}
 }
 
@@ -397,5 +409,97 @@ func TestDeleteVerifiedModelFilesCountsOnlySurvivingTargetsAsKept(t *testing.T) 
 	})
 	if !strings.Contains(stderr, "removed 2 symlink(s) (1 target(s) kept)") {
 		t.Fatalf("expected only the surviving blob target to be reported kept, got %q", stderr)
+	}
+}
+
+// a subdirectory swapped for a symlink between the scan and the post-upload
+// delete must not redirect the removal outside --model-path: the removal is
+// refused by the containment root and the file outside survives.
+func TestDeleteVerifiedModelFilesRefusesAncestorSwap(t *testing.T) {
+	modelDir := t.TempDir()
+	sub := filepath.Join(modelDir, "sub")
+	writeTestFile(t, filepath.Join(sub, "weights.bin"), "weights")
+	outside := t.TempDir()
+	outsideWeights := filepath.Join(outside, "weights.bin")
+	writeTestFile(t, outsideWeights, "do-not-touch")
+
+	files, err := collectModelFiles(modelDir)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("collect: %v %+v", err, files)
+	}
+
+	oldDir := addModelDirectoryPath
+	addModelDirectoryPath = modelDir
+	t.Cleanup(func() { addModelDirectoryPath = oldDir })
+
+	// the swap window: `sub` becomes a symlink out of --model-path
+	aside := modelDir + ".aside"
+	if err := os.Rename(sub, aside); err != nil {
+		t.Fatalf("rename sub aside: %v", err)
+	}
+	symlinkOrSkip(t, outside, sub)
+
+	deletedCount, _, _, delErr := deleteVerifiedModelFiles(files)
+
+	if delErr == nil {
+		t.Fatal("expected the delete to refuse the swapped ancestor")
+	}
+	if !strings.Contains(delErr.Error(), "failed to delete 1 of 1 model file(s)") {
+		t.Fatalf("expected the partial-failure summary to name the refused file, got %v", delErr)
+	}
+	if deletedCount != 0 {
+		t.Fatalf("nothing may be deleted through the swapped ancestor, got %d", deletedCount)
+	}
+	assertFileContent(t, outsideWeights, "do-not-touch")
+	assertFileContent(t, filepath.Join(aside, "weights.bin"), "weights")
+}
+
+// --model-path itself swapped for a symlink after the scan is refused by the
+// recorded directory identity, not re-resolved and emptied.
+func TestDeleteVerifiedModelFilesRefusesModelDirSwap(t *testing.T) {
+	modelDir := t.TempDir()
+	writeTestFile(t, filepath.Join(modelDir, "weights.bin"), "weights")
+	outside := t.TempDir()
+	outsideWeights := filepath.Join(outside, "weights.bin")
+	writeTestFile(t, outsideWeights, "do-not-touch")
+
+	files, err := collectModelFiles(modelDir)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("collect: %v %+v", err, files)
+	}
+
+	oldDir := addModelDirectoryPath
+	addModelDirectoryPath = modelDir
+	t.Cleanup(func() { addModelDirectoryPath = oldDir })
+
+	aside := modelDir + ".aside"
+	if err := os.Rename(modelDir, aside); err != nil {
+		t.Fatalf("rename model dir aside: %v", err)
+	}
+	symlinkOrSkip(t, outside, modelDir)
+
+	deletedCount, _, _, delErr := deleteVerifiedModelFiles(files)
+
+	if delErr == nil {
+		t.Fatal("expected the delete to refuse the swapped model directory")
+	}
+	if !strings.Contains(delErr.Error(), "changed since it was scanned") {
+		t.Fatalf("expected the swap refusal to name the changed directory, got %v", delErr)
+	}
+	if deletedCount != 0 {
+		t.Fatalf("nothing may be deleted through the swapped model directory, got %d", deletedCount)
+	}
+	assertFileContent(t, outsideWeights, "do-not-touch")
+	assertFileContent(t, filepath.Join(aside, "weights.bin"), "weights")
+}
+
+func assertFileContent(t *testing.T, path, want string) {
+	t.Helper()
+	got, err := os.ReadFile(path) //nolint:gosec // G304: test-controlled temp path
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if string(got) != want {
+		t.Fatalf("%s = %q, want %q", path, got, want)
 	}
 }
