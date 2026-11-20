@@ -87,7 +87,7 @@ func (c *GraphQLClient) Query(input GraphQLInput) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := ReadBounded(resp.Body)
+	body, err := ReadBodyForStatus(resp.StatusCode, resp.Body)
 	if err != nil {
 		return nil, err
 	}

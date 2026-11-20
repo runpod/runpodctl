@@ -92,7 +92,7 @@ func defaultListDependentEndpoints(owner, name, hash string) ([]DependentEndpoin
 	}
 	defer res.Body.Close()
 
-	rawData, err := api.ReadBoundedResponse(res.Body)
+	rawData, err := internalapi.ReadBodyForStatus(res.StatusCode, res.Body)
 	if err != nil {
 		return nil, err
 	}

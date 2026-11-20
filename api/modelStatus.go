@@ -53,7 +53,7 @@ func GetEndpointModelReferences(endpointID string) ([]string, error) {
 	}
 	defer res.Body.Close()
 
-	rawData, err := ReadBoundedResponse(res.Body)
+	rawData, err := readResponseBody(res)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +117,7 @@ func GetPodModelVersions(podID string) ([]*PodModelVersion, error) {
 	}
 	defer res.Body.Close()
 
-	rawData, err := ReadBoundedResponse(res.Body)
+	rawData, err := readResponseBody(res)
 	if err != nil {
 		return nil, err
 	}

@@ -47,7 +47,7 @@ func GetEndpointEnvOverride(endpointID string) ([]EndpointEnvVar, error) {
 	}
 	defer res.Body.Close()
 
-	rawData, err := ReadBoundedResponse(res.Body)
+	rawData, err := readResponseBody(res)
 	if err != nil {
 		return nil, err
 	}

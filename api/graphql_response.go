@@ -66,7 +66,7 @@ func queryGraphQLData(input Input) (gqldata map[string]any, rawData []byte, err 
 // body (bounded by maxModelResponseBytes; a larger response is an error) is returned
 // so callers can include it in "<field> is nil" diagnostics.
 func parseGraphQLData(status int, body io.Reader) (gqldata map[string]any, rawData []byte, err error) {
-	rawData, err = ReadBoundedResponse(body)
+	rawData, err = internalapi.ReadBodyForStatus(status, body)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -99,4 +99,11 @@ const maxModelResponseBytes = internalapi.MaxResponseBytes
 // 300 MB body measured ~800 MB RSS) or silently truncating into invalid json.
 func ReadBoundedResponse(body io.Reader) ([]byte, error) {
 	return internalapi.ReadBounded(body)
+}
+
+// readResponseBody is ReadBoundedResponse for a received response: when the
+// status is not 2xx and the body is oversized or cut short, the error carries
+// that status and its stable code (see internalapi.ReadBodyForStatus).
+func readResponseBody(res *http.Response) ([]byte, error) {
+	return internalapi.ReadBodyForStatus(res.StatusCode, res.Body)
 }

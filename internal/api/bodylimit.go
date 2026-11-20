@@ -27,6 +27,33 @@ func ReadBounded(body io.Reader) ([]byte, error) {
 	return data, nil
 }
 
+// unreadableBodyError is the error for a rejected (non-2xx) response whose body
+// ReadBounded refused (oversized) or could not finish (cut short). The response
+// itself was received, so the error keeps its status and stable code rather
+// than the bare read error.
+func unreadableBodyError(status int, readErr error) *APIError {
+	return &APIError{
+		Status:  status,
+		Code:    codeForStatus(status),
+		Message: fmt.Sprintf("api request failed with status %d (the error body could not be read: %v)", status, redact.Error(readErr)),
+	}
+}
+
+// ReadBodyForStatus is ReadBounded for a response with a known status. A read
+// failure on a non-2xx response is an APIError carrying that status and its
+// stable code; on a 2xx response it stays the plain read error, since nothing
+// was rejected.
+func ReadBodyForStatus(status int, body io.Reader) ([]byte, error) {
+	data, err := ReadBounded(body)
+	if err != nil {
+		if status < 200 || status >= 300 {
+			return nil, unreadableBodyError(status, err)
+		}
+		return nil, err
+	}
+	return data, nil
+}
+
 // ErrorBodyExcerptBytes bounds how much of a response body is echoed into an
 // error message. The body itself may be up to MaxResponseBytes, which is far too
 // much to print.

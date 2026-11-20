@@ -150,11 +150,7 @@ func (c *Client) requestURLContext(ctx context.Context, method, u string, body a
 			// a rejected status whose body was oversized or cut short: the
 			// response itself was received, so keep its status and stable code
 			// rather than the bare read error. Retries were handled above.
-			return nil, &APIError{
-				Status:  resp.status,
-				Code:    codeForStatus(resp.status),
-				Message: fmt.Sprintf("api request failed with status %d (the error body could not be read: %v)", resp.status, redact.Error(errors.Unwrap(err))),
-			}
+			return nil, unreadableBodyError(resp.status, errors.Unwrap(err))
 		}
 		if resp.status < 200 || resp.status >= 300 {
 			return nil, parseAPIError(resp.body, resp.status)
