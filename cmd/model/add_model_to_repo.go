@@ -684,10 +684,16 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 	// Pin the containment roots before walking (see scanRoots.pin): the first
 	// open of each root happens now, narrowing the resolve-to-open window to
 	// the handful of instructions between EvalSymlinks and pin. A swap of
-	// --model-path itself within that window is still followed, by design, the
-	// same as passing the replacement directory directly.
+	// --model-path inside that window is still followed, by design, the same
+	// as passing the replacement directory directly. That residual cannot be
+	// closed portably: pinning the resolved *directory itself* would need
+	// fd-path canonicalization (readlink on /proc/self/fd/N), which is
+	// linux-only, and this binary builds for Windows too. It is tracked as a
+	// follow-up rather than claimed closed.
 	if pinErr := roots.pin(); pinErr != nil {
-		return nil, fmt.Errorf("scan model directory: %w", pinErr)
+		// close what pin already opened so a failing scan leaks no root
+		// descriptor; the pin error stays the primary one.
+		return nil, errors.Join(fmt.Errorf("scan model directory: %w", pinErr), roots.close())
 	}
 
 	// the resolved --model-path directory's scan-time identity, taken through
@@ -697,7 +703,7 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 	// cannot pass as the scanned directory.
 	_, deleteRootInfo, err := roots.open(0)
 	if err != nil {
-		return nil, fmt.Errorf("stat model directory: %w", err)
+		return nil, errors.Join(fmt.Errorf("stat model directory: %w", err), roots.close())
 	}
 
 	var files []modelFile
@@ -1052,6 +1058,11 @@ func deleteVerifiedModelFiles(files []modelFile) (deletedCount int, deletedBytes
 // hashed. Returns nil when they are the same. Comparisons go through the
 // pinned --model-path root, so the lookup itself cannot escape it. file is a
 // pointer into the caller's slice: per-entry copies of a modelFile are wasted.
+//
+// For a regular file the inode alone is not enough: a truncate-and-rewrite in
+// place keeps it, so the size and mtime must match too (see inside). A symlink
+// entry compares only the link's own identity; its target's bytes are never
+// deleted through the link.
 func refuseDeleteOfReplacedEntry(root *os.Root, file *modelFile) error {
 	// a symlink entry compares against the link's own scan-time lstat (the
 	// delete removes the link), a regular entry against the scanned target.
@@ -1080,6 +1091,17 @@ func refuseDeleteOfReplacedEntry(root *os.Root, file *modelFile) error {
 	}
 	if !os.SameFile(scanned, current) {
 		return errors.New("it changed since the model directory was scanned")
+	}
+	if !scannedIsLink {
+		// SameFile compares device+inode: a truncate-and-rewrite in place (how
+		// torch.save and safetensors save_file write a checkpoint) keeps the
+		// inode, so a same-path rewrite after the scan would pass that check
+		// and delete bytes that were never uploaded. The size and mtime must
+		// also match. Residual: a writer that rewrites the file AND restores
+		// its size and mtime is indistinguishable and passes.
+		if current.Size() != scanned.Size() || !current.ModTime().Equal(scanned.ModTime()) {
+			return errors.New("its contents changed since the model directory was scanned")
+		}
 	}
 	return nil
 }
@@ -1797,41 +1819,71 @@ const modelUploadErrorExcerptRunes = 256
 // the signature, access key id and string-to-sign in arbitrary other elements.
 const unrecognizedXMLErrorText = "unrecognized XML error response"
 
-// storageXMLMarkerPattern spots an S3-style error document anywhere in the
-// body, so a proxy that wraps one behind a plain-text or JSON prefix cannot
-// hide it from the structured path (which echoes only the allowlisted <Code>
-// and <Message> fields, never arbitrary other elements).
+// storageXMLMarkerPattern spots an S3-style error document buried in a body
+// that does not itself lead with markup (a proxy prepending plain text, or an
+// error document embedded in JSON), so a wrapper cannot hide one from the
+// structured path (which echoes only the allowlisted <Code> and <Message>
+// fields, never arbitrary other elements).
 var storageXMLMarkerPattern = regexp.MustCompile(`<\?xml[\s?]|<Error[\s>]`)
 
 // markupTagPattern matches one markup tag, for reducing a proxy's HTML error
 // page to its readable text.
 var markupTagPattern = regexp.MustCompile(`<[^>]*>`)
 
+// looksLikeHTML reports whether body reads as an HTML document (a proxy's
+// 502/504 page), the only markup shape whose text is safe to echo. Case does
+// not matter.
+func looksLikeHTML(body string) bool {
+	lower := strings.ToLower(body)
+	for _, prefix := range []string{"<html", "<!doctype", "<head", "<body"} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// redactedCodeMessage renders the allowlisted fields of a storage error
+// document, each bounded and redacted.
+func redactedCodeMessage(code, message string) string {
+	switch {
+	case code != "" && message != "":
+		return boundedRedacted(code) + ": " + boundedRedacted(message)
+	case code != "":
+		return boundedRedacted(code)
+	default:
+		return boundedRedacted(message)
+	}
+}
+
 func summarizeStorageError(body string) string {
-	body = strings.TrimSpace(body)
+	body = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(body), "\uFEFF"))
 	if body == "" {
 		return ""
 	}
-	if storageXMLMarkerPattern.MatchString(body) {
-		code, message := parseStorageErrorXML(body)
-		switch {
-		case code != "" && message != "":
-			return boundedRedacted(code) + ": " + boundedRedacted(message)
-		case code != "":
-			return boundedRedacted(code)
-		case message != "":
-			return boundedRedacted(message)
+	if strings.HasPrefix(body, "<") {
+		// any markup-leading body is a storage-style error document or nothing:
+		// structurally parsed, only the allowlisted <Code>/<Message> text comes
+		// out. Unrecognized markup is never echoed at all — unknown elements
+		// can carry the access key id, signature and string-to-sign, and
+		// redact.Text does not know them. A recognized HTML page (a proxy's
+		// error document) alone keeps a text excerpt for diagnosis.
+		if code, message := parseStorageErrorXML(body); code != "" || message != "" {
+			return redactedCodeMessage(code, message)
+		}
+		if looksLikeHTML(body) {
+			return boundedRedacted(stripMarkupTags(body))
 		}
 		return unrecognizedXMLErrorText
 	}
-	// Not a storage error document: anything else (a proxy's HTML 502/504
-	// page, a JSON body such as {"message":"expected <Part> elements"}, plain
-	// text) keeps a bounded redacted excerpt for diagnosis. Only a body that
-	// leads with markup has its tags stripped, so the `<Part>` of a JSON
-	// error message survives intact.
-	if strings.HasPrefix(body, "<") {
-		return boundedRedacted(stripMarkupTags(body))
+	if storageXMLMarkerPattern.MatchString(body) {
+		if code, message := parseStorageErrorXML(body); code != "" || message != "" {
+			return redactedCodeMessage(code, message)
+		}
+		return unrecognizedXMLErrorText
 	}
+	// plain text or JSON (e.g. {"message":"expected <Part> elements"}): a
+	// bounded redacted excerpt, verbatim so error text survives intact.
 	return boundedRedacted(body)
 }
 

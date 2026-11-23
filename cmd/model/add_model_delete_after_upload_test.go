@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/runpod/runpodctl/api"
 )
@@ -665,6 +666,58 @@ func TestDeleteVerifiedModelFilesSkipsLinkReplacedByRegularFile(t *testing.T) {
 	}
 	assertFileContent(t, link, "downloaded, never uploaded")
 	assertFileContent(t, blob, "blob")
+}
+
+// a checkpoint rewritten IN PLACE (truncate + write, same inode — how
+// torch.save and safetensors save_file save) keeps its identity but is not
+// the uploaded file: size or mtime must also match for deletion.
+func TestDeleteVerifiedModelFilesSkipsInPlaceRewrite(t *testing.T) {
+	setup := func(t *testing.T) (string, []modelFile) {
+		t.Helper()
+		modelDir := t.TempDir()
+		weights := filepath.Join(modelDir, "weights.bin")
+		writeTestFile(t, weights, "weights")
+		files, err := collectModelFiles(modelDir)
+		if err != nil || len(files) != 1 {
+			t.Fatalf("collect: %v %+v", err, files)
+		}
+		oldDir := addModelDirectoryPath
+		addModelDirectoryPath = modelDir
+		t.Cleanup(func() { addModelDirectoryPath = oldDir })
+		return weights, files
+	}
+
+	t.Run("size changed", func(t *testing.T) {
+		weights, files := setup(t)
+		writeTestFile(t, weights, "rewritten and longer, never uploaded")
+
+		deletedCount, _, _, delErr := deleteVerifiedModelFiles(files)
+		if delErr == nil || !strings.Contains(delErr.Error(), "its contents changed since the model directory was scanned") {
+			t.Fatalf("expected the in-place rewrite to be refused, got %v", delErr)
+		}
+		if deletedCount != 0 {
+			t.Fatalf("a rewritten file must not be deleted, got %d", deletedCount)
+		}
+		assertFileContent(t, weights, "rewritten and longer, never uploaded")
+	})
+
+	t.Run("same size, mtime changed", func(t *testing.T) {
+		weights, files := setup(t)
+		writeTestFile(t, weights, "CHANGED")
+		future := time.Now().Add(2 * time.Hour)
+		if err := os.Chtimes(weights, future, future); err != nil {
+			t.Fatalf("chtimes: %v", err)
+		}
+
+		deletedCount, _, _, delErr := deleteVerifiedModelFiles(files)
+		if delErr == nil || !strings.Contains(delErr.Error(), "its contents changed since the model directory was scanned") {
+			t.Fatalf("expected the in-place rewrite to be refused, got %v", delErr)
+		}
+		if deletedCount != 0 {
+			t.Fatalf("a rewritten file must not be deleted, got %d", deletedCount)
+		}
+		assertFileContent(t, weights, "CHANGED")
+	})
 }
 
 func assertFileContent(t *testing.T, path, want string) {

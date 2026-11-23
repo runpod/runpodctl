@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -274,6 +275,44 @@ func TestCollectModelFiles_BlobsLayoutOutsideHuggingFaceRepoRefused(t *testing.T
 
 	if _, err := collectModelFiles(root); err == nil {
 		t.Fatal("the blobs allowance applies only to a models--<owner>--<name> repo directory")
+	}
+}
+
+// a scan that fails while pinning a secondary containment root (e.g. an HF
+// blobs/ path that is not a directory) must close the roots it already
+// opened: repeated failed scans must not leak descriptors.
+func TestCollectModelFiles_ClosesRootsWhenPinFails(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("descriptor counting uses /proc/self/fd")
+	}
+	cache := t.TempDir()
+	repo := filepath.Join(cache, "models--owner--name")
+	snapshot := filepath.Join(repo, "snapshots", "abc123")
+	writeTestFile(t, filepath.Join(snapshot, "config.json"), "{}")
+	// blobs as a FILE: os.OpenRoot on it fails with not-a-directory (not
+	// ErrNotExist), so pin() fails after the model root already opened.
+	writeTestFile(t, filepath.Join(repo, "blobs"), "not a directory")
+
+	countFDs := func(t *testing.T) int {
+		t.Helper()
+		entries, err := os.ReadDir("/proc/self/fd")
+		if err != nil {
+			t.Fatalf("read /proc/self/fd: %v", err)
+		}
+		return len(entries)
+	}
+
+	if _, err := collectModelFiles(snapshot); err == nil {
+		t.Fatal("premise: the not-a-directory blobs root must fail the scan")
+	}
+	before := countFDs(t)
+	for range 20 {
+		if _, err := collectModelFiles(snapshot); err == nil {
+			t.Fatal("the not-a-directory blobs root must fail the scan")
+		}
+	}
+	if after := countFDs(t); after != before {
+		t.Fatalf("failed scans leaked %d descriptor(s): %d before, %d after", after-before, before, after)
 	}
 }
 
