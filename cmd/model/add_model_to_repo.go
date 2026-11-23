@@ -762,114 +762,8 @@ func collectModelFilesWithOptions(dir string, includeHidden bool) (files []model
 		return nil, 0, fmt.Errorf("stat model directory: %w", err)
 	}
 
-	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-
-		if path == root {
-			return nil
-		}
-
-		// decided on the name alone and before symlink resolution, so a skipped
-		// entry is never followed or stat'ed.
-		if !includeHidden && isSensitiveModelEntry(d.Name(), d.IsDir()) {
-			skipped++
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		if d.IsDir() {
-			return nil
-		}
-
-		resolved := path
-		var linkInfo os.FileInfo
-		if d.Type()&fs.ModeSymlink != 0 {
-			target, err := filepath.EvalSymlinks(path)
-			if err != nil {
-				return fmt.Errorf("resolve symlink %q: %w", path, err)
-			}
-			resolved = target
-			// keep the link's own lstat (identity-pinned like info): the delete
-			// removes the link by name and must only remove the very link that
-			// was scanned, not a same-named replacement.
-			linkInfo, err = d.Info()
-			if err != nil {
-				return fmt.Errorf("stat symlink %q: %w", path, err)
-			}
-			if pinErr := pinScanFileIdentity(linkInfo); pinErr != nil {
-				return fmt.Errorf("scan symlink %q: %w", path, pinErr)
-			}
-		}
-		rootIdx, rootRel, within := roots.locate(resolved)
-		if !within {
-			return fmt.Errorf("%w: %q resolves to %q, outside the model directory (--model-path); refusing to upload files that are not under --model-path. %s", errSymlinkOutsideModelPath, path, resolved, symlinkOutsideModelPathHint)
-		}
-
-		info, rootInfo, err := roots.lstat(path, rootIdx, rootRel)
-		if err != nil {
-			return fmt.Errorf("stat file %q: %w", path, err)
-		}
-
-		// the entry name alone is not enough: a benign-looking link to .env or
-		// into .git would otherwise upload the excluded file under its alias.
-		// `resolved` is the lexical evaluation from before the rooted stat; a
-		// directory swapped for a link in between makes the rooted open
-		// traverse different components. Check every component the confined
-		// resolution through the root actually traverses instead.
-		if !includeHidden {
-			handle, _, openErr := roots.open(rootIdx)
-			if openErr != nil {
-				return fmt.Errorf("stat file %q: %w", path, openErr)
-			}
-			traversed, resolveErr := resolveInRoot(handle, rootRel)
-			if resolveErr != nil {
-				return fmt.Errorf("resolve %q through the model directory: %w", path, resolveErr)
-			}
-			if traversedHasSensitiveEntry(traversed, info.IsDir()) {
-				skipped++
-				return nil
-			}
-		}
-
-		if info.IsDir() {
-			return fmt.Errorf("encountered directory %q while collecting files", path)
-		}
-
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("model-path contains unsupported file type: %s", path)
-		}
-
-		if pinErr := pinScanFileIdentity(info); pinErr != nil {
-			return fmt.Errorf("scan %q: %w", path, pinErr)
-		}
-
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-
-		if err := validateModelRelativePath(filepath.ToSlash(rel)); err != nil {
-			return err
-		}
-
-		files = append(files, modelFile{
-			AbsolutePath:   path,
-			ResolvedPath:   resolved,
-			RelativePath:   filepath.ToSlash(rel),
-			Size:           info.Size(),
-			info:           &scannedModelInfo{FileInfo: info, rootDir: roots.dirs[rootIdx], rootInfo: rootInfo, name: rootRel},
-			linkInfo:       linkInfo,
-			deleteRootDir:  root,
-			deleteRootInfo: deleteRootInfo,
-			deleteName:     rel,
-		})
-
-		return nil
-	})
+	scan := &modelDirScan{root: root, roots: roots, deleteRootInfo: deleteRootInfo, includeHidden: includeHidden}
+	walkErr := filepath.WalkDir(root, scan.collectEntry)
 
 	if closeErr := roots.close(); walkErr == nil && closeErr != nil {
 		walkErr = fmt.Errorf("close model directory: %w", closeErr)
@@ -878,11 +772,156 @@ func collectModelFilesWithOptions(dir string, includeHidden bool) (files []model
 		return nil, 0, fmt.Errorf("scan model directory: %w", walkErr)
 	}
 
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].RelativePath < files[j].RelativePath
+	sort.Slice(scan.files, func(i, j int) bool {
+		return scan.files[i].RelativePath < scan.files[j].RelativePath
 	})
 
-	return files, skipped, nil
+	return scan.files, scan.skipped, nil
+}
+
+// modelDirScan collects the entries of one --model-path walk: the walk's
+// pinned containment roots and per-entry state, so the per-entry logic can
+// live outside the WalkDir closure.
+type modelDirScan struct {
+	root           string
+	roots          *scanRoots
+	deleteRootInfo os.FileInfo
+	includeHidden  bool
+	files          []modelFile
+	skipped        int
+}
+
+// collectEntry handles one walked entry: sensitive names are skipped by name
+// alone (never followed or stat'ed), every other file is symlink-resolved,
+// located inside the containment roots, statted through the pinned root, and
+// appended when it is the regular file the confined traversal says it is.
+func (s *modelDirScan) collectEntry(path string, d fs.DirEntry, walkErr error) error {
+	if walkErr != nil {
+		return walkErr
+	}
+
+	if path == s.root {
+		return nil
+	}
+
+	// decided on the name alone and before symlink resolution, so a skipped
+	// entry is never followed or stat'ed.
+	if !s.includeHidden && isSensitiveModelEntry(d.Name(), d.IsDir()) {
+		s.skipped++
+		if d.IsDir() {
+			return filepath.SkipDir
+		}
+		return nil
+	}
+
+	if d.IsDir() {
+		return nil
+	}
+
+	resolved, linkInfo, err := resolveEntryTarget(path, d)
+	if err != nil {
+		return err
+	}
+	rootIdx, rootRel, within := s.roots.locate(resolved)
+	if !within {
+		return fmt.Errorf("%w: %q resolves to %q, outside the model directory (--model-path); refusing to upload files that are not under --model-path. %s", errSymlinkOutsideModelPath, path, resolved, symlinkOutsideModelPathHint)
+	}
+
+	info, rootInfo, statErr := s.roots.lstat(path, rootIdx, rootRel)
+	if statErr != nil {
+		return fmt.Errorf("stat file %q: %w", path, statErr)
+	}
+
+	// the entry name alone is not enough: a benign-looking link to .env or
+	// into .git would otherwise upload the excluded file under its alias, so
+	// the components the confined resolution actually traverses are checked
+	// too (not the stale lexical `resolved`).
+	if !s.includeHidden {
+		sensitive, sensErr := s.traversesSensitive(path, rootIdx, rootRel, info.IsDir())
+		if sensErr != nil {
+			return sensErr
+		}
+		if sensitive {
+			s.skipped++
+			return nil
+		}
+	}
+
+	if info.IsDir() {
+		return fmt.Errorf("encountered directory %q while collecting files", path)
+	}
+
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("model-path contains unsupported file type: %s", path)
+	}
+
+	if pinErr := pinScanFileIdentity(info); pinErr != nil {
+		return fmt.Errorf("scan %q: %w", path, pinErr)
+	}
+
+	rel, err := filepath.Rel(s.root, path)
+	if err != nil {
+		return err
+	}
+
+	if err := validateModelRelativePath(filepath.ToSlash(rel)); err != nil {
+		return err
+	}
+
+	s.files = append(s.files, modelFile{
+		AbsolutePath:   path,
+		ResolvedPath:   resolved,
+		RelativePath:   filepath.ToSlash(rel),
+		Size:           info.Size(),
+		info:           &scannedModelInfo{FileInfo: info, rootDir: s.roots.dirs[rootIdx], rootInfo: rootInfo, name: rootRel},
+		linkInfo:       linkInfo,
+		deleteRootDir:  s.root,
+		deleteRootInfo: s.deleteRootInfo,
+		deleteName:     rel,
+	})
+
+	return nil
+}
+
+// resolveEntryTarget resolves a walked file entry to its upload path: the
+// fully symlink-resolved path and, for a link, the link's own pinned lstat
+// (the delete removes the link by name and must only remove the very link
+// that was scanned, not a same-named replacement).
+func resolveEntryTarget(path string, d fs.DirEntry) (resolved string, linkInfo os.FileInfo, err error) {
+	resolved = path
+	if d.Type()&fs.ModeSymlink == 0 {
+		return resolved, nil, nil
+	}
+	target, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", nil, fmt.Errorf("resolve symlink %q: %w", path, err)
+	}
+	resolved = target
+	linkInfo, err = d.Info()
+	if err != nil {
+		return "", nil, fmt.Errorf("stat symlink %q: %w", path, err)
+	}
+	if pinErr := pinScanFileIdentity(linkInfo); pinErr != nil {
+		return "", nil, fmt.Errorf("scan symlink %q: %w", path, pinErr)
+	}
+	return resolved, linkInfo, nil
+}
+
+// traversesSensitive reports whether the path actually traversed to a file
+// inside a containment root contains an excluded (sensitive) entry, per the
+// confined resolution through the pinned root (see resolveInRoot): a
+// directory swapped for a link to .git after the lexical resolution must not
+// upload a sensitive file under its alias.
+func (s *modelDirScan) traversesSensitive(path string, rootIdx int, rootRel string, isDir bool) (bool, error) {
+	handle, _, err := s.roots.open(rootIdx)
+	if err != nil {
+		return false, fmt.Errorf("stat file %q: %w", path, err)
+	}
+	traversed, err := resolveInRoot(handle, rootRel)
+	if err != nil {
+		return false, fmt.Errorf("resolve %q through the model directory: %w", path, err)
+	}
+	return traversedHasSensitiveEntry(traversed, isDir), nil
 }
 
 // resolveInRoot returns the path components within root that opening rel

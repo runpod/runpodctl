@@ -92,16 +92,19 @@ func TestUnreadableBodyOnRejectedStatusKeepsNetworkCause(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error")
 	}
-	var apiErr *APIError
-	if !errors.As(err, &apiErr) {
+	apiErr, isAPIError := errors.AsType[*APIError](err)
+	if !isAPIError {
 		t.Fatalf("expected an *APIError, got %T: %v", err, err)
 	}
 	if apiErr.Status != http.StatusBadGateway || apiErr.ErrorCode() != "server_error" {
 		t.Fatalf("the received status must win: status=%d code=%q", apiErr.Status, apiErr.ErrorCode())
 	}
-	var opErr *net.OpError
-	if !errors.As(err, &opErr) {
+	opErr, isNetError := errors.AsType[*net.OpError](err)
+	if !isNetError {
 		t.Fatalf("the network cause must stay reachable through Unwrap: %v", err)
+	}
+	if opErr.Op != "read" {
+		t.Fatalf("expected the read net.OpError, got %v", opErr)
 	}
 	if !strings.Contains(err.Error(), "connection reset") {
 		t.Fatalf("the message should name the read failure, got %v", err)

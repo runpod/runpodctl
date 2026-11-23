@@ -77,7 +77,14 @@ func TestQueryMalformedURLErrorIsRedacted(t *testing.T) {
 	t.Setenv("RUNPOD_API_KEY", "test-key")
 	t.Setenv("RUNPOD_GRAPHQL_URL", "https://bad host/x?X-Amz-Signature=deadbeef0123456789")
 
-	_, err := Query(Input{Query: "query test"})
+	res, err := Query(Input{Query: "query test"})
+	if res != nil {
+		defer func() {
+			if closeErr := res.Body.Close(); closeErr != nil {
+				t.Errorf("close response body: %v", closeErr)
+			}
+		}()
+	}
 	if err == nil {
 		t.Fatal("expected a request-construction error")
 	}

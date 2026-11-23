@@ -128,7 +128,8 @@ func TestCollectModelFiles_SensitiveSymlinkTargetIsSkipped(t *testing.T) {
 		t.Fatalf("collect: %v", err)
 	}
 	got := strings.Join(collectedNames(files), ",")
-	for _, f := range files {
+	for i := range files {
+		f := &files[i]
 		if strings.Contains(f.ResolvedPath, ".env") || strings.Contains(strings.ToLower(f.ResolvedPath), ".git") {
 			t.Errorf("%s resolves to an excluded file: %s", f.RelativePath, f.ResolvedPath)
 		}
@@ -190,14 +191,15 @@ func TestCollectModelFiles_SkipsAliasWhoseAncestorSwappedToSensitiveDuringScan(t
 		symlinkOrSkip(t, ".git", safe)
 	}
 
-	files, _, err := collectModelFilesWithOptions(root, false)
+	files, _, collectErr := collectModelFilesWithOptions(root, false)
 	if !swapped {
 		t.Fatal("hook did not run")
 	}
-	if err != nil {
-		t.Fatalf("collect: %v", err)
+	if collectErr != nil {
+		t.Fatalf("collect: %v", collectErr)
 	}
-	for _, f := range files {
+	for i := range files {
+		f := &files[i]
 		if strings.Contains(strings.ToLower(f.ResolvedPath), ".git") {
 			t.Errorf("%s reached a sensitive file through the swapped ancestor: %s", f.RelativePath, f.ResolvedPath)
 		}
@@ -225,8 +227,8 @@ func TestCollectModelFiles_AliasThroughBenignDirectoryKept(t *testing.T) {
 }
 
 func containsName(files []modelFile, name string) bool {
-	for _, f := range files {
-		if f.RelativePath == name {
+	for i := range files {
+		if files[i].RelativePath == name {
 			return true
 		}
 	}
