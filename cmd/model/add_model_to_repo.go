@@ -686,8 +686,8 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 	// the handful of instructions between EvalSymlinks and pin. A swap of
 	// --model-path itself within that window is still followed, by design, the
 	// same as passing the replacement directory directly.
-	if err := roots.pin(); err != nil {
-		return nil, fmt.Errorf("scan model directory: %w", err)
+	if pinErr := roots.pin(); pinErr != nil {
+		return nil, fmt.Errorf("scan model directory: %w", pinErr)
 	}
 
 	// the resolved --model-path directory's scan-time identity, taken through
@@ -931,8 +931,8 @@ func openScannedModelFile(path string, scanned os.FileInfo) (*os.File, os.FileIn
 
 func totalModelFileSize(files []modelFile) int64 {
 	var total int64
-	for _, file := range files {
-		total += file.Size
+	for i := range files {
+		total += files[i].Size
 	}
 	return total
 }
@@ -1002,7 +1002,8 @@ func deleteVerifiedModelFiles(files []modelFile) (deletedCount int, deletedBytes
 	deleted := make(map[string]bool)
 	keptTargets := make(map[string]bool)
 
-	for _, file := range files {
+	for i := range files {
+		file := &files[i]
 		if refuseErr := refuseDeleteOfReplacedEntry(root, file); refuseErr != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", file.RelativePath, refuseErr))
 			continue
@@ -1030,11 +1031,9 @@ func deleteVerifiedModelFiles(files []modelFile) (deletedCount int, deletedBytes
 		msg := fmt.Sprintf("deleted %d verified model file(s) (%d bytes) from %s", deletedCount, deletedBytes, addModelDirectoryPath)
 		if removedSymlinks > 0 {
 			msg += fmt.Sprintf(" and removed %d symlink(s)", removedSymlinks)
-			switch kept := len(keptTargets); {
-			case kept == 0:
-			case kept == removedSymlinks:
+			if kept := len(keptTargets); kept == removedSymlinks {
 				msg += " (targets kept)"
-			default:
+			} else if kept > 0 {
 				msg += fmt.Sprintf(" (%d target(s) kept)", kept)
 			}
 		}
@@ -1051,8 +1050,9 @@ func deleteVerifiedModelFiles(files []modelFile) (deletedCount int, deletedBytes
 // refuseDeleteOfReplacedEntry reports why file must not be deleted: the entry
 // at its scanned name is no longer the entry that was scanned, uploaded and
 // hashed. Returns nil when they are the same. Comparisons go through the
-// pinned --model-path root, so the lookup itself cannot escape it.
-func refuseDeleteOfReplacedEntry(root *os.Root, file modelFile) error {
+// pinned --model-path root, so the lookup itself cannot escape it. file is a
+// pointer into the caller's slice: per-entry copies of a modelFile are wasted.
+func refuseDeleteOfReplacedEntry(root *os.Root, file *modelFile) error {
 	// a symlink entry compares against the link's own scan-time lstat (the
 	// delete removes the link), a regular entry against the scanned target.
 	scanned := file.info
@@ -1428,7 +1428,8 @@ func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInp
 			CredentialReference: baseInput.CredentialReference,
 			Files:               make([]api.ModelRepoUploadBatchFileInput, len(chunk)),
 		}
-		for i, file := range chunk {
+		for i := range chunk {
+			file := &chunk[i]
 			batchInput.Files[i] = api.ModelRepoUploadBatchFileInput{
 				FileName:      file.RelativePath,
 				FileSizeBytes: strconv.FormatInt(file.Size, 10),
@@ -1538,7 +1539,8 @@ func runBounded(parent context.Context, n, concurrency int, fn func(ctx context.
 // for the whole chunk before any goroutine is launched, so a malformed response fails
 // before wasting a single byte transfer.
 func uploadModelFileChunk(chunk []modelFile, uploads []*api.ModelRepoUpload, progress modelUploadProgress) ([]uploadedModelFile, error) {
-	for i, file := range chunk {
+	for i := range chunk {
+		file := &chunk[i]
 		upload := uploads[i]
 		if upload == nil {
 			return nil, fmt.Errorf("upload batch response missing upload session details for %s", file.RelativePath)
