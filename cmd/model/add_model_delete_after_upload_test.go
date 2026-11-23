@@ -220,10 +220,18 @@ func TestDeleteVerifiedModelFilesReturnsNonZeroOnPartialFailure(t *testing.T) {
 	t.Cleanup(func() { removeModelFileInRoot = oldRemove })
 
 	modelDir := t.TempDir()
-	rootInfo, err := os.Lstat(modelDir)
-	if err != nil {
-		t.Fatalf("stat model dir: %v", err)
+	writeTestFile(t, filepath.Join(modelDir, "a.bin"), "aaaaaaaaaa")
+	writeTestFile(t, filepath.Join(modelDir, "b.bin"), "bbbbbbbbbbbbbbbbbbbb")
+	writeTestFile(t, filepath.Join(modelDir, "c.bin"), "cccccccccccccccccccccccccccccc")
+
+	files, err := collectModelFiles(modelDir)
+	if err != nil || len(files) != 3 {
+		t.Fatalf("collect: %v %+v", err, files)
 	}
+
+	oldDir := addModelDirectoryPath
+	addModelDirectoryPath = modelDir
+	t.Cleanup(func() { addModelDirectoryPath = oldDir })
 
 	var removed []string
 	removeModelFileInRoot = func(_ *os.Root, name string) error {
@@ -232,12 +240,6 @@ func TestDeleteVerifiedModelFilesReturnsNonZeroOnPartialFailure(t *testing.T) {
 		}
 		removed = append(removed, name)
 		return nil
-	}
-
-	files := []modelFile{
-		{AbsolutePath: filepath.Join(modelDir, "a.bin"), RelativePath: "a.bin", Size: 10, deleteRootDir: modelDir, deleteRootInfo: rootInfo, deleteName: "a.bin"},
-		{AbsolutePath: filepath.Join(modelDir, "b.bin"), RelativePath: "b.bin", Size: 20, deleteRootDir: modelDir, deleteRootInfo: rootInfo, deleteName: "b.bin"},
-		{AbsolutePath: filepath.Join(modelDir, "c.bin"), RelativePath: "c.bin", Size: 30, deleteRootDir: modelDir, deleteRootInfo: rootInfo, deleteName: "c.bin"},
 	}
 
 	deletedCount, deletedBytes, _, err := deleteVerifiedModelFiles(files)
@@ -267,19 +269,21 @@ func TestDeleteVerifiedModelFilesSucceedsWhenAllRemoved(t *testing.T) {
 	t.Cleanup(func() { removeModelFileInRoot = oldRemove })
 
 	modelDir := t.TempDir()
-	rootInfo, err := os.Lstat(modelDir)
-	if err != nil {
-		t.Fatalf("stat model dir: %v", err)
+	writeTestFile(t, filepath.Join(modelDir, "a.bin"), "aaaaa")
+
+	files, err := collectModelFiles(modelDir)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("collect: %v %+v", err, files)
 	}
+
+	oldDir := addModelDirectoryPath
+	addModelDirectoryPath = modelDir
+	t.Cleanup(func() { addModelDirectoryPath = oldDir })
 
 	var removed []string
 	removeModelFileInRoot = func(_ *os.Root, name string) error {
 		removed = append(removed, name)
 		return nil
-	}
-
-	files := []modelFile{
-		{AbsolutePath: filepath.Join(modelDir, "a.bin"), RelativePath: "a.bin", Size: 5, deleteRootDir: modelDir, deleteRootInfo: rootInfo, deleteName: "a.bin"},
 	}
 
 	deletedCount, deletedBytes, _, err := deleteVerifiedModelFiles(files)
@@ -491,6 +495,176 @@ func TestDeleteVerifiedModelFilesRefusesModelDirSwap(t *testing.T) {
 	}
 	assertFileContent(t, outsideWeights, "do-not-touch")
 	assertFileContent(t, filepath.Join(aside, "weights.bin"), "weights")
+}
+
+// two HF-style aliases to the same surviving blob and one in-root link whose
+// target is deleted in the run: the blob is ONE distinct surviving target and
+// must be counted once, not once per alias.
+func TestDeleteVerifiedModelFilesCountsDistinctSurvivingTargets(t *testing.T) {
+	cache := t.TempDir()
+	repo := filepath.Join(cache, "models--owner--name")
+	writeTestFile(t, filepath.Join(repo, "blobs", "sha"), "blob")
+	snapshot := filepath.Join(repo, "snapshots", "rev")
+	writeTestFile(t, filepath.Join(snapshot, "real.bin"), "real")
+	symlinkOrSkip(t, filepath.Join("..", "..", "blobs", "sha"), filepath.Join(snapshot, "hf1.bin"))
+	symlinkOrSkip(t, filepath.Join("..", "..", "blobs", "sha"), filepath.Join(snapshot, "hf2.bin"))
+	symlinkOrSkip(t, "real.bin", filepath.Join(snapshot, "internal.bin"))
+
+	files, err := collectModelFiles(snapshot)
+	if err != nil || len(files) != 4 {
+		t.Fatalf("collect: %v %+v", err, files)
+	}
+
+	oldDir := addModelDirectoryPath
+	addModelDirectoryPath = snapshot
+	t.Cleanup(func() { addModelDirectoryPath = oldDir })
+
+	_, stderr := captureStdStreams(t, func() {
+		if _, _, _, delErr := deleteVerifiedModelFiles(files); delErr != nil {
+			t.Fatalf("delete: %v", delErr)
+		}
+	})
+	if !strings.Contains(stderr, "removed 3 symlink(s) (1 target(s) kept)") {
+		t.Fatalf("expected the single distinct surviving target reported once, got %q", stderr)
+	}
+}
+
+// --model-path replaced by a real directory with same-named files after the
+// scan: the directory identity was pinned at scan time, so the replacement is
+// not mistaken for the scanned directory (a delayed os.SameFile would compare
+// the replacement to itself) and nothing inside it is deleted.
+func TestDeleteVerifiedModelFilesRefusesReplacedRootDirectory(t *testing.T) {
+	modelDir := t.TempDir()
+	writeTestFile(t, filepath.Join(modelDir, "weights.bin"), "weights")
+
+	files, err := collectModelFiles(modelDir)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("collect: %v %+v", err, files)
+	}
+
+	oldDir := addModelDirectoryPath
+	addModelDirectoryPath = modelDir
+	t.Cleanup(func() { addModelDirectoryPath = oldDir })
+
+	aside := modelDir + ".aside"
+	if err := os.Rename(modelDir, aside); err != nil {
+		t.Fatalf("rename model dir aside: %v", err)
+	}
+	writeTestFile(t, filepath.Join(modelDir, "weights.bin"), "do-not-touch")
+
+	deletedCount, _, _, delErr := deleteVerifiedModelFiles(files)
+	if delErr == nil || !strings.Contains(delErr.Error(), "changed since it was scanned") {
+		t.Fatalf("expected the replaced root directory to be refused, got %v", delErr)
+	}
+	if deletedCount != 0 {
+		t.Fatalf("nothing may be deleted from the replaced directory, got %d", deletedCount)
+	}
+	assertFileContent(t, filepath.Join(modelDir, "weights.bin"), "do-not-touch")
+	assertFileContent(t, filepath.Join(aside, "weights.bin"), "weights")
+}
+
+// a same-named file renamed over a scanned one in the wait between the upload
+// and the delete (a training job writing a new checkpoint) was never uploaded:
+// the delete skips it with a failure and the replacement survives.
+func TestDeleteVerifiedModelFilesSkipsRenamedOverFile(t *testing.T) {
+	modelDir := t.TempDir()
+	weights := filepath.Join(modelDir, "weights.bin")
+	writeTestFile(t, weights, "weights")
+
+	files, err := collectModelFiles(modelDir)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("collect: %v %+v", err, files)
+	}
+
+	oldDir := addModelDirectoryPath
+	addModelDirectoryPath = modelDir
+	t.Cleanup(func() { addModelDirectoryPath = oldDir })
+
+	replacement := filepath.Join(modelDir, "weights.bin.new")
+	writeTestFile(t, replacement, "newer weights never uploaded")
+	if err := os.Rename(replacement, weights); err != nil {
+		t.Fatalf("rename over: %v", err)
+	}
+
+	deletedCount, _, _, delErr := deleteVerifiedModelFiles(files)
+	if delErr == nil || !strings.Contains(delErr.Error(), "changed since the model directory was scanned") {
+		t.Fatalf("expected the rename-over to be refused, got %v", delErr)
+	}
+	if deletedCount != 0 {
+		t.Fatalf("a replaced file must not be deleted, got %d", deletedCount)
+	}
+	assertFileContent(t, weights, "newer weights never uploaded")
+}
+
+// an ancestor directory replaced by a real, same-named directory between the
+// upload and the delete: the entries inside were never scanned or uploaded,
+// so they survive and the delete reports a failure for each.
+func TestDeleteVerifiedModelFilesSkipsReplacedAncestorDirectory(t *testing.T) {
+	modelDir := t.TempDir()
+	sub := filepath.Join(modelDir, "sub")
+	writeTestFile(t, filepath.Join(sub, "weights.bin"), "weights")
+
+	files, err := collectModelFiles(modelDir)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("collect: %v %+v", err, files)
+	}
+
+	oldDir := addModelDirectoryPath
+	addModelDirectoryPath = modelDir
+	t.Cleanup(func() { addModelDirectoryPath = oldDir })
+
+	aside := modelDir + ".aside"
+	if err := os.Rename(sub, aside); err != nil {
+		t.Fatalf("rename sub aside: %v", err)
+	}
+	// same relative path, different file that was never uploaded.
+	writeTestFile(t, filepath.Join(sub, "weights.bin"), "do-not-touch")
+
+	deletedCount, _, _, delErr := deleteVerifiedModelFiles(files)
+	if delErr == nil || !strings.Contains(delErr.Error(), "changed since the model directory was scanned") {
+		t.Fatalf("expected the entry beneath a replaced directory to be refused, got %v", delErr)
+	}
+	if deletedCount != 0 {
+		t.Fatalf("nothing may be deleted beneath a replaced directory, got %d", deletedCount)
+	}
+	assertFileContent(t, filepath.Join(sub, "weights.bin"), "do-not-touch")
+	assertFileContent(t, filepath.Join(aside, "weights.bin"), "weights")
+}
+
+// a symlink entry replaced by a regular file (a re-download with --local-dir)
+// is not the scanned link: it is skipped and the new file survives.
+func TestDeleteVerifiedModelFilesSkipsLinkReplacedByRegularFile(t *testing.T) {
+	cache := t.TempDir()
+	repo := filepath.Join(cache, "models--owner--name")
+	blob := filepath.Join(repo, "blobs", "sha")
+	writeTestFile(t, blob, "blob")
+	snapshot := filepath.Join(repo, "snapshots", "rev")
+	link := filepath.Join(snapshot, "model.safetensors")
+	symlinkOrSkip(t, filepath.Join("..", "..", "blobs", "sha"), link)
+
+	files, err := collectModelFiles(snapshot)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("collect: %v %+v", err, files)
+	}
+
+	oldDir := addModelDirectoryPath
+	addModelDirectoryPath = snapshot
+	t.Cleanup(func() { addModelDirectoryPath = oldDir })
+
+	if err := os.Remove(link); err != nil {
+		t.Fatalf("remove link: %v", err)
+	}
+	writeTestFile(t, link, "downloaded, never uploaded")
+
+	deletedCount, _, removedLinks, delErr := deleteVerifiedModelFiles(files)
+	if delErr == nil || !strings.Contains(delErr.Error(), "changed since the model directory was scanned") {
+		t.Fatalf("expected the replaced link to be refused, got %v", delErr)
+	}
+	if deletedCount != 0 || removedLinks != 0 {
+		t.Fatalf("a replaced link must not be deleted, got files=%d links=%d", deletedCount, removedLinks)
+	}
+	assertFileContent(t, link, "downloaded, never uploaded")
+	assertFileContent(t, blob, "blob")
 }
 
 func assertFileContent(t *testing.T, path, want string) {

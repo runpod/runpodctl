@@ -131,11 +131,19 @@ type modelFile struct {
 	ResolvedPath string
 	RelativePath string
 	Size         int64
-	// info is the scan-time lstat of ResolvedPath. The upload re-checks the
-	// opened file against it so a path swapped after the scan is refused.
+	// info is the scan-time lstat of ResolvedPath, identity-pinned at scan time
+	// (see pinScanFileIdentity). The upload re-checks the opened file against it
+	// so a path swapped after the scan is refused.
 	info os.FileInfo
+	// linkInfo is the scan-time lstat of the symlink itself, set only when the
+	// entry reached its target through a link (isSymlink). The post-upload
+	// delete removes the link by name and compares the entry's identity against
+	// this before doing so; for a regular entry the delete compares against
+	// info instead. Also identity-pinned at scan time.
+	linkInfo os.FileInfo
 	// deleteRootDir is the scanned (symlink-resolved) --model-path directory and
-	// deleteRootInfo its scan-time stat. The post-upload delete re-opens the
+	// deleteRootInfo its scan-time stat through the pinned containment root
+	// (identity pinned at scan time). The post-upload delete re-opens the
 	// directory (os.Root) and refuses to run when it is no longer the same
 	// directory, so a directory swapped for a symlink after the scan cannot
 	// redirect a removal outside it; deleteName is the removed entry's path
@@ -176,8 +184,9 @@ type modelAddOutput struct {
 	DeletedModelFiles      int                  `json:"deletedModelFiles,omitempty"`
 	DeletedModelFilesBytes int64                `json:"deletedModelFilesBytes,omitempty"`
 	// RemovedSymlinks counts symlinks removed by --delete-my-model-files-after-upload.
-	// Only the link is removed; its target (e.g. a Hugging Face blob) is kept, so
-	// these are not part of DeletedModelFiles/DeletedModelFilesBytes.
+	// Only the link is removed, never its target through the link; a target that
+	// is itself a collected entry (an in-root link) is deleted as that regular
+	// entry, so symlinks are not part of DeletedModelFiles/DeletedModelFilesBytes.
 	RemovedSymlinks int `json:"removedSymlinks,omitempty"`
 }
 
@@ -570,7 +579,9 @@ type scannedModelInfo struct {
 	name     string
 }
 
-// scanRoots lazily opens the containment roots for the duration of one scan.
+// scanRoots holds the containment roots for the duration of one scan. pin
+// opens every root up front; a root that does not exist yet (an HF repo with
+// no blobs/ directory) opens lazily at first use instead.
 type scanRoots struct {
 	dirs    []string
 	handles []*os.Root
@@ -608,6 +619,26 @@ func (s *scanRoots) open(i int) (*os.Root, os.FileInfo, error) {
 	}
 	s.handles[i], s.infos[i] = handle, info
 	return handle, info, nil
+}
+
+// pin opens every containment root before the walk starts, so the first open
+// of each happens now, in one place, instead of lazily mid-walk (the blobs
+// root of a Hugging Face cache would otherwise open when the first link into
+// it is found). A root opened earlier follows a directory swapped in between
+// the path resolution above and the open; pinning shrinks that window to the
+// few instructions between EvalSymlinks and here. Extra roots that do not
+// exist (an HF repo with no blobs/ directory and no links into it) open
+// lazily at first use instead.
+func (s *scanRoots) pin() error {
+	for i := range s.dirs {
+		if _, _, err := s.open(i); err != nil {
+			if i > 0 && errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *scanRoots) close() error {
@@ -650,10 +681,21 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 		return nil, fmt.Errorf("resolve model directory: %w", err)
 	}
 	roots := newScanRoots(modelContainmentRoots(root))
+	// Pin the containment roots before walking (see scanRoots.pin): the first
+	// open of each root happens now, narrowing the resolve-to-open window to
+	// the handful of instructions between EvalSymlinks and pin. A swap of
+	// --model-path itself within that window is still followed, by design, the
+	// same as passing the replacement directory directly.
+	if err := roots.pin(); err != nil {
+		return nil, fmt.Errorf("scan model directory: %w", err)
+	}
 
-	// the resolved --model-path directory's scan-time identity: the post-upload
-	// delete re-checks it before removing anything.
-	deleteRootInfo, err := os.Lstat(root)
+	// the resolved --model-path directory's scan-time identity, taken through
+	// the pinned root (its identity is loaded now, not lazily at the first
+	// os.SameFile call): the post-upload delete re-checks it before removing
+	// anything, so a real-directory replacement of --model-path after the scan
+	// cannot pass as the scanned directory.
+	_, deleteRootInfo, err := roots.open(0)
 	if err != nil {
 		return nil, fmt.Errorf("stat model directory: %w", err)
 	}
@@ -674,12 +716,23 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 		}
 
 		resolved := path
+		var linkInfo os.FileInfo
 		if d.Type()&fs.ModeSymlink != 0 {
 			target, err := filepath.EvalSymlinks(path)
 			if err != nil {
 				return fmt.Errorf("resolve symlink %q: %w", path, err)
 			}
 			resolved = target
+			// keep the link's own lstat (identity-pinned like info): the delete
+			// removes the link by name and must only remove the very link that
+			// was scanned, not a same-named replacement.
+			linkInfo, err = d.Info()
+			if err != nil {
+				return fmt.Errorf("stat symlink %q: %w", path, err)
+			}
+			if pinErr := pinScanFileIdentity(linkInfo); pinErr != nil {
+				return fmt.Errorf("scan symlink %q: %w", path, pinErr)
+			}
 		}
 		rootIdx, rootRel, within := roots.locate(resolved)
 		if !within {
@@ -725,6 +778,7 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 			RelativePath:   filepath.ToSlash(rel),
 			Size:           info.Size(),
 			info:           &scannedModelInfo{FileInfo: info, rootDir: roots.dirs[rootIdx], rootInfo: rootInfo, name: rootRel},
+			linkInfo:       linkInfo,
 			deleteRootDir:  root,
 			deleteRootInfo: deleteRootInfo,
 			deleteName:     rel,
@@ -748,22 +802,33 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 }
 
 // modelContainmentRoots returns the directories a resolved file may live in:
-// the (already resolved) model directory itself and, when it is a Hugging Face
-// cache snapshot (.../models--owner--name/snapshots/<rev>), that repo's blobs/
-// directory and nothing else of the repo. HF caches store every snapshot file as
-// a relative symlink into the repo's blobs/ directory
-// (snapshots/<rev>/file -> ../../blobs/<sha>), so a single root would refuse the
-// whole layout. refs/ and the other revisions' snapshots/ stay outside the
-// allowance: a link into them would upload content that is neither in the
-// selected snapshot nor a blob.
+// the (already resolved) model directory itself and, when it sits at or below
+// a Hugging Face cache snapshot's revision directory
+// (.../models--owner--name/snapshots/<rev>[/sub/dir]), that repo's blobs/
+// directory and nothing else of the repo. HF caches store every snapshot file
+// as a relative symlink into the repo's blobs/ directory
+// (snapshots/<rev>/file -> ../../blobs/<sha>), so a single root would refuse
+// the whole layout; a subfolder of a snapshot (say snapshots/<rev>/unet, how
+// a diffusers component would be uploaded) stores its files as links into the
+// same blobs/, so the nearest snapshots/<rev> ancestor wins the allowance,
+// not only the revision directory itself. refs/ and the other revisions'
+// snapshots/ stay outside the allowance: a link into them would upload
+// content that is neither in the selected snapshot nor a blob.
 func modelContainmentRoots(resolvedRoot string) []string {
 	roots := []string{resolvedRoot}
-	snapshots := filepath.Dir(resolvedRoot)
-	if filepath.Base(snapshots) == "snapshots" {
-		repo := filepath.Dir(snapshots)
+	for dir := resolvedRoot; ; dir = filepath.Dir(dir) {
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		if filepath.Base(parent) != "snapshots" {
+			continue
+		}
+		repo := filepath.Dir(parent)
 		if strings.HasPrefix(filepath.Base(repo), "models--") {
 			roots = append(roots, filepath.Join(repo, "blobs"))
 		}
+		break
 	}
 	return roots
 }
@@ -902,6 +967,15 @@ func modelUploadRequestedBytes(modelFiles []modelFile) (bytes int64, ok bool) {
 // and the server do, and a directory -- or --model-path itself -- swapped for
 // a symlink during that window must not redirect a removal outside
 // --model-path.
+//
+// Before each entry is removed its identity is compared against the scan (the
+// link's own lstat for a symlink, the target's for a regular file). An entry
+// that was replaced since the scan -- renamed over, or reached through a
+// same-named replaced directory -- fails the check and is reported as a
+// failure instead of being deleted: only the bytes that were uploaded may be
+// removed, so a same-named file that was never part of this run survives. The
+// name can still change between that check and the removal itself; the window
+// is the few instructions between them rather than the whole upload.
 func deleteVerifiedModelFiles(files []modelFile) (deletedCount int, deletedBytes int64, removedSymlinks int, err error) {
 	if len(files) == 0 {
 		return 0, 0, 0, nil
@@ -921,13 +995,18 @@ func deleteVerifiedModelFiles(files []modelFile) (deletedCount int, deletedBytes
 	}
 
 	var failures []string
-	// regular entries deleted in this run, and the resolved targets of removed
-	// links: an in-root link's target is itself a collected entry and is deleted
-	// too, so "targets kept" only holds for links whose target survived.
+	// regular entries deleted in this run, and the distinct resolved targets of
+	// removed links: an in-root link's target is itself a collected entry and
+	// is deleted too, so "targets kept" only holds for distinct link targets
+	// that survived -- two aliases to one surviving blob are one kept target.
 	deleted := make(map[string]bool)
-	var removedLinkTargets []string
+	keptTargets := make(map[string]bool)
 
 	for _, file := range files {
+		if refuseErr := refuseDeleteOfReplacedEntry(root, file); refuseErr != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", file.RelativePath, refuseErr))
+			continue
+		}
 		if removeErr := removeModelFileInRoot(root, file.deleteName); removeErr != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", file.RelativePath, removeErr))
 			continue
@@ -936,10 +1015,13 @@ func deleteVerifiedModelFiles(files []modelFile) (deletedCount int, deletedBytes
 		// no bytes: count it separately instead of adding the target's size.
 		if file.isSymlink() {
 			removedSymlinks++
-			removedLinkTargets = append(removedLinkTargets, file.ResolvedPath)
+			if !deleted[file.ResolvedPath] {
+				keptTargets[file.ResolvedPath] = true
+			}
 			continue
 		}
 		deleted[file.AbsolutePath] = true
+		delete(keptTargets, file.AbsolutePath)
 		deletedCount++
 		deletedBytes += file.Size
 	}
@@ -948,16 +1030,11 @@ func deleteVerifiedModelFiles(files []modelFile) (deletedCount int, deletedBytes
 		msg := fmt.Sprintf("deleted %d verified model file(s) (%d bytes) from %s", deletedCount, deletedBytes, addModelDirectoryPath)
 		if removedSymlinks > 0 {
 			msg += fmt.Sprintf(" and removed %d symlink(s)", removedSymlinks)
-			kept := 0
-			for _, target := range removedLinkTargets {
-				if !deleted[target] {
-					kept++
-				}
-			}
-			switch {
+			switch kept := len(keptTargets); {
+			case kept == 0:
 			case kept == removedSymlinks:
 				msg += " (targets kept)"
-			case kept > 0:
+			default:
 				msg += fmt.Sprintf(" (%d target(s) kept)", kept)
 			}
 		}
@@ -969,6 +1046,42 @@ func deleteVerifiedModelFiles(files []modelFile) (deletedCount int, deletedBytes
 	}
 
 	return deletedCount, deletedBytes, removedSymlinks, nil
+}
+
+// refuseDeleteOfReplacedEntry reports why file must not be deleted: the entry
+// at its scanned name is no longer the entry that was scanned, uploaded and
+// hashed. Returns nil when they are the same. Comparisons go through the
+// pinned --model-path root, so the lookup itself cannot escape it.
+func refuseDeleteOfReplacedEntry(root *os.Root, file modelFile) error {
+	// a symlink entry compares against the link's own scan-time lstat (the
+	// delete removes the link), a regular entry against the scanned target.
+	scanned := file.info
+	scannedIsLink := false
+	if file.isSymlink() {
+		scanned = file.linkInfo
+		scannedIsLink = true
+	}
+	if scanned == nil {
+		// files constructed without a scan (tests, non-model-path flows) have no
+		// identity to compare; collectModelFiles always records one.
+		return nil
+	}
+	// os.SameFile needs the raw stat: scannedModelInfo wraps it with the
+	// scan-time location, and comparing the wrapper itself is never equal.
+	if wrapped, ok := scanned.(*scannedModelInfo); ok {
+		scanned = wrapped.FileInfo
+	}
+	current, err := root.Lstat(file.deleteName)
+	if err != nil {
+		return fmt.Errorf("it is no longer present as scanned: %w", err)
+	}
+	if isLink := current.Mode()&os.ModeSymlink != 0; isLink != scannedIsLink {
+		return errors.New("it changed since the model directory was scanned")
+	}
+	if !os.SameFile(scanned, current) {
+		return errors.New("it changed since the model directory was scanned")
+	}
+	return nil
 }
 
 func stderrIsTerminal() bool {
@@ -1682,28 +1795,48 @@ const modelUploadErrorExcerptRunes = 256
 // the signature, access key id and string-to-sign in arbitrary other elements.
 const unrecognizedXMLErrorText = "unrecognized XML error response"
 
-// xmlLikePattern spots markup anywhere in a body, so a prefix cannot hide an
-// XML document from the structured path and route it to the plain-text one.
-var xmlLikePattern = regexp.MustCompile(`<[A-Za-z?!/]`)
+// storageXMLMarkerPattern spots an S3-style error document anywhere in the
+// body, so a proxy that wraps one behind a plain-text or JSON prefix cannot
+// hide it from the structured path (which echoes only the allowlisted <Code>
+// and <Message> fields, never arbitrary other elements).
+var storageXMLMarkerPattern = regexp.MustCompile(`<\?xml[\s?]|<Error[\s>]`)
+
+// markupTagPattern matches one markup tag, for reducing a proxy's HTML error
+// page to its readable text.
+var markupTagPattern = regexp.MustCompile(`<[^>]*>`)
 
 func summarizeStorageError(body string) string {
 	body = strings.TrimSpace(body)
 	if body == "" {
 		return ""
 	}
-	if !xmlLikePattern.MatchString(body) {
-		return boundedRedacted(body)
+	if storageXMLMarkerPattern.MatchString(body) {
+		code, message := parseStorageErrorXML(body)
+		switch {
+		case code != "" && message != "":
+			return boundedRedacted(code) + ": " + boundedRedacted(message)
+		case code != "":
+			return boundedRedacted(code)
+		case message != "":
+			return boundedRedacted(message)
+		}
+		return unrecognizedXMLErrorText
 	}
-	code, message := parseStorageErrorXML(body)
-	switch {
-	case code != "" && message != "":
-		return boundedRedacted(code) + ": " + boundedRedacted(message)
-	case code != "":
-		return boundedRedacted(code)
-	case message != "":
-		return boundedRedacted(message)
+	// Not a storage error document: anything else (a proxy's HTML 502/504
+	// page, a JSON body such as {"message":"expected <Part> elements"}, plain
+	// text) keeps a bounded redacted excerpt for diagnosis. Only a body that
+	// leads with markup has its tags stripped, so the `<Part>` of a JSON
+	// error message survives intact.
+	if strings.HasPrefix(body, "<") {
+		return boundedRedacted(stripMarkupTags(body))
 	}
-	return unrecognizedXMLErrorText
+	return boundedRedacted(body)
+}
+
+// stripMarkupTags reduces an HTML error page to its text: tags are dropped
+// and the remaining runs of whitespace collapse into single spaces.
+func stripMarkupTags(s string) string {
+	return strings.Join(strings.Fields(markupTagPattern.ReplaceAllString(s, " ")), " ")
 }
 
 // parseStorageErrorXML decodes body structurally and returns only the text of
