@@ -198,6 +198,29 @@ func TestCollectModelFiles_HuggingFaceSnapshotLayout(t *testing.T) {
 	}
 }
 
+func TestCollectModelFiles_HuggingFaceSnapshotSubfolderLayout(t *testing.T) {
+	// a diffusers component subfolder (snapshots/<rev>/unet) as --model-path:
+	// its files are links into the same repo's blobs/, one level deeper than
+	// the snapshot root's, so the blobs allowance must follow the nearest
+	// snapshots/<rev> ancestor, not only the revision directory itself.
+	cache := t.TempDir()
+	repo := filepath.Join(cache, "models--owner--name")
+	writeTestFile(t, filepath.Join(repo, "blobs", "sha-unet"), "unet-weights")
+	subfolder := filepath.Join(repo, "snapshots", "abc123", "unet")
+	symlinkOrSkip(t, filepath.Join("..", "..", "..", "blobs", "sha-unet"), filepath.Join(subfolder, "diffusion_pytorch_model.safetensors"))
+
+	files, err := collectModelFiles(subfolder)
+	if err != nil {
+		t.Fatalf("a snapshot subfolder must keep the repo's blobs allowance: %v", err)
+	}
+	if got := strings.Join(collectedNames(files), ","); got != "diffusion_pytorch_model.safetensors" {
+		t.Fatalf("unexpected files: %s", got)
+	}
+	if !strings.Contains(files[0].ResolvedPath, string(filepath.Separator)+"blobs"+string(filepath.Separator)) {
+		t.Errorf("should resolve into blobs/, got %s", files[0].ResolvedPath)
+	}
+}
+
 func TestCollectModelFiles_HuggingFaceLayoutDoesNotWidenTrustBeyondRepo(t *testing.T) {
 	cache := t.TempDir()
 	repo := filepath.Join(cache, "models--owner--name")

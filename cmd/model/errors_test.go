@@ -350,6 +350,62 @@ func TestRunAddModelPropagatesErrors(t *testing.T) {
 	}
 }
 
+// TestRunAddModelSingleFileUploadPrintsPresignedURLs pins the documented
+// single-file exception to output redaction: the create-upload response
+// carries the presigned URLs the caller itself must use to perform the
+// upload, so parts[].url, completeUrl and abortUrl must reach the user
+// verbatim. An output-wide URL redaction would silently break single-file
+// uploads; the error paths (not this success path) stay redacted.
+func TestRunAddModelSingleFileUploadPrintsPresignedURLs(t *testing.T) {
+	resetAddModelGlobals(t)
+	oldAdd, oldCreate := addModelToRepo, createModelRepoUpload
+	oldGetUsage := getModelRepoStorageUsage
+	getModelRepoStorageUsage = func(string) (*api.ModelRepoStorageUsage, error) { return nil, nil }
+	t.Cleanup(func() {
+		addModelToRepo, createModelRepoUpload = oldAdd, oldCreate
+		getModelRepoStorageUsage = oldGetUsage
+	})
+
+	addModelName = "m"
+	addModelCreateUpload = true
+	addModelFileName = "f.bin"
+	addModelFileSize = "10"
+	addModelToRepo = func(*api.AddModelToRepoInput) (*api.Model, error) {
+		return &api.Model{ID: "model-id", Name: "m"}, nil
+	}
+
+	const partURL = "https://bucket.s3.example.com/key?partNumber=1&X-Amz-Credential=AKIAEXAMPLE&X-Amz-Signature=deadbeef0123456789"
+	const completeURL = "https://bucket.s3.example.com/key?X-Amz-Credential=AKIAEXAMPLE&X-Amz-Signature=c0ffee00112233aa"
+	const abortURL = "https://bucket.s3.example.com/key?X-Amz-Credential=AKIAEXAMPLE&X-Amz-Signature=ab07abc00112233bb"
+	createModelRepoUpload = func(*api.CreateModelRepoUploadInput) (*api.ModelRepoMutationResult, error) {
+		return &api.ModelRepoMutationResult{
+			Upload: &api.ModelRepoUpload{
+				SessionID:   "session-id",
+				Parts:       []*api.ModelRepoUploadPart{{PartNumber: 1, URL: partURL}},
+				CompleteURL: completeURL,
+				AbortURL:    abortURL,
+			},
+		}, nil
+	}
+
+	var runErr error
+	stdout, _ := captureStdStreams(t, func() { runErr = runAddModel(newTestAddModelCommand(), nil) })
+	if runErr != nil {
+		t.Fatalf("runAddModel: %v", runErr)
+	}
+
+	var output modelAddOutput
+	if err := json.Unmarshal([]byte(stdout), &output); err != nil {
+		t.Fatalf("decode output: %v\n%s", err, stdout)
+	}
+	if output.Upload == nil || len(output.Upload.Parts) != 1 || output.Upload.Parts[0].URL != partURL {
+		t.Fatalf("parts[0].url must reach output verbatim, got %#v", output.Upload)
+	}
+	if output.Upload.CompleteURL != completeURL || output.Upload.AbortURL != abortURL {
+		t.Fatalf("completeUrl/abortUrl must reach output verbatim, got %#v", output.Upload)
+	}
+}
+
 // TestCreateUploadValidationRunsBeforeCreatingTheModel pins the ordering fix: a
 // missing --file-name must fail BEFORE addModelToRepo is called, otherwise the
 // model is created server-side and the cli reports a plain validation error, so
