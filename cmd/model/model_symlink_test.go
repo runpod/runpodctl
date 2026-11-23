@@ -36,8 +36,8 @@ func symlinkOrSkip(t *testing.T, target, link string) {
 
 func collectedNames(files []modelFile) []string {
 	names := make([]string, len(files))
-	for i, f := range files {
-		names[i] = f.RelativePath
+	for i := range files {
+		names[i] = files[i].RelativePath
 	}
 	return names
 }

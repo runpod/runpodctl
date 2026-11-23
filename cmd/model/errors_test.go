@@ -360,7 +360,10 @@ func TestRunAddModelSingleFileUploadPrintsPresignedURLs(t *testing.T) {
 	resetAddModelGlobals(t)
 	oldAdd, oldCreate := addModelToRepo, createModelRepoUpload
 	oldGetUsage := getModelRepoStorageUsage
-	getModelRepoStorageUsage = func(string) (*api.ModelRepoStorageUsage, error) { return nil, nil }
+	getModelRepoStorageUsage = func(string) (*api.ModelRepoStorageUsage, error) {
+		// unenforced: the quota pre-check skips, same as an unreachable query.
+		return &api.ModelRepoStorageUsage{}, nil
+	}
 	t.Cleanup(func() {
 		addModelToRepo, createModelRepoUpload = oldAdd, oldCreate
 		getModelRepoStorageUsage = oldGetUsage
@@ -394,15 +397,15 @@ func TestRunAddModelSingleFileUploadPrintsPresignedURLs(t *testing.T) {
 		t.Fatalf("runAddModel: %v", runErr)
 	}
 
-	var output modelAddOutput
-	if err := json.Unmarshal([]byte(stdout), &output); err != nil {
+	var parsed modelAddOutput
+	if err := json.Unmarshal([]byte(stdout), &parsed); err != nil {
 		t.Fatalf("decode output: %v\n%s", err, stdout)
 	}
-	if output.Upload == nil || len(output.Upload.Parts) != 1 || output.Upload.Parts[0].URL != partURL {
-		t.Fatalf("parts[0].url must reach output verbatim, got %#v", output.Upload)
+	if parsed.Upload == nil || len(parsed.Upload.Parts) != 1 || parsed.Upload.Parts[0].URL != partURL {
+		t.Fatalf("parts[0].url must reach output verbatim, got %#v", parsed.Upload)
 	}
-	if output.Upload.CompleteURL != completeURL || output.Upload.AbortURL != abortURL {
-		t.Fatalf("completeUrl/abortUrl must reach output verbatim, got %#v", output.Upload)
+	if parsed.Upload.CompleteURL != completeURL || parsed.Upload.AbortURL != abortURL {
+		t.Fatalf("completeUrl/abortUrl must reach output verbatim, got %#v", parsed.Upload)
 	}
 }
 
