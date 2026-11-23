@@ -68,3 +68,46 @@ func TestTopLevelGraphQLErrorMessagesAreBoundedAndRedacted(t *testing.T) {
 		})
 	}
 }
+
+// TestBatchFinalizedAliasErrorIsBoundedAndRedacted pins the path-resolved
+// case: errors[i].path names the c<index> session alias, the batch-complete
+// path turns it into "N of M sessions failed to finalize (alias-message)",
+// and that alias message is bounded and redacted like every other server
+// message (plus the joined list is bounded again at the end).
+func TestBatchFinalizedAliasErrorIsBoundedAndRedacted(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+
+	body, err := json.Marshal(map[string]any{"errors": []map[string]any{
+		{"message": hugeSignedErrorMessage(), "path": []string{"c0"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if _, writeErr := w.Write(body); writeErr != nil {
+			return
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("RUNPOD_GRAPHQL_URL", server.URL)
+
+	_, err = CompleteModelRepoUploadBatch([]string{"session-0"})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	got := err.Error()
+	if !strings.Contains(got, "failed to finalize") {
+		t.Fatalf("expected the alias-resolved failure shape, got %.200q", got)
+	}
+	if len(got) > excerptLimit {
+		t.Fatalf("message is %d bytes, want at most %d", len(got), excerptLimit)
+	}
+	if !strings.Contains(got, "truncated") {
+		t.Errorf("expected a truncation marker, got %.200q", got)
+	}
+	if strings.Contains(got, errorMessageTestSignature) {
+		t.Errorf("message leaks the signature: %.200q", got)
+	}
+}

@@ -2,7 +2,6 @@ package api
 
 import (
 	"bytes"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -116,56 +115,5 @@ func TestErrorBodyExcerpt(t *testing.T) {
 	multi := []byte(strings.Repeat("é", errorBodyExcerptBytes))
 	if got := errorBodyExcerpt(multi); !strings.HasSuffix(got, "... (truncated)") || strings.ContainsRune(got, '\uFFFD') {
 		t.Errorf("expected valid truncated text, got suffix %q", got[len(got)-40:])
-	}
-}
-
-// TestGraphQLErrorMessagesAreBoundedAndRedacted pins that a valid graphql
-// {"errors":[{"message":...}]} reply with a multi-MB message is bounded and
-// redacted on every path that surfaces errors[0].message.
-func TestGraphQLErrorMessagesAreBoundedAndRedacted(t *testing.T) {
-	viper.Reset()
-	t.Cleanup(viper.Reset)
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-
-	const signature = "deadbeef0123456789"
-	huge := "failed https://bucket.s3.amazonaws.com/k?X-Amz-Signature=" + signature + " " + strings.Repeat("m", 3<<20)
-	payload, err := json.Marshal(map[string]any{
-		"errors": []map[string]any{{"message": huge, "path": []string{"c0"}}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if _, writeErr := w.Write(payload); writeErr != nil {
-			return
-		}
-	}))
-	t.Cleanup(server.Close)
-	t.Setenv("RUNPOD_GRAPHQL_URL", server.URL)
-
-	for name, call := range map[string]func() error{
-		"pod.go":                func() error { _, err := GetPods(); return err },
-		"volume.go":             func() error { _, err := GetNetworkVolumes(); return err },
-		"endpoint.go":           func() error { _, err := GetEndpoints(); return err },
-		"envOverride.go":        func() error { _, err := GetEndpointEnvOverride("ep"); return err },
-		"modelStatus.go (refs)": func() error { _, err := GetEndpointModelReferences("ep"); return err },
-		"graphql_response.go":   func() error { _, _, err := queryGraphQLData(Input{Query: "q"}); return err },
-		"model.go":              func() error { _, err := CompleteModelRepoUploadBatch([]string{"s"}); return err },
-	} {
-		t.Run(name, func(t *testing.T) {
-			err := call()
-			if err == nil {
-				t.Fatal("expected an error")
-			}
-			if len(err.Error()) > excerptLimit {
-				t.Fatalf("error message is %d bytes; expected a bound near %d", len(err.Error()), errorBodyExcerptBytes)
-			}
-			if !strings.Contains(err.Error(), "truncated") {
-				t.Errorf("expected a truncation marker, got %.200q", err.Error())
-			}
-			if strings.Contains(err.Error(), signature) {
-				t.Errorf("message leaks the signature: %.200q", err.Error())
-			}
-		})
 	}
 }

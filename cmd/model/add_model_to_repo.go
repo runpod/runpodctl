@@ -816,9 +816,23 @@ func collectModelFilesWithOptions(dir string, includeHidden bool) (files []model
 
 		// the entry name alone is not enough: a benign-looking link to .env or
 		// into .git would otherwise upload the excluded file under its alias.
-		if !includeHidden && resolved != path && resolvesToSensitiveEntry(roots.dirs, resolved, info.IsDir()) {
-			skipped++
-			return nil
+		// `resolved` is the lexical evaluation from before the rooted stat; a
+		// directory swapped for a link in between makes the rooted open
+		// traverse different components. Check every component the confined
+		// resolution through the root actually traverses instead.
+		if !includeHidden {
+			handle, _, openErr := roots.open(rootIdx)
+			if openErr != nil {
+				return fmt.Errorf("stat file %q: %w", path, openErr)
+			}
+			traversed, resolveErr := resolveInRoot(handle, rootRel)
+			if resolveErr != nil {
+				return fmt.Errorf("resolve %q through the model directory: %w", path, resolveErr)
+			}
+			if traversedHasSensitiveEntry(traversed, info.IsDir()) {
+				skipped++
+				return nil
+			}
 		}
 
 		if info.IsDir() {
@@ -871,24 +885,69 @@ func collectModelFilesWithOptions(dir string, includeHidden bool) (files []model
 	return files, skipped, nil
 }
 
-// resolvesToSensitiveEntry reports whether a symlink's resolved target (a file,
-// or a directory when isDir) is, or sits under, an entry that
-// isSensitiveModelEntry excludes. The target's path relative to the containment
-// root that holds it is walked component by component, so `alias.bin -> .env`
-// and `alias.bin -> sub/.git/config` are both caught.
-func resolvesToSensitiveEntry(roots []string, resolved string, isDir bool) bool {
-	for _, root := range roots {
-		rel, err := filepath.Rel(root, resolved)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+// resolveInRoot returns the path components within root that opening rel
+// actually traverses: every component is lstat'ed through the root and links
+// are followed via the root's own Readlink, so the result names the directory
+// entries in place right now, not the entries an earlier lexical resolution
+// (from before a possible swap) saw. Resolution stays confined to root: an
+// absolute link target resolves root-relative, and a ".." that would leave
+// the root is an error.
+func resolveInRoot(root *os.Root, rel string) ([]string, error) {
+	var stack []string
+	pending := strings.Split(rel, string(filepath.Separator))
+	links := 0
+	for len(pending) > 0 {
+		comp := pending[0]
+		pending = pending[1:]
+		switch comp {
+		case "", ".":
+			continue
+		case "..":
+			if len(stack) == 0 {
+				return nil, fmt.Errorf("%q resolves outside the model directory", rel)
+			}
+			stack = stack[:len(stack)-1]
 			continue
 		}
-		parts := strings.Split(rel, string(filepath.Separator))
-		for i, part := range parts {
-			if isSensitiveModelEntry(part, i < len(parts)-1 || isDir) {
-				return true
-			}
+		stack = append(stack, comp)
+		cur := strings.Join(stack, string(filepath.Separator))
+		info, err := root.Lstat(cur)
+		if err != nil {
+			return nil, err
 		}
-		return false
+		if info.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		links++
+		if links > 40 {
+			return nil, fmt.Errorf("too many symbolic links resolving %q", rel)
+		}
+		target, err := root.Readlink(cur)
+		if err != nil {
+			return nil, err
+		}
+		// the link's own component comes off; its target's components resolve
+		// from the link's containing directory (or from the root for an
+		// absolute target, which the root confines the same way on open).
+		stack = stack[:len(stack)-1]
+		target = filepath.Clean(target)
+		if filepath.IsAbs(target) {
+			stack = stack[:0]
+			target = strings.TrimPrefix(target, string(filepath.Separator))
+		}
+		pending = append(strings.Split(target, string(filepath.Separator)), pending...)
+	}
+	return stack, nil
+}
+
+// traversedHasSensitiveEntry reports whether any component on the path
+// actually traversed to a file is a sensitive entry (see isSensitiveModelEntry):
+// all but the last are directories, the last is a directory when isDir.
+func traversedHasSensitiveEntry(components []string, isDir bool) bool {
+	for i, comp := range components {
+		if isSensitiveModelEntry(comp, i < len(components)-1 || isDir) {
+			return true
+		}
 	}
 	return false
 }

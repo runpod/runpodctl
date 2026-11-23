@@ -271,6 +271,9 @@ func TestParseAPIError(t *testing.T) {
 		{"rest v2 detail without errors is used alone", `{"detail":"pod not found","status":404,"title":"Not Found"}`, 404, "pod not found", "not_found"},
 		{"object-shaped errors keep the message and code", `{"error":"pod not found","code":"POD_NOT_FOUND","errors":[{"message":"x"}]}`, 404, "pod not found", "pod_not_found"},
 		{"object-shaped errors next to detail are skipped", `{"detail":"Request validation failed.","errors":[{"message":"x"}]}`, 422, "Request validation failed.", "bad_request"},
+		{"a code carrying a url is dropped for the status-derived one", `{"error":"boom","code":"https://h.example/x?X-Amz-Signature=deadbeef0123456789"}`, 500, "boom", "server_error"},
+		{"an oversized code is dropped", `{"error":"boom","code":"` + strings.Repeat("c", 4096) + `"}`, 400, "boom", "bad_request"},
+		{"a multi-line code is dropped", "{\"error\":\"boom\",\"code\":\"conflict\\nsee https://h.example\"}", 409, "boom", "conflict"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -13,7 +13,7 @@ import (
 // parseGraphQLData or readResponseBody: a rejected status with an oversized body
 // keeps its status and stable code, a 200 with one stays a plain read error.
 func TestGraphQLHelpersKeepStatusOnUnreadableBody(t *testing.T) {
-	oversized := strings.Repeat("a", maxModelResponseBytes+1)
+	oversized := strings.Repeat("a", internalapi.MaxResponseBytes+1)
 	for status, wantCode := range map[int]string{http.StatusTooManyRequests: "rate_limited", http.StatusServiceUnavailable: "server_error"} {
 		_, _, err := parseGraphQLData(status, strings.NewReader(oversized))
 		var apiErr *internalapi.APIError

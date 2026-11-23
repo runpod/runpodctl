@@ -1188,7 +1188,7 @@ func CompleteModelRepoUploadBatch(sessionIDs []string) ([]*CompleteModelRepoUplo
 		}
 		return nil, fmt.Errorf(
 			"%d of %d sessions failed to finalize (%s); the server-side outcome of the other %d sessions in this same batch request is not confirmed by this response and must be reconciled separately, not assumed failed",
-			len(failed), len(sessionIDs), strings.Join(failed, "; "), len(sessionIDs)-len(failed),
+			len(failed), len(sessionIDs), finalizeFailuresExcerpt(failed), len(sessionIDs)-len(failed),
 		)
 	}
 	if data.Data == nil {
@@ -1210,6 +1210,14 @@ func CompleteModelRepoUploadBatch(sessionIDs []string) ([]*CompleteModelRepoUplo
 		results[i] = result
 	}
 	return results, nil
+}
+
+// finalizeFailuresExcerpt joins the per-session failure messages and bounds
+// the assembled text: each alias message is excerpted individually already,
+// and a response for hundreds of sessions at once would otherwise still print
+// megabytes of failures.
+func finalizeFailuresExcerpt(failed []string) string {
+	return errorMessageExcerpt(strings.Join(failed, "; "))
 }
 
 // UpdateModelVersionStatus updates the status for a model version by hash.

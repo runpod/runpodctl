@@ -293,7 +293,9 @@ func (c *LogClient) stream(ctx context.Context, path string, opts LogStreamOptio
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		// a *url.Error quotes the url verbatim, including any credentials in
+		// its query string; redact like the transport errors below.
+		return fmt.Errorf("failed to create request: %w", redact.Error(err))
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Accept", "text/event-stream")

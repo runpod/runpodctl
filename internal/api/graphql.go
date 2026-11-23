@@ -74,7 +74,9 @@ func (c *GraphQLClient) Query(input GraphQLInput) ([]byte, error) {
 
 	req, err := http.NewRequest("POST", c.url, bytes.NewBuffer(jsonValue))
 	if err != nil {
-		return nil, err
+		// a *url.Error quotes the url verbatim, including any credentials in
+		// its query string; redact it like the transport errors below.
+		return nil, redact.Error(err)
 	}
 
 	req.Header.Add("Content-Type", "application/json")

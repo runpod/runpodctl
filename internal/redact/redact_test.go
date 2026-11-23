@@ -273,17 +273,17 @@ func TestErrorNilAndIdempotent(t *testing.T) {
 	}
 }
 
-// timeoutNetError is a net.Error whose Timeout and Temporary answers are set by
-// the test.
-type timeoutNetError struct{ timeout, temporary bool }
+// timeoutNetError is a net.Error whose Timeout answer is set by the test.
+type timeoutNetError struct{ timeout bool }
 
 func (e *timeoutNetError) Error() string   { return "i/o timeout" }
 func (e *timeoutNetError) Timeout() bool   { return e.timeout }
-func (e *timeoutNetError) Temporary() bool { return e.temporary }
+func (e *timeoutNetError) Temporary() bool { return false }
 
 // Sanitizing must not change how a failure classifies: a timeout stays a
-// timeout (errors.As to net.Error, Timeout(), Temporary(), errors.Is on the
-// deadline sentinels) while the URL is scrubbed.
+// timeout (errors.As to net.Error, Timeout(), errors.Is on the deadline
+// sentinels) while the URL is scrubbed. Temporary() is deprecated (SA1019)
+// and deliberately not asserted.
 func TestErrorKeepsTimeoutClassification(t *testing.T) {
 	const rawURL = "https://user:pw@host.test/x?X-Amz-Signature=deadbeef" //nolint:gosec // G101: fake credential fixture
 	scrubbed := []string{"pw", "deadbeef", "user:", "X-Amz-Signature"}
@@ -292,21 +292,18 @@ func TestErrorKeepsTimeoutClassification(t *testing.T) {
 		return &url.Error{Op: "Get", URL: rawURL, Err: cause}
 	}
 	cases := []struct {
-		name      string
-		err       error
-		timeout   bool
-		temporary bool
+		name    string
+		err     error
+		timeout bool
 	}{
-		{"net timeout", wrapped(&timeoutNetError{timeout: true}), true, false},
-		{"net temporary", wrapped(&timeoutNetError{temporary: true}), false, true},
-		{"net timeout and temporary", wrapped(&timeoutNetError{timeout: true, temporary: true}), true, true},
-		{"net non-timeout", wrapped(&timeoutNetError{}), false, false},
-		{"context deadline", wrapped(context.DeadlineExceeded), true, true},
-		{"os deadline", wrapped(os.ErrDeadlineExceeded), true, true},
-		{"op error timeout", wrapped(&net.OpError{Op: "dial", Net: "tcp", Err: &timeoutNetError{timeout: true}}), true, false},
-		{"plain refusal", wrapped(errors.New("connection refused")), false, false},
-		{"behind fmt.Errorf", fmt.Errorf("request failed: %w", wrapped(&timeoutNetError{timeout: true})), true, false},
-		{"behind errors.Join", errors.Join(errors.New("other"), fmt.Errorf("x: %w", wrapped(context.DeadlineExceeded))), true, true},
+		{"net timeout", wrapped(&timeoutNetError{timeout: true}), true},
+		{"net non-timeout", wrapped(&timeoutNetError{}), false},
+		{"context deadline", wrapped(context.DeadlineExceeded), true},
+		{"os deadline", wrapped(os.ErrDeadlineExceeded), true},
+		{"op error timeout", wrapped(&net.OpError{Op: "dial", Net: "tcp", Err: &timeoutNetError{timeout: true}}), true},
+		{"plain refusal", wrapped(errors.New("connection refused")), false},
+		{"behind fmt.Errorf", fmt.Errorf("request failed: %w", wrapped(&timeoutNetError{timeout: true})), true},
+		{"behind errors.Join", errors.Join(errors.New("other"), fmt.Errorf("x: %w", wrapped(context.DeadlineExceeded))), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -326,16 +323,16 @@ func TestErrorKeepsTimeoutClassification(t *testing.T) {
 					t.Errorf("url.Error.URL contains %q: %s", secret, ue.URL)
 				}
 			}
-			if ue.Timeout() != tc.timeout || ue.Temporary() != tc.temporary {
-				t.Errorf("url.Error Timeout/Temporary = %v/%v, want %v/%v", ue.Timeout(), ue.Temporary(), tc.timeout, tc.temporary)
+			if ue.Timeout() != tc.timeout {
+				t.Errorf("url.Error Timeout = %v, want %v", ue.Timeout(), tc.timeout)
 			}
 
 			var netErr net.Error
 			if !errors.As(got, &netErr) {
 				t.Fatal("errors.As to net.Error failed")
 			}
-			if netErr.Timeout() != tc.timeout || netErr.Temporary() != tc.temporary { //nolint:staticcheck // see above
-				t.Errorf("net.Error Timeout/Temporary = %v/%v, want %v/%v", netErr.Timeout(), netErr.Temporary(), tc.timeout, tc.temporary) //nolint:staticcheck // see above
+			if netErr.Timeout() != tc.timeout {
+				t.Errorf("net.Error Timeout = %v, want %v", netErr.Timeout(), tc.timeout)
 			}
 			// the sentinels answer exactly as they did before sanitizing.
 			for _, sentinel := range []error{context.DeadlineExceeded, os.ErrDeadlineExceeded} {

@@ -691,6 +691,44 @@ func TestCreateModelRepoUploadBatchServerMessagesRedactPresignedURLs(t *testing.
 	}
 }
 
+// a finalize failure for every alias must still produce a bounded error: each
+// message is excerpted individually and the joined list is bounded again, so
+// 64 sessions failing with 2 KiB messages do not print 128 KiB.
+func TestCompleteModelRepoUploadBatchJoinedFailuresStayBounded(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+
+	const sessions = 64
+	sessionIDs := make([]string, sessions)
+	errs := make([]any, sessions)
+	for i := range sessionIDs {
+		sessionIDs[i] = fmt.Sprintf("session-%d", i)
+		errs[i] = map[string]any{
+			"message": fmt.Sprintf("alias %d failed: %s", i, strings.Repeat("x", 2048)),
+			"path":    []any{fmt.Sprintf("c%d", i)},
+		}
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if err := json.NewEncoder(w).Encode(map[string]any{"errors": errs}); err != nil {
+			t.Errorf("encode response: %v", err)
+		}
+	}))
+	defer server.Close()
+	t.Setenv("RUNPOD_GRAPHQL_URL", server.URL)
+
+	_, err := CompleteModelRepoUploadBatch(sessionIDs)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "failed to finalize") {
+		t.Fatalf("expected the alias-resolved failure shape, got %.200q", err.Error())
+	}
+	if len(err.Error()) > excerptLimit {
+		t.Fatalf("the joined failures are not bounded: %d bytes, want at most %d", len(err.Error()), excerptLimit)
+	}
+}
+
 func TestModelRepoGraphQLErrorRedactsMessage(t *testing.T) {
 	err := modelRepoGraphQLError(&GraphQLError{Message: "failed https://h.example/k?X-Amz-Signature=deadbeef0123456789"})
 	if strings.Contains(err.Error(), "deadbeef") {

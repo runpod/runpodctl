@@ -61,6 +61,9 @@ func Query(input Input) (res *http.Response, err error) {
 
 	req, err := http.NewRequest("POST", apiUrl, bytes.NewBuffer(jsonValue))
 	if err != nil {
+		// a *url.Error quotes the url verbatim, including any credentials in its
+		// query string; redact it like the transport errors below.
+		err = redact.Error(err)
 		return
 	}
 

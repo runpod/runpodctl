@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	internalapi "github.com/runpod/runpodctl/internal/api"
 )
 
 // TestFirstGraphQLErrorMessage_MalformedDoesNotPanic pins that a graphql error
@@ -98,7 +100,7 @@ func TestParseGraphQLData_LargeValidResponseParses(t *testing.T) {
 // TestParseGraphQLData_OverLimitIsExplicitError pins that a body over the limit
 // is an explicit error, not a silent truncation.
 func TestParseGraphQLData_OverLimitIsExplicitError(t *testing.T) {
-	body := io.MultiReader(strings.NewReader(`{"data":{"pad":"`), strings.NewReader(strings.Repeat("x", maxModelResponseBytes)))
+	body := io.MultiReader(strings.NewReader(`{"data":{"pad":"`), strings.NewReader(strings.Repeat("x", internalapi.MaxResponseBytes)))
 	_, _, err := parseGraphQLData(http.StatusOK, body)
 	if err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("expected an explicit limit error, got %v", err)

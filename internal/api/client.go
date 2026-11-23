@@ -192,7 +192,9 @@ func (c *Client) send(ctx context.Context, method, u string, jsonBody []byte) (*
 
 	req, err := http.NewRequestWithContext(ctx, method, u, reqBody)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", errRequestConstruction, err)
+		// a *url.Error quotes the url verbatim, including any credentials in
+		// its query string; redact before wrapping it into the chain.
+		return nil, fmt.Errorf("%w: %w", errRequestConstruction, redact.Error(err))
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
@@ -348,10 +350,19 @@ type APIError struct {
 	Message string `json:"error"`
 	Code    string `json:"code,omitempty"`
 	Status  int    `json:"status,omitempty"`
+	// cause keeps the underlying failure (e.g. the read error behind an
+	// unreadable error body) reachable through errors.Is/As without letting a
+	// raw url or body back into the message. Never marshaled.
+	cause error
 }
 
 // Error implements the error interface.
 func (e *APIError) Error() string { return e.Message }
+
+// Unwrap exposes the underlying cause, when one was recorded, so classifiers
+// (e.g. the network-error check in output) still see a response whose status
+// was received but whose body failed as the network failure it is.
+func (e *APIError) Unwrap() error { return e.cause }
 
 // ErrorCode returns a stable machine-readable code for the error, deriving one
 // from the HTTP status when the API did not supply an explicit code.
@@ -413,6 +424,28 @@ func codeForStatus(status int) string {
 	}
 }
 
+// sanitizeAPICode normalizes a server-provided error code. The value is
+// echoed verbatim into the JSON error object on stderr (see output.Error), so
+// a response-sized or credential-bearing "code" must not pass through: only
+// the conventional machine-code shape (lowercase snake/kebab, single line,
+// bounded length) is accepted; anything else is dropped and the code is
+// derived from the status instead.
+func sanitizeAPICode(code string) string {
+	code = strings.ToLower(strings.TrimSpace(code))
+	// long enough for any real machine code, too short for payload.
+	if code == "" || len(code) > 64 || strings.ContainsAny(code, "\r\n") {
+		return ""
+	}
+	for _, r := range code {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_', r == '.', r == '-':
+		default:
+			return ""
+		}
+	}
+	return code
+}
+
 // parseAPIError builds a structured APIError from a non-2xx response body. It
 // unwraps the common {"error": "..."} / {"message": "..."} envelope so the
 // message is not double-encoded (e.g. `api error: {"error":"pod not found"}`),
@@ -451,8 +484,9 @@ func parseAPIError(body []byte, status int) *APIError {
 				// bound the joined text as a whole, after the parts are combined.
 				apiErr.Message = ErrorMessageExcerpt(apiErr.Message)
 			}
-			// normalize an explicit api code to the lowercase vocabulary.
-			apiErr.Code = strings.ToLower(envelope.Code)
+			// normalize an explicit api code to the lowercase vocabulary,
+			// dropping anything that is not a machine-code shape.
+			apiErr.Code = sanitizeAPICode(envelope.Code)
 		}
 	}
 

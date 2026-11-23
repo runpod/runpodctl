@@ -30,12 +30,16 @@ func ReadBounded(body io.Reader) ([]byte, error) {
 // unreadableBodyError is the error for a rejected (non-2xx) response whose body
 // ReadBounded refused (oversized) or could not finish (cut short). The response
 // itself was received, so the error keeps its status and stable code rather
-// than the bare read error.
+// than the bare read error -- but the (redacted) read error stays reachable
+// through Unwrap, so a transient network failure behind the body still
+// classifies as one.
 func unreadableBodyError(status int, readErr error) *APIError {
+	cause := redact.Error(readErr)
 	return &APIError{
 		Status:  status,
 		Code:    codeForStatus(status),
-		Message: fmt.Sprintf("api request failed with status %d (the error body could not be read: %v)", status, redact.Error(readErr)),
+		Message: fmt.Sprintf("api request failed with status %d (the error body could not be read: %v)", status, cause),
+		cause:   cause,
 	}
 }
 

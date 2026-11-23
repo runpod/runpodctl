@@ -1,6 +1,7 @@
 package model
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -155,6 +156,71 @@ func TestCollectModelFiles_SensitiveSymlinkTargetIncludedWithIncludeHidden(t *te
 	}
 	if !containsName(files, "alias.bin") || !containsName(files, "head.bin") {
 		t.Fatalf("aliases should be uploaded with --include-hidden, got %v", collectedNames(files))
+	}
+}
+
+// TestCollectModelFiles_SkipsAliasWhoseAncestorSwappedToSensitiveDuringScan
+// pins the scan-time ancestor swap: an alias whose intermediate directory is
+// replaced by a link to .git between the lexical resolution and the rooted
+// stat must not upload .git/config under the alias. The sensitive check looks
+// at the components the confined resolution through the root actually
+// traverses, not the stale lexical target.
+func TestCollectModelFiles_SkipsAliasWhoseAncestorSwappedToSensitiveDuringScan(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, ".git", "config"), "[core]")
+	writeTestFile(t, filepath.Join(root, "safe", "config"), "ok")
+	symlinkOrSkip(t, filepath.Join("safe", "config"), filepath.Join(root, "alias"))
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	safe := filepath.Join(resolvedRoot, "safe")
+
+	orig := afterScanEntryHook
+	t.Cleanup(func() { afterScanEntryHook = orig })
+	swapped := false
+	afterScanEntryHook = func(path string) {
+		if swapped || path != filepath.Join(resolvedRoot, "alias") {
+			return
+		}
+		swapped = true
+		if err := os.Rename(safe, safe+".aside"); err != nil {
+			t.Fatal(err)
+		}
+		symlinkOrSkip(t, ".git", safe)
+	}
+
+	files, _, err := collectModelFilesWithOptions(root, false)
+	if !swapped {
+		t.Fatal("hook did not run")
+	}
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	for _, f := range files {
+		if strings.Contains(strings.ToLower(f.ResolvedPath), ".git") {
+			t.Errorf("%s reached a sensitive file through the swapped ancestor: %s", f.RelativePath, f.ResolvedPath)
+		}
+	}
+	if containsName(files, "alias") {
+		t.Fatalf("the alias must be skipped once its target traverses .git, got %v", collectedNames(files))
+	}
+}
+
+// the same layout without the swap uploads the alias: the check must not
+// over-reach when no ancestor leads anywhere sensitive.
+func TestCollectModelFiles_AliasThroughBenignDirectoryKept(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, ".git", "config"), "[core]")
+	writeTestFile(t, filepath.Join(root, "safe", "config"), "ok")
+	symlinkOrSkip(t, filepath.Join("safe", "config"), filepath.Join(root, "alias"))
+
+	files, _, err := collectModelFilesWithOptions(root, false)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if !containsName(files, "alias") {
+		t.Fatalf("the benign alias should be collected, got %v", collectedNames(files))
 	}
 }
 

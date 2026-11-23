@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	internalapi "github.com/runpod/runpodctl/internal/api"
 	"github.com/spf13/viper"
 )
 
@@ -83,7 +84,7 @@ func TestModelRepoResponseOverLimitIsError(t *testing.T) {
 		if _, err := w.Write([]byte(`{"data":{"pad":"`)); err != nil {
 			return
 		}
-		for range (maxModelResponseBytes >> 20) + 2 {
+		for range (internalapi.MaxResponseBytes >> 20) + 2 {
 			if _, err := w.Write(chunk); err != nil {
 				return
 			}
@@ -102,9 +103,9 @@ func TestModelRepoResponseOverLimitIsError(t *testing.T) {
 	}
 }
 
-func TestReadBoundedResponseAtLimitSucceeds(t *testing.T) {
-	data, err := ReadBoundedResponse(strings.NewReader(strings.Repeat("a", maxModelResponseBytes)))
-	if err != nil || len(data) != maxModelResponseBytes {
+func TestReadBoundedAtLimitSucceeds(t *testing.T) {
+	data, err := internalapi.ReadBounded(strings.NewReader(strings.Repeat("a", internalapi.MaxResponseBytes)))
+	if err != nil || len(data) != internalapi.MaxResponseBytes {
 		t.Fatalf("expected exactly-at-limit body to be read, got len=%d err=%v", len(data), err)
 	}
 }
@@ -122,7 +123,7 @@ func TestGraphQLCallsRejectOversizeResponses(t *testing.T) {
 		if _, err := w.Write([]byte(`{"data":{"pad":"`)); err != nil {
 			return
 		}
-		for range (maxModelResponseBytes >> 20) + 2 {
+		for range (internalapi.MaxResponseBytes >> 20) + 2 {
 			if _, err := w.Write(chunk); err != nil {
 				return
 			}

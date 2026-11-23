@@ -2,9 +2,11 @@ package api
 
 import (
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -80,6 +82,35 @@ func TestRejectedStatusKeepsStatusWhenBodyUnreadable(t *testing.T) {
 		}
 	}
 }
+
+// a received error status whose body dies with a connection reset keeps its
+// status and code, but the (redacted) network failure stays reachable through
+// errors.As, so it still classifies as the transient network failure it is.
+func TestUnreadableBodyOnRejectedStatusKeepsNetworkCause(t *testing.T) {
+	readErr := &net.OpError{Op: "read", Net: "tcp", Err: errors.New("read: connection reset by peer")}
+	_, err := ReadBodyForStatus(http.StatusBadGateway, failingReader{err: readErr})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected an *APIError, got %T: %v", err, err)
+	}
+	if apiErr.Status != http.StatusBadGateway || apiErr.ErrorCode() != "server_error" {
+		t.Fatalf("the received status must win: status=%d code=%q", apiErr.Status, apiErr.ErrorCode())
+	}
+	var opErr *net.OpError
+	if !errors.As(err, &opErr) {
+		t.Fatalf("the network cause must stay reachable through Unwrap: %v", err)
+	}
+	if !strings.Contains(err.Error(), "connection reset") {
+		t.Fatalf("the message should name the read failure, got %v", err)
+	}
+}
+
+type failingReader struct{ err error }
+
+func (r failingReader) Read([]byte) (int, error) { return 0, r.err }
 
 // a body that cannot be read on a 2xx is still the read error, not an APIError.
 func TestSuccessStatusWithUnreadableBodyStaysReadError(t *testing.T) {

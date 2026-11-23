@@ -63,8 +63,8 @@ func queryGraphQLData(input Input) (gqldata map[string]any, rawData []byte, err 
 // parseGraphQLData decodes a graphql HTTP response and returns its "data" object.
 // It returns an error carrying the first graphql error message when the payload
 // reports errors, or the status code and body for non-200 responses. The raw
-// body (bounded by maxModelResponseBytes; a larger response is an error) is returned
-// so callers can include it in "<field> is nil" diagnostics.
+// body (bounded by internalapi.MaxResponseBytes; a larger response is an error)
+// is returned so callers can include it in "<field> is nil" diagnostics.
 func parseGraphQLData(status int, body io.Reader) (gqldata map[string]any, rawData []byte, err error) {
 	rawData, err = internalapi.ReadBodyForStatus(status, body)
 	if err != nil {
@@ -91,19 +91,9 @@ func parseGraphQLData(status int, body io.Reader) (gqldata map[string]any, rawDa
 	return gqldata, rawData, nil
 }
 
-// maxModelResponseBytes is the bound ReadBoundedResponse enforces.
-const maxModelResponseBytes = internalapi.MaxResponseBytes
-
-// ReadBoundedResponse reads a graphql response body up to maxModelResponseBytes
-// and fails if the server sent more, rather than buffering hundreds of MB (a
-// 300 MB body measured ~800 MB RSS) or silently truncating into invalid json.
-func ReadBoundedResponse(body io.Reader) ([]byte, error) {
-	return internalapi.ReadBounded(body)
-}
-
-// readResponseBody is ReadBoundedResponse for a received response: when the
-// status is not 2xx and the body is oversized or cut short, the error carries
-// that status and its stable code (see internalapi.ReadBodyForStatus).
+// readResponseBody is internalapi.ReadBodyForStatus for a received response:
+// when the status is not 2xx and the body is oversized or cut short, the error
+// carries that status and its stable code.
 func readResponseBody(res *http.Response) ([]byte, error) {
 	return internalapi.ReadBodyForStatus(res.StatusCode, res.Body)
 }
