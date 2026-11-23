@@ -302,9 +302,11 @@ func (c *Client) getV2AllPages(endpoint string, params url.Values, decode func([
 		if next == nil || *next == "" {
 			return fmt.Errorf("the api reported more pages of %s but no cursor to fetch them", endpoint)
 		}
-		// a cursor the api already handed out would loop forever
+		// a cursor the api already handed out would loop forever; the cursor is
+		// server-supplied text, so quote the bounded redacted excerpt, not the
+		// raw value.
 		if seen[*next] {
-			return fmt.Errorf("the api repeated page cursor %q while listing %s", *next, endpoint)
+			return fmt.Errorf("the api repeated page cursor %q while listing %s", ErrorMessageExcerpt(*next), endpoint)
 		}
 		seen[*next] = true
 		query.Set("cursor", *next)

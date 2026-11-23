@@ -585,6 +585,11 @@ type scannedModelInfo struct {
 	rootDir  string
 	rootInfo os.FileInfo
 	name     string
+	// checkSensitivity records that the scan excluded sensitive entries, so
+	// the upload re-runs the confined traversal check right before opening:
+	// a benign phase between the scan-time check and the upload must not let
+	// a swapped-back sensitive ancestor through.
+	checkSensitivity bool
 }
 
 // scanRoots holds the containment roots for the duration of one scan. pin
@@ -681,6 +686,12 @@ func (s *scanRoots) close() error {
 // afterScanEntryHook, when set, runs in the scan after an entry is read and
 // before it is statted. Tests use it to swap paths inside that window.
 var afterScanEntryHook func(path string)
+
+// beforeTraversalCheckHook, when set, runs in the scan after an entry's rooted
+// stat and before the confined traversal sensitivity check. Tests use it to
+// move a directory again inside that second window (a benign phase between a
+// sensitive stat and a sensitive upload).
+var beforeTraversalCheckHook func(path string)
 
 // errSymlinkOutsideModelPath is the sentinel for a symlink that resolves outside
 // the containment roots.
@@ -843,6 +854,9 @@ func (s *modelDirScan) collectEntry(path string, d fs.DirEntry, walkErr error) e
 	// the components the confined resolution actually traverses are checked
 	// too (not the stale lexical `resolved`).
 	if !s.includeHidden {
+		if beforeTraversalCheckHook != nil {
+			beforeTraversalCheckHook(path)
+		}
 		sensitive, sensErr := s.traversesSensitive(path, rootIdx, rootRel, info.IsDir())
 		if sensErr != nil {
 			return sensErr
@@ -879,7 +893,7 @@ func (s *modelDirScan) collectEntry(path string, d fs.DirEntry, walkErr error) e
 		ResolvedPath:   resolved,
 		RelativePath:   filepath.ToSlash(rel),
 		Size:           info.Size(),
-		info:           &scannedModelInfo{FileInfo: info, rootDir: s.roots.dirs[rootIdx], rootInfo: rootInfo, name: rootRel},
+		info:           &scannedModelInfo{FileInfo: info, rootDir: s.roots.dirs[rootIdx], rootInfo: rootInfo, name: rootRel, checkSensitivity: !s.includeHidden},
 		linkInfo:       linkInfo,
 		deleteRootDir:  s.root,
 		deleteRootInfo: s.deleteRootInfo,
@@ -973,9 +987,12 @@ func resolveInRoot(root *os.Root, rel string) ([]string, error) {
 		}
 		// the link's own component comes off; its target's components resolve
 		// from the link's containing directory (or from the root for an
-		// absolute target, which the root confines the same way on open).
+		// absolute target, which the root confines the same way on open). The
+		// target is NOT filepath.Clean'd first: the kernel resolves ".." by
+		// popping the real directory resolved so far, so a link chain such as
+		// x -> .git/sub, safe -> x/../secret must land on .git/secret, not on
+		// the lexically cleaned "secret".
 		stack = stack[:len(stack)-1]
-		target = filepath.Clean(target)
 		if filepath.IsAbs(target) {
 			stack = stack[:0]
 			target = strings.TrimPrefix(target, string(filepath.Separator))
@@ -1069,13 +1086,17 @@ var betweenLstatAndOpenHook func(path string)
 // it describes the file actually opened and must be a regular file with the scan
 // identity. scanned may be nil (callers outside the directory scan), in which
 // case only the regular-file checks apply. When scanned carries the scan-time
-// root (see scannedModelInfo) the file is opened beneath that root instead of by
-// path.
+// root (see scannedModelInfo) the file is opened beneath that root instead of
+// by path, and when it additionally records that the scan excluded sensitive
+// entries, the confined traversal check is re-run immediately before the open
+// (shrinking, not closing, the check-to-open swap window; fully closing it
+// would need post-open fd-path verification, which is linux-only).
 func openScannedModelFile(path string, scanned os.FileInfo) (*os.File, os.FileInfo, error) {
 	var (
-		root     *os.Root
-		openName = path
-		identity = scanned
+		root             *os.Root
+		openName         = path
+		identity         = scanned
+		checkSensitivity = false
 	)
 	if rooted, ok := scanned.(*scannedModelInfo); ok {
 		// open beneath the scan-time root: the root itself must still be the same
@@ -1096,6 +1117,7 @@ func openScannedModelFile(path string, scanned os.FileInfo) (*os.File, os.FileIn
 		}
 		openName = rooted.name
 		identity = rooted.FileInfo
+		checkSensitivity = rooted.checkSensitivity
 	}
 	lstat := os.Lstat
 	// a path open also refuses a symlink at the final component; a root open
@@ -1120,6 +1142,21 @@ func openScannedModelFile(path string, scanned os.FileInfo) (*os.File, os.FileIn
 
 	if betweenLstatAndOpenHook != nil {
 		betweenLstatAndOpenHook(path)
+	}
+	if checkSensitivity {
+		// re-run the confined traversal check, this late and no earlier: the
+		// scan-time check passed in a benign window and an ancestor swapped
+		// back to something sensitive (a link to .git) since must not reach
+		// the open. A swap in the check-to-open window itself cannot be caught
+		// portably (that needs post-open fd-path verification, linux-only;
+		// tracked as a follow-up).
+		traversed, resolveErr := resolveInRoot(root, openName)
+		if resolveErr != nil {
+			return nil, nil, fmt.Errorf("refusing to upload %q: %w", path, resolveErr)
+		}
+		if traversedHasSensitiveEntry(traversed, false) {
+			return nil, nil, fmt.Errorf("refusing to upload %q: its path traverses a sensitive entry", path)
+		}
 	}
 	file, err := open(openName)
 	if err != nil {

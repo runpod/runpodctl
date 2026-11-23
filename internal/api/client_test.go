@@ -620,6 +620,38 @@ func TestGetV2AllPagesFollowsCursorsAndStopsOnRepeat(t *testing.T) {
 	}
 }
 
+// a repeated page cursor is server-supplied text: the walk-stop error must
+// quote only a bounded redacted excerpt, not a 10 KB credential-bearing value.
+func TestGetV2AllPagesRepeatedCursorIsBoundedAndRedacted(t *testing.T) {
+	bigCursor := strings.Repeat("c", 9000) + "X-Amz-Signature=deadbeef0123456789"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"items":      []int{1},
+			"pagination": map[string]any{"hasNextPage": true, "nextCursor": bigCursor},
+		}); err != nil {
+			return
+		}
+	}))
+	defer server.Close()
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+	client, err := NewClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.baseURL = server.URL
+
+	err = client.getV2AllPages("/things", nil, func([]byte) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "repeated page cursor") {
+		t.Fatalf("expected the repeated-cursor error, got %v", err)
+	}
+	if len(err.Error()) > ErrorBodyExcerptBytes+256 {
+		t.Fatalf("error is %d bytes; expected the excerpt bound", len(err.Error()))
+	}
+	if strings.Contains(err.Error(), "deadbeef") || strings.Contains(err.Error(), bigCursor) {
+		t.Fatalf("error retains the raw cursor: %.200q...", err.Error())
+	}
+}
+
 func TestGetV2AllPagesFailsOnMissingCursor(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"items":[1],"pagination":{"hasNextPage":true,"nextCursor":null}}`))

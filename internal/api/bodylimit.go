@@ -32,7 +32,10 @@ func ReadBounded(body io.Reader) ([]byte, error) {
 // itself was received, so the error keeps its status and stable code rather
 // than the bare read error -- but the (redacted) read error stays reachable
 // through Unwrap, so a transient network failure behind the body still
-// classifies as one.
+// classifies as one for classifiers that walk the chain (isNetworkError). The
+// received status sets the emitted code: output.Error prefers ErrorCode()
+// (server_error for a 502) over the network fallback, so the JSON contract for
+// agents is unchanged by the preserved cause.
 func unreadableBodyError(status int, readErr error) *APIError {
 	cause := redact.Error(readErr)
 	return &APIError{

@@ -150,7 +150,10 @@ func (m *ModelRepoUpload) UnmarshalJSON(data []byte) error {
 		}
 		value, err := strconv.ParseInt(s, 10, 64)
 		if err != nil {
-			return fmt.Errorf("invalid partSizeBytes value %q: %w", s, err)
+			// the value is server-supplied text, not a number: bounded and
+			// redacted, and the raw parse error (which quotes it again) is
+			// not wrapped into the chain.
+			return fmt.Errorf("invalid partSizeBytes value %q", errorMessageExcerpt(s))
 		}
 		m.PartSizeBytes = value
 		return nil

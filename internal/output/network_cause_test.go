@@ -1,6 +1,7 @@
 package output
 
 import (
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -30,3 +31,27 @@ func TestUnreadableBodyErrorOnRejectedStatusStillClassifiesAsNetwork(t *testing.
 type resetReader struct{ err error }
 
 func (r resetReader) Read([]byte) (int, error) { return 0, r.err }
+
+// the emitted JSON keeps the received status's code even when the wrapped
+// cause is a network error: ErrorCode() wins over the network fallback (the
+// published code vocabulary for agents is unchanged by the preserved cause,
+// which stays reachable through errors.As for classifiers).
+func TestErrorOutputKeepsHTTPCodeOverNetworkCause(t *testing.T) {
+	readErr := &net.OpError{Op: "read", Net: "tcp", Err: errors.New("read: connection reset by peer")}
+	_, err := internalapi.ReadBodyForStatus(http.StatusBadGateway, resetReader{readErr})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !isNetworkError(err) {
+		t.Fatal("premise: the cause must classify as a network error")
+	}
+
+	out := captureStderr(t, func() { Error(err) })
+	var obj errorObject
+	if jsonErr := json.Unmarshal([]byte(out), &obj); jsonErr != nil {
+		t.Fatalf("decode error object: %v\n%s", jsonErr, out)
+	}
+	if obj.Code != "server_error" || obj.Status != http.StatusBadGateway {
+		t.Fatalf("expected the http-derived code and status, got %s", out)
+	}
+}

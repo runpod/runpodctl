@@ -729,6 +729,29 @@ func TestCompleteModelRepoUploadBatchJoinedFailuresStayBounded(t *testing.T) {
 	}
 }
 
+// an invalid partSizeBytes is server-supplied text, not a number: the error
+// must show only a bounded redacted excerpt, and nothing in the chain may
+// retain the raw value (the strconv.NumError used to).
+func TestModelRepoUploadMalformedPartSizeBytesIsBoundedAndRedacted(t *testing.T) {
+	const marker = "X-Amz-Signature=deadbeef0123456789"
+	payload := []byte(`{"partSizeBytes":"` + strings.Repeat("y", 9000) + marker + `"}`)
+
+	var upload ModelRepoUpload
+	err := upload.UnmarshalJSON(payload)
+	if err == nil {
+		t.Fatal("expected an invalid partSizeBytes error")
+	}
+	if !strings.Contains(err.Error(), "invalid partSizeBytes value") {
+		t.Fatalf("expected the invalid-value error, got %.200q", err.Error())
+	}
+	if len(err.Error()) > errorBodyExcerptBytes+256 {
+		t.Fatalf("error is %d bytes; expected the excerpt bound, got %.200q...", len(err.Error()), err.Error())
+	}
+	if strings.Contains(err.Error(), "deadbeef") || strings.Contains(err.Error(), strings.Repeat("y", 9000)) {
+		t.Fatalf("error retains the raw server value: %.200q...", err.Error())
+	}
+}
+
 func TestModelRepoGraphQLErrorRedactsMessage(t *testing.T) {
 	err := modelRepoGraphQLError(&GraphQLError{Message: "failed https://h.example/k?X-Amz-Signature=deadbeef0123456789"})
 	if strings.Contains(err.Error(), "deadbeef") {

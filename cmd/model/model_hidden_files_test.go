@@ -226,6 +226,133 @@ func TestCollectModelFiles_AliasThroughBenignDirectoryKept(t *testing.T) {
 	}
 }
 
+// a link chain whose tail precleans lexically (x -> .git/sub, safe ->
+// x/../secret) must resolve like the kernel does: the ".." pops the real
+// directory x resolved to, landing on .git/secret, not on "secret".
+func TestCollectModelFiles_NestedLinkDotDotNotPrecleaned(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, ".git", "secret"), "secret")
+	writeTestFile(t, filepath.Join(root, ".git", "sub", ".keep"), "")
+	symlinkOrSkip(t, filepath.Join(".git", "sub"), filepath.Join(root, "x"))
+	writeTestFile(t, filepath.Join(root, "safe", "secret"), "benign")
+	symlinkOrSkip(t, filepath.Join("safe", "secret"), filepath.Join(root, "alias"))
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	safe := filepath.Join(resolvedRoot, "safe")
+
+	orig := afterScanEntryHook
+	t.Cleanup(func() { afterScanEntryHook = orig })
+	swapped := false
+	afterScanEntryHook = func(path string) {
+		if swapped || path != filepath.Join(resolvedRoot, "alias") {
+			return
+		}
+		swapped = true
+		if err := os.Rename(safe, safe+".aside"); err != nil {
+			t.Fatal(err)
+		}
+		// the target is written literally: filepath.Join would preclean "x/.."
+		// to ".", destroying the ".." traversal this test exists to pin.
+		symlinkOrSkip(t, "x/..", safe)
+	}
+
+	files, _, collectErr := collectModelFilesWithOptions(root, false)
+	if !swapped {
+		t.Fatal("hook did not run")
+	}
+	if collectErr != nil {
+		t.Fatalf("collect: %v", collectErr)
+	}
+	if containsName(files, "alias") {
+		t.Fatalf("a link chain resolving through x/../ into .git must be skipped, got %v", collectedNames(files))
+	}
+}
+
+// the three-state sequence deanq named: the scan's stat sees the sensitive
+// layout, the scan's sensitivity check sees a benign one, and the upload opens
+// the sensitive layout again. The upload-time recheck must refuse, before any
+// request is made.
+func TestUpload_AncestorSwappedBackToSensitiveRefused(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, ".git", "config"), "[core]")
+	writeTestFile(t, filepath.Join(root, "safe", "config"), "benign")
+	symlinkOrSkip(t, filepath.Join("safe", "config"), filepath.Join(root, "alias"))
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	safe := filepath.Join(resolvedRoot, "safe")
+	makeSensitive := func(t *testing.T) {
+		t.Helper()
+		if renameErr := os.Rename(safe, safe+".aside"); renameErr != nil {
+			t.Fatal(renameErr)
+		}
+		symlinkOrSkip(t, ".git", safe)
+	}
+	makeBenign := func(t *testing.T) {
+		t.Helper()
+		if removeErr := os.Remove(safe); removeErr != nil {
+			t.Fatal(removeErr)
+		}
+		if renameErr := os.Rename(safe+".aside", safe); renameErr != nil {
+			t.Fatal(renameErr)
+		}
+	}
+
+	origScan, origTraversal := afterScanEntryHook, beforeTraversalCheckHook
+	t.Cleanup(func() { afterScanEntryHook, beforeTraversalCheckHook = origScan, origTraversal })
+	phase := 0
+	afterScanEntryHook = func(path string) {
+		if phase != 0 || path != filepath.Join(resolvedRoot, "alias") {
+			return
+		}
+		phase = 1
+		makeSensitive(t) // state 1: the rooted stat records .git/config
+	}
+	beforeTraversalCheckHook = func(path string) {
+		if phase != 1 || path != filepath.Join(resolvedRoot, "alias") {
+			return
+		}
+		phase = 2
+		makeBenign(t) // state 2: the sensitivity check sees the benign layout
+	}
+
+	files, _, err := collectModelFilesWithOptions(root, false)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if phase != 2 || !containsName(files, "alias") {
+		t.Fatalf("premise: the alias must pass the benign phase (phase=%d files=%v)", phase, collectedNames(files))
+	}
+	var file *modelFile
+	for i := range files {
+		if files[i].RelativePath == "alias" {
+			file = &files[i]
+		}
+	}
+	if file == nil {
+		t.Fatal("alias missing from the collected files")
+	}
+
+	server, hits := newUnreachableUploadServer(t)
+	origBetween := betweenLstatAndOpenHook
+	t.Cleanup(func() { betweenLstatAndOpenHook = origBetween })
+	betweenLstatAndOpenHook = func(string) { makeSensitive(t) } // state 3: sensitive again at the upload
+
+	err = completeModelUploadFile(t.Context(), uploadFor(server.URL), file.uploadPath(), file.info, nil)
+	if err == nil {
+		t.Fatal("expected the upload-time recheck to refuse the swapped-back ancestor")
+	}
+	if !strings.Contains(err.Error(), "sensitive") {
+		t.Fatalf("expected a sensitivity refusal, got %v", err)
+	}
+	if hits() != 0 {
+		t.Fatalf("nothing may be sent, server saw %d request(s)", hits())
+	}
+}
+
 func containsName(files []modelFile, name string) bool {
 	for i := range files {
 		if files[i].RelativePath == name {
