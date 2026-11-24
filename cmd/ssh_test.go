@@ -119,14 +119,36 @@ func TestSSHRemoveKey_RequiresIdentifier(t *testing.T) {
 // an agent and an ssh command that can never connect.
 
 func sshStub(t *testing.T, pods string) {
+	sshStubWithPodGet(t, pods, nil)
+}
+
+func sshStubWithPodGet(t *testing.T, pods string, podGetOverrides map[string]string) {
 	t.Helper()
+	var parsedPods []json.RawMessage
+	if err := json.Unmarshal([]byte(pods), &parsedPods); err != nil {
+		t.Fatalf("invalid pods fixture: %v", err)
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/pods":
+		switch {
+		case r.URL.Path == "/pods":
 			_, _ = w.Write([]byte(`{"pods":` + pods + `,"pagination":{"hasNextPage":false,"nextCursor":null}}`))
-		case "/account/ssh-keys":
+		case r.URL.Path == "/account/ssh-keys":
 			_, _ = w.Write([]byte(`{"keys":[]}`))
+		case strings.HasPrefix(r.URL.Path, "/pods/"):
+			id := strings.TrimPrefix(r.URL.Path, "/pods/")
+			if override, ok := podGetOverrides[id]; ok {
+				_, _ = w.Write([]byte(override))
+				return
+			}
+			for _, raw := range parsedPods {
+				var entry map[string]interface{}
+				if err := json.Unmarshal(raw, &entry); err == nil && entry["id"] == id {
+					_, _ = w.Write(raw)
+					return
+				}
+			}
+			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected request %s", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -231,6 +253,59 @@ func TestSSHInfo_RuntimeState(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSSHInfo_FallsBackToSinglePodReadWhenListLagsRuntime(t *testing.T) {
+	listPods := `[{"id":"p","name":"p","status":"RUNNING","ports":["22/tcp"],"runtime":null}]`
+	freshGet := `{"id":"p","name":"p","status":"RUNNING","ports":["22/tcp"],"runtime":{"uptime":30,"ports":[` + sshPortJSON + `]}}`
+	sshStubWithPodGet(t, listPods, map[string]string{"p": freshGet})
+
+	got := sshCaptureJSON(t, []string{"p"}, false)
+
+	if gotErr, ok := got["error"]; ok {
+		t.Errorf("expected a ready connection once the single-pod read is consulted, got error %v (%v)", gotErr, got)
+	}
+	if _, ok := got["ssh_command"]; !ok {
+		t.Errorf("expected an ssh_command once the single-pod read shows the pod is up, got %v", got)
+	}
+}
+
+// TestSSHInfo_SinglePodReadFailureKeepsListedView covers the fallback's error
+// path: if GetPodRuntime fails (the single-pod endpoint 404s or errors), the
+// command must fall back to the listed (nil-runtime) view instead of failing
+// the whole command, and report the pod as not ready exactly as it did before
+// this fallback existed.
+func TestSSHInfo_SinglePodReadFailureKeepsListedView(t *testing.T) {
+	listPods := `[{"id":"p","name":"p","status":"RUNNING","ports":["22/tcp"],"runtime":null}]`
+	sshStubWithPodGet(t, listPods, nil) // no override -> /pods/p 404s
+
+	got := sshCaptureJSON(t, []string{"p"}, false)
+
+	if _, ok := got["error"]; !ok {
+		t.Errorf("expected a not-ready error when the single-pod read fails, got %v", got)
+	}
+	if _, ok := got["ssh_command"]; ok {
+		t.Errorf("did not expect an ssh_command from a failed single-pod read, got %v", got)
+	}
+}
+
+// TestSSHInfo_SinglePodReadIgnoredOnIDMismatch mirrors the defensive ID check
+// internal/waitfor/pod.go already applies to the same fallback read: a
+// response whose id doesn't match the pod being queried must never be
+// trusted, even if the http call itself succeeded.
+func TestSSHInfo_SinglePodReadIgnoredOnIDMismatch(t *testing.T) {
+	listPods := `[{"id":"p","name":"p","status":"RUNNING","ports":["22/tcp"],"runtime":null}]`
+	wrongIDGet := `{"id":"other","name":"other","status":"RUNNING","ports":["22/tcp"],"runtime":{"uptime":30,"ports":[` + sshPortJSON + `]}}`
+	sshStubWithPodGet(t, listPods, map[string]string{"p": wrongIDGet})
+
+	got := sshCaptureJSON(t, []string{"p"}, false)
+
+	if _, ok := got["error"]; !ok {
+		t.Errorf("expected a not-ready error when the single-pod read returns a mismatched id, got %v", got)
+	}
+	if id, _ := got["id"].(string); id != "p" {
+		t.Errorf("expected the originally listed pod id 'p' to be reported, got %v", got)
 	}
 }
 

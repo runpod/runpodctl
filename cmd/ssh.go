@@ -230,6 +230,12 @@ func runSSHInfoWithArgs(cmd *cobra.Command, args []string, allowAll bool) error 
 	nameOrID := args[0]
 	pod, conn := sshconnect.FindPodConnection(pods, nameOrID, keyInfo)
 	if pod != nil {
+		if pod.Runtime == nil {
+			if fresh, err := client.GetPodRuntime(pod.ID); err == nil && fresh != nil && fresh.ID == pod.ID {
+				pod = fresh
+				conn = sshconnect.BuildConnection(pod, keyInfo)
+			}
+		}
 		// the same derivation `pod get` uses, so both commands explain a
 		// not-ready pod identically instead of saying only "pod not ready".
 		state := sshconnect.PodState(pod)
