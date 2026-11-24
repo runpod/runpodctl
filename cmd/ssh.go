@@ -231,7 +231,7 @@ func runSSHInfoWithArgs(cmd *cobra.Command, args []string, allowAll bool) error 
 	pod, conn := sshconnect.FindPodConnection(pods, nameOrID, keyInfo)
 	if pod != nil {
 		if pod.Runtime == nil {
-			if fresh, err := client.GetPodRuntime(pod.ID); err == nil && fresh != nil {
+			if fresh, err := client.GetPodRuntime(pod.ID); err == nil && fresh != nil && fresh.ID == pod.ID {
 				pod = fresh
 				conn = sshconnect.BuildConnection(pod, keyInfo)
 			}

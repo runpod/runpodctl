@@ -271,6 +271,44 @@ func TestSSHInfo_FallsBackToSinglePodReadWhenListLagsRuntime(t *testing.T) {
 	}
 }
 
+// TestSSHInfo_SinglePodReadFailureKeepsListedView covers the fallback's error
+// path: if GetPodRuntime fails (the single-pod endpoint 404s or errors), the
+// command must fall back to the listed (nil-runtime) view instead of failing
+// the whole command, and report the pod as not ready exactly as it did before
+// this fallback existed.
+func TestSSHInfo_SinglePodReadFailureKeepsListedView(t *testing.T) {
+	listPods := `[{"id":"p","name":"p","status":"RUNNING","ports":["22/tcp"],"runtime":null}]`
+	sshStubWithPodGet(t, listPods, nil) // no override -> /pods/p 404s
+
+	got := sshCaptureJSON(t, []string{"p"}, false)
+
+	if _, ok := got["error"]; !ok {
+		t.Errorf("expected a not-ready error when the single-pod read fails, got %v", got)
+	}
+	if _, ok := got["ssh_command"]; ok {
+		t.Errorf("did not expect an ssh_command from a failed single-pod read, got %v", got)
+	}
+}
+
+// TestSSHInfo_SinglePodReadIgnoredOnIDMismatch mirrors the defensive ID check
+// internal/waitfor/pod.go already applies to the same fallback read: a
+// response whose id doesn't match the pod being queried must never be
+// trusted, even if the http call itself succeeded.
+func TestSSHInfo_SinglePodReadIgnoredOnIDMismatch(t *testing.T) {
+	listPods := `[{"id":"p","name":"p","status":"RUNNING","ports":["22/tcp"],"runtime":null}]`
+	wrongIDGet := `{"id":"other","name":"other","status":"RUNNING","ports":["22/tcp"],"runtime":{"uptime":30,"ports":[` + sshPortJSON + `]}}`
+	sshStubWithPodGet(t, listPods, map[string]string{"p": wrongIDGet})
+
+	got := sshCaptureJSON(t, []string{"p"}, false)
+
+	if _, ok := got["error"]; !ok {
+		t.Errorf("expected a not-ready error when the single-pod read returns a mismatched id, got %v", got)
+	}
+	if id, _ := got["id"].(string); id != "p" {
+		t.Errorf("expected the originally listed pod id 'p' to be reported, got %v", got)
+	}
+}
+
 // TestSSHConnect_ListSkipsDeadPods covers the no-arg legacy path, which builds
 // connections through ListConnections rather than FindPodConnection.
 func TestSSHConnect_ListSkipsDeadPods(t *testing.T) {
