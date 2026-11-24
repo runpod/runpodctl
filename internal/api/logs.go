@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/runpod/runpodctl/internal/configenv"
+	"github.com/runpod/runpodctl/internal/redact"
 )
 
 // This file is the cli's only streaming transport. The log routes
@@ -119,7 +120,7 @@ func NewLogClient() (*LogClient, error) {
 		// stream is meant to outlive any timeout the user has configured. The
 		// caller's context is the only thing that ends a read. Note this also
 		// means the viper `timeout` key deliberately does not apply here.
-		httpClient: &http.Client{},
+		httpClient: &http.Client{CheckRedirect: noRedirects},
 		userAgent:  buildUserAgent(),
 	}, nil
 }
@@ -286,9 +287,15 @@ func (c *LogClient) stream(ctx context.Context, path string, opts LogStreamOptio
 		target += "?" + params.Encode()
 	}
 
+	if err := configenv.CheckAPIURL(target); err != nil {
+		return err
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		// a *url.Error quotes the url verbatim, including any credentials in
+		// its query string; redact like the transport errors below.
+		return fmt.Errorf("failed to create request: %w", redact.Error(err))
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Accept", "text/event-stream")
@@ -301,10 +308,18 @@ func (c *LogClient) stream(ctx context.Context, path string, opts LogStreamOptio
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
+		return fmt.Errorf("request failed: %w", redact.Error(err))
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		// redirects are never followed (see noRedirects), so name it.
+		return &APIError{
+			Status:  resp.StatusCode,
+			Code:    codeForStatus(resp.StatusCode),
+			Message: fmt.Sprintf("api redirected (status %d); redirects are not followed", resp.StatusCode),
+		}
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// error bodies are small json documents, so reading to the end is safe
 		// here even though the success path must not.
@@ -568,6 +583,12 @@ func IsPermanentStreamError(err error) bool {
 	switch apiErr.HTTPStatus() {
 	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden,
 		http.StatusNotFound, http.StatusUnprocessableEntity:
+		return true
+	}
+	// a redirect is refused, never followed, so the same request meets the same
+	// answer on every reconnect: a misconfigured api url must end the follow,
+	// not retry it forever.
+	if status := apiErr.HTTPStatus(); status >= http.StatusMultipleChoices && status < http.StatusBadRequest {
 		return true
 	}
 	switch apiErr.ErrorCode() {

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 
 	internalapi "github.com/runpod/runpodctl/internal/api"
@@ -64,6 +66,38 @@ func TestQueryFallsBackToConfiguredAPIURL(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	defer res.Body.Close()
+}
+
+// TestQueryMalformedURLErrorIsRedacted pins that a request-construction
+// failure (a *url.Error quoting the raw url) does not echo credentials from
+// the url query string, in the message or anywhere in the chain.
+func TestQueryMalformedURLErrorIsRedacted(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+	t.Setenv("RUNPOD_GRAPHQL_URL", "https://bad host/x?X-Amz-Signature=deadbeef0123456789")
+
+	res, err := Query(Input{Query: "query test"})
+	if res != nil {
+		defer func() {
+			if closeErr := res.Body.Close(); closeErr != nil {
+				t.Errorf("close response body: %v", closeErr)
+			}
+		}()
+	}
+	if err == nil {
+		t.Fatal("expected a request-construction error")
+	}
+	if strings.Contains(err.Error(), "deadbeef") {
+		t.Fatalf("error leaks the url query: %v", err)
+	}
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) {
+		t.Fatalf("expected a *url.Error in the chain, got %T: %v", err, err)
+	}
+	if strings.Contains(urlErr.URL, "deadbeef") {
+		t.Fatalf("the url.Error in the chain still carries the query: %v", urlErr.URL)
+	}
 }
 
 func TestErrNoCredentialsIsMatchableFromThisPackage(t *testing.T) {

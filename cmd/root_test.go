@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/runpod/runpodctl/internal/api"
+	"github.com/runpod/runpodctl/internal/configenv"
 )
 
 func TestRootCmd_Structure(t *testing.T) {
@@ -108,6 +109,38 @@ func TestRootCmd_OutputFlag(t *testing.T) {
 	}
 	if flag.Usage != "output format (json, yaml)" {
 		t.Errorf("expected usage 'output format (json, yaml)', got %s", flag.Usage)
+	}
+}
+
+func TestRootCmd_InsecureFlag(t *testing.T) {
+	root := GetRootCmd()
+	flag := root.PersistentFlags().Lookup("insecure")
+	if flag == nil {
+		t.Fatal("expected --insecure flag")
+	}
+	if flag.DefValue != "false" {
+		t.Errorf("--insecure must default to false, got %s", flag.DefValue)
+	}
+
+	original := insecureAPI
+	t.Cleanup(func() { insecureAPI = original; configenv.SetAllowInsecureAPI(false) })
+	t.Setenv(configenv.AllowInsecureAPIEnv, "")
+
+	// the pre-run hook must carry the flag into configenv, since the api
+	// clients read it from there.
+	insecureAPI = true
+	if err := root.PersistentPreRunE(root, nil); err != nil {
+		t.Fatalf("PersistentPreRunE: %v", err)
+	}
+	if !configenv.AllowInsecureAPI() {
+		t.Error("--insecure was not propagated to configenv")
+	}
+	insecureAPI = false
+	if err := root.PersistentPreRunE(root, nil); err != nil {
+		t.Fatalf("PersistentPreRunE: %v", err)
+	}
+	if configenv.AllowInsecureAPI() {
+		t.Error("insecure access stayed enabled after the flag was cleared")
 	}
 }
 

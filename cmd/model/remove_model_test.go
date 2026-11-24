@@ -1,10 +1,15 @@
 package model
 
 import (
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/runpod/runpodctl/api"
+	internalapi "github.com/runpod/runpodctl/internal/api"
 )
 
 func TestFindModelVersion(t *testing.T) {
@@ -241,4 +246,85 @@ func TestCheckDependentEndpoints(t *testing.T) {
 			t.Fatal("expected an error, got nil")
 		}
 	})
+}
+
+// TestDefaultListDependentEndpointsRejectsOversizeResponse pins that the
+// dependent-endpoint lookup used before a removal bounds its response read.
+func TestDefaultListDependentEndpointsRejectsOversizeResponse(t *testing.T) {
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+	chunk := []byte(strings.Repeat("x", 1<<20))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if _, err := w.Write([]byte(`{"data":{"pad":"`)); err != nil {
+			return
+		}
+		for range (internalapi.MaxResponseBytes >> 20) + 2 {
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+	t.Setenv("RUNPOD_GRAPHQL_URL", server.URL)
+
+	if _, err := defaultListDependentEndpoints("owner", "name", "hash"); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("expected an over-limit error, got %v", err)
+	}
+}
+
+// TestDefaultListDependentEndpointsBoundsErrorBody pins that a large non-200
+// body is cut in the error rather than echoed whole.
+func TestDefaultListDependentEndpointsBoundsErrorBody(t *testing.T) {
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+	payload := []byte(strings.Repeat("z", 3<<20))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		if _, err := w.Write(payload); err != nil {
+			return
+		}
+	}))
+	defer server.Close()
+	t.Setenv("RUNPOD_GRAPHQL_URL", server.URL)
+
+	_, err := defaultListDependentEndpoints("owner", "name", "hash")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if len(err.Error()) > internalapi.ErrorBodyExcerptBytes+256 || !strings.Contains(err.Error(), "truncated") {
+		t.Fatalf("expected a bounded error with a truncation marker, got %d bytes", len(err.Error()))
+	}
+}
+
+// TestDefaultListDependentEndpointsBoundsAndRedactsGraphQLErrorMessage pins that
+// a top-level graphql error message from the dependent-endpoint lookup is
+// bounded and redacted: it reaches stderr through checkDependentEndpoints.
+func TestDefaultListDependentEndpointsBoundsAndRedactsGraphQLErrorMessage(t *testing.T) {
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+	const signature = "deadbeefcafe0123456789"
+	msg := "lookup failed https://bucket.s3.amazonaws.com/key?X-Amz-Credential=AKIAEXAMPLE&X-Amz-Signature=" + signature + " " + strings.Repeat("m", 3<<20)
+	payload, marshalErr := json.Marshal(map[string]any{"errors": []map[string]any{{"message": msg}}})
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if _, err := w.Write(payload); err != nil {
+			return
+		}
+	}))
+	defer server.Close()
+	t.Setenv("RUNPOD_GRAPHQL_URL", server.URL)
+
+	_, err := defaultListDependentEndpoints("owner", "name", "hash")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	var coder interface{ ErrorCode() string }
+	if !errors.As(err, &coder) || coder.ErrorCode() != "graphql_error" {
+		t.Fatalf("expected a graphql_error, got %#v", err)
+	}
+	if len(err.Error()) > internalapi.ErrorBodyExcerptBytes+256 || !strings.Contains(err.Error(), "truncated") {
+		t.Fatalf("expected a bounded message with a truncation marker, got %d bytes", len(err.Error()))
+	}
+	if strings.Contains(err.Error(), signature) {
+		t.Fatalf("message leaks the presigned signature: %.200q", err.Error())
+	}
 }

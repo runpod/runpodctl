@@ -3,11 +3,11 @@ package api
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	"net/http"
 	"time"
 
 	"github.com/runpod/runpodctl/internal/configenv"
+	"github.com/runpod/runpodctl/internal/redact"
 	"github.com/spf13/viper"
 )
 
@@ -52,7 +52,7 @@ func NewGraphQLClient() (*GraphQLClient, error) {
 	return &GraphQLClient{
 		url:        apiURL,
 		apiKey:     apiKey,
-		httpClient: &http.Client{Timeout: timeout},
+		httpClient: &http.Client{Timeout: timeout, CheckRedirect: RefuseRedirect},
 		userAgent:  buildUserAgent(),
 	}, nil
 }
@@ -68,9 +68,15 @@ func (c *GraphQLClient) Query(input GraphQLInput) ([]byte, error) {
 		return nil, err
 	}
 
+	if checkErr := configenv.CheckAPIURL(c.url); checkErr != nil {
+		return nil, checkErr
+	}
+
 	req, err := http.NewRequest("POST", c.url, bytes.NewBuffer(jsonValue))
 	if err != nil {
-		return nil, err
+		// a *url.Error quotes the url verbatim, including any credentials in
+		// its query string; redact it like the transport errors below.
+		return nil, redact.Error(err)
 	}
 
 	req.Header.Add("Content-Type", "application/json")
@@ -79,11 +85,11 @@ func (c *GraphQLClient) Query(input GraphQLInput) ([]byte, error) {
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, redact.Error(err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := ReadBodyForStatus(resp.StatusCode, resp.Body)
 	if err != nil {
 		return nil, err
 	}

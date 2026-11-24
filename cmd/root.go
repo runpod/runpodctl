@@ -25,6 +25,7 @@ import (
 	"github.com/runpod/runpodctl/cmd/user"
 	"github.com/runpod/runpodctl/cmd/volume"
 	"github.com/runpod/runpodctl/internal/api"
+	"github.com/runpod/runpodctl/internal/configenv"
 	"github.com/runpod/runpodctl/internal/output"
 
 	"github.com/spf13/cobra"
@@ -33,6 +34,9 @@ import (
 
 var version string
 var outputFormat string
+
+// insecureAPI is the global --insecure flag; see configenv.AllowInsecureAPI.
+var insecureAPI bool
 var configInitErr error
 
 var errProjectRemoved = errors.New("project command removed")
@@ -122,6 +126,7 @@ func init() {
 		if c.Name() == "help" || c.Name() == projectCommandName {
 			return nil
 		}
+		configenv.SetAllowInsecureAPI(insecureAPI)
 		if err := output.ValidateFormat(outputFormat); err != nil {
 			return &usageError{cmd: c, err: err}
 		}
@@ -139,6 +144,7 @@ func registerCommands() {
 
 	// Global flags
 	rootCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "json", "output format (json, yaml)")
+	rootCmd.PersistentFlags().BoolVar(&insecureAPI, "insecure", false, "allow a non-loopback http:// api url, which sends the api key unencrypted (or set RUNPOD_ALLOW_INSECURE_API=1)")
 
 	// Core resource commands
 	rootCmd.AddCommand(pod.Cmd)

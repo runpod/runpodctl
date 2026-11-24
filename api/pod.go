@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 )
 
@@ -114,7 +113,7 @@ func GetPods() (pods []*Pod, err error) {
 		return
 	}
 	defer res.Body.Close()
-	rawData, err := io.ReadAll(res.Body)
+	rawData, err := readResponseBody(res)
 	if err != nil {
 		return
 	}
@@ -123,11 +122,11 @@ func GetPods() (pods []*Pod, err error) {
 		return
 	}
 	if len(data.Errors) > 0 {
-		err = errors.New(data.Errors[0].Message)
+		err = errors.New(errorMessageExcerpt(data.Errors[0].Message))
 		return
 	}
 	if data == nil || data.Data == nil || data.Data.Myself == nil || data.Data.Myself.Pods == nil {
-		err = fmt.Errorf("data is nil: %s", string(rawData))
+		err = fmt.Errorf("data is nil: %s", errorBodyExcerpt(rawData))
 		return
 	}
 	pods = data.Data.Myself.Pods
@@ -185,7 +184,7 @@ func CreatePod(podInput *CreatePodInput) (pod map[string]interface{}, err error)
 	}
 	pod, ok := gqldata["podFindAndDeployOnDemand"].(map[string]interface{})
 	if !ok || pod == nil {
-		err = fmt.Errorf("pod is nil: %s", string(rawData))
+		err = fmt.Errorf("pod is nil: %s", errorBodyExcerpt(rawData))
 		return
 	}
 	return
@@ -212,7 +211,7 @@ func StartSpotPod(id string, bidPerGpu float32, gpuCount int) (podBidResume map[
 	}
 	podBidResume, ok := gqldata["podBidResume"].(map[string]interface{})
 	if !ok || podBidResume == nil {
-		err = fmt.Errorf("podBidResume is nil: %s", string(rawData))
+		err = fmt.Errorf("podBidResume is nil: %s", errorBodyExcerpt(rawData))
 		return
 	}
 	return

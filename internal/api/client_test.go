@@ -271,6 +271,9 @@ func TestParseAPIError(t *testing.T) {
 		{"rest v2 detail without errors is used alone", `{"detail":"pod not found","status":404,"title":"Not Found"}`, 404, "pod not found", "not_found"},
 		{"object-shaped errors keep the message and code", `{"error":"pod not found","code":"POD_NOT_FOUND","errors":[{"message":"x"}]}`, 404, "pod not found", "pod_not_found"},
 		{"object-shaped errors next to detail are skipped", `{"detail":"Request validation failed.","errors":[{"message":"x"}]}`, 422, "Request validation failed.", "bad_request"},
+		{"a code carrying a url is dropped for the status-derived one", `{"error":"boom","code":"https://h.example/x?X-Amz-Signature=deadbeef0123456789"}`, 500, "boom", "server_error"},
+		{"an oversized code is dropped", `{"error":"boom","code":"` + strings.Repeat("c", 4096) + `"}`, 400, "boom", "bad_request"},
+		{"a multi-line code is dropped", "{\"error\":\"boom\",\"code\":\"conflict\\nsee https://h.example\"}", 409, "boom", "conflict"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -502,6 +505,73 @@ func TestRequestV2RefusesEmptyIDAndRedirects(t *testing.T) {
 	}
 }
 
+// the Location of a refused redirect can carry a presigned url or a token, so
+// the error names only where it points, never a credential.
+func TestRefusedRedirectErrorRedactsLocation(t *testing.T) {
+	for name, tc := range map[string]struct {
+		location string
+		secrets  []string
+		want     string
+	}{
+		"presigned url": {
+			location: "https://bucket.s3.us-east-1.amazonaws.com/key?X-Amz-Signature=deadbeef&X-Amz-Credential=abc",
+			secrets:  []string{"deadbeef", "X-Amz-Credential", "abc"},
+			want:     "https://bucket.s3.us-east-1.amazonaws.com/key",
+		},
+		"bearer token": {
+			location: "Bearer rpa_secret123",
+			secrets:  []string{"rpa_secret123"},
+		},
+		"relative with token query": {
+			location: "/next?token=rpa_secret123",
+			secrets:  []string{"rpa_secret123"},
+			want:     "/next",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Location", tc.location)
+				w.WriteHeader(http.StatusFound)
+			}))
+			defer server.Close()
+			client := newV2TestClient(t, server)
+
+			_, err := client.GetV2("/registries", nil)
+			if err == nil {
+				t.Fatal("a redirect must fail")
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, "redirected (status 302)") {
+				t.Errorf("error = %q, want the status named", msg)
+			}
+			for _, secret := range tc.secrets {
+				if strings.Contains(msg, secret) {
+					t.Errorf("error %q leaks %q", msg, secret)
+				}
+			}
+			if tc.want != "" && !strings.Contains(msg, tc.want) {
+				t.Errorf("error = %q, want the redacted location %q", msg, tc.want)
+			}
+		})
+	}
+}
+
+// a transport failure quotes the request url in a *url.Error; its query string
+// must not reach the message.
+func TestTransportErrorRedactsRequestURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	client := newV2TestClient(t, server)
+	server.Close()
+
+	_, err := client.GetV2("/registries", url.Values{"X-Amz-Signature": {"deadbeef"}})
+	if err == nil {
+		t.Fatal("a closed server must fail")
+	}
+	if strings.Contains(err.Error(), "deadbeef") {
+		t.Errorf("error %q leaks the query string", err)
+	}
+}
+
 func TestGetV2AllPagesFollowsCursorsAndStopsOnRepeat(t *testing.T) {
 	var cursors []string
 	repeat := false
@@ -547,6 +617,38 @@ func TestGetV2AllPagesFollowsCursorsAndStopsOnRepeat(t *testing.T) {
 	}
 	if len(cursors) != 2 {
 		t.Fatalf("expected the walk to stop after the repeat, got %d requests", len(cursors))
+	}
+}
+
+// a repeated page cursor is server-supplied text: the walk-stop error must
+// quote only a bounded redacted excerpt, not a 10 KB credential-bearing value.
+func TestGetV2AllPagesRepeatedCursorIsBoundedAndRedacted(t *testing.T) {
+	bigCursor := strings.Repeat("c", 9000) + "X-Amz-Signature=deadbeef0123456789"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"items":      []int{1},
+			"pagination": map[string]any{"hasNextPage": true, "nextCursor": bigCursor},
+		}); err != nil {
+			return
+		}
+	}))
+	defer server.Close()
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+	client, err := NewClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.baseURL = server.URL
+
+	err = client.getV2AllPages("/things", nil, func([]byte) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "repeated page cursor") {
+		t.Fatalf("expected the repeated-cursor error, got %v", err)
+	}
+	if len(err.Error()) > ErrorBodyExcerptBytes+256 {
+		t.Fatalf("error is %d bytes; expected the excerpt bound", len(err.Error()))
+	}
+	if strings.Contains(err.Error(), "deadbeef") || strings.Contains(err.Error(), bigCursor) {
+		t.Fatalf("error retains the raw cursor: %.200q...", err.Error())
 	}
 }
 

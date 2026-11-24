@@ -16,6 +16,7 @@ import (
 	"github.com/runpod/runpodctl/internal/agent"
 	"github.com/runpod/runpodctl/internal/clierr"
 	"github.com/runpod/runpodctl/internal/configenv"
+	"github.com/runpod/runpodctl/internal/redact"
 	"github.com/spf13/viper"
 )
 
@@ -74,6 +75,21 @@ func noRedirects(*http.Request, []*http.Request) error {
 	return http.ErrUseLastResponse
 }
 
+// ErrRedirectRefused is what a graphql client returns, via RefuseRedirect, when
+// the api answers with a redirect. Every client that sends the api key refuses
+// redirects: go keeps the Authorization header on a redirect to the same host on
+// another port and replays the request as a get, so following one can hand the
+// key and body to a different listener or report a write as a read.
+var ErrRedirectRefused = errors.New("graphql endpoint responded with a redirect; refusing to follow it (check the configured api url)")
+
+// RefuseRedirect is a CheckRedirect that fails the request instead of following
+// a redirect. Use it where the caller has no 3xx handling of its own, so the
+// redirect surfaces as an error rather than a status nobody checks; clients whose
+// request path reports a 3xx itself use noRedirects.
+func RefuseRedirect(*http.Request, []*http.Request) error {
+	return ErrRedirectRefused
+}
+
 func restBaseURL() string {
 	baseURL := configenv.RESTURL()
 	if baseURL == "" {
@@ -117,7 +133,7 @@ func (c *Client) requestURLContext(ctx context.Context, method, u string, body a
 		if retryableStatus(method, resp.status) && waitToRetry(ctx, resp.header, attempt) {
 			continue
 		}
-		if err != nil {
+		if err != nil && resp.status >= 200 && resp.status < 300 {
 			return nil, err
 		}
 
@@ -127,8 +143,14 @@ func (c *Client) requestURLContext(ctx context.Context, method, u string, body a
 			return nil, &APIError{
 				Status:  resp.status,
 				Code:    codeForStatus(resp.status),
-				Message: fmt.Sprintf("api redirected (status %d) to %q; redirects are not followed", resp.status, resp.header.Get("Location")),
+				Message: fmt.Sprintf("api redirected (status %d) to %q; redirects are not followed", resp.status, redact.URL(redact.Text(resp.header.Get("Location")))),
 			}
+		}
+		if err != nil {
+			// a rejected status whose body was oversized or cut short: the
+			// response itself was received, so keep its status and stable code
+			// rather than the bare read error. Retries were handled above.
+			return nil, unreadableBodyError(resp.status, errors.Unwrap(err))
 		}
 		if resp.status < 200 || resp.status >= 300 {
 			return nil, parseAPIError(resp.body, resp.status)
@@ -164,9 +186,15 @@ func (c *Client) send(ctx context.Context, method, u string, jsonBody []byte) (*
 		reqBody = bytes.NewReader(jsonBody) // fresh reader each attempt
 	}
 
+	if err := configenv.CheckAPIURL(u); err != nil {
+		return nil, fmt.Errorf("%w: %w", errRequestConstruction, err)
+	}
+
 	req, err := http.NewRequestWithContext(ctx, method, u, reqBody)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", errRequestConstruction, err)
+		// a *url.Error quotes the url verbatim, including any credentials in
+		// its query string; redact before wrapping it into the chain.
+		return nil, fmt.Errorf("%w: %w", errRequestConstruction, redact.Error(err))
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
@@ -174,12 +202,12 @@ func (c *Client) send(ctx context.Context, method, u string, jsonBody []byte) (*
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		return nil, fmt.Errorf("request failed: %w", redact.Error(err))
 	}
 	defer resp.Body.Close()
 
 	got := &response{status: resp.StatusCode, header: resp.Header}
-	got.body, err = io.ReadAll(resp.Body)
+	got.body, err = ReadBounded(resp.Body)
 	if err != nil {
 		return got, fmt.Errorf("failed to read response: %w", err)
 	}
@@ -274,9 +302,11 @@ func (c *Client) getV2AllPages(endpoint string, params url.Values, decode func([
 		if next == nil || *next == "" {
 			return fmt.Errorf("the api reported more pages of %s but no cursor to fetch them", endpoint)
 		}
-		// a cursor the api already handed out would loop forever
+		// a cursor the api already handed out would loop forever; the cursor is
+		// server-supplied text, so quote the bounded redacted excerpt, not the
+		// raw value.
 		if seen[*next] {
-			return fmt.Errorf("the api repeated page cursor %q while listing %s", *next, endpoint)
+			return fmt.Errorf("the api repeated page cursor %q while listing %s", ErrorMessageExcerpt(*next), endpoint)
 		}
 		seen[*next] = true
 		query.Set("cursor", *next)
@@ -322,10 +352,19 @@ type APIError struct {
 	Message string `json:"error"`
 	Code    string `json:"code,omitempty"`
 	Status  int    `json:"status,omitempty"`
+	// cause keeps the underlying failure (e.g. the read error behind an
+	// unreadable error body) reachable through errors.Is/As without letting a
+	// raw url or body back into the message. Never marshaled.
+	cause error
 }
 
 // Error implements the error interface.
 func (e *APIError) Error() string { return e.Message }
+
+// Unwrap exposes the underlying cause, when one was recorded, so classifiers
+// (e.g. the network-error check in output) still see a response whose status
+// was received but whose body failed as the network failure it is.
+func (e *APIError) Unwrap() error { return e.cause }
 
 // ErrorCode returns a stable machine-readable code for the error, deriving one
 // from the HTTP status when the API did not supply an explicit code.
@@ -387,6 +426,28 @@ func codeForStatus(status int) string {
 	}
 }
 
+// sanitizeAPICode normalizes a server-provided error code. The value is
+// echoed verbatim into the JSON error object on stderr (see output.Error), so
+// a response-sized or credential-bearing "code" must not pass through: only
+// the conventional machine-code shape (lowercase snake/kebab, single line,
+// bounded length) is accepted; anything else is dropped and the code is
+// derived from the status instead.
+func sanitizeAPICode(code string) string {
+	code = strings.ToLower(strings.TrimSpace(code))
+	// long enough for any real machine code, too short for payload.
+	if code == "" || len(code) > 64 || strings.ContainsAny(code, "\r\n") {
+		return ""
+	}
+	for _, r := range code {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_', r == '.', r == '-':
+		default:
+			return ""
+		}
+	}
+	return code
+}
+
 // parseAPIError builds a structured APIError from a non-2xx response body. It
 // unwraps the common {"error": "..."} / {"message": "..."} envelope so the
 // message is not double-encoded (e.g. `api error: {"error":"pod not found"}`),
@@ -408,9 +469,9 @@ func parseAPIError(body []byte, status int) *APIError {
 		if err := json.Unmarshal(trimmed, &envelope); err == nil {
 			switch {
 			case envelope.Error != "":
-				apiErr.Message = envelope.Error
+				apiErr.Message = ErrorMessageExcerpt(envelope.Error)
 			case envelope.Message != "":
-				apiErr.Message = envelope.Message
+				apiErr.Message = ErrorMessageExcerpt(envelope.Message)
 			case envelope.Detail != "":
 				// fastapi-style bodies use "detail"; without this the whole blob
 				// used to become the message.
@@ -422,9 +483,12 @@ func parseAPIError(body []byte, status int) *APIError {
 				if json.Unmarshal(envelope.Errors, &details) == nil && len(details) > 0 {
 					apiErr.Message += " " + strings.Join(details, "; ")
 				}
+				// bound the joined text as a whole, after the parts are combined.
+				apiErr.Message = ErrorMessageExcerpt(apiErr.Message)
 			}
-			// normalize an explicit api code to the lowercase vocabulary.
-			apiErr.Code = strings.ToLower(envelope.Code)
+			// normalize an explicit api code to the lowercase vocabulary,
+			// dropping anything that is not a machine-code shape.
+			apiErr.Code = sanitizeAPICode(envelope.Code)
 		}
 	}
 
@@ -437,7 +501,7 @@ func parseAPIError(body []byte, status int) *APIError {
 		apiErr.Message = fmt.Sprintf("api request failed with status %d", status)
 	}
 	if apiErr.Message == "" {
-		apiErr.Message = trimmedBody
+		apiErr.Message = ErrorBodyExcerpt([]byte(trimmedBody))
 	}
 	if apiErr.Message == "" {
 		apiErr.Message = fmt.Sprintf("api request failed with status %d", status)
@@ -468,7 +532,7 @@ func (e *GraphQLError) HTTPStatus() int { return e.Status }
 
 // newGraphQLError wraps an already-unwrapped graphql message.
 func newGraphQLError(message string) *GraphQLError {
-	return &GraphQLError{Message: message}
+	return &GraphQLError{Message: ErrorMessageExcerpt(message)}
 }
 
 // parseGraphQLHTTPError builds a GraphQLError from a non-200 graphql HTTP
@@ -477,7 +541,7 @@ func newGraphQLError(message string) *GraphQLError {
 func parseGraphQLHTTPError(body []byte, status int) *GraphQLError {
 	msg := extractGraphQLMessage(body)
 	if msg == "" {
-		msg = strings.TrimSpace(string(body))
+		msg = ErrorBodyExcerpt(bytes.TrimSpace(body))
 	}
 	if msg == "" {
 		msg = fmt.Sprintf("request failed with status %d", status)
@@ -504,10 +568,10 @@ func extractGraphQLMessage(body []byte) string {
 		return ""
 	}
 	if len(env.Errors) > 0 && env.Errors[0].Message != "" {
-		return env.Errors[0].Message
+		return ErrorMessageExcerpt(env.Errors[0].Message)
 	}
 	if env.Error != "" {
-		return env.Error
+		return ErrorMessageExcerpt(env.Error)
 	}
-	return env.Message
+	return ErrorMessageExcerpt(env.Message)
 }

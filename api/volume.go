@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 )
 
 type NetworkVolume struct {
@@ -38,7 +37,7 @@ func GetNetworkVolumes() (volumes []*NetworkVolume, err error) {
 		return
 	}
 	defer res.Body.Close()
-	rawData, err := io.ReadAll(res.Body)
+	rawData, err := readResponseBody(res)
 	if err != nil {
 		return nil, err
 	}
@@ -47,11 +46,11 @@ func GetNetworkVolumes() (volumes []*NetworkVolume, err error) {
 		return nil, err
 	}
 	if len(data.Errors) > 0 {
-		err = errors.New(data.Errors[0].Message)
+		err = errors.New(errorMessageExcerpt(data.Errors[0].Message))
 		return nil, err
 	}
 	if data == nil || data.Data == nil || data.Data.Myself == nil || data.Data.Myself.NetworkVolumes == nil {
-		err = fmt.Errorf("data is nil: %s", string(rawData))
+		err = fmt.Errorf("data is nil: %s", errorBodyExcerpt(rawData))
 		return nil, err
 	}
 	return data.Data.Myself.NetworkVolumes, nil

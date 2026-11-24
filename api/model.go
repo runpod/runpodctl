@@ -4,13 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
 
 	internalapi "github.com/runpod/runpodctl/internal/api"
-	"github.com/runpod/runpodctl/internal/redact"
 )
 
 // ErrModelRepoNotImplemented is retained for backwards compatibility with callers that
@@ -22,7 +20,7 @@ var ErrModelRepoNotImplemented = errors.New("model repository functionality not 
 // "graphql_error" code and preserving the http status.
 func modelRepoHTTPError(status int, body []byte) error {
 	return &internalapi.GraphQLError{
-		Message: fmt.Sprintf("statuscode %d: %s", status, redact.Text(string(body))),
+		Message: fmt.Sprintf("statuscode %d: %s", status, errorBodyExcerpt(body)),
 		Status:  status,
 	}
 }
@@ -30,10 +28,10 @@ func modelRepoHTTPError(status int, body []byte) error {
 // modelRepoGraphQLError wraps a graphql top-level error (how Model Repo
 // access failures surface: the resolver throws before returning data) as a
 // typed GraphQLError, giving it a stable "graphql_error" code instead of the
-// generic cli_error fallback. The message is redacted: server errors can echo
-// a presigned URL.
+// generic cli_error fallback. The message is redacted and bounded: server errors can echo
+// a presigned URL, and a valid JSON envelope can be megabytes long.
 func modelRepoGraphQLError(gqlErr *GraphQLError) error {
-	return &internalapi.GraphQLError{Message: redact.Text(gqlErr.Message)}
+	return &internalapi.GraphQLError{Message: errorMessageExcerpt(gqlErr.Message)}
 }
 
 // Model represents a model stored in the RunPod model repository.
@@ -152,7 +150,10 @@ func (m *ModelRepoUpload) UnmarshalJSON(data []byte) error {
 		}
 		value, err := strconv.ParseInt(s, 10, 64)
 		if err != nil {
-			return fmt.Errorf("invalid partSizeBytes value %q: %w", s, err)
+			// the value is server-supplied text, not a number: bounded and
+			// redacted, and the raw parse error (which quotes it again) is
+			// not wrapped into the chain.
+			return fmt.Errorf("invalid partSizeBytes value %q", errorMessageExcerpt(s))
 		}
 		m.PartSizeBytes = value
 		return nil
@@ -422,7 +423,7 @@ func AddModelToRepo(input *AddModelToRepoInput) (*Model, error) {
 	}
 	defer res.Body.Close()
 
-	rawData, err := io.ReadAll(res.Body)
+	rawData, err := readResponseBody(res)
 	if err != nil {
 		return nil, err
 	}
@@ -443,18 +444,18 @@ func AddModelToRepo(input *AddModelToRepoInput) (*Model, error) {
 		return nil, modelRepoGraphQLError(data.Errors[0])
 	}
 	if data.Data == nil || data.Data.AddModelToRepo == nil {
-		return nil, fmt.Errorf("data is nil: %s", redact.Text(string(rawData)))
+		return nil, fmt.Errorf("data is nil: %s", errorBodyExcerpt(rawData))
 	}
 
 	result := data.Data.AddModelToRepo
 	if !result.Success {
 		if result.Message != "" {
-			return nil, errors.New(redact.Text(result.Message))
+			return nil, errors.New(errorMessageExcerpt(result.Message))
 		}
-		return nil, fmt.Errorf("model creation failed: %s", redact.Text(string(rawData)))
+		return nil, fmt.Errorf("model creation failed: %s", errorBodyExcerpt(rawData))
 	}
 	if result.Model == nil {
-		return nil, fmt.Errorf("model is nil: %s", redact.Text(string(rawData)))
+		return nil, fmt.Errorf("model is nil: %s", errorBodyExcerpt(rawData))
 	}
 
 	return result.Model, nil
@@ -500,7 +501,7 @@ func GetModels(input *GetModelsInput) ([]*Model, error) {
 	}
 	defer res.Body.Close()
 
-	rawData, err := io.ReadAll(res.Body)
+	rawData, err := readResponseBody(res)
 	if err != nil {
 		return nil, err
 	}
@@ -521,7 +522,7 @@ func GetModels(input *GetModelsInput) ([]*Model, error) {
 		return nil, modelRepoGraphQLError(data.Errors[0])
 	}
 	if data.Data == nil {
-		return nil, fmt.Errorf("data is nil: %s", redact.Text(string(rawData)))
+		return nil, fmt.Errorf("data is nil: %s", errorBodyExcerpt(rawData))
 	}
 
 	models := data.Data.MyModels
@@ -612,7 +613,7 @@ func GetModel(input *GetModelInput) (*Model, error) {
 	}
 	defer res.Body.Close()
 
-	rawData, err := io.ReadAll(res.Body)
+	rawData, err := readResponseBody(res)
 	if err != nil {
 		return nil, err
 	}
@@ -633,7 +634,7 @@ func GetModel(input *GetModelInput) (*Model, error) {
 		return nil, modelRepoGraphQLError(data.Errors[0])
 	}
 	if data.Data == nil || data.Data.MyModel == nil {
-		return nil, fmt.Errorf("data is nil: %s", redact.Text(string(rawData)))
+		return nil, fmt.Errorf("data is nil: %s", errorBodyExcerpt(rawData))
 	}
 
 	return data.Data.MyModel, nil
@@ -700,7 +701,7 @@ func RemoveModel(input *RemoveModelInput) (*ModelRepoMutationResult, error) {
 	}
 	defer res.Body.Close()
 
-	rawData, err := io.ReadAll(res.Body)
+	rawData, err := readResponseBody(res)
 	if err != nil {
 		return nil, err
 	}
@@ -721,15 +722,15 @@ func RemoveModel(input *RemoveModelInput) (*ModelRepoMutationResult, error) {
 		return nil, modelRepoGraphQLError(data.Errors[0])
 	}
 	if data.Data == nil || data.Data.RemoveModelFromRepo == nil {
-		return nil, fmt.Errorf("data is nil: %s", redact.Text(string(rawData)))
+		return nil, fmt.Errorf("data is nil: %s", errorBodyExcerpt(rawData))
 	}
 
 	result := data.Data.RemoveModelFromRepo
 	if !result.Success {
 		if result.Message != "" {
-			return nil, errors.New(redact.Text(result.Message))
+			return nil, errors.New(errorMessageExcerpt(result.Message))
 		}
-		return nil, fmt.Errorf("model removal failed: %s", redact.Text(string(rawData)))
+		return nil, fmt.Errorf("model removal failed: %s", errorBodyExcerpt(rawData))
 	}
 
 	return result, nil
@@ -808,7 +809,7 @@ func CreateModelRepoUpload(input *CreateModelRepoUploadInput) (*ModelRepoMutatio
 	}
 	defer res.Body.Close()
 
-	rawData, err := io.ReadAll(res.Body)
+	rawData, err := readResponseBody(res)
 	if err != nil {
 		return nil, err
 	}
@@ -829,19 +830,19 @@ func CreateModelRepoUpload(input *CreateModelRepoUploadInput) (*ModelRepoMutatio
 		return nil, modelRepoGraphQLError(data.Errors[0])
 	}
 	if data.Data == nil || data.Data.CreateModelRepoUpload == nil {
-		return nil, fmt.Errorf("data is nil: %s", redact.Text(string(rawData)))
+		return nil, fmt.Errorf("data is nil: %s", errorBodyExcerpt(rawData))
 	}
 
 	result := data.Data.CreateModelRepoUpload
 	if !result.Success {
 		if result.Message != "" {
-			return nil, errors.New(redact.Text(result.Message))
+			return nil, errors.New(errorMessageExcerpt(result.Message))
 		}
-		return nil, fmt.Errorf("createModelRepoUpload failed: %s", redact.Text(string(rawData)))
+		return nil, fmt.Errorf("createModelRepoUpload failed: %s", errorBodyExcerpt(rawData))
 	}
 
 	if result.Upload == nil {
-		return nil, fmt.Errorf("upload is nil: %s", redact.Text(string(rawData)))
+		return nil, fmt.Errorf("upload is nil: %s", errorBodyExcerpt(rawData))
 	}
 
 	return result, nil
@@ -936,7 +937,7 @@ func CreateModelRepoUploadBatch(input *CreateModelRepoUploadBatchInput) (*ModelR
 	}
 	defer res.Body.Close()
 
-	rawData, err := io.ReadAll(res.Body)
+	rawData, err := readResponseBody(res)
 	if err != nil {
 		return nil, err
 	}
@@ -957,19 +958,19 @@ func CreateModelRepoUploadBatch(input *CreateModelRepoUploadBatchInput) (*ModelR
 		return nil, modelRepoGraphQLError(data.Errors[0])
 	}
 	if data.Data == nil || data.Data.CreateModelRepoUploadBatch == nil {
-		return nil, fmt.Errorf("data is nil: %s", redact.Text(string(rawData)))
+		return nil, fmt.Errorf("data is nil: %s", errorBodyExcerpt(rawData))
 	}
 
 	result := data.Data.CreateModelRepoUploadBatch
 	if !result.Success {
 		if result.Message != "" {
-			return nil, errors.New(redact.Text(result.Message))
+			return nil, errors.New(errorMessageExcerpt(result.Message))
 		}
-		return nil, fmt.Errorf("createModelRepoUploadBatch failed: %s", redact.Text(string(rawData)))
+		return nil, fmt.Errorf("createModelRepoUploadBatch failed: %s", errorBodyExcerpt(rawData))
 	}
 
 	if len(result.Uploads) != len(input.Files) {
-		return nil, fmt.Errorf("expected %d upload sessions, got %d: %s", len(input.Files), len(result.Uploads), redact.Text(string(rawData)))
+		return nil, fmt.Errorf("expected %d upload sessions, got %d: %s", len(input.Files), len(result.Uploads), errorBodyExcerpt(rawData))
 	}
 
 	return result, nil
@@ -1006,7 +1007,7 @@ func GetModelRepoStorageUsage(owner string) (*ModelRepoStorageUsage, error) {
 	}
 	defer res.Body.Close()
 
-	rawData, err := io.ReadAll(res.Body)
+	rawData, err := readResponseBody(res)
 	if err != nil {
 		return nil, err
 	}
@@ -1027,7 +1028,7 @@ func GetModelRepoStorageUsage(owner string) (*ModelRepoStorageUsage, error) {
 		return nil, modelRepoGraphQLError(data.Errors[0])
 	}
 	if data.Data == nil || data.Data.ModelRepoStorageUsage == nil {
-		return nil, fmt.Errorf("data is nil: %s", redact.Text(string(rawData)))
+		return nil, fmt.Errorf("data is nil: %s", errorBodyExcerpt(rawData))
 	}
 
 	return data.Data.ModelRepoStorageUsage, nil
@@ -1066,7 +1067,7 @@ func CompleteModelRepoUpload(sessionID string) (*CompleteModelRepoUploadResult, 
 	}
 	defer res.Body.Close()
 
-	rawData, err := io.ReadAll(res.Body)
+	rawData, err := readResponseBody(res)
 	if err != nil {
 		return nil, err
 	}
@@ -1087,15 +1088,15 @@ func CompleteModelRepoUpload(sessionID string) (*CompleteModelRepoUploadResult, 
 		return nil, modelRepoGraphQLError(data.Errors[0])
 	}
 	if data.Data == nil || data.Data.CompleteModelRepoUpload == nil {
-		return nil, fmt.Errorf("data is nil: %s", redact.Text(string(rawData)))
+		return nil, fmt.Errorf("data is nil: %s", errorBodyExcerpt(rawData))
 	}
 
 	result := data.Data.CompleteModelRepoUpload
 	if !result.Success {
 		if result.Message != "" {
-			return nil, errors.New(redact.Text(result.Message))
+			return nil, errors.New(errorMessageExcerpt(result.Message))
 		}
-		return nil, fmt.Errorf("completeModelRepoUpload failed: %s", redact.Text(string(rawData)))
+		return nil, fmt.Errorf("completeModelRepoUpload failed: %s", errorBodyExcerpt(rawData))
 	}
 
 	return result, nil
@@ -1148,7 +1149,7 @@ func CompleteModelRepoUploadBatch(sessionIDs []string) ([]*CompleteModelRepoUplo
 	}
 	defer res.Body.Close()
 
-	rawData, err := io.ReadAll(res.Body)
+	rawData, err := readResponseBody(res)
 	if err != nil {
 		return nil, err
 	}
@@ -1174,7 +1175,7 @@ func CompleteModelRepoUploadBatch(sessionIDs []string) ([]*CompleteModelRepoUplo
 				continue
 			}
 			if alias, ok := gqlErr.Path[0].(string); ok {
-				failedByAlias[alias] = redact.Text(gqlErr.Message)
+				failedByAlias[alias] = errorMessageExcerpt(gqlErr.Message)
 			}
 		}
 		var failed []string
@@ -1190,28 +1191,36 @@ func CompleteModelRepoUploadBatch(sessionIDs []string) ([]*CompleteModelRepoUplo
 		}
 		return nil, fmt.Errorf(
 			"%d of %d sessions failed to finalize (%s); the server-side outcome of the other %d sessions in this same batch request is not confirmed by this response and must be reconciled separately, not assumed failed",
-			len(failed), len(sessionIDs), strings.Join(failed, "; "), len(sessionIDs)-len(failed),
+			len(failed), len(sessionIDs), finalizeFailuresExcerpt(failed), len(sessionIDs)-len(failed),
 		)
 	}
 	if data.Data == nil {
-		return nil, fmt.Errorf("data is nil: %s", redact.Text(string(rawData)))
+		return nil, fmt.Errorf("data is nil: %s", errorBodyExcerpt(rawData))
 	}
 
 	results := make([]*CompleteModelRepoUploadResult, len(sessionIDs))
 	for i, sessionID := range sessionIDs {
 		result := data.Data[fmt.Sprintf("c%d", i)]
 		if result == nil {
-			return nil, fmt.Errorf("missing result for session %s: %s", sessionID, redact.Text(string(rawData)))
+			return nil, fmt.Errorf("missing result for session %s: %s", sessionID, errorBodyExcerpt(rawData))
 		}
 		if !result.Success {
 			if result.Message != "" {
-				return nil, fmt.Errorf("session %s: %s", sessionID, redact.Text(result.Message))
+				return nil, fmt.Errorf("session %s: %s", sessionID, errorMessageExcerpt(result.Message))
 			}
-			return nil, fmt.Errorf("completeModelRepoUpload failed for session %s: %s", sessionID, redact.Text(string(rawData)))
+			return nil, fmt.Errorf("completeModelRepoUpload failed for session %s: %s", sessionID, errorBodyExcerpt(rawData))
 		}
 		results[i] = result
 	}
 	return results, nil
+}
+
+// finalizeFailuresExcerpt joins the per-session failure messages and bounds
+// the assembled text: each alias message is excerpted individually already,
+// and a response for hundreds of sessions at once would otherwise still print
+// megabytes of failures.
+func finalizeFailuresExcerpt(failed []string) string {
+	return errorMessageExcerpt(strings.Join(failed, "; "))
 }
 
 // UpdateModelVersionStatus updates the status for a model version by hash.
@@ -1235,7 +1244,7 @@ func UpdateModelVersionStatusByIdentifier(input *UpdateModelVersionStatusInput) 
 	}
 	defer res.Body.Close()
 
-	rawData, err := io.ReadAll(res.Body)
+	rawData, err := readResponseBody(res)
 	if err != nil {
 		return nil, err
 	}
@@ -1256,18 +1265,18 @@ func UpdateModelVersionStatusByIdentifier(input *UpdateModelVersionStatusInput) 
 		return nil, modelRepoGraphQLError(data.Errors[0])
 	}
 	if data.Data == nil || data.Data.UpdateModelVersionStatus == nil {
-		return nil, fmt.Errorf("data is nil: %s", redact.Text(string(rawData)))
+		return nil, fmt.Errorf("data is nil: %s", errorBodyExcerpt(rawData))
 	}
 
 	result := data.Data.UpdateModelVersionStatus
 	if !result.Success {
 		if result.Message != "" {
-			return nil, errors.New(redact.Text(result.Message))
+			return nil, errors.New(errorMessageExcerpt(result.Message))
 		}
-		return nil, fmt.Errorf("updateModelVersionStatus failed: %s", redact.Text(string(rawData)))
+		return nil, fmt.Errorf("updateModelVersionStatus failed: %s", errorBodyExcerpt(rawData))
 	}
 	if result.ModelVersion == nil {
-		return nil, fmt.Errorf("modelVersion is nil: %s", redact.Text(string(rawData)))
+		return nil, fmt.Errorf("modelVersion is nil: %s", errorBodyExcerpt(rawData))
 	}
 
 	return result.ModelVersion, nil

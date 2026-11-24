@@ -56,7 +56,7 @@ func NewInvokeClient() (*InvokeClient, error) {
 		baseURL: invokeBaseURL(),
 		apiKey:  apiKey,
 		// no client-wide timeout: every call carries its own context deadline.
-		httpClient: &http.Client{},
+		httpClient: &http.Client{CheckRedirect: noRedirects},
 		userAgent:  buildUserAgent(),
 	}, nil
 }

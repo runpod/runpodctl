@@ -7,11 +7,24 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	internalapi "github.com/runpod/runpodctl/internal/api"
 )
 
-// maxGraphQLBodyBytes bounds how much of a response is read, so a misbehaving
-// server cannot make the CLI buffer an unbounded body.
-const maxGraphQLBodyBytes = 64 << 10
+// errorBodyExcerptBytes is the bound errorBodyExcerpt enforces.
+const errorBodyExcerptBytes = internalapi.ErrorBodyExcerptBytes
+
+// errorBodyExcerpt is body, redacted and cut at errorBodyExcerptBytes, for an
+// error message. See internalapi.ErrorBodyExcerpt.
+func errorBodyExcerpt(body []byte) string {
+	return internalapi.ErrorBodyExcerpt(body)
+}
+
+// errorMessageExcerpt is msg, redacted and bounded, for a message extracted from
+// an error response. See internalapi.ErrorMessageExcerpt.
+func errorMessageExcerpt(msg string) string {
+	return internalapi.ErrorMessageExcerpt(msg)
+}
 
 // firstGraphQLErrorMessage safely extracts the message of the first graphql
 // error, tolerating a missing or non-string message rather than panicking on an
@@ -26,7 +39,7 @@ func firstGraphQLErrorMessage(gqlErrors []any) string {
 		return fallback
 	}
 	if msg, ok := first["message"].(string); ok && msg != "" {
-		return msg
+		return errorMessageExcerpt(msg)
 	}
 	return fallback
 }
@@ -50,16 +63,16 @@ func queryGraphQLData(input Input) (gqldata map[string]any, rawData []byte, err 
 // parseGraphQLData decodes a graphql HTTP response and returns its "data" object.
 // It returns an error carrying the first graphql error message when the payload
 // reports errors, or the status code and body for non-200 responses. The raw
-// body (bounded by maxGraphQLBodyBytes) is returned so callers can include it in
-// "<field> is nil" diagnostics.
+// body (bounded by internalapi.MaxResponseBytes; a larger response is an error)
+// is returned so callers can include it in "<field> is nil" diagnostics.
 func parseGraphQLData(status int, body io.Reader) (gqldata map[string]any, rawData []byte, err error) {
-	rawData, err = io.ReadAll(io.LimitReader(body, maxGraphQLBodyBytes))
+	rawData, err = internalapi.ReadBodyForStatus(status, body)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	if status != http.StatusOK {
-		return nil, rawData, fmt.Errorf("statuscode %d: %s", status, string(rawData))
+		return nil, rawData, fmt.Errorf("statuscode %d: %s", status, errorBodyExcerpt(rawData))
 	}
 
 	data := make(map[string]any)
@@ -73,7 +86,14 @@ func parseGraphQLData(status int, body io.Reader) (gqldata map[string]any, rawDa
 
 	gqldata, ok := data["data"].(map[string]any)
 	if !ok || gqldata == nil {
-		return nil, rawData, fmt.Errorf("data is nil: %s", string(rawData))
+		return nil, rawData, fmt.Errorf("data is nil: %s", errorBodyExcerpt(rawData))
 	}
 	return gqldata, rawData, nil
+}
+
+// readResponseBody is internalapi.ReadBodyForStatus for a received response:
+// when the status is not 2xx and the body is oversized or cut short, the error
+// carries that status and its stable code.
+func readResponseBody(res *http.Response) ([]byte, error) {
+	return internalapi.ReadBodyForStatus(res.StatusCode, res.Body)
 }

@@ -3,7 +3,6 @@ package model
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
@@ -93,13 +92,13 @@ func defaultListDependentEndpoints(owner, name, hash string) ([]DependentEndpoin
 	}
 	defer res.Body.Close()
 
-	rawData, err := io.ReadAll(res.Body)
+	rawData, err := internalapi.ReadBodyForStatus(res.StatusCode, res.Body)
 	if err != nil {
 		return nil, err
 	}
 	if res.StatusCode != http.StatusOK {
 		return nil, &internalapi.GraphQLError{
-			Message: fmt.Sprintf("statuscode %d: %s", res.StatusCode, string(rawData)),
+			Message: fmt.Sprintf("statuscode %d: %s", res.StatusCode, internalapi.ErrorBodyExcerpt(rawData)),
 			Status:  res.StatusCode,
 		}
 	}
@@ -123,10 +122,10 @@ func defaultListDependentEndpoints(owner, name, hash string) ([]DependentEndpoin
 		// Same graphql top-level error shape as api/model.go; wrap as a typed
 		// GraphQLError so it keeps the "graphql_error" code through
 		// checkDependentEndpoints' %w wrap.
-		return nil, &internalapi.GraphQLError{Message: data.Errors[0].Message}
+		return nil, &internalapi.GraphQLError{Message: internalapi.ErrorMessageExcerpt(data.Errors[0].Message)}
 	}
 	if data.Data == nil || data.Data.Myself == nil {
-		return nil, fmt.Errorf("data is nil: %s", string(rawData))
+		return nil, fmt.Errorf("data is nil: %s", internalapi.ErrorBodyExcerpt(rawData))
 	}
 
 	var dependents []DependentEndpoint

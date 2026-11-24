@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,9 +19,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/runpod/runpodctl/api"
 	internalapi "github.com/runpod/runpodctl/internal/api"
+	"github.com/runpod/runpodctl/internal/configenv"
 	"github.com/runpod/runpodctl/internal/output"
 	"github.com/runpod/runpodctl/internal/redact"
 
@@ -44,6 +47,7 @@ var (
 	addModelDirectoryPath       string
 	addModelMetadata            map[string]string
 	addModelWaitForHash         bool
+	addModelIncludeHidden       bool
 	addModelHashTimeout         time.Duration
 	addModelVerbose             bool
 	addModelDeleteAfterUpload   bool
@@ -319,6 +323,7 @@ func bindAddModelFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&addModelContentType, "content-type", "", "upload content type")
 	cmd.Flags().StringVar(&addModelDirectoryPath, "model-path", "", "directory containing model files to upload")
 	cmd.Flags().StringToStringVar(&addModelMetadata, "metadata", nil, "metadata key=value pairs")
+	cmd.Flags().BoolVar(&addModelIncludeHidden, "include-hidden", false, "also upload .git, .env, .env.*, .envrc, .git-credentials and .netrc entries from --model-path (skipped by default)")
 	cmd.Flags().BoolVar(&addModelWaitForHash, "wait-for-hash", false, "wait for completed model-path uploads to become deployable")
 	cmd.Flags().DurationVar(&addModelHashTimeout, "hash-timeout", modelHashWaitTimeout, "maximum duration to wait for --wait-for-hash (0 disables timeout)")
 	cmd.Flags().BoolVarP(&addModelVerbose, "verbose", "v", false, "include upload details in wait-for-hash output")
@@ -366,9 +371,12 @@ func runAddModel(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("model-path %q must be a directory", addModelDirectoryPath)
 		}
 
-		files, err := collectModelFiles(modelPath)
+		files, skipped, err := collectModelFilesWithOptions(modelPath, addModelIncludeHidden)
 		if err != nil {
 			return err
+		}
+		if skipped > 0 {
+			fmt.Fprintf(os.Stderr, "skipped %d sensitive entries (.git, .env, .env.*, .envrc, .git-credentials, .netrc) under --model-path; pass --include-hidden to upload them\n", skipped)
 		}
 		if len(files) == 0 {
 			return fmt.Errorf("model-path %q does not contain any files to upload", addModelDirectoryPath)
@@ -577,6 +585,11 @@ type scannedModelInfo struct {
 	rootDir  string
 	rootInfo os.FileInfo
 	name     string
+	// checkSensitivity records that the scan excluded sensitive entries, so
+	// the upload re-runs the confined traversal check right before opening:
+	// a benign phase between the scan-time check and the upload must not let
+	// a swapped-back sensitive ancestor through.
+	checkSensitivity bool
 }
 
 // scanRoots holds the containment roots for the duration of one scan. pin
@@ -621,6 +634,25 @@ func (s *scanRoots) open(i int) (*os.Root, os.FileInfo, error) {
 	return handle, info, nil
 }
 
+// lstat stats name (relative to root i) through the root, not the path: a
+// directory swapped for a symlink after the walk read the entry at path is
+// refused by the root instead of being followed to a file outside it. It
+// returns the root's scan-time identity along with the file's.
+func (s *scanRoots) lstat(path string, i int, name string) (info, rootInfo os.FileInfo, err error) {
+	if afterScanEntryHook != nil {
+		afterScanEntryHook(path)
+	}
+	handle, rootInfo, err := s.open(i)
+	if err != nil {
+		return nil, nil, err
+	}
+	info, err = handle.Lstat(name)
+	if err != nil {
+		return nil, nil, err
+	}
+	return info, rootInfo, nil
+}
+
 // pin opens every containment root before the walk starts, so the first open
 // of each happens now, in one place, instead of lazily mid-walk (the blobs
 // root of a Hugging Face cache would otherwise open when the first link into
@@ -655,6 +687,12 @@ func (s *scanRoots) close() error {
 // before it is statted. Tests use it to swap paths inside that window.
 var afterScanEntryHook func(path string)
 
+// beforeTraversalCheckHook, when set, runs in the scan after an entry's rooted
+// stat and before the confined traversal sensitivity check. Tests use it to
+// move a directory again inside that second window (a benign phase between a
+// sensitive stat and a sensitive upload).
+var beforeTraversalCheckHook func(path string)
+
 // errSymlinkOutsideModelPath is the sentinel for a symlink that resolves outside
 // the containment roots.
 var errSymlinkOutsideModelPath = errors.New("model-path contains a symlink that points outside it")
@@ -671,14 +709,49 @@ const symlinkOutsideModelPathHint = "To fix: copy the real files into the direct
 // pointing anywhere else is refused rather than silently uploading a file that
 // is not part of --model-path. Symlinked directories, FIFOs, devices and other
 // non-regular files are refused too.
+//
+// Version-control and secret files (see isSensitiveModelEntry) are skipped; use
+// collectModelFilesWithOptions to include them.
 func collectModelFiles(dir string) ([]modelFile, error) {
+	files, _, err := collectModelFilesWithOptions(dir, false)
+	return files, err
+}
+
+// isSensitiveModelEntry reports whether a directory entry is one that is almost
+// never part of a model and commonly holds credentials or history: a `.git` entry
+// (directory, or the gitfile of a worktree/submodule), and these files: `.env`,
+// `.env.*`, `.envrc` (direnv, often exports tokens), `.git-credentials` and
+// `.netrc`. Names are compared lowercased, since on a case-insensitive volume
+// `.ENV` is the same file as `.env`. Other dotfiles, such as .gitattributes or
+// .huggingface/, are legitimate model content and are not matched; a directory
+// that merely has an env-like name (`.env.d/`, a virtualenv `.env/`) is not
+// matched either.
+func isSensitiveModelEntry(name string, isDir bool) bool {
+	name = strings.ToLower(name)
+	if name == ".git" {
+		return true
+	}
+	if isDir {
+		return false
+	}
+	switch name {
+	case ".env", ".envrc", ".git-credentials", ".netrc":
+		return true
+	}
+	return strings.HasPrefix(name, ".env.")
+}
+
+// collectModelFilesWithOptions is collectModelFiles with control over sensitive
+// entries. skipped counts the entries left out (a `.git` directory counts once),
+// so the caller can say something without listing names or contents.
+func collectModelFilesWithOptions(dir string, includeHidden bool) (files []modelFile, skipped int, err error) {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
-		return nil, fmt.Errorf("resolve model directory: %w", err)
+		return nil, 0, fmt.Errorf("resolve model directory: %w", err)
 	}
 	root, err := filepath.EvalSymlinks(absDir)
 	if err != nil {
-		return nil, fmt.Errorf("resolve model directory: %w", err)
+		return nil, 0, fmt.Errorf("resolve model directory: %w", err)
 	}
 	roots := newScanRoots(modelContainmentRoots(root))
 	// Pin the containment roots before walking (see scanRoots.pin): the first
@@ -693,7 +766,7 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 	if pinErr := roots.pin(); pinErr != nil {
 		// close what pin already opened so a failing scan leaks no root
 		// descriptor; the pin error stays the primary one.
-		return nil, errors.Join(fmt.Errorf("scan model directory: %w", pinErr), roots.close())
+		return nil, 0, errors.Join(fmt.Errorf("scan model directory: %w", pinErr), roots.close())
 	}
 
 	// the resolved --model-path directory's scan-time identity, taken through
@@ -703,108 +776,255 @@ func collectModelFiles(dir string) ([]modelFile, error) {
 	// cannot pass as the scanned directory.
 	_, deleteRootInfo, err := roots.open(0)
 	if err != nil {
-		return nil, errors.Join(fmt.Errorf("stat model directory: %w", err), roots.close())
+		return nil, 0, errors.Join(fmt.Errorf("stat model directory: %w", err), roots.close())
 	}
 
-	var files []modelFile
-
-	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-
-		if path == root {
-			return nil
-		}
-
-		if d.IsDir() {
-			return nil
-		}
-
-		resolved := path
-		var linkInfo os.FileInfo
-		if d.Type()&fs.ModeSymlink != 0 {
-			target, err := filepath.EvalSymlinks(path)
-			if err != nil {
-				return fmt.Errorf("resolve symlink %q: %w", path, err)
-			}
-			resolved = target
-			// keep the link's own lstat (identity-pinned like info): the delete
-			// removes the link by name and must only remove the very link that
-			// was scanned, not a same-named replacement.
-			linkInfo, err = d.Info()
-			if err != nil {
-				return fmt.Errorf("stat symlink %q: %w", path, err)
-			}
-			if pinErr := pinScanFileIdentity(linkInfo); pinErr != nil {
-				return fmt.Errorf("scan symlink %q: %w", path, pinErr)
-			}
-		}
-		rootIdx, rootRel, within := roots.locate(resolved)
-		if !within {
-			return fmt.Errorf("%w: %q resolves to %q, outside the model directory (--model-path); refusing to upload files that are not under --model-path. %s", errSymlinkOutsideModelPath, path, resolved, symlinkOutsideModelPathHint)
-		}
-
-		if afterScanEntryHook != nil {
-			afterScanEntryHook(path)
-		}
-
-		// stat through the root, not the path: a directory swapped for a symlink
-		// after the walk read this entry is refused by the root instead of being
-		// followed to a file outside it.
-		handle, rootInfo, err := roots.open(rootIdx)
-		if err != nil {
-			return fmt.Errorf("stat file %q: %w", path, err)
-		}
-		info, err := handle.Lstat(rootRel)
-		if err != nil {
-			return fmt.Errorf("stat file %q: %w", path, err)
-		}
-
-		if info.IsDir() {
-			return fmt.Errorf("encountered directory %q while collecting files", path)
-		}
-
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("model-path contains unsupported file type: %s", path)
-		}
-
-		if pinErr := pinScanFileIdentity(info); pinErr != nil {
-			return fmt.Errorf("scan %q: %w", path, pinErr)
-		}
-
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-
-		files = append(files, modelFile{
-			AbsolutePath:   path,
-			ResolvedPath:   resolved,
-			RelativePath:   filepath.ToSlash(rel),
-			Size:           info.Size(),
-			info:           &scannedModelInfo{FileInfo: info, rootDir: roots.dirs[rootIdx], rootInfo: rootInfo, name: rootRel},
-			linkInfo:       linkInfo,
-			deleteRootDir:  root,
-			deleteRootInfo: deleteRootInfo,
-			deleteName:     rel,
-		})
-
-		return nil
-	})
+	scan := &modelDirScan{root: root, roots: roots, deleteRootInfo: deleteRootInfo, includeHidden: includeHidden}
+	walkErr := filepath.WalkDir(root, scan.collectEntry)
 
 	if closeErr := roots.close(); walkErr == nil && closeErr != nil {
 		walkErr = fmt.Errorf("close model directory: %w", closeErr)
 	}
 	if walkErr != nil {
-		return nil, fmt.Errorf("scan model directory: %w", walkErr)
+		return nil, 0, fmt.Errorf("scan model directory: %w", walkErr)
 	}
 
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].RelativePath < files[j].RelativePath
+	sort.Slice(scan.files, func(i, j int) bool {
+		return scan.files[i].RelativePath < scan.files[j].RelativePath
 	})
 
-	return files, nil
+	return scan.files, scan.skipped, nil
+}
+
+// modelDirScan collects the entries of one --model-path walk: the walk's
+// pinned containment roots and per-entry state, so the per-entry logic can
+// live outside the WalkDir closure.
+type modelDirScan struct {
+	root           string
+	roots          *scanRoots
+	deleteRootInfo os.FileInfo
+	includeHidden  bool
+	files          []modelFile
+	skipped        int
+}
+
+// collectEntry handles one walked entry: sensitive names are skipped by name
+// alone (never followed or stat'ed), every other file is symlink-resolved,
+// located inside the containment roots, statted through the pinned root, and
+// appended when it is the regular file the confined traversal says it is.
+func (s *modelDirScan) collectEntry(path string, d fs.DirEntry, walkErr error) error {
+	if walkErr != nil {
+		return walkErr
+	}
+
+	if path == s.root {
+		return nil
+	}
+
+	// decided on the name alone and before symlink resolution, so a skipped
+	// entry is never followed or stat'ed.
+	if !s.includeHidden && isSensitiveModelEntry(d.Name(), d.IsDir()) {
+		s.skipped++
+		if d.IsDir() {
+			return filepath.SkipDir
+		}
+		return nil
+	}
+
+	if d.IsDir() {
+		return nil
+	}
+
+	resolved, linkInfo, err := resolveEntryTarget(path, d)
+	if err != nil {
+		return err
+	}
+	rootIdx, rootRel, within := s.roots.locate(resolved)
+	if !within {
+		return fmt.Errorf("%w: %q resolves to %q, outside the model directory (--model-path); refusing to upload files that are not under --model-path. %s", errSymlinkOutsideModelPath, path, resolved, symlinkOutsideModelPathHint)
+	}
+
+	info, rootInfo, statErr := s.roots.lstat(path, rootIdx, rootRel)
+	if statErr != nil {
+		return fmt.Errorf("stat file %q: %w", path, statErr)
+	}
+
+	// the entry name alone is not enough: a benign-looking link to .env or
+	// into .git would otherwise upload the excluded file under its alias, so
+	// the components the confined resolution actually traverses are checked
+	// too (not the stale lexical `resolved`).
+	if !s.includeHidden {
+		if beforeTraversalCheckHook != nil {
+			beforeTraversalCheckHook(path)
+		}
+		sensitive, sensErr := s.traversesSensitive(path, rootIdx, rootRel, info.IsDir())
+		if sensErr != nil {
+			return sensErr
+		}
+		if sensitive {
+			s.skipped++
+			return nil
+		}
+	}
+
+	if info.IsDir() {
+		return fmt.Errorf("encountered directory %q while collecting files", path)
+	}
+
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("model-path contains unsupported file type: %s", path)
+	}
+
+	if pinErr := pinScanFileIdentity(info); pinErr != nil {
+		return fmt.Errorf("scan %q: %w", path, pinErr)
+	}
+
+	rel, err := filepath.Rel(s.root, path)
+	if err != nil {
+		return err
+	}
+
+	if err := validateModelRelativePath(filepath.ToSlash(rel)); err != nil {
+		return err
+	}
+
+	s.files = append(s.files, modelFile{
+		AbsolutePath:   path,
+		ResolvedPath:   resolved,
+		RelativePath:   filepath.ToSlash(rel),
+		Size:           info.Size(),
+		info:           &scannedModelInfo{FileInfo: info, rootDir: s.roots.dirs[rootIdx], rootInfo: rootInfo, name: rootRel, checkSensitivity: !s.includeHidden},
+		linkInfo:       linkInfo,
+		deleteRootDir:  s.root,
+		deleteRootInfo: s.deleteRootInfo,
+		deleteName:     rel,
+	})
+
+	return nil
+}
+
+// resolveEntryTarget resolves a walked file entry to its upload path: the
+// fully symlink-resolved path and, for a link, the link's own pinned lstat
+// (the delete removes the link by name and must only remove the very link
+// that was scanned, not a same-named replacement).
+func resolveEntryTarget(path string, d fs.DirEntry) (resolved string, linkInfo os.FileInfo, err error) {
+	resolved = path
+	if d.Type()&fs.ModeSymlink == 0 {
+		return resolved, nil, nil
+	}
+	target, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", nil, fmt.Errorf("resolve symlink %q: %w", path, err)
+	}
+	resolved = target
+	linkInfo, err = d.Info()
+	if err != nil {
+		return "", nil, fmt.Errorf("stat symlink %q: %w", path, err)
+	}
+	if pinErr := pinScanFileIdentity(linkInfo); pinErr != nil {
+		return "", nil, fmt.Errorf("scan symlink %q: %w", path, pinErr)
+	}
+	return resolved, linkInfo, nil
+}
+
+// traversesSensitive reports whether the path actually traversed to a file
+// inside a containment root contains an excluded (sensitive) entry, per the
+// confined resolution through the pinned root (see resolveInRoot): a
+// directory swapped for a link to .git after the lexical resolution must not
+// upload a sensitive file under its alias.
+func (s *modelDirScan) traversesSensitive(path string, rootIdx int, rootRel string, isDir bool) (bool, error) {
+	handle, _, err := s.roots.open(rootIdx)
+	if err != nil {
+		return false, fmt.Errorf("stat file %q: %w", path, err)
+	}
+	traversed, err := resolveInRoot(handle, rootRel)
+	if err != nil {
+		return false, fmt.Errorf("resolve %q through the model directory: %w", path, err)
+	}
+	return traversedHasSensitiveEntry(traversed, isDir), nil
+}
+
+// resolveInRoot returns the path components within root that opening rel
+// actually traverses: every component is lstat'ed through the root and links
+// are followed via the root's own Readlink, so the result names the directory
+// entries in place right now, not the entries an earlier lexical resolution
+// (from before a possible swap) saw. Resolution stays confined to root: an
+// absolute link target resolves root-relative, and a ".." that would leave
+// the root is an error.
+func resolveInRoot(root *os.Root, rel string) ([]string, error) {
+	var stack []string
+	pending := strings.Split(rel, string(filepath.Separator))
+	links := 0
+	for len(pending) > 0 {
+		comp := pending[0]
+		pending = pending[1:]
+		switch comp {
+		case "", ".":
+			continue
+		case "..":
+			if len(stack) == 0 {
+				return nil, fmt.Errorf("%q resolves outside the model directory", rel)
+			}
+			stack = stack[:len(stack)-1]
+			continue
+		}
+		stack = append(stack, comp)
+		cur := strings.Join(stack, string(filepath.Separator))
+		info, err := root.Lstat(cur)
+		if err != nil {
+			return nil, err
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		links++
+		if links > 40 {
+			return nil, fmt.Errorf("too many symbolic links resolving %q", rel)
+		}
+		target, err := root.Readlink(cur)
+		if err != nil {
+			return nil, err
+		}
+		// the link's own component comes off; its target's components resolve
+		// from the link's containing directory (or from the root for an
+		// absolute target, which the root confines the same way on open). The
+		// target is NOT filepath.Clean'd first: the kernel resolves ".." by
+		// popping the real directory resolved so far, so a link chain such as
+		// x -> .git/sub, safe -> x/../secret must land on .git/secret, not on
+		// the lexically cleaned "secret".
+		stack = stack[:len(stack)-1]
+		if filepath.IsAbs(target) {
+			stack = stack[:0]
+			target = strings.TrimPrefix(target, string(filepath.Separator))
+		}
+		pending = append(strings.Split(target, string(filepath.Separator)), pending...)
+	}
+	return stack, nil
+}
+
+// traversedHasSensitiveEntry reports whether any component on the path
+// actually traversed to a file is a sensitive entry (see isSensitiveModelEntry):
+// all but the last are directories, the last is a directory when isDir.
+func traversedHasSensitiveEntry(components []string, isDir bool) bool {
+	for i, comp := range components {
+		if isSensitiveModelEntry(comp, i < len(components)-1 || isDir) {
+			return true
+		}
+	}
+	return false
+}
+
+// validateModelRelativePath rejects a file name that cannot be represented
+// faithfully in the upload manifest: control characters (newline included) and
+// backslashes are valid in a unix file name but are sent as typed and mean
+// something different to the server, other tools, and terminals that print them.
+func validateModelRelativePath(rel string) error {
+	for _, r := range rel {
+		if r == '\\' || unicode.IsControl(r) {
+			return fmt.Errorf("model-path contains a file whose name has a backslash or control character (%q); rename it before uploading", rel)
+		}
+	}
+	return nil
 }
 
 // modelContainmentRoots returns the directories a resolved file may live in:
@@ -866,13 +1086,17 @@ var betweenLstatAndOpenHook func(path string)
 // it describes the file actually opened and must be a regular file with the scan
 // identity. scanned may be nil (callers outside the directory scan), in which
 // case only the regular-file checks apply. When scanned carries the scan-time
-// root (see scannedModelInfo) the file is opened beneath that root instead of by
-// path.
+// root (see scannedModelInfo) the file is opened beneath that root instead of
+// by path, and when it additionally records that the scan excluded sensitive
+// entries, the confined traversal check is re-run immediately before the open
+// (shrinking, not closing, the check-to-open swap window; fully closing it
+// would need post-open fd-path verification, which is linux-only).
 func openScannedModelFile(path string, scanned os.FileInfo) (*os.File, os.FileInfo, error) {
 	var (
-		root     *os.Root
-		openName = path
-		identity = scanned
+		root             *os.Root
+		openName         = path
+		identity         = scanned
+		checkSensitivity = false
 	)
 	if rooted, ok := scanned.(*scannedModelInfo); ok {
 		// open beneath the scan-time root: the root itself must still be the same
@@ -893,6 +1117,7 @@ func openScannedModelFile(path string, scanned os.FileInfo) (*os.File, os.FileIn
 		}
 		openName = rooted.name
 		identity = rooted.FileInfo
+		checkSensitivity = rooted.checkSensitivity
 	}
 	lstat := os.Lstat
 	// a path open also refuses a symlink at the final component; a root open
@@ -917,6 +1142,21 @@ func openScannedModelFile(path string, scanned os.FileInfo) (*os.File, os.FileIn
 
 	if betweenLstatAndOpenHook != nil {
 		betweenLstatAndOpenHook(path)
+	}
+	if checkSensitivity {
+		// re-run the confined traversal check, this late and no earlier: the
+		// scan-time check passed in a benign window and an ancestor swapped
+		// back to something sensitive (a link to .git) since must not reach
+		// the open. A swap in the check-to-open window itself cannot be caught
+		// portably (that needs post-open fd-path verification, linux-only;
+		// tracked as a follow-up).
+		traversed, resolveErr := resolveInRoot(root, openName)
+		if resolveErr != nil {
+			return nil, nil, fmt.Errorf("refusing to upload %q: %w", path, resolveErr)
+		}
+		if traversedHasSensitiveEntry(traversed, false) {
+			return nil, nil, fmt.Errorf("refusing to upload %q: its path traverses a sensitive entry", path)
+		}
 	}
 	file, err := open(openName)
 	if err != nil {
@@ -1417,6 +1657,10 @@ func shellDoubleQuoteValue(value string) string {
 	return replacer.Replace(value)
 }
 
+// modelUploadSessionFailed is the terminal upload-session status the server
+// returns (with success: true) when it could not assemble the object.
+const modelUploadSessionFailed = "FAILED"
+
 // uploadModelFiles creates upload sessions for every file in files, modelRepoUploadBatchSize at
 // a time, then uploads their bytes. The first batch's response establishes modelVersionUUID and
 // every later batch is pinned to it, so a chunked manifest still lands on one model version.
@@ -1504,6 +1748,12 @@ func uploadModelFiles(files []modelFile, baseInput *api.CreateModelRepoUploadInp
 			return fail(fmt.Errorf("expected %d completed sessions, got %d", len(uploadedFiles), len(completions)))
 		}
 		for i, completion := range completions {
+			if completion == nil {
+				return fail(fmt.Errorf("complete upload sessions: missing result for %s", uploadedFiles[i].RelativePath))
+			}
+			if strings.EqualFold(strings.TrimSpace(completion.Status), modelUploadSessionFailed) {
+				return fail(fmt.Errorf("upload of %s failed: the server finalized its session with status %s", uploadedFiles[i].RelativePath, completion.Status))
+			}
 			uploadedFiles[i].SessionID = completion.SessionID
 			uploadedFiles[i].Status = completion.Status
 		}
@@ -1641,7 +1891,13 @@ const modelUploadErrorBodyLimit = 4096
 // ResponseHeaderTimeout guards a stalled server once the body has been sent
 // without capping a legitimately long large-part upload; http.DefaultClient
 // (used before) had no timeouts at all, so a hung connection blocked forever.
+//
+// Redirects are never followed. The part/complete URLs are presigned and
+// server-supplied; go would replay a redirected PUT/POST as a body-less GET to
+// wherever the response points, which reports success for an upload that never
+// happened. The 3xx is returned and rejected by the status checks instead.
 var modelUploadHTTPClient = &http.Client{
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	Transport: &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -1758,6 +2014,9 @@ func doModelUploadRequest(ctx context.Context, what string, newReq func() (*http
 		resp, err := doGuardedModelUploadAttempt(ctx, newReq)
 		retryAfter := ""
 		switch {
+		case errors.Is(err, errUploadSourceShrank):
+			// the file changed under us; a retry re-reads the same short file.
+			return nil, fmt.Errorf("%s: %w", what, err)
 		case err != nil:
 			lastErr = fmt.Errorf("%s: %w", what, err)
 		case isRetryableUploadStatus(resp.StatusCode):
@@ -2003,6 +2262,97 @@ func doGuardedModelUploadAttempt(parent context.Context, newReq func() (*http.Re
 	return resp, nil
 }
 
+// errUploadSourceSizeChanged means the file's size at upload time differs from
+// the size seen by the directory scan, which the upload plan was built from.
+var errUploadSourceSizeChanged = errors.New("file size differs from the scan")
+
+// errUploadSourceShrank means a part's source file held fewer bytes than the
+// upload plan declared, i.e. it was truncated after the directory scan.
+var errUploadSourceShrank = errors.New("file is shorter than when it was scanned (it changed during the upload)")
+
+// exactReader yields exactly want bytes or fails. io.SectionReader reports a
+// clean EOF when the file is shorter than the section, which would let the
+// request body end early; this turns that into errUploadSourceShrank.
+type exactReader struct {
+	r    io.Reader
+	want int64
+	read int64
+}
+
+func (e *exactReader) Read(p []byte) (int, error) {
+	n, err := e.r.Read(p)
+	e.read += int64(n)
+	if err == io.EOF && e.read < e.want {
+		return n, errUploadSourceShrank
+	}
+	return n, err
+}
+
+// redirectNote adds a hint to a status error when the response is a redirect
+// that the upload client deliberately did not follow.
+func redirectNote(resp *http.Response) string {
+	if resp.StatusCode >= http.StatusMultipleChoices && resp.StatusCode < http.StatusBadRequest {
+		return " (redirect not followed)"
+	}
+	return ""
+}
+
+// validateModelUploadURL rejects a server-supplied upload url that is not https,
+// unless plain http has been opted into (see modelUploadHTTPAllowed). The url
+// comes from the api response, so a compromised or misdirected response must not
+// be able to send the file, and the presigned credential in the query, in
+// cleartext to a host of its choosing, loopback included. The url itself is
+// never put in the error: it is presigned.
+func validateModelUploadURL(what, raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("%s upload url is not a valid absolute url", what)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return nil
+	case "http":
+		if modelUploadHTTPAllowed() {
+			return nil
+		}
+	}
+	return fmt.Errorf("refusing %s upload url with scheme %q on host %q: upload urls must be https; pass --insecure or set %s=1 to allow plain http (for example a local MinIO)",
+		what, u.Scheme, u.Hostname(), configenv.AllowInsecureAPIEnv)
+}
+
+// modelUploadHTTPAllowed reports whether plain-http upload urls are acceptable:
+// the user opted in (--insecure or RUNPOD_ALLOW_INSECURE_API), or the configured
+// api url is itself loopback, which means a local dev stack whose object storage
+// is local too. Nothing about the upload url itself can grant this.
+func modelUploadHTTPAllowed() bool {
+	if configenv.AllowInsecureAPI() {
+		return true
+	}
+	apiURL := configenv.GraphQLURL()
+	if apiURL == "" {
+		return false
+	}
+	u, err := url.Parse(apiURL)
+	return err == nil && configenv.IsLoopbackHost(u.Hostname())
+}
+
+// validateModelUploadPlan checks the server-supplied urls and part list before
+// the first byte is sent (a null part would otherwise nil-deref in the sort).
+func validateModelUploadPlan(upload *api.ModelRepoUpload) error {
+	if err := validateModelUploadURL("completion", upload.CompleteURL); err != nil {
+		return err
+	}
+	for i, part := range upload.Parts {
+		if part == nil {
+			return fmt.Errorf("upload part list contains a null entry at index %d", i)
+		}
+		if err := validateModelUploadURL(fmt.Sprintf("part %d", part.PartNumber), part.URL); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func completeModelUploadWithProgress(upload *api.ModelRepoUpload, artifactPath string, progress modelUploadProgress) error {
 	return completeModelUploadWithContext(context.Background(), upload, artifactPath, nil, progress)
 }
@@ -2022,6 +2372,14 @@ func completeModelUploadWithContext(ctx context.Context, upload *api.ModelRepoUp
 	}
 	defer file.Close()
 
+	// the upload batch was planned from the scan-time size; a file that shrank
+	// (or grew) since would otherwise be uploaded truncated, with every PUT and
+	// the completion succeeding. exactReader below still catches a truncation
+	// that happens after this point.
+	if scanned != nil && fileInfo.Size() != scanned.Size() {
+		return fmt.Errorf("refusing to upload %q: its size changed since the model directory was scanned (%d bytes then, %d now): %w", artifactPath, scanned.Size(), fileInfo.Size(), errUploadSourceSizeChanged)
+	}
+
 	totalSize := fileInfo.Size()
 	if totalSize == 0 {
 		if len(upload.Parts) > 0 {
@@ -2032,6 +2390,10 @@ func completeModelUploadWithContext(ctx context.Context, upload *api.ModelRepoUp
 
 	if len(upload.Parts) == 0 {
 		return fmt.Errorf("upload does not contain any parts")
+	}
+
+	if validateErr := validateModelUploadPlan(upload); validateErr != nil {
+		return validateErr
 	}
 
 	parts := make([]*api.ModelRepoUploadPart, len(upload.Parts))
@@ -2062,7 +2424,10 @@ func completeModelUploadWithContext(ctx context.Context, upload *api.ModelRepoUp
 		resp, err := doModelUploadRequest(ctx, fmt.Sprintf("upload part %d", part.PartNumber), func() (*http.Request, error) {
 			// fresh SectionReader per attempt so a retry re-reads the chunk.
 			// os.File.ReadAt (used by SectionReader) is safe for concurrent use.
-			req, reqErr := http.NewRequestWithContext(ctx, http.MethodPut, part.URL, io.NewSectionReader(file, offset, chunkSize))
+			// exactReader fails the request, rather than sending fewer bytes than
+			// the declared Content-Length, if the file shrank after the scan.
+			body := &exactReader{r: io.NewSectionReader(file, offset, chunkSize), want: chunkSize}
+			req, reqErr := http.NewRequestWithContext(ctx, http.MethodPut, part.URL, body)
 			if reqErr != nil {
 				return nil, fmt.Errorf("create request for part %d: %w", part.PartNumber, reqErr)
 			}
@@ -2074,9 +2439,9 @@ func completeModelUploadWithContext(ctx context.Context, upload *api.ModelRepoUp
 		}
 		defer resp.Body.Close()
 
-		// a non-retryable status reaches here (2xx ok, 4xx errors out).
+		// a non-retryable status reaches here (2xx ok, 3xx/4xx errors out).
 		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-			return fmt.Errorf("upload part %d failed: status %d: %s", part.PartNumber, resp.StatusCode, modelUploadErrorSnippet(resp.Body))
+			return fmt.Errorf("upload part %d failed: status %d%s: %s", part.PartNumber, resp.StatusCode, redirectNote(resp), modelUploadErrorSnippet(resp.Body))
 		}
 		etag := strings.Trim(resp.Header.Get("ETag"), "\"")
 		if etag == "" {
@@ -2128,7 +2493,7 @@ func completeModelUploadWithContext(ctx context.Context, upload *api.ModelRepoUp
 	defer resp.Body.Close()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("completion request failed: status %d: %s", resp.StatusCode, modelUploadErrorSnippet(resp.Body))
+		return fmt.Errorf("completion request failed: status %d%s: %s", resp.StatusCode, redirectNote(resp), modelUploadErrorSnippet(resp.Body))
 	}
 
 	return nil
