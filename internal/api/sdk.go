@@ -23,6 +23,9 @@ const sdkPathPrefix = "/v2"
 // newSDK builds the generated SDK client on the cli's own transport, so the
 // requests go where they always went (RUNPOD_API_URL and restApiUrl include the
 // /v2 path the SDK adds itself) and retry exactly as before.
+//
+// BREAKING: a rest api url that does not parse now fails when the client is
+// built, naming the url, instead of at the first rest call.
 func newSDK(baseURL, apiKey, userAgent string, timeout time.Duration) (*runpod.Client, error) {
 	u, err := url.Parse(baseURL)
 	if err != nil {

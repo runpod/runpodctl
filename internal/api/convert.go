@@ -27,6 +27,10 @@ func float32To64(f float32) float64 {
 // the top level also counts community stock that has no data center entry, but
 // it can read NONE while a data center reads LOW (observed 2026-10-03 for the
 // RTX A4000 without a cloud filter).
+//
+// BACKWARD_COMPATIBILITY: prints the field names (displayName, memoryInGb,
+// securePrice, ...) and the High/Medium/Low stock spelling the cli has always
+// used. Next major: print the API's names and levels.
 func gpuTypeFromSDK(gpu types.GpuType) GpuTypeWithAvailability {
 	var stockStatus string
 	if gpu.Availability != nil {
@@ -64,6 +68,9 @@ func gpuTypeFromSDK(gpu types.GpuType) GpuTypeWithAvailability {
 // dataCenterFromSDK converts a data center read with gpu availability. v2
 // reports a region (e.g. NORTH_AMERICA) where graphql had a country-level
 // location; it is carried in Location.
+//
+// BACKWARD_COMPATIBILITY: the region is printed as location, and stock with
+// the High/Medium/Low spelling. Next major: print the API's region and levels.
 func dataCenterFromSDK(dc types.DataCenter) DataCenter {
 	out := DataCenter{ID: dc.Id, Name: dc.Name, Location: string(dc.Region)}
 	if dc.GpuAvailability != nil {
@@ -86,6 +93,10 @@ func registryAuthFromSDK(r types.Registry) ContainerRegistryAuth {
 // templateFromSDK converts a rest v2 template into the field names the cli has
 // always printed. readme, portsConfig and isRunpod have no v2 field and are
 // filled in from graphql where the cli shows them.
+//
+// BACKWARD_COMPATIBILITY: prints the field names the cli has always used
+// (imageName, dockerStartCmd, containerDiskInGb, ...), not the API's. Next
+// major: print the API's names.
 func templateFromSDK(t types.Template) Template {
 	out := Template{
 		ID:                t.Id,

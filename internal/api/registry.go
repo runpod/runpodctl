@@ -8,9 +8,13 @@ import (
 	"github.com/runpod/go-sdk/v2/lib/types"
 )
 
-// ContainerRegistryAuth is the registry auth the cli prints. It is kept
-// instead of the SDK's type so v3 output stays backward compatible. Remove in
-// the next major release.
+// ContainerRegistryAuth is the registry auth the cli prints.
+//
+// BACKWARD_COMPATIBILITY: kept instead of the SDK's type so v3 output keeps its
+// shape. Next major: print the SDK type.
+//
+// BREAKING: username is no longer printed by registry list and get. The API
+// does not return it, so no real output changes.
 type ContainerRegistryAuth struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`

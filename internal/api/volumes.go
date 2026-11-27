@@ -9,9 +9,10 @@ import (
 	"github.com/runpod/go-sdk/v2/lib/types"
 )
 
-// NetworkVolume is the network volume the cli prints. It is kept instead of
-// the SDK's type so v3 output stays backward compatible (dataCenterId, no
-// costCenter or tags). Remove in the next major release.
+// NetworkVolume is the network volume the cli prints.
+//
+// BACKWARD_COMPATIBILITY: kept instead of the SDK's type so v3 output keeps its
+// shape (dataCenterId, no costCenter or tags). Next major: print the SDK type.
 type NetworkVolume struct {
 	ID           string `json:"id"`
 	Name         string `json:"name"`

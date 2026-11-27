@@ -512,6 +512,9 @@ func (c *Client) CreateTemplate(req *TemplateCreateRequest) (*Template, error) {
 		body.Mounts = &types.TemplateMounts{Persistent: &types.PersistentMount{Size: req.VolumeInGb, Path: req.VolumeMountPath}}
 	}
 	return c.writeTemplate(func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		// BACKWARD_COMPATIBILITY: an empty --name or --image is left out of the
+		// body, so the API answers with the same error as before. Next major:
+		// reject it locally.
 		return sdk.Templates.CreateTemplate(ctx, body, dropEmptyStrings("name", "image"))
 	})
 }

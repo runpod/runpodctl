@@ -62,6 +62,9 @@ type billingQuery struct {
 	bucket     *types.BillingBucketSize
 	// raw holds a time the cli could not parse, sent as typed so the API
 	// rejects it with its own validation error, as it always has.
+	//
+	// BACKWARD_COMPATIBILITY: keeps the API's error for an invalid
+	// --start-time or --end-time. Next major: reject it locally.
 	raw url.Values
 }
 
@@ -113,6 +116,9 @@ func optional(s string) *string {
 // listBillingRecords decodes into the cli's own record types, which match the
 // wire shape: the SDK's records parse startTime and endTime into time.Time,
 // which would print them differently from what the API sent.
+//
+// BACKWARD_COMPATIBILITY: keeps the API's timestamp text in the output. Next
+// major: decode into the SDK's records.
 func listBillingRecords[T any](c *Client, call sdkRequest) ([]T, error) {
 	resp, err := sdkCall[struct {
 		Records []T `json:"records"`

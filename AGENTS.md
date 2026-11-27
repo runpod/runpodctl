@@ -62,4 +62,5 @@ This document exists for non-obvious, error-prone shortcomings in the codebase, 
 - default output format is json (for agent consumption); never change this default.
 - e2e tests cost real money — always clean up resources with `t.Cleanup`.
 - always e2e test cli changes before considering work done: build the binary, run the new/changed commands against the live api (`RUNPOD_API_KEY` is in the env), and clean up any created resources immediately after verifying the response. this is non-negotiable.
+- mark compatibility code with a grep-able keyword at the start of a comment line. `BACKWARD_COMPATIBILITY:` is code that exists only to keep current behaviour (an output shape or field name, an error passed through unchanged); say what to do in the next major. `BREAKING:` is a deliberate visible change since the last release. before a major release, `grep -rn 'BACKWARD_COMPATIBILITY:\|BREAKING:'` lists what can go and what the release notes must cover.
 - keep the runpodctl skill in sync: https://github.com/runpod/runpod-plugins-official/tree/main/plugins/runpod/skills/runpodctl — update it whenever commands, flags, or behavior change.
