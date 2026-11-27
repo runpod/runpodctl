@@ -1,11 +1,16 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
+
+	runpod "github.com/runpod/go-sdk/v2"
+	"github.com/runpod/go-sdk/v2/lib/types"
 
 	"github.com/runpod/runpodctl/internal/configenv"
 )
@@ -117,7 +122,7 @@ type EndpointListOptions struct {
 
 // ListEndpoints returns all endpoints, from rest v2.
 func (c *Client) ListEndpoints(opts *EndpointListOptions) ([]Endpoint, error) {
-	v2Endpoints, err := c.listV2Endpoints()
+	v2Endpoints, err := c.listSDKEndpoints()
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +136,7 @@ func (c *Client) ListEndpoints(opts *EndpointListOptions) ([]Endpoint, error) {
 	}
 	endpoints := make([]Endpoint, 0, len(v2Endpoints))
 	for i := range v2Endpoints {
-		out := v2Endpoints[i].toEndpoint(poolTypes)
+		out := endpointFromSDK(v2Endpoints[i], poolTypes)
 		if err := c.decorateEndpoint(&out, &v2Endpoints[i], opts, workers); err != nil {
 			return nil, err
 		}
@@ -143,7 +148,7 @@ func (c *Client) ListEndpoints(opts *EndpointListOptions) ([]Endpoint, error) {
 // poolTypesFor reads the gpu catalog, which maps v2's pools to gpu types, when
 // any endpoint has a gpu block. without it gpuIds would print empty, which
 // reads as "no gpus"; cpu endpoints don't need it.
-func (c *Client) poolTypesFor(endpoints []v2Endpoint) (map[string][]string, error) {
+func (c *Client) poolTypesFor(endpoints []types.Endpoint) (map[string][]string, error) {
 	for i := range endpoints {
 		if endpoints[i].Gpu != nil {
 			poolTypes, err := c.gpuPoolTypes()
@@ -158,11 +163,11 @@ func (c *Client) poolTypesFor(endpoints []v2Endpoint) (map[string][]string, erro
 
 // GetEndpoint returns a single endpoint, from rest v2.
 func (c *Client) GetEndpoint(endpointID string, includeTemplate, includeWorkers bool) (*Endpoint, error) {
-	e, err := c.getV2Endpoint(endpointID)
+	e, err := c.getSDKEndpoint(endpointID)
 	if err != nil {
 		return nil, err
 	}
-	poolTypes, err := c.poolTypesFor([]v2Endpoint{*e})
+	poolTypes, err := c.poolTypesFor([]types.Endpoint{*e})
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +176,7 @@ func (c *Client) GetEndpoint(endpointID string, includeTemplate, includeWorkers 
 	if err != nil {
 		return nil, err
 	}
-	out := e.toEndpoint(poolTypes)
+	out := endpointFromSDK(*e, poolTypes)
 	if err := c.decorateEndpoint(&out, e, opts, workers); err != nil {
 		return nil, err
 	}
@@ -180,66 +185,63 @@ func (c *Client) GetEndpoint(endpointID string, includeTemplate, includeWorkers 
 
 // UpdateEndpoint applies the supplied settings through rest v2.
 func (c *Client) UpdateEndpoint(endpointID string, req *EndpointUpdateRequest) error {
-	body := map[string]any{}
-	if req.Name != "" {
-		body["name"] = req.Name
+	if err := requireID(endpointID); err != nil {
+		return err
 	}
-	workers := map[string]any{}
-	if req.WorkersMin != nil {
-		workers["min"] = *req.WorkersMin
-	}
-	if req.WorkersMax != nil {
-		workers["max"] = *req.WorkersMax
-	}
-	if req.IdleTimeout != nil {
-		workers["idleTimeout"] = *req.IdleTimeout
-	}
-	if len(workers) > 0 {
-		body["workers"] = workers
+	body := types.UpdateEndpointRequest{Name: optional(req.Name)}
+	if req.WorkersMin != nil || req.WorkersMax != nil || req.IdleTimeout != nil {
+		body.Workers = &types.EndpointWorkers{Min: req.WorkersMin, Max: req.WorkersMax, IdleTimeout: req.IdleTimeout}
 	}
 	if req.ScalerType != "" || req.ScalerValue != nil {
 		scalerType := req.ScalerType
 		var value float64
 		if req.ScalerType == "" || req.ScalerValue == nil {
-			current, err := c.getV2Endpoint(endpointID)
+			current, err := c.getSDKEndpoint(endpointID)
 			if err != nil {
 				return err
 			}
+			scaling := endpointScalingOf(*current)
 			if scalerType == "" {
-				scalerType = current.Scaling.Type
+				scalerType = scaling.Type
 			}
-			switch current.Scaling.Type {
+			switch scaling.Type {
 			case "QUEUE_DELAY":
-				if current.Scaling.QueueDelay != nil {
-					value = *current.Scaling.QueueDelay
+				if scaling.QueueDelay != nil {
+					value = *scaling.QueueDelay
 				}
 			case "REQUEST_COUNT":
-				if current.Scaling.RequestCount != nil {
-					value = float64(*current.Scaling.RequestCount)
+				if scaling.RequestCount != nil {
+					value = float64(*scaling.RequestCount)
 				}
 			}
 		}
 		if req.ScalerValue != nil {
 			value = float64(*req.ScalerValue)
 		}
-		scaling := map[string]any{"type": scalerType}
+		var scaling types.EndpointScaling
 		switch scalerType {
 		case "QUEUE_DELAY":
 			if value < 0.5 {
 				return errors.New("queue delay must be at least 0.5 seconds, set --scale-threshold")
 			}
-			scaling["queueDelay"] = value
+			if err := scaling.FromQueueDelayScaling(types.QueueDelayScaling{Type: types.QueueDelayScalingTypeQueueDelay, QueueDelay: float32(value)}); err != nil {
+				return err
+			}
 		case "REQUEST_COUNT":
 			if value < 1 || value != float64(int(value)) {
 				return errors.New("request count must be a positive integer, set --scale-threshold")
 			}
-			scaling["requestCount"] = int(value)
+			if err := scaling.FromRequestCountScaling(types.RequestCountScaling{Type: types.RequestCountScalingTypeRequestCount, RequestCount: int(value)}); err != nil {
+				return err
+			}
 		default:
 			return fmt.Errorf("unsupported scaling type %q", scalerType)
 		}
-		body["scaling"] = scaling
+		body.Scaling = &scaling
 	}
-	_, err := c.PatchV2("/serverless/"+url.PathEscape(endpointID), body)
+	_, err := c.sdkSend(func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.Serverless.UpdateEndpoint(ctx, endpointID, body)
+	})
 	return err
 }
 
@@ -289,7 +291,12 @@ func (c *Client) UpdateEndpointTemplate(endpointID, templateID string) error {
 
 // DeleteEndpoint deletes an endpoint
 func (c *Client) DeleteEndpoint(endpointID string) error {
-	_, err := c.DeleteV2("/serverless/" + url.PathEscape(endpointID))
+	if err := requireID(endpointID); err != nil {
+		return err
+	}
+	_, err := c.sdkSend(func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.Serverless.DeleteEndpoint(ctx, endpointID)
+	})
 	return err
 }
 

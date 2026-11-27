@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
+
+	runpod "github.com/runpod/go-sdk/v2"
+	"github.com/spf13/viper"
 
 	"github.com/runpod/runpodctl/internal/configenv"
-	"github.com/spf13/viper"
 )
 
 // V2Client serves the v2 calls that need a per-call context: the log streams
@@ -17,10 +18,8 @@ import (
 
 // V2Client makes ordinary (non-streaming) json requests against the v2 rest api.
 type V2Client struct {
-	baseURL    string
-	apiKey     string
-	httpClient *http.Client
-	userAgent  string
+	baseURL string
+	sdk     *runpod.Client
 }
 
 // NewV2Client creates a client for the v2 rest api.
@@ -35,18 +34,12 @@ func NewV2Client() (*V2Client, error) {
 		timeout = DefaultTimeout
 	}
 
-	return &V2Client{
-		baseURL:    restBaseURL(),
-		apiKey:     apiKey,
-		httpClient: &http.Client{Timeout: timeout},
-		userAgent:  buildUserAgent(),
-	}, nil
-}
-
-// get issues a GET against the v2 api and returns the raw body.
-func (c *V2Client) get(ctx context.Context, path string) ([]byte, error) {
-	client := Client{apiKey: c.apiKey, httpClient: c.httpClient, userAgent: c.userAgent}
-	return client.requestURLContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	baseURL := restBaseURL()
+	sdk, err := newSDK(baseURL, apiKey, buildUserAgent(), timeout)
+	if err != nil {
+		return nil, err
+	}
+	return &V2Client{baseURL: baseURL, sdk: sdk}, nil
 }
 
 // Worker is one worker backing a serverless endpoint, as reported by v2.
@@ -90,7 +83,16 @@ type WorkersResponse struct {
 // route addresses a worker directly, and the v1 endpoint expansion cannot be
 // trusted to say which workers exist or what state they are in.
 func (c *V2Client) ListEndpointWorkers(ctx context.Context, endpointID string) (*WorkersResponse, error) {
-	body, err := c.get(ctx, "/serverless/"+url.PathEscape(endpointID)+"/workers")
+	if err := requireID(endpointID); err != nil {
+		return nil, err
+	}
+	// BACKWARD_COMPATIBILITY: decoded into the cli's own types, which match the
+	// wire shape: the SDK's workers parse startedAt into time.Time, which would
+	// print it differently from what the API sent. Next major: decode into the
+	// SDK's workers.
+	body, err := sdkSendContext(ctx, c.sdk, func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.Serverless.ListEndpointWorkers(ctx, endpointID)
+	})
 	if err != nil {
 		return nil, err
 	}

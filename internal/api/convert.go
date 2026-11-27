@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 
@@ -238,4 +239,118 @@ func legacyPodFromSDK(p types.Pod) *LegacyPod {
 		legacy.Runtime = runtime
 	}
 	return legacy
+}
+
+// endpointScaling is an endpoint's scaling block in the shape the cli has
+// always read it. The SDK models it as a union whose queueDelay is a float32;
+// reading the raw block keeps the API's value exact.
+type endpointScaling struct {
+	Type         string   `json:"type"`
+	QueueDelay   *float64 `json:"queueDelay"` // fractional seconds, minimum 0.5
+	RequestCount *int     `json:"requestCount"`
+}
+
+func endpointScalingOf(e types.Endpoint) endpointScaling {
+	var s endpointScaling
+	if raw, err := e.Scaling.MarshalJSON(); err == nil {
+		_ = json.Unmarshal(raw, &s)
+	}
+	return s
+}
+
+// endpointFromSDK converts a rest v2 endpoint; poolTypes (keyed by upper-case
+// pool id) expands pools into the gpu type ids v1 reported. v2 keeps no link to
+// a template, so templateId is not reported.
+//
+// BACKWARD_COMPATIBILITY: prints the field names graphql did (workersMin,
+// scalerType, executionTimeoutMs, locations as a comma-separated string, gpu
+// pools expanded into gpu type ids, ...). Next major: print the API's endpoint.
+func endpointFromSDK(e types.Endpoint, poolTypes map[string][]string) Endpoint {
+	scaling := endpointScalingOf(e)
+	out := Endpoint{
+		ID:                 e.Id,
+		Name:               e.Name,
+		ScalerType:         scaling.Type,
+		WorkersMin:         e.Workers.Min,
+		WorkersMax:         e.Workers.Max,
+		ExecutionTimeoutMs: e.Timeout,
+		URLs:               invokeURLs(e.Id),
+	}
+	if e.Workers.IdleTimeout != nil {
+		idle := *e.Workers.IdleTimeout
+		out.IdleTimeout = &idle
+	}
+	switch {
+	case scaling.QueueDelay != nil:
+		out.ScalerValue = *scaling.QueueDelay
+	case scaling.RequestCount != nil:
+		out.ScalerValue = float64(*scaling.RequestCount)
+	}
+	// graphql's comma-separated spelling; v1 never reported placement
+	out.Locations = strings.Join(e.DataCenterIds, ",")
+	flashboot := e.Flashboot != "" && !strings.EqualFold(string(e.Flashboot), "OFF")
+	out.Flashboot = &flashboot
+	if len(e.NetworkVolumes) > 0 {
+		out.NetworkVolumeID = e.NetworkVolumes[0]
+		for _, v := range e.NetworkVolumes {
+			out.NetworkVolumeIDs = append(out.NetworkVolumeIDs, EndpointNetworkVolume{NetworkVolumeID: v})
+		}
+	}
+	if e.Gpu != nil {
+		out.GpuCount = deref(e.Gpu.Count)
+		out.MinCudaVersion = deref(e.Gpu.MinCudaVersion)
+		excluded := map[string]bool{}
+		for _, t := range deref(e.Gpu.ExcludedTypes) {
+			excluded[strings.ToUpper(t)] = true
+		}
+		for _, pool := range e.Gpu.Pools {
+			members, ok := poolTypes[strings.ToUpper(pool)]
+			if !ok {
+				// a pool the catalog doesn't list (inactive, or not offered to
+				// this account) is printed as its id, so the endpoint never reads
+				// as one with no gpus.
+				out.GpuTypeIDs = append(out.GpuTypeIDs, pool)
+				continue
+			}
+			added := 0
+			for _, t := range members {
+				if !excluded[strings.ToUpper(t)] {
+					out.GpuTypeIDs = append(out.GpuTypeIDs, t)
+					added++
+				}
+			}
+			// every type in the pool excluded: the pool id still says which
+			// hardware the endpoint asked for, where nothing reads as no gpus
+			if added == 0 {
+				out.GpuTypeIDs = append(out.GpuTypeIDs, pool)
+			}
+		}
+	}
+	return out
+}
+
+// endpointInlineTemplate is what --include-template can still show: v2 inlines
+// the container config into the endpoint and keeps no template link, so there
+// is no template id or name to report.
+//
+// BACKWARD_COMPATIBILITY: the template field names graphql used. Next major:
+// print the API's container config.
+func endpointInlineTemplate(e types.Endpoint) map[string]any {
+	t := map[string]any{
+		"imageName":         deref(e.Image),
+		"containerDiskInGb": deref(e.Disk),
+		"dockerArgs":        deref(e.Args),
+		"env":               deref(e.Env),
+		"ports":             strings.Join(deref(e.Ports), ","),
+		"isServerless":      true,
+	}
+	if e.Registry != nil {
+		t["containerRegistryAuthId"] = *e.Registry
+	}
+	// the start command can live in cmd instead of args; templates print it
+	// under the same name
+	if cmd := deref(e.Cmd); len(cmd) > 0 {
+		t["dockerStartCmd"] = cmd
+	}
+	return t
 }

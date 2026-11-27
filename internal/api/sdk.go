@@ -109,8 +109,12 @@ func sdkCall[T any](c *Client, call sdkRequest) (*T, error) {
 func (c *Client) sdkSend(call sdkRequest) ([]byte, error) {
 	ctx, cancel := c.callContext()
 	defer cancel()
+	return sdkSendContext(ctx, c.sdk, call)
+}
 
-	resp, err := call(ctx, c.sdk)
+// sdkSendContext is sdkSend under the caller's context.
+func sdkSendContext(ctx context.Context, sdk *runpod.Client, call sdkRequest) ([]byte, error) {
+	resp, err := call(ctx, sdk)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}

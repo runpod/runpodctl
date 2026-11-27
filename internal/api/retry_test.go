@@ -64,15 +64,21 @@ func TestPermanentServerErrorsAreNotRetried(t *testing.T) {
 func TestWorkerListRetriesTransientGet(t *testing.T) {
 	withFastRetry(t)
 	var attempts atomic.Int32
-	client := newTestClient(t, "https://example.invalid")
-	client.httpClient.Transport = roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if attempts.Add(1) == 1 {
-			return testResponse(http.StatusServiceUnavailable, ""), nil
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
 		}
-		return testResponse(http.StatusOK, `{"workers":[{"id":"worker-1"}]}`), nil
-	})
+		_, _ = io.WriteString(w, `{"workers":[{"id":"worker-1"}]}`)
+	}))
+	defer server.Close()
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+	t.Setenv("RUNPOD_API_URL", server.URL)
 
-	v2 := &V2Client{baseURL: client.baseURL, apiKey: client.apiKey, httpClient: client.httpClient, userAgent: client.userAgent}
+	v2, err := NewV2Client()
+	if err != nil {
+		t.Fatal(err)
+	}
 	workers, err := v2.ListEndpointWorkers(context.Background(), "endpoint-1")
 	if err != nil || len(workers.Workers) != 1 {
 		t.Fatalf("worker listing after retry: %v, %v", workers, err)

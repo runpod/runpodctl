@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -202,5 +203,55 @@ func TestPodFromSDKCPUAndMissingTime(t *testing.T) {
 	got := podFromSDK(types.Pod{Id: "pod-def456", Status: "EXITED", Cpu: &types.CpuConfig{Id: "cpu3c", Memory: 4, VcpuCount: 2}})
 	if got.MemoryInGb != 4 || got.VcpuCount != 2 || got.CreatedAt != nil || got.DesiredStatus != "EXITED" || got.GpuTypeID != "" {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+func sdkTestEndpoint(t *testing.T, scaling string) types.Endpoint {
+	t.Helper()
+	var e types.Endpoint
+	body := `{"id":"ep-abc123","name":"my-endpoint","image":"runpod/worker-vllm:stable","args":"python handler.py",
+		"cmd":["python","handler.py"],"env":{"HF_HOME":"/workspace/hf"},"ports":["8000/http"],"disk":20,"registry":"reg-abc123",
+		"gpu":{"pools":["AMPERE_48","ADA_24"],"excludedTypes":["NVIDIA RTX A6000"],"count":2,"minCudaVersion":"12.4","allowedCudaVersions":[]},
+		"networkVolumes":["vol-abc123","vol-def456"],"dataCenterIds":["EU-RO-1","US-TX-3"],"flashboot":"FLASHBOOT","timeout":600000,
+		"scaling":` + scaling + `,"workers":{"min":1,"max":3,"idleTimeout":5},"createdAt":"2026-03-14T08:30:00Z","mounts":{"global":[],"network":[]}}`
+	if err := json.Unmarshal([]byte(body), &e); err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+func TestEndpointFromSDK(t *testing.T) {
+	t.Setenv("RUNPOD_INVOKE_URL", "")
+	pools := map[string][]string{"AMPERE_48": {"NVIDIA A40", "NVIDIA RTX A6000"}}
+	got := endpointFromSDK(sdkTestEndpoint(t, `{"type":"QUEUE_DELAY","queueDelay":2.7}`), pools)
+	// graphql-only fields, and the --include-template/--include-workers expansions
+	requireAllFieldsSet(t, got, "TemplateID", "GpuIDs", "InstanceIDs", "FlashBootType", "ComputeType", "ModelReferences",
+		"Template", "Workers", "NetworkVolumeIDs.DataCenterID")
+	if got.ScalerValue != 2.7 || got.ScalerType != "QUEUE_DELAY" {
+		t.Errorf("scaling = %s %v, want QUEUE_DELAY 2.7 (no float32 noise)", got.ScalerType, got.ScalerValue)
+	}
+	// ADA_24 is not in the catalog, so it prints as its id; the excluded type is dropped
+	if want := []string{"NVIDIA A40", "ADA_24"}; !reflect.DeepEqual(got.GpuTypeIDs, want) {
+		t.Errorf("gpuTypeIds = %v, want %v", got.GpuTypeIDs, want)
+	}
+	if got.Locations != "EU-RO-1,US-TX-3" || got.NetworkVolumeID != "vol-abc123" || !*got.Flashboot || *got.IdleTimeout != 5 {
+		t.Errorf("got %+v", got)
+	}
+
+	requestCount := endpointFromSDK(sdkTestEndpoint(t, `{"type":"REQUEST_COUNT","requestCount":4}`), pools)
+	if requestCount.ScalerValue != 4 || requestCount.ScalerType != "REQUEST_COUNT" {
+		t.Errorf("scaling = %s %v, want REQUEST_COUNT 4", requestCount.ScalerType, requestCount.ScalerValue)
+	}
+}
+
+func TestEndpointInlineTemplate(t *testing.T) {
+	got := endpointInlineTemplate(sdkTestEndpoint(t, `{"type":"QUEUE_DELAY","queueDelay":4}`))
+	want := map[string]any{
+		"imageName": "runpod/worker-vllm:stable", "containerDiskInGb": 20, "dockerArgs": "python handler.py",
+		"env": map[string]string{"HF_HOME": "/workspace/hf"}, "ports": "8000/http", "isServerless": true,
+		"containerRegistryAuthId": "reg-abc123", "dockerStartCmd": []string{"python", "handler.py"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %#v\nwant %#v", got, want)
 	}
 }
