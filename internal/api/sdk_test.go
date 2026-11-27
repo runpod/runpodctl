@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -102,5 +103,26 @@ func TestRequireIDRejectsEmptyAndDotSegments(t *testing.T) {
 		if err := client.DeleteNetworkVolume(id); !errors.As(err, &coder) || coder.ErrorCode() != "usage_error" {
 			t.Errorf("id %q: err = %v, want usage_error", id, err)
 		}
+	}
+}
+
+func TestCreateTemplateLeavesOutEmptyNameAndImage(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = io.WriteString(w, `{"title":"Unprocessable Entity","status":422,"detail":"Request validation failed."}`)
+	}))
+	defer server.Close()
+
+	_, _ = newV2TestClient(t, server).CreateTemplate(&TemplateCreateRequest{Name: "", ImageName: ""})
+	if _, ok := body["name"]; ok {
+		t.Errorf("body has name: %v", body)
+	}
+	if _, ok := body["image"]; ok {
+		t.Errorf("body has image: %v", body)
+	}
+	if body["serverless"] != false {
+		t.Errorf("body lost its other fields: %v", body)
 	}
 }

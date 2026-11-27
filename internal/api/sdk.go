@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -169,6 +170,47 @@ func withCursor(cursor *string) func(context.Context, *http.Request) error {
 			q.Set("cursor", *cursor)
 			req.URL.RawQuery = q.Encode()
 		}
+		return nil
+	}
+}
+
+// nonEmpty is a pointer to s, or nil for an empty s, for the optional list
+// fields the hand-written client left out when empty.
+func nonEmpty(s []string) *[]string {
+	if len(s) == 0 {
+		return nil
+	}
+	return &s
+}
+
+// dropEmptyStrings removes the named top-level fields from a JSON request body
+// when they are "". A generated request type always sends its required fields,
+// where the hand-written client left an empty one out, and the API rejects the
+// two differently; dropping it keeps the error a user gets unchanged.
+func dropEmptyStrings(fields ...string) func(context.Context, *http.Request) error {
+	return func(_ context.Context, req *http.Request) error {
+		if req.Body == nil {
+			return nil
+		}
+		raw, err := io.ReadAll(req.Body)
+		if err != nil {
+			return err
+		}
+		var body map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &body); err != nil {
+			return err
+		}
+		for _, f := range fields {
+			if string(body[f]) == `""` {
+				delete(body, f)
+			}
+		}
+		if raw, err = json.Marshal(body); err != nil {
+			return err
+		}
+		req.Body = io.NopCloser(bytes.NewReader(raw))
+		req.ContentLength = int64(len(raw))
+		req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(raw)), nil }
 		return nil
 	}
 }

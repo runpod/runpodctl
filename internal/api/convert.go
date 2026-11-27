@@ -82,3 +82,36 @@ func dataCenterFromSDK(dc types.DataCenter) DataCenter {
 func registryAuthFromSDK(r types.Registry) ContainerRegistryAuth {
 	return ContainerRegistryAuth{ID: r.Id, Name: r.Name}
 }
+
+// templateFromSDK converts a rest v2 template into the field names the cli has
+// always printed. readme, portsConfig and isRunpod have no v2 field and are
+// filled in from graphql where the cli shows them.
+func templateFromSDK(t types.Template) Template {
+	out := Template{
+		ID:                t.Id,
+		Name:              t.Name,
+		ImageName:         t.Image,
+		IsServerless:      t.Serverless,
+		IsPublic:          t.Public,
+		Category:          string(t.Category),
+		Ports:             t.Ports,
+		ContainerDiskInGb: t.Disk,
+	}
+	if t.Entrypoint != nil {
+		out.DockerEntrypoint = *t.Entrypoint
+	}
+	if t.Cmd != nil {
+		out.DockerStartCmd = *t.Cmd
+	}
+	if len(t.Env) > 0 {
+		out.Env = t.Env
+	}
+	if t.Registry != nil {
+		out.ContainerRegistryAuthID = *t.Registry
+	}
+	if p := t.Mounts.Persistent; p != nil {
+		out.VolumeInGb = p.Size
+		out.VolumeMountPath = p.Path
+	}
+	return out
+}

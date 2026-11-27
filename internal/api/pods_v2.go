@@ -9,6 +9,11 @@ import (
 	"time"
 )
 
+type v2PersistentMount struct {
+	Size int    `json:"size"`
+	Path string `json:"path"`
+}
+
 // v2Pod is a pod as rest v2 reports it. toPod maps it onto the field names the
 // cli has always printed; toLegacyPod builds the runtime/ssh view that
 // internal/sshconnect and internal/podstate consume.

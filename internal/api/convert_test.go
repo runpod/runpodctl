@@ -127,3 +127,24 @@ func TestRegistryAuthFromSDK(t *testing.T) {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
 }
+
+func TestTemplateFromSDK(t *testing.T) {
+	registry := "reg-abc123"
+	got := templateFromSDK(types.Template{
+		Id: "tpl-abc123", Name: "pytorch-dev", Image: "runpod/pytorch:2.1.0", Serverless: true, Public: true,
+		Category: "NVIDIA", Ports: []string{"8888/http"}, Disk: 20, Registry: &registry,
+		Entrypoint: &[]string{"bash"}, Cmd: &[]string{"-c", "run"}, Env: map[string]string{"HF_HOME": "/workspace/hf"},
+		Mounts: types.TemplateMounts{Persistent: &types.PersistentMount{Size: 50, Path: "/workspace"}},
+	})
+	// isRunpod, portsConfig and readme have no v2 field; they come from graphql
+	requireAllFieldsSet(t, got, "IsRunpod", "PortsConfig", "Readme")
+	want := Template{
+		ID: "tpl-abc123", Name: "pytorch-dev", ImageName: "runpod/pytorch:2.1.0", IsServerless: true, IsPublic: true,
+		Category: "NVIDIA", Ports: []string{"8888/http"}, ContainerDiskInGb: 20, ContainerRegistryAuthID: "reg-abc123",
+		DockerEntrypoint: []string{"bash"}, DockerStartCmd: []string{"-c", "run"}, Env: map[string]string{"HF_HOME": "/workspace/hf"},
+		VolumeInGb: 50, VolumeMountPath: "/workspace",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v\nwant %+v", got, want)
+	}
+}
