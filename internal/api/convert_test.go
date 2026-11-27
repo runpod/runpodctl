@@ -201,7 +201,8 @@ func TestLegacyPodFromSDK(t *testing.T) {
 
 func TestPodFromSDKCPUAndMissingTime(t *testing.T) {
 	got := podFromSDK(types.Pod{Id: "pod-def456", Status: "EXITED", Cpu: &types.CpuConfig{Id: "cpu3c", Memory: 4, VcpuCount: 2}})
-	if got.MemoryInGb != 4 || got.VcpuCount != 2 || got.CreatedAt != nil || got.DesiredStatus != "EXITED" || got.GpuTypeID != "" {
+	// the API's zero time prints as v1 printed it
+	if got.MemoryInGb != 4 || got.VcpuCount != 2 || got.CreatedAt != "0001-01-01 00:00:00 +0000 UTC" || got.DesiredStatus != "EXITED" || got.GpuTypeID != "" {
 		t.Fatalf("got %+v", got)
 	}
 }

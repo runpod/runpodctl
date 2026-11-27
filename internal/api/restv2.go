@@ -15,11 +15,8 @@ import (
 // V2Client serves the v2 calls that need a per-call context: the worker
 // listing (the log streams have their own client in logs.go). Ordinary v2
 // requests go through Client's SDK client (see sdk.go).
-
-// V2Client makes ordinary (non-streaming) json requests against the v2 rest api.
 type V2Client struct {
-	baseURL string
-	sdk     *runpod.Client
+	sdk *runpod.Client
 }
 
 // NewV2Client creates a client for the v2 rest api.
@@ -34,12 +31,11 @@ func NewV2Client() (*V2Client, error) {
 		timeout = DefaultTimeout
 	}
 
-	baseURL := restBaseURL()
-	sdk, err := newSDK(baseURL, apiKey, buildUserAgent(), timeout)
+	sdk, err := newSDK(restBaseURL(), apiKey, buildUserAgent(), timeout)
 	if err != nil {
 		return nil, err
 	}
-	return &V2Client{baseURL: baseURL, sdk: sdk}, nil
+	return &V2Client{sdk: sdk}, nil
 }
 
 // Worker is one worker backing a serverless endpoint, as reported by v2.

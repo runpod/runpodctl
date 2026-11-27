@@ -106,13 +106,6 @@ func (q billingQuery) rawTimes(_ context.Context, req *http.Request) error {
 	return nil
 }
 
-func optional(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
-}
-
 // listBillingRecords decodes into the cli's own record types, which match the
 // wire shape: the SDK's records parse startTime and endTime into time.Time,
 // which would print them differently from what the API sent.

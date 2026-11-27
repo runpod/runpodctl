@@ -78,5 +78,5 @@ func (c *Client) workerClient(opts *EndpointListOptions) (*V2Client, error) {
 	if opts == nil || !opts.IncludeWorkers {
 		return nil, nil
 	}
-	return &V2Client{baseURL: c.baseURL, sdk: c.sdk}, nil
+	return &V2Client{sdk: c.sdk}, nil
 }

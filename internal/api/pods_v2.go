@@ -30,11 +30,9 @@ func legacyDesiredStatus(status string) string {
 
 // legacyTimestamp renders a v2 time the way v1 did (Go's time.String layout,
 // e.g. "2026-10-02 05:28:38.366 +0000 UTC"), which `pod get` has always
-// printed. A missing time is left out.
+// printed. The API sends the zero time when it has none, which v1 printed as
+// "0001-01-01 00:00:00 +0000 UTC" too.
 func legacyTimestamp(t time.Time) interface{} {
-	if t.IsZero() {
-		return nil
-	}
 	return t.UTC().String()
 }
 

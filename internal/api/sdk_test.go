@@ -152,8 +152,10 @@ func TestSDKAllPagesFollowsCursorsAndStopsOnRepeat(t *testing.T) {
 	if err := sdkAllPages("/things", fetch); err == nil || len(seen) != 2 {
 		t.Fatalf("a repeated cursor must stop the walk with an error: err = %v, cursors = %q", err, seen)
 	}
+}
 
-	pages[""] = types.Pagination{HasNextPage: true}
+func TestSDKAllPagesFailsOnMissingCursor(t *testing.T) {
+	fetch := func(*string) (types.Pagination, error) { return types.Pagination{HasNextPage: true}, nil }
 	if err := sdkAllPages("/things", fetch); err == nil || !strings.Contains(err.Error(), "no cursor") {
 		t.Fatalf("more pages without a cursor must be an error, not a partial list: %v", err)
 	}
@@ -198,5 +200,16 @@ func TestSDKEscapesEncodedDotsInIDs(t *testing.T) {
 	want := []string{"/network-volumes/%252e", "/network-volumes/%252e%252e", "/network-volumes/a%252fb"}
 	if !reflect.DeepEqual(paths, want) {
 		t.Fatalf("paths = %q, want %q", paths, want)
+	}
+}
+
+func TestSDKCallRejectsAnEmptySuccessBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	if _, err := newV2TestClient(t, server).GetNetworkVolume("vol-1"); err == nil || !strings.Contains(err.Error(), "failed to parse response") {
+		t.Fatalf("err = %v, want a parse error, not an empty volume", err)
 	}
 }

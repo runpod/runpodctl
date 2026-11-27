@@ -95,9 +95,6 @@ func sdkCall[T any](c *Client, call sdkRequest) (*T, error) {
 		return nil, err
 	}
 	var out T
-	if len(body) == 0 {
-		return &out, nil
-	}
 	if err := json.Unmarshal(body, &out); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
@@ -179,6 +176,15 @@ func withCursor(cursor *string) func(context.Context, *http.Request) error {
 		}
 		return nil
 	}
+}
+
+// optional is a pointer to s, or nil for an empty s, for the optional string
+// fields the hand-written client left out when empty.
+func optional(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 // nonEmpty is a pointer to s, or nil for an empty s, for the optional list

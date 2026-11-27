@@ -34,15 +34,13 @@ func TestRESTClientsShareBaseURL(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			workers, err := NewV2Client()
-			if err != nil {
-				t.Fatal(err)
-			}
 			logs, err := NewLogClient()
 			if err != nil {
 				t.Fatal(err)
 			}
-			for name, got := range map[string]string{"crud": client.baseURL, "workers": workers.baseURL, "logs": logs.baseURL} {
+			// the worker listing shares client's SDK; TestRESTOverrideRoutesEveryClient
+			// checks where its requests go
+			for name, got := range map[string]string{"crud": client.baseURL, "logs": logs.baseURL} {
 				if got != tc.want {
 					t.Errorf("%s base = %q, want %q", name, got, tc.want)
 				}
