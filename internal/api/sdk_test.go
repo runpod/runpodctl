@@ -6,8 +6,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
+
+	runpod "github.com/runpod/go-sdk/v2"
+	"github.com/runpod/go-sdk/v2/lib/types"
 )
 
 func TestSDKRequestsKeepConfiguredBasePath(t *testing.T) {
@@ -124,5 +129,74 @@ func TestCreateTemplateLeavesOutEmptyNameAndImage(t *testing.T) {
 	}
 	if body["serverless"] != false {
 		t.Errorf("body lost its other fields: %v", body)
+	}
+}
+
+func TestSDKAllPagesFollowsCursorsAndStopsOnRepeat(t *testing.T) {
+	pages := map[string]types.Pagination{
+		"":    {HasNextPage: true, NextCursor: runpod.Ptr("a b")},
+		"a b": {HasNextPage: false},
+	}
+	var seen []string
+	fetch := func(cursor *string) (types.Pagination, error) {
+		c := deref(cursor)
+		seen = append(seen, c)
+		return pages[c], nil
+	}
+	if err := sdkAllPages("/things", fetch); err != nil || !reflect.DeepEqual(seen, []string{"", "a b"}) {
+		t.Fatalf("err = %v, cursors = %q", err, seen)
+	}
+
+	pages["a b"] = types.Pagination{HasNextPage: true, NextCursor: runpod.Ptr("a b")}
+	seen = nil
+	if err := sdkAllPages("/things", fetch); err == nil || len(seen) != 2 {
+		t.Fatalf("a repeated cursor must stop the walk with an error: err = %v, cursors = %q", err, seen)
+	}
+
+	pages[""] = types.Pagination{HasNextPage: true}
+	if err := sdkAllPages("/things", fetch); err == nil || !strings.Contains(err.Error(), "no cursor") {
+		t.Fatalf("more pages without a cursor must be an error, not a partial list: %v", err)
+	}
+}
+
+func TestSDKListSendsTheCursorEscaped(t *testing.T) {
+	var queries []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.Query().Get("cursor"))
+		if r.URL.Query().Get("cursor") == "" {
+			_, _ = io.WriteString(w, `{"networkVolumes":[],"pagination":{"hasNextPage":true,"nextCursor":"a b&c"}}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"networkVolumes":[],"pagination":{"hasNextPage":false}}`)
+	}))
+	defer server.Close()
+
+	if _, err := newV2TestClient(t, server).ListNetworkVolumes(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(queries, []string{"", "a b&c"}) {
+		t.Fatalf("cursors = %q", queries)
+	}
+}
+
+// ids are path-escaped by the generated client, so an encoded dot or slash
+// reaches the API as the literal text, never as a dot segment
+func TestSDKEscapesEncodedDotsInIDs(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.EscapedPath())
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	client := newV2TestClient(t, server)
+
+	for _, id := range []string{"%2e", "%2e%2e", "a%2fb"} {
+		if err := client.DeleteNetworkVolume(id); err != nil {
+			t.Fatalf("id %q: %v", id, err)
+		}
+	}
+	want := []string{"/network-volumes/%252e", "/network-volumes/%252e%252e", "/network-volumes/a%252fb"}
+	if !reflect.DeepEqual(paths, want) {
+		t.Fatalf("paths = %q, want %q", paths, want)
 	}
 }

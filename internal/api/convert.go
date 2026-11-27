@@ -162,7 +162,9 @@ func podVolume(p types.Pod) (sizeGb int, mountPath, networkVolumeID string) {
 }
 
 // podFromSDK converts a rest v2 pod read, carrying the runtime/ssh view of the
-// same read along (Pod.Legacy).
+// same read along (Pod.Legacy). v2 has no lastStatusChange and no machine
+// details, so those are not reported (`--include-machine` carries only
+// dataCenterId and secureCloud).
 //
 // BACKWARD_COMPATIBILITY: prints the field names v1 did (desiredStatus mapped
 // from v2's status, imageName, costPerHr, createdAt in Go's time.String

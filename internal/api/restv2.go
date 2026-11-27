@@ -12,9 +12,9 @@ import (
 	"github.com/runpod/runpodctl/internal/configenv"
 )
 
-// V2Client serves the v2 calls that need a per-call context: the log streams
-// (logs.go) and the worker listing. Ordinary v2 requests go through Client's
-// GetV2/PostV2/PatchV2/PutV2/DeleteV2 helpers.
+// V2Client serves the v2 calls that need a per-call context: the worker
+// listing (the log streams have their own client in logs.go). Ordinary v2
+// requests go through Client's SDK client (see sdk.go).
 
 // V2Client makes ordinary (non-streaming) json requests against the v2 rest api.
 type V2Client struct {

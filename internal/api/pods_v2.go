@@ -14,12 +14,6 @@ import (
 	"github.com/runpod/go-sdk/v2/lib/types"
 )
 
-// v2Pod is a pod as rest v2 reports it. toPod maps it onto the field names the
-// cli has always printed; toLegacyPod builds the runtime/ssh view that
-// internal/sshconnect and internal/podstate consume.
-//
-// v2 has no lastStatusChange and no machine details, so those are not reported
-// (`--include-machine` carries only dataCenterId and secureCloud).
 // legacyDesiredStatus maps v2's observed status onto the requested-state value
 // the cli has always printed as desiredStatus: a pod being provisioned or
 // started was asked to run.
