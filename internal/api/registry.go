@@ -1,21 +1,19 @@
 package api
 
 import (
-	"encoding/json"
-	"fmt"
-	"net/url"
+	"context"
+	"net/http"
+
+	runpod "github.com/runpod/go-sdk/v2"
+	"github.com/runpod/go-sdk/v2/lib/types"
 )
 
-// ContainerRegistryAuth represents a container registry authentication
+// ContainerRegistryAuth is the registry auth the cli prints. It is kept
+// instead of the SDK's type so v3 output stays backward compatible. Remove in
+// the next major release.
 type ContainerRegistryAuth struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Username string `json:"username,omitempty"`
-}
-
-// registryListResponse is the rest v2 registry listing envelope
-type registryListResponse struct {
-	Registries []ContainerRegistryAuth `json:"registries"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // ContainerRegistryAuthCreateRequest is the request to create a container registry auth
@@ -30,13 +28,20 @@ type ContainerRegistryAuthCreateRequest struct {
 // if that changes.
 func (c *Client) ListContainerRegistryAuths() ([]ContainerRegistryAuth, error) {
 	auths := []ContainerRegistryAuth{}
-	err := c.getV2AllPages("/registries", nil, func(data []byte) error {
-		var resp registryListResponse
-		if err := json.Unmarshal(data, &resp); err != nil {
-			return fmt.Errorf("failed to parse response: %w", err)
+	err := sdkAllPages("/registries", func(cursor *string) (types.Pagination, error) {
+		page, err := sdkCall[struct {
+			types.ListRegistriesResponse
+			Pagination types.Pagination `json:"pagination"`
+		}](c, func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+			return sdk.Registries.ListRegistries(ctx, withCursor(cursor))
+		})
+		if err != nil {
+			return types.Pagination{}, err
 		}
-		auths = append(auths, resp.Registries...)
-		return nil
+		for _, r := range page.Registries {
+			auths = append(auths, registryAuthFromSDK(r))
+		}
+		return page.Pagination, nil
 	})
 	if err != nil {
 		return nil, err
@@ -46,36 +51,39 @@ func (c *Client) ListContainerRegistryAuths() ([]ContainerRegistryAuth, error) {
 
 // GetContainerRegistryAuth returns a single container registry auth by ID
 func (c *Client) GetContainerRegistryAuth(authID string) (*ContainerRegistryAuth, error) {
-	data, err := c.GetV2("/registries/"+url.PathEscape(authID), nil)
+	if err := requireID(authID); err != nil {
+		return nil, err
+	}
+	r, err := sdkCall[types.Registry](c, func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.Registries.GetRegistry(ctx, authID)
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	var auth ContainerRegistryAuth
-	if err := json.Unmarshal(data, &auth); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return &auth, nil
+	out := registryAuthFromSDK(*r)
+	return &out, nil
 }
 
 // CreateContainerRegistryAuth creates a new container registry auth
 func (c *Client) CreateContainerRegistryAuth(req *ContainerRegistryAuthCreateRequest) (*ContainerRegistryAuth, error) {
-	data, err := c.PostV2("/registries", req)
+	body := types.CreateRegistryRequest{Name: req.Name, Username: req.Username, Password: req.Password}
+	r, err := sdkCall[types.Registry](c, func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.Registries.CreateRegistry(ctx, body)
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	var auth ContainerRegistryAuth
-	if err := json.Unmarshal(data, &auth); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return &auth, nil
+	out := registryAuthFromSDK(*r)
+	return &out, nil
 }
 
 // DeleteContainerRegistryAuth deletes a container registry auth
 func (c *Client) DeleteContainerRegistryAuth(authID string) error {
-	_, err := c.DeleteV2("/registries/" + url.PathEscape(authID))
+	if err := requireID(authID); err != nil {
+		return err
+	}
+	_, err := c.sdkSend(func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.Registries.DeleteRegistry(ctx, authID)
+	})
 	return err
 }

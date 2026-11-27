@@ -77,3 +77,8 @@ func dataCenterFromSDK(dc types.DataCenter) DataCenter {
 	}
 	return out
 }
+
+// registryAuthFromSDK converts a registry auth.
+func registryAuthFromSDK(r types.Registry) ContainerRegistryAuth {
+	return ContainerRegistryAuth{ID: r.Id, Name: r.Name}
+}

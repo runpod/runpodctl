@@ -119,3 +119,11 @@ func TestDataCenterFromSDK(t *testing.T) {
 		t.Fatalf("got %+v\nwant %+v", got, want)
 	}
 }
+
+func TestRegistryAuthFromSDK(t *testing.T) {
+	got := registryAuthFromSDK(types.Registry{Id: "reg-abc123", Name: "my-registry"})
+	requireAllFieldsSet(t, got)
+	if want := (ContainerRegistryAuth{ID: "reg-abc123", Name: "my-registry"}); got != want {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+}

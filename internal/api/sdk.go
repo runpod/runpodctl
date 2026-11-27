@@ -160,6 +160,19 @@ func sdkAllPages(label string, fetch func(cursor *string) (types.Pagination, err
 	}
 }
 
+// withCursor asks for the page after cursor, for list operations whose
+// generated client takes no cursor parameter. A nil cursor changes nothing.
+func withCursor(cursor *string) func(context.Context, *http.Request) error {
+	return func(_ context.Context, req *http.Request) error {
+		if cursor != nil {
+			q := req.URL.Query()
+			q.Set("cursor", *cursor)
+			req.URL.RawQuery = q.Encode()
+		}
+		return nil
+	}
+}
+
 // requireID rejects an id that would leave an empty or dot path segment: v2
 // redirects "/registries/" to the collection, so a get would print an empty
 // object and a delete would report success without deleting anything.
