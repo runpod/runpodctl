@@ -1,48 +1,23 @@
 package api
 
 import (
-	"encoding/json"
-	"fmt"
-	"net/url"
+	"context"
+	"net/http"
+
+	runpod "github.com/runpod/go-sdk/v2"
+	"github.com/runpod/go-sdk/v2/lib/networkvolumes"
+	"github.com/runpod/go-sdk/v2/lib/types"
 )
 
-// NetworkVolume represents a network volume
+// NetworkVolume is the network volume the cli prints.
+//
+// BACKWARD_COMPATIBILITY: kept instead of the SDK's type so v3 output keeps its
+// shape (dataCenterId, no costCenter or tags). Next major: print the SDK type.
 type NetworkVolume struct {
 	ID           string `json:"id"`
 	Name         string `json:"name"`
 	Size         int    `json:"size"`
 	DataCenterID string `json:"dataCenterId"`
-}
-
-// v2NetworkVolume is a network volume as rest v2 reports it. v2 names the data
-// center `dataCenter`; the cli keeps printing it as `dataCenterId`.
-type v2NetworkVolume struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	Size       int    `json:"size"`
-	DataCenter string `json:"dataCenter"`
-}
-
-func (v v2NetworkVolume) toNetworkVolume() *NetworkVolume {
-	return &NetworkVolume{ID: v.ID, Name: v.Name, Size: v.Size, DataCenterID: v.DataCenter}
-}
-
-type v2NetworkVolumeList struct {
-	NetworkVolumes []v2NetworkVolume `json:"networkVolumes"`
-}
-
-type v2CreateNetworkVolumeRequest struct {
-	Name       string `json:"name"`
-	Size       int    `json:"size"`
-	DataCenter string `json:"dataCenter"`
-}
-
-func parseV2NetworkVolume(data []byte) (*NetworkVolume, error) {
-	var v v2NetworkVolume
-	if err := json.Unmarshal(data, &v); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-	return v.toNetworkVolume(), nil
 }
 
 // NetworkVolumeCreateRequest is the request to create a network volume. It is
@@ -63,15 +38,17 @@ type NetworkVolumeUpdateRequest struct {
 // ListNetworkVolumes returns all network volumes
 func (c *Client) ListNetworkVolumes() ([]NetworkVolume, error) {
 	volumes := []NetworkVolume{}
-	err := c.getV2AllPages("/network-volumes", nil, func(data []byte) error {
-		var list v2NetworkVolumeList
-		if err := json.Unmarshal(data, &list); err != nil {
-			return fmt.Errorf("failed to parse response: %w", err)
+	err := sdkAllPages("/network-volumes", func(cursor *string) (types.Pagination, error) {
+		page, err := sdkCall[types.ListNetworkVolumesResponse](c, func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+			return sdk.NetworkVolumes.ListNetworkVolumes(ctx, &networkvolumes.ListNetworkVolumesParams{Cursor: cursor})
+		})
+		if err != nil {
+			return types.Pagination{}, err
 		}
-		for _, v := range list.NetworkVolumes {
-			volumes = append(volumes, *v.toNetworkVolume())
+		for _, v := range page.NetworkVolumes {
+			volumes = append(volumes, networkVolumeFromSDK(v))
 		}
-		return nil
+		return page.Pagination, nil
 	})
 	if err != nil {
 		return nil, err
@@ -81,24 +58,30 @@ func (c *Client) ListNetworkVolumes() ([]NetworkVolume, error) {
 
 // GetNetworkVolume returns a single network volume by ID
 func (c *Client) GetNetworkVolume(volumeID string) (*NetworkVolume, error) {
-	data, err := c.GetV2("/network-volumes/"+url.PathEscape(volumeID), nil)
-	if err != nil {
+	if err := requireID(volumeID); err != nil {
 		return nil, err
 	}
-	return parseV2NetworkVolume(data)
-}
-
-// CreateNetworkVolume creates a new network volume
-func (c *Client) CreateNetworkVolume(req *NetworkVolumeCreateRequest) (*NetworkVolume, error) {
-	data, err := c.PostV2("/network-volumes", &v2CreateNetworkVolumeRequest{
-		Name:       req.Name,
-		Size:       req.Size,
-		DataCenter: req.DataCenterID,
+	v, err := sdkCall[types.NetworkVolume](c, func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.NetworkVolumes.GetNetworkVolume(ctx, volumeID)
 	})
 	if err != nil {
 		return nil, err
 	}
-	return parseV2NetworkVolume(data)
+	out := networkVolumeFromSDK(*v)
+	return &out, nil
+}
+
+// CreateNetworkVolume creates a new network volume
+func (c *Client) CreateNetworkVolume(req *NetworkVolumeCreateRequest) (*NetworkVolume, error) {
+	body := types.CreateNetworkVolumeRequest{Name: req.Name, Size: req.Size, DataCenter: req.DataCenterID}
+	v, err := sdkCall[types.NetworkVolume](c, func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.NetworkVolumes.CreateNetworkVolume(ctx, body)
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := networkVolumeFromSDK(*v)
+	return &out, nil
 }
 
 // UpdateNetworkVolume updates an existing network volume
@@ -109,15 +92,33 @@ func (c *Client) UpdateNetworkVolume(volumeID string, req *NetworkVolumeUpdateRe
 	if req.Name == "" && req.Size == 0 {
 		return c.GetNetworkVolume(volumeID)
 	}
-	data, err := c.PatchV2("/network-volumes/"+url.PathEscape(volumeID), req)
+	if err := requireID(volumeID); err != nil {
+		return nil, err
+	}
+	var body types.UpdateNetworkVolumeRequest
+	if req.Name != "" {
+		body.Name = &req.Name
+	}
+	if req.Size != 0 {
+		body.Size = &req.Size
+	}
+	v, err := sdkCall[types.NetworkVolume](c, func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.NetworkVolumes.UpdateNetworkVolume(ctx, volumeID, body)
+	})
 	if err != nil {
 		return nil, err
 	}
-	return parseV2NetworkVolume(data)
+	out := networkVolumeFromSDK(*v)
+	return &out, nil
 }
 
 // DeleteNetworkVolume deletes a network volume
 func (c *Client) DeleteNetworkVolume(volumeID string) error {
-	_, err := c.DeleteV2("/network-volumes/" + url.PathEscape(volumeID))
+	if err := requireID(volumeID); err != nil {
+		return err
+	}
+	_, err := c.sdkSend(func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.NetworkVolumes.DeleteNetworkVolume(ctx, volumeID)
+	})
 	return err
 }

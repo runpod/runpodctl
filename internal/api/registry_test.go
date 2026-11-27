@@ -36,9 +36,8 @@ func TestGetContainerRegistryAuth(t *testing.T) {
 			t.Errorf("expected /registries/reg-123, got %s", r.URL.Path)
 		}
 		json.NewEncoder(w).Encode(ContainerRegistryAuth{
-			ID:       "reg-123",
-			Name:     "my-registry",
-			Username: "user",
+			ID:   "reg-123",
+			Name: "my-registry",
 		})
 	}))
 	defer server.Close()
@@ -62,9 +61,8 @@ func TestCreateContainerRegistryAuth(t *testing.T) {
 		var req ContainerRegistryAuthCreateRequest
 		json.NewDecoder(r.Body).Decode(&req)
 		json.NewEncoder(w).Encode(ContainerRegistryAuth{
-			ID:       "new-reg-id",
-			Name:     req.Name,
-			Username: req.Username,
+			ID:   "new-reg-id",
+			Name: req.Name,
 		})
 	}))
 	defer server.Close()

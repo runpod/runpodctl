@@ -124,7 +124,7 @@ type PodEnvVar struct {
 }
 
 // LegacyPod is the graphql-shaped pod view the ssh paths and the legacy commands
-// use, built from rest v2 (toLegacyPod) so their output is unchanged.
+// use, built from rest v2 (legacyPodFromSDK) so their output is unchanged.
 type LegacyPod struct {
 	ID                string         `json:"id"`
 	ContainerDiskInGb int            `json:"containerDiskInGb"`

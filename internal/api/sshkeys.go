@@ -1,13 +1,17 @@
 package api
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
+	"net/http"
 	"regexp"
 	"strings"
 
-	"github.com/runpod/runpodctl/internal/clierr"
+	runpod "github.com/runpod/go-sdk/v2"
+	"github.com/runpod/go-sdk/v2/lib/types"
 	"golang.org/x/crypto/ssh"
+
+	"github.com/runpod/runpodctl/internal/clierr"
 )
 
 // SSH keys live on the account: rest v2 lists them with GET /account/ssh-keys
@@ -72,20 +76,14 @@ func checkStoredSSHKeys(lines []string, removeInvalid bool) ([]string, error) {
 	return kept, nil
 }
 
-type sshKeysBody struct {
-	Keys []string `json:"keys"`
-}
-
 func (c *Client) getSSHKeyLines() ([]string, error) {
-	data, err := c.GetV2("/account/ssh-keys", nil)
+	resp, err := sdkCall[types.SshKeys](c, func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.Account.GetSshKeys(ctx)
+	})
 	if err != nil {
 		return nil, err
 	}
-	var body sshKeysBody
-	if err := json.Unmarshal(data, &body); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-	return body.Keys, nil
+	return resp.Keys, nil
 }
 
 // putSSHKeyLines replaces the account's key list. entries go out trimmed and
@@ -100,7 +98,9 @@ func (c *Client) putSSHKeyLines(lines []string) error {
 			clean = append(clean, line)
 		}
 	}
-	_, err := c.PutV2("/account/ssh-keys", &sshKeysBody{Keys: clean})
+	_, err := c.sdkSend(func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.Account.UpdateSshKeys(ctx, types.UpdateSshKeysRequest{Keys: clean})
+	})
 	return err
 }
 

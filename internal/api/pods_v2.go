@@ -1,62 +1,18 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
-	"net/url"
+	"net/http"
 	"strings"
 	"time"
-)
 
-// v2Pod is a pod as rest v2 reports it. toPod maps it onto the field names the
-// cli has always printed; toLegacyPod builds the runtime/ssh view that
-// internal/sshconnect and internal/podstate consume.
-//
-// v2 has no lastStatusChange and no machine details, so those are not reported
-// (`--include-machine` carries only dataCenterId and secureCloud).
-type v2Pod struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Status    string `json:"status"`
-	CreatedAt string `json:"createdAt"`
-	Image     string `json:"image"`
-	Gpu       *struct {
-		ID        string  `json:"id"`
-		Count     int     `json:"count"`
-		VcpuCount float64 `json:"vcpuCount"`
-		Memory    float64 `json:"memory"`
-	} `json:"gpu"`
-	Cpu *struct {
-		ID        string  `json:"id"`
-		VcpuCount float64 `json:"vcpuCount"`
-		Memory    float64 `json:"memory"`
-	} `json:"cpu"`
-	Disk   int `json:"disk"`
-	Mounts struct {
-		Persistent *v2PersistentMount `json:"persistent"`
-		Network    []struct {
-			VolumeID string `json:"volumeId"`
-			Path     string `json:"path"`
-		} `json:"network"`
-	} `json:"mounts"`
-	Ports        []string          `json:"ports"`
-	Cmd          []string          `json:"cmd"`
-	Entrypoint   []string          `json:"entrypoint"`
-	Cost         float64           `json:"cost"`
-	Env          map[string]string `json:"env"`
-	DataCenterID string            `json:"dataCenterId"`
-	Cloud        string            `json:"cloud"`
-	Runtime      *struct {
-		Uptime *int `json:"uptime"`
-		Ports  []struct {
-			IP      *string `json:"ip"`
-			Private int     `json:"private"`
-			Public  *int    `json:"public"`
-			Type    string  `json:"type"`
-		} `json:"ports"`
-	} `json:"runtime"`
-}
+	runpod "github.com/runpod/go-sdk/v2"
+	sdkpods "github.com/runpod/go-sdk/v2/lib/pods"
+	"github.com/runpod/go-sdk/v2/lib/types"
+)
 
 // legacyDesiredStatus maps v2's observed status onto the requested-state value
 // the cli has always printed as desiredStatus: a pod being provisioned or
@@ -72,72 +28,12 @@ func legacyDesiredStatus(status string) string {
 	}
 }
 
-// legacyTimestamp renders a v2 RFC 3339 time the way v1 did (Go's time.String
-// layout, e.g. "2026-10-02 05:28:38.366 +0000 UTC"), which `pod get` has always
-// printed. An unparseable value is passed through unchanged.
-func legacyTimestamp(v string) interface{} {
-	if v == "" {
-		return nil
-	}
-	t, err := time.Parse(time.RFC3339Nano, v)
-	if err != nil {
-		return v
-	}
+// legacyTimestamp renders a v2 time the way v1 did (Go's time.String layout,
+// e.g. "2026-10-02 05:28:38.366 +0000 UTC"), which `pod get` has always
+// printed. The API sends the zero time when it has none, which v1 printed as
+// "0001-01-01 00:00:00 +0000 UTC" too.
+func legacyTimestamp(t time.Time) interface{} {
 	return t.UTC().String()
-}
-
-func (p *v2Pod) memoryAndVcpu() (memory, vcpu int) {
-	switch {
-	case p.Gpu != nil:
-		return int(p.Gpu.Memory), int(p.Gpu.VcpuCount)
-	case p.Cpu != nil:
-		return int(p.Cpu.Memory), int(p.Cpu.VcpuCount)
-	}
-	return 0, 0
-}
-
-func (p *v2Pod) volume() (sizeGb int, mountPath, networkVolumeID string) {
-	if m := p.Mounts.Persistent; m != nil {
-		sizeGb, mountPath = m.Size, m.Path
-	}
-	if len(p.Mounts.Network) > 0 {
-		networkVolumeID = p.Mounts.Network[0].VolumeID
-		if mountPath == "" {
-			mountPath = p.Mounts.Network[0].Path
-		}
-	}
-	return sizeGb, mountPath, networkVolumeID
-}
-
-func (p *v2Pod) toPod() Pod {
-	memory, vcpu := p.memoryAndVcpu()
-	volumeInGb, mountPath, networkVolumeID := p.volume()
-	pod := Pod{
-		ID:                p.ID,
-		Name:              p.Name,
-		DesiredStatus:     legacyDesiredStatus(p.Status),
-		CreatedAt:         legacyTimestamp(p.CreatedAt),
-		ImageName:         p.Image,
-		VolumeInGb:        volumeInGb,
-		ContainerDiskInGb: p.Disk,
-		MemoryInGb:        memory,
-		VcpuCount:         vcpu,
-		VolumeMountPath:   mountPath,
-		Ports:             p.Ports,
-		DockerStartCmd:    p.Cmd,
-		DockerEntrypoint:  p.Entrypoint,
-		CostPerHr:         p.Cost,
-		NetworkVolumeID:   networkVolumeID,
-		legacy:            p.toLegacyPod(),
-	}
-	if p.Gpu != nil {
-		pod.GpuTypeID = p.Gpu.ID
-		pod.GpuCount = p.Gpu.Count
-	}
-	if len(p.Env) > 0 {
-		pod.Env = p.Env
-	}
-	return pod
 }
 
 // isPublicIP reports whether ip is reachable from the internet. graphql flagged
@@ -153,85 +49,53 @@ func isPublicIP(ip string) bool {
 	return !cgnat.Contains(parsed)
 }
 
-func (p *v2Pod) toLegacyPod() *LegacyPod {
-	memory, vcpu := p.memoryAndVcpu()
-	volumeInGb, mountPath, _ := p.volume()
-	legacy := &LegacyPod{
-		ID:                p.ID,
-		ContainerDiskInGb: p.Disk,
-		CostPerHr:         float32(p.Cost),
-		DesiredStatus:     legacyDesiredStatus(p.Status),
-		ImageName:         p.Image,
-		MemoryInGb:        memory,
-		Name:              p.Name,
-		Ports:             strings.Join(p.Ports, ","),
-		VcpuCount:         vcpu,
-		VolumeInGb:        volumeInGb,
-		VolumeMountPath:   mountPath,
-	}
-	if p.Gpu != nil {
-		legacy.GpuCount = p.Gpu.Count
-	}
-	for k, v := range p.Env {
-		legacy.Env = append(legacy.Env, k+"="+v)
-	}
-	if p.Runtime != nil {
-		runtime := &LegacyRuntime{UptimeInSeconds: p.Runtime.Uptime, Ports: []*LegacyPort{}}
-		for _, port := range p.Runtime.Ports {
-			lp := &LegacyPort{PrivatePort: port.Private, PortType: port.Type}
-			if port.IP != nil {
-				lp.Ip = *port.IP
-			}
-			if port.Public != nil {
-				lp.PublicPort = *port.Public
-			}
-			// reachable means a public address and a published port; a port
-			// v2 lists before it publishes one is not an endpoint yet. any
-			// type, as graphql's isIpPublic was; ssh checks for tcp itself
-			lp.IsIpPublic = port.IP != nil && port.Public != nil && *port.Public > 0 && isPublicIP(*port.IP)
-			runtime.Ports = append(runtime.Ports, lp)
-		}
-		legacy.Runtime = runtime
-	}
-	return legacy
-}
-
-func parseV2Pod(data []byte) (*Pod, error) {
-	var p v2Pod
+// parseSDKPod decodes a rest v2 pod read.
+func parseSDKPod(data []byte) (*Pod, error) {
+	var p types.Pod
 	if err := json.Unmarshal(data, &p); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
-	pod := p.toPod()
+	pod := podFromSDK(p)
 	return &pod, nil
 }
 
-// listV2Pods reads every pod, following v2's pagination.
-func (c *Client) listV2Pods() ([]v2Pod, error) {
-	var pods []v2Pod
-	err := c.getV2AllPages("/pods", nil, func(data []byte) error {
-		var page struct {
-			Pods []v2Pod `json:"pods"`
-		}
-		if err := json.Unmarshal(data, &page); err != nil {
-			return fmt.Errorf("failed to parse response: %w", err)
+// listSDKPods reads every pod, following v2's pagination.
+func (c *Client) listSDKPods() ([]types.Pod, error) {
+	var pods []types.Pod
+	err := sdkAllPages("/pods", func(cursor *string) (types.Pagination, error) {
+		page, err := sdkCall[types.ListPodsResponse](c, func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+			return sdk.Pods.ListPods(ctx, &sdkpods.ListPodsParams{Cursor: cursor})
+		})
+		if err != nil {
+			return types.Pagination{}, err
 		}
 		pods = append(pods, page.Pods...)
-		return nil
+		return page.Pagination, nil
 	})
 	return pods, err
+}
+
+// getSDKPod reads one pod.
+func (c *Client) getSDKPod(podID string) (*types.Pod, error) {
+	if err := requireID(podID); err != nil {
+		return nil, err
+	}
+	return sdkCall[types.Pod](c, func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.Pods.GetPod(ctx, podID)
+	})
 }
 
 // GetPods returns every pod in the runtime/ssh view that internal/sshconnect,
 // internal/podstate and the --wait poll consume. It replaces the graphql
 // myPods read: v2 reports runtime telemetry and ports directly.
 func (c *Client) GetPods() ([]*LegacyPod, error) {
-	pods, err := c.listV2Pods()
+	pods, err := c.listSDKPods()
 	if err != nil {
 		return nil, err
 	}
 	out := make([]*LegacyPod, 0, len(pods))
-	for i := range pods {
-		out = append(out, pods[i].toLegacyPod())
+	for _, p := range pods {
+		out = append(out, legacyPodFromSDK(p))
 	}
 	return out, nil
 }
@@ -240,15 +104,11 @@ func (c *Client) GetPods() ([]*LegacyPod, error) {
 // The v2 list can leave runtime out while the single-pod read reports it
 // (seen in prod), so a wait that needs runtime fills it in from here.
 func (c *Client) GetPodRuntime(podID string) (*LegacyPod, error) {
-	data, err := c.GetV2("/pods/"+url.PathEscape(podID), nil)
+	p, err := c.getSDKPod(podID)
 	if err != nil {
 		return nil, err
 	}
-	var p v2Pod
-	if err := json.Unmarshal(data, &p); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-	return p.toLegacyPod(), nil
+	return legacyPodFromSDK(*p), nil
 }
 
 // GetLegacyPods returns every pod as the legacy `get pod` command prints it:
@@ -256,23 +116,22 @@ func (c *Client) GetPodRuntime(podID string) (*LegacyPod, error) {
 // and the location from the data center id (legacyLocation). v2 cannot tell a
 // spot pod from an on-demand one, so podType is always RESERVED.
 func (c *Client) GetLegacyPods() ([]*LegacyPod, error) {
-	pods, err := c.listV2Pods()
+	pods, err := c.listSDKPods()
 	if err != nil {
 		return nil, err
 	}
 	var gpuNames map[string]string
 	out := make([]*LegacyPod, 0, len(pods))
-	for i := range pods {
-		p := &pods[i]
-		legacy := p.toLegacyPod()
+	for _, p := range pods {
+		legacy := legacyPodFromSDK(p)
 		legacy.PodType = "RESERVED"
-		machine := &LegacyMachine{GpuDisplayName: "unknown", Location: legacyLocation(p.DataCenterID)}
-		if p.Gpu != nil && p.Gpu.ID != "" {
+		machine := &LegacyMachine{GpuDisplayName: "unknown", Location: legacyLocation(deref(p.DataCenterId))}
+		if p.Gpu != nil && p.Gpu.Id != "" {
 			if gpuNames == nil {
 				gpuNames = c.catalogGpuNames()
 			}
-			machine.GpuDisplayName = p.Gpu.ID
-			if name := gpuNames[p.Gpu.ID]; name != "" {
+			machine.GpuDisplayName = p.Gpu.Id
+			if name := gpuNames[p.Gpu.Id]; name != "" {
 				machine.GpuDisplayName = name
 			}
 		}
@@ -292,7 +151,7 @@ func (c *Client) catalogGpuNames() map[string]string {
 		return names
 	}
 	for _, gpu := range gpus {
-		names[gpu.ID] = gpu.Name
+		names[gpu.Id] = gpu.Name
 	}
 	return names
 }

@@ -39,11 +39,11 @@ func TestGetTemplateBackfillsPortsConfigFromGraphQL(t *testing.T) {
 	viper.Set("apiUrl", server.URL)
 	defer viper.Set("apiUrl", "")
 
+	t.Setenv("RUNPOD_API_URL", server.URL)
 	client, err := NewClient()
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
-	client.baseURL = server.URL
 
 	tmpl, err := client.GetTemplate("tpl-1")
 	if err != nil {

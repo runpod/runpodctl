@@ -234,7 +234,8 @@ func TestUpdatePodCompletesVolumeFromCurrentMount(t *testing.T) {
 				case http.MethodPatch:
 					var body map[string]json.RawMessage
 					_ = json.NewDecoder(r.Body).Decode(&body)
-					if got := string(body["mounts"]); got != tt.wantMounts {
+					// key order is not behaviour; compare the values
+					if got := string(body["mounts"]); !jsonEqual(got, tt.wantMounts) {
 						t.Errorf("mounts = %s, want %s", got, tt.wantMounts)
 					}
 					_, _ = io.WriteString(w, `{"id":"p","status":"RUNNING"}`)
@@ -299,7 +300,7 @@ func TestLegacyRuntimePortIsPublic(t *testing.T) {
 		"private address": {`{"ip":"100.65.17.95","private":22,"public":60476,"type":"tcp"}`, false},
 	}
 	for name, tc := range cases {
-		pod, err := parseV2Pod([]byte(`{"id":"p","status":"RUNNING","runtime":{"uptime":5,"ports":[` + tc.port + `]}}`))
+		pod, err := parseSDKPod([]byte(`{"id":"p","status":"RUNNING","runtime":{"uptime":5,"ports":[` + tc.port + `]}}`))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -307,4 +308,12 @@ func TestLegacyRuntimePortIsPublic(t *testing.T) {
 			t.Errorf("%s: public = %v, want %v", name, got, tc.want)
 		}
 	}
+}
+
+func jsonEqual(a, b string) bool {
+	if a == "" || b == "" {
+		return a == b
+	}
+	var av, bv any
+	return json.Unmarshal([]byte(a), &av) == nil && json.Unmarshal([]byte(b), &bv) == nil && reflect.DeepEqual(av, bv)
 }

@@ -1,15 +1,19 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
+	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/google/shlex"
+	runpod "github.com/runpod/go-sdk/v2"
+	"github.com/runpod/go-sdk/v2/lib/catalog"
+	"github.com/runpod/go-sdk/v2/lib/types"
+
 	"github.com/runpod/runpodctl/internal/clierr"
 )
 
@@ -37,36 +41,6 @@ type PodCreateV2Request struct {
 	GlobalNetworking bool
 	CountryCode      string
 	Compliance       []string
-}
-
-type v2PodGpu struct {
-	ID             string `json:"id"`
-	Count          int    `json:"count,omitempty"`
-	MinCudaVersion string `json:"minCudaVersion,omitempty"`
-}
-
-type v2PodCpu struct {
-	ID        string `json:"id"`
-	VcpuCount int    `json:"vcpuCount"`
-}
-
-type v2PodCreate struct {
-	Name             string            `json:"name"`
-	Image            string            `json:"image,omitempty"`
-	TemplateID       string            `json:"templateId,omitempty"`
-	Cloud            string            `json:"cloud,omitempty"`
-	Gpu              *v2PodGpu         `json:"gpu,omitempty"`
-	Cpu              *v2PodCpu         `json:"cpu,omitempty"`
-	Disk             int               `json:"disk,omitempty"`
-	Mounts           *v2PodMounts      `json:"mounts,omitempty"`
-	Ports            []string          `json:"ports,omitempty"`
-	Env              map[string]string `json:"env,omitempty"`
-	Cmd              []string          `json:"cmd,omitempty"`
-	Entrypoint       []string          `json:"entrypoint,omitempty"`
-	DataCenterIDs    []string          `json:"dataCenterIds,omitempty"`
-	Registry         string            `json:"registry,omitempty"`
-	StartSSH         bool              `json:"startSsh,omitempty"`
-	GlobalNetworking bool              `json:"globalNetworking,omitempty"`
 }
 
 // v1DefaultCpuVcpus is the vcpu count v1 gave a cpu pod created without one.
@@ -102,19 +76,30 @@ func (c *Client) CreatePodV2(req *PodCreateV2Request) (*Pod, map[string]interfac
 	if err := checkPlacement(req); err != nil {
 		return nil, nil, err
 	}
-	body := &v2PodCreate{
-		Name:             defaultPodName(req),
-		Image:            req.ImageName,
-		TemplateID:       req.TemplateID,
-		Cloud:            req.CloudType,
-		Disk:             req.ContainerDisk,
-		Ports:            req.Ports,
-		Env:              req.Env,
-		Cmd:              req.Cmd,
-		Entrypoint:       req.Entrypoint,
-		Registry:         req.RegistryAuthID,
-		StartSSH:         req.StartSSH,
-		GlobalNetworking: req.GlobalNetworking,
+	body := types.CreatePodRequest{
+		Name:       defaultPodName(req),
+		Image:      optional(req.ImageName),
+		TemplateId: optional(req.TemplateID),
+		Ports:      nonEmpty(req.Ports),
+		Cmd:        nonEmpty(req.Cmd),
+		Entrypoint: nonEmpty(req.Entrypoint),
+		Registry:   optional(req.RegistryAuthID),
+	}
+	if req.CloudType != "" {
+		cloud := types.Cloud(req.CloudType)
+		body.Cloud = &cloud
+	}
+	if req.ContainerDisk != 0 {
+		body.Disk = &req.ContainerDisk
+	}
+	if len(req.Env) > 0 {
+		body.Env = &req.Env
+	}
+	if req.StartSSH {
+		body.StartSsh = &req.StartSSH
+	}
+	if req.GlobalNetworking {
+		body.GlobalNetworking = &req.GlobalNetworking
 	}
 	switch {
 	case req.NetworkVolumeID != "":
@@ -122,19 +107,23 @@ func (c *Client) CreatePodV2(req *PodCreateV2Request) (*Pod, map[string]interfac
 		if path == "" {
 			path = "/workspace"
 		}
-		body.Mounts = &v2PodMounts{Network: []v2NetworkMount{{VolumeID: req.NetworkVolumeID, Path: path}}}
+		body.Mounts = &types.Mounts{Network: &[]types.NetworkMount{{VolumeId: req.NetworkVolumeID, Path: path}}}
 	case req.VolumeInGb > 0:
-		body.Mounts = &v2PodMounts{Persistent: &v2PersistentMount{Size: req.VolumeInGb, Path: req.VolumeMountPath}}
+		body.Mounts = &types.Mounts{Persistent: &types.PersistentMount{Size: req.VolumeInGb, Path: req.VolumeMountPath}}
 	}
 
 	dataCenters, err := c.placementDataCenters(req)
 	if err != nil {
 		return nil, nil, err
 	}
-	body.DataCenterIDs = dataCenters
+	body.DataCenterIds = nonEmpty(dataCenters)
 
 	if req.GpuTypeID != "" {
-		body.Gpu = &v2PodGpu{ID: req.GpuTypeID, Count: req.GpuCount, MinCudaVersion: req.MinCudaVersion}
+		gpu := &types.CreateGpuConfig{Id: req.GpuTypeID, MinCudaVersion: optional(req.MinCudaVersion)}
+		if req.GpuCount != 0 {
+			gpu.Count = &req.GpuCount
+		}
+		body.Gpu = gpu
 		return c.postPod(body)
 	}
 
@@ -144,7 +133,7 @@ func (c *Client) CreatePodV2(req *PodCreateV2Request) (*Pod, map[string]interfac
 	}
 	var lastErr error
 	for _, flavor := range flavors {
-		body.Cpu = &v2PodCpu{ID: flavor, VcpuCount: v1DefaultCpuVcpus}
+		body.Cpu = &types.CreateCpuConfig{Id: flavor, VcpuCount: v1DefaultCpuVcpus}
 		pod, raw, err := c.postPod(body)
 		if err == nil {
 			return pod, raw, nil
@@ -185,8 +174,10 @@ func checkPlacement(req *PodCreateV2Request) error {
 	return nil
 }
 
-func (c *Client) postPod(body *v2PodCreate) (*Pod, map[string]interface{}, error) {
-	data, err := c.PostV2("/pods", body)
+func (c *Client) postPod(body types.CreatePodRequest) (*Pod, map[string]interface{}, error) {
+	data, err := c.sdkSend(func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.Pods.CreatePod(ctx, body)
+	})
 	if err != nil {
 		var apiErr *APIError
 		if errors.As(err, &apiErr) && apiErr.Status < 500 {
@@ -200,7 +191,7 @@ func (c *Client) postPod(body *v2PodCreate) (*Pod, map[string]interface{}, error
 	}
 	var raw map[string]interface{}
 	_ = json.Unmarshal(data, &raw)
-	pod, err := parseV2Pod(data)
+	pod, err := parseSDKPod(data)
 	if err == nil && pod.ID == "" {
 		err = errors.New("no pod id in the reply")
 	}
@@ -233,29 +224,24 @@ func (e *uncertainCreateError) ErrorCode() string       { return "create_uncerta
 func (e *uncertainCreateError) ErrorResourceID() string { return e.id }
 
 func (c *Client) cpuFlavorsByStock() ([]string, error) {
-	data, err := c.GetV2("/catalog/cpus", url.Values{
-		"include":   {"AVAILABILITY"},
-		"product":   {"POD"},
-		"vcpuCount": {strconv.Itoa(v1DefaultCpuVcpus)},
+	vcpus := v1DefaultCpuVcpus
+	resp, err := sdkCall[types.ListCpuTypesResponse](c, func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.Catalog.ListCpuTypes(ctx, &catalog.ListCpuTypesParams{
+			Include:   &types.CatalogIncludeParam{types.CatalogIncludeAvailability},
+			Product:   &types.CpuProductFilter{types.CpuProductPod},
+			VcpuCount: &vcpus,
+		})
 	})
 	if err != nil {
 		return nil, err
 	}
-	var resp struct {
-		Cpus []struct {
-			ID           string `json:"id"`
-			Availability string `json:"availability"`
-		} `json:"cpus"`
-	}
-	if err := json.Unmarshal(data, &resp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
+	availability := func(cpu types.CpuType) string { return string(deref(cpu.Availability)) }
 	sort.SliceStable(resp.Cpus, func(i, j int) bool {
-		return stockRank(resp.Cpus[i].Availability) > stockRank(resp.Cpus[j].Availability)
+		return stockRank(availability(resp.Cpus[i])) > stockRank(availability(resp.Cpus[j]))
 	})
 	ids := make([]string, 0, len(resp.Cpus))
 	for _, cpu := range resp.Cpus {
-		ids = append(ids, cpu.ID)
+		ids = append(ids, cpu.Id)
 	}
 	return ids, nil
 }
@@ -279,18 +265,21 @@ func (c *Client) placementDataCenters(req *PodCreateV2Request) ([]string, error)
 	}
 
 	if req.CountryCode != "" {
-		params := url.Values{"include": {"AVAILABILITY"}, "product": {"POD"}, "countryCodes": {strings.ToUpper(req.CountryCode)}}
+		params := podAvailabilityParams()
+		params.CountryCodes = &types.CountryCodesFilter{strings.ToUpper(req.CountryCode)}
 		gpus, err := c.listCatalogGpus(params)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve --country-code: %w", err)
 		}
 		var ids []string
 		for _, gpu := range gpus {
-			if req.GpuTypeID != "" && !strings.EqualFold(gpu.ID, req.GpuTypeID) {
+			if req.GpuTypeID != "" && !strings.EqualFold(gpu.Id, req.GpuTypeID) {
 				continue
 			}
-			for _, dc := range gpu.DataCenters {
-				ids = append(ids, dc.ID)
+			if gpu.DataCenters != nil {
+				for _, dc := range *gpu.DataCenters {
+					ids = append(ids, dc.Id)
+				}
 			}
 		}
 		if err := narrow(dedupe(ids), "--country-code "+req.CountryCode); err != nil {
@@ -299,21 +288,19 @@ func (c *Client) placementDataCenters(req *PodCreateV2Request) ([]string, error)
 	}
 
 	if len(cleanList(req.Compliance)) > 0 {
-		data, err := c.GetV2("/catalog/datacenters", url.Values{"compliance": {strings.Join(cleanList(req.Compliance), ",")}})
+		compliance := []types.Compliance{}
+		for _, v := range cleanList(req.Compliance) {
+			compliance = append(compliance, types.Compliance(v))
+		}
+		resp, err := sdkCall[types.ListDataCentersResponse](c, func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+			return sdk.Catalog.ListDataCenters(ctx, &catalog.ListDataCentersParams{Compliance: &compliance})
+		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve --compliance: %w", err)
 		}
-		var resp struct {
-			DataCenters []struct {
-				ID string `json:"id"`
-			} `json:"dataCenters"`
-		}
-		if err := json.Unmarshal(data, &resp); err != nil {
-			return nil, fmt.Errorf("failed to parse response: %w", err)
-		}
 		var ids []string
 		for _, dc := range resp.DataCenters {
-			ids = append(ids, dc.ID)
+			ids = append(ids, dc.Id)
 		}
 		if err := narrow(ids, "--compliance "+strings.Join(req.Compliance, ",")); err != nil {
 			return nil, err

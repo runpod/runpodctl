@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 
@@ -82,7 +81,7 @@ func TestClient_Get(t *testing.T) {
 	}
 	client.baseURL = server.URL
 
-	data, err := client.GetV2("/test", nil)
+	data, err := client.requestURL(http.MethodGet, client.baseURL+"/test", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -114,7 +113,7 @@ func TestClient_Post(t *testing.T) {
 	}
 	client.baseURL = server.URL
 
-	data, err := client.PostV2("/test", map[string]string{"name": "test"})
+	data, err := client.requestURL(http.MethodPost, client.baseURL+"/test", map[string]string{"name": "test"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -145,7 +144,7 @@ func TestClient_Delete(t *testing.T) {
 	}
 	client.baseURL = server.URL
 
-	_, err = client.DeleteV2("/test/123")
+	_, err = client.requestURL(http.MethodDelete, client.baseURL+"/test/123", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -166,7 +165,7 @@ func TestClient_ErrorResponse(t *testing.T) {
 	}
 	client.baseURL = server.URL
 
-	_, err = client.GetV2("/notfound", nil)
+	_, err = client.requestURL(http.MethodGet, client.baseURL+"/notfound", nil)
 	if err == nil {
 		t.Error("expected error for 404 response")
 	}
@@ -415,33 +414,6 @@ func TestParseAPIError_NeverEmitsANestedJSONBlob(t *testing.T) {
 	}
 }
 
-func TestRequestV2UsesRESTBaseURL(t *testing.T) {
-	var gotPath, gotQuery, gotMethod string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotMethod, gotPath, gotQuery = r.Method, r.URL.Path, r.URL.RawQuery
-		_, _ = w.Write([]byte(`{}`))
-	}))
-	defer server.Close()
-
-	client := &Client{
-		baseURL:    server.URL + "/v2/",
-		apiKey:     "test-key",
-		httpClient: server.Client(),
-	}
-	if _, err := client.GetV2("/pods", url.Values{"limit": {"5"}}); err != nil {
-		t.Fatalf("GetV2: %v", err)
-	}
-	if gotMethod != http.MethodGet || gotPath != "/v2/pods" || gotQuery != "limit=5" {
-		t.Fatalf("got %s %s?%s, want GET /v2/pods?limit=5", gotMethod, gotPath, gotQuery)
-	}
-	if _, err := client.DeleteV2("/pods/abc"); err != nil {
-		t.Fatalf("DeleteV2: %v", err)
-	}
-	if gotMethod != http.MethodDelete || gotPath != "/v2/pods/abc" {
-		t.Fatalf("got %s %s, want DELETE /v2/pods/abc", gotMethod, gotPath)
-	}
-}
-
 func TestRESTBaseURLFollowsConfig(t *testing.T) {
 	t.Setenv("RUNPOD_API_URL", "https://v2.example.test/v2/")
 	if got := restBaseURL(); got != "https://v2.example.test/v2" {
@@ -449,130 +421,13 @@ func TestRESTBaseURLFollowsConfig(t *testing.T) {
 	}
 }
 
-// v2 redirects an empty path segment to the collection; following it would
-// turn `delete ""` into a successful read of the list
-func TestRequestV2RefusesEmptyIDAndRedirects(t *testing.T) {
-	hits := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits++
-		if r.URL.Path == "/old" {
-			http.Redirect(w, r, "/registries", http.StatusMovedPermanently)
-			return
-		}
-		_, _ = w.Write([]byte(`{"registries":[]}`))
-	}))
-	defer server.Close()
-	client := newV2TestClient(t, server)
-
-	_, err := client.DeleteV2("/registries/")
-	var usage interface{ ErrorCode() string }
-	if !errors.As(err, &usage) || usage.ErrorCode() != "usage_error" {
-		t.Fatalf("empty id: err = %v, want a usage_error", err)
-	}
-	if hits != 0 {
-		t.Fatalf("an empty id must not reach the api, got %d requests", hits)
-	}
-	for _, id := range []string{".", ".."} {
-		_, err = client.GetV2("/registries/"+url.PathEscape(id), nil)
-		if !errors.As(err, &usage) || usage.ErrorCode() != "usage_error" {
-			t.Fatalf("id %q: err = %v, want a usage_error", id, err)
-		}
-	}
-	// a caller that skipped url.PathEscape: encoded dots and slashes are
-	// checked decoded
-	for _, raw := range []string{"%2e", "%2E%2e", "%2f", "a%2fb", "%2e%2e%2f"} {
-		_, err = client.GetV2("/registries/"+raw, nil)
-		if !errors.As(err, &usage) || usage.ErrorCode() != "usage_error" {
-			t.Fatalf("path segment %q: err = %v, want a usage_error", raw, err)
-		}
-	}
-	if hits != 0 {
-		t.Fatalf("a dot-segment id must not reach the api, got %d requests", hits)
-	}
-
-	_, err = client.DeleteV2("/old")
-	if err == nil {
-		t.Fatal("a redirected delete must fail, not follow the redirect")
-	}
-	if !strings.Contains(err.Error(), "redirected (status 301)") || !strings.Contains(err.Error(), `"/registries"`) {
-		t.Errorf("redirect error = %q, want the status and the location named", err)
-	}
-	if hits != 1 {
-		t.Errorf("redirect was followed: %d requests", hits)
-	}
-}
-
-func TestGetV2AllPagesFollowsCursorsAndStopsOnRepeat(t *testing.T) {
-	var cursors []string
-	repeat := false
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c := r.URL.Query().Get("cursor")
-		cursors = append(cursors, c)
-		switch {
-		case c == "":
-			_, _ = w.Write([]byte(`{"items":[1],"pagination":{"hasNextPage":true,"nextCursor":"a b"}}`))
-		case repeat:
-			_, _ = w.Write([]byte(`{"items":[2],"pagination":{"hasNextPage":true,"nextCursor":"a b"}}`))
-		default:
-			_, _ = w.Write([]byte(`{"items":[2],"pagination":{"hasNextPage":false,"nextCursor":null}}`))
-		}
-	}))
-	defer server.Close()
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-	client, err := NewClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-	client.baseURL = server.URL
-
-	var items []int
-	decode := func(data []byte) error {
-		var page struct{ Items []int }
-		if err := json.Unmarshal(data, &page); err != nil {
-			return err
-		}
-		items = append(items, page.Items...)
-		return nil
-	}
-	if err := client.getV2AllPages("/things", url.Values{"limit": {"1"}}, decode); err != nil {
-		t.Fatal(err)
-	}
-	if len(items) != 2 || len(cursors) != 2 || cursors[1] != "a b" {
-		t.Fatalf("items = %v, cursors = %q", items, cursors)
-	}
-
-	repeat, items, cursors = true, nil, nil
-	if err := client.getV2AllPages("/things", nil, decode); err == nil {
-		t.Fatal("a repeated cursor must stop the walk with an error")
-	}
-	if len(cursors) != 2 {
-		t.Fatalf("expected the walk to stop after the repeat, got %d requests", len(cursors))
-	}
-}
-
-func TestGetV2AllPagesFailsOnMissingCursor(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"items":[1],"pagination":{"hasNextPage":true,"nextCursor":null}}`))
-	}))
-	defer server.Close()
-	t.Setenv("RUNPOD_API_KEY", "test-key")
-	client, err := NewClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-	client.baseURL = server.URL
-	if err := client.getV2AllPages("/things", nil, func([]byte) error { return nil }); err == nil {
-		t.Fatal("more pages without a cursor must be an error, not a partial list")
-	}
-}
-
 func newV2TestClient(t *testing.T, server *httptest.Server) *Client {
 	t.Helper()
 	t.Setenv("RUNPOD_API_KEY", "test-key")
+	t.Setenv("RUNPOD_API_URL", server.URL)
 	client, err := NewClient()
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.baseURL = server.URL
 	return client
 }

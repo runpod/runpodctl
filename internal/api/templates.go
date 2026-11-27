@@ -1,13 +1,18 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"sort"
 	"strings"
+
+	runpod "github.com/runpod/go-sdk/v2"
+	"github.com/runpod/go-sdk/v2/lib/catalog"
+	sdktemplates "github.com/runpod/go-sdk/v2/lib/templates"
+	"github.com/runpod/go-sdk/v2/lib/types"
 )
 
 // TemplatePortConfig represents a named port shown in the Runpod dashboard.
@@ -96,73 +101,6 @@ type templateGraphQL struct {
 	Readme                  string               `json:"readme,omitempty"`
 }
 
-// v2Template is a template as rest v2 reports it. toTemplate maps it onto the
-// field names the cli has always printed; readme, portsConfig and isRunpod have
-// no v2 field and are filled in from graphql where the cli shows them.
-type v2Template struct {
-	ID         string            `json:"id"`
-	Name       string            `json:"name"`
-	Image      string            `json:"image"`
-	Serverless bool              `json:"serverless"`
-	Public     bool              `json:"public"`
-	Category   string            `json:"category"`
-	Ports      []string          `json:"ports"`
-	Env        map[string]string `json:"env"`
-	Disk       int               `json:"disk"`
-	Registry   *string           `json:"registry"`
-	Mounts     v2TemplateMounts  `json:"mounts"`
-	Entrypoint []string          `json:"entrypoint"`
-	Cmd        []string          `json:"cmd"`
-}
-
-type v2PersistentMount struct {
-	Size int    `json:"size"`
-	Path string `json:"path"`
-}
-
-type v2TemplateMounts struct {
-	Persistent *v2PersistentMount `json:"persistent,omitempty"`
-}
-
-func (t *v2Template) toTemplate() Template {
-	out := Template{
-		ID:                t.ID,
-		Name:              t.Name,
-		ImageName:         t.Image,
-		IsServerless:      t.Serverless,
-		IsPublic:          t.Public,
-		Category:          t.Category,
-		Ports:             t.Ports,
-		DockerEntrypoint:  t.Entrypoint,
-		DockerStartCmd:    t.Cmd,
-		ContainerDiskInGb: t.Disk,
-	}
-	if len(t.Env) > 0 {
-		out.Env = t.Env
-	}
-	if t.Registry != nil {
-		out.ContainerRegistryAuthID = *t.Registry
-	}
-	if p := t.Mounts.Persistent; p != nil {
-		out.VolumeInGb = p.Size
-		out.VolumeMountPath = p.Path
-	}
-	return out
-}
-
-func parseV2Template(data []byte) (*Template, error) {
-	var t v2Template
-	if err := json.Unmarshal(data, &t); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-	out := t.toTemplate()
-	return &out, nil
-}
-
-type v2TemplateList struct {
-	Templates []v2Template `json:"templates"`
-}
-
 // TemplateType for filtering
 type TemplateType string
 
@@ -217,15 +155,17 @@ type TemplateUpdateRequest struct {
 // ListTemplates returns templates (user's own via REST API)
 func (c *Client) ListTemplates() ([]Template, error) {
 	templates := []Template{}
-	err := c.getV2AllPages("/templates", nil, func(data []byte) error {
-		var page v2TemplateList
-		if err := json.Unmarshal(data, &page); err != nil {
-			return fmt.Errorf("failed to parse response: %w", err)
+	err := sdkAllPages("/templates", func(cursor *string) (types.Pagination, error) {
+		page, err := sdkCall[types.ListTemplatesResponse](c, func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+			return sdk.Templates.ListTemplates(ctx, &sdktemplates.ListTemplatesParams{Cursor: cursor})
+		})
+		if err != nil {
+			return types.Pagination{}, err
 		}
-		for i := range page.Templates {
-			templates = append(templates, page.Templates[i].toTemplate())
+		for _, t := range page.Templates {
+			templates = append(templates, templateFromSDK(t))
 		}
-		return nil
+		return page.Pagination, nil
 	})
 	if err != nil {
 		return nil, err
@@ -273,17 +213,16 @@ func (c *Client) backfillUserTemplateReadmes(templates []Template) {
 
 // listOfficialTemplates reads runpod's official templates from the v2 catalog.
 func (c *Client) listOfficialTemplates() ([]Template, error) {
-	data, err := c.GetV2("/catalog/templates", url.Values{"source": {"official"}})
+	source := catalog.CatalogTemplateSourceOfficial
+	list, err := sdkCall[types.TemplateList](c, func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.Catalog.ListPublicTemplates(ctx, &catalog.ListPublicTemplatesParams{Source: &source})
+	})
 	if err != nil {
 		return nil, err
 	}
-	var list v2TemplateList
-	if err := json.Unmarshal(data, &list); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
 	templates := make([]Template, 0, len(list.Templates))
-	for i := range list.Templates {
-		t := list.Templates[i].toTemplate()
+	for _, raw := range list.Templates {
+		t := templateFromSDK(raw)
 		t.IsRunpod = true
 		templates = append(templates, listingFields(t))
 	}
@@ -414,7 +353,12 @@ func (c *Client) ListAllTemplates(opts *TemplateListOptions) ([]Template, error)
 // field, so they are read from graphql (best-effort, as the label backfill always
 // was). a template v2 cannot read falls back to graphql entirely.
 func (c *Client) GetTemplate(templateID string) (*Template, error) {
-	data, err := c.GetV2("/templates/"+url.PathEscape(templateID), nil)
+	if err := requireID(templateID); err != nil {
+		return nil, err
+	}
+	raw, err := sdkCall[types.Template](c, func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.Templates.GetTemplate(ctx, templateID)
+	})
 	if err != nil {
 		// only a template v2 doesn't know falls back; any other failure (a
 		// usage error, auth, a 5xx) is the real error and is reported as-is.
@@ -424,10 +368,8 @@ func (c *Client) GetTemplate(templateID string) (*Template, error) {
 		}
 		return c.getTemplateByIDGraphQL(templateID)
 	}
-	template, err := parseV2Template(data)
-	if err != nil {
-		return nil, err
-	}
+	t := templateFromSDK(*raw)
+	template := &t
 	if gql, gqlErr := c.getTemplateByIDGraphQL(templateID); gqlErr == nil {
 		template.Readme = gql.Readme
 		template.PortsConfig = gql.PortsConfig
@@ -537,21 +479,6 @@ func templateFromGraphQL(source *templateGraphQL) *Template {
 	return template
 }
 
-type v2TemplateWrite struct {
-	Name       string            `json:"name,omitempty"`
-	Image      string            `json:"image,omitempty"`
-	Serverless *bool             `json:"serverless,omitempty"`
-	Ports      []string          `json:"ports,omitempty"`
-	Entrypoint []string          `json:"entrypoint,omitempty"`
-	Cmd        []string          `json:"cmd,omitempty"`
-	Env        map[string]string `json:"env,omitempty"`
-	Disk       *int              `json:"disk,omitempty"`
-	// an empty string clears the registry. v2 ignores null here, despite the
-	// schema allowing it (observed 2026-10-02).
-	Registry *string           `json:"registry,omitempty"`
-	Mounts   *v2TemplateMounts `json:"mounts,omitempty"`
-}
-
 // v1DefaultTemplatePorts is what v1 gave a template created without ports. v2
 // defaults to none, so the cli sends v1's default to keep `template create`
 // without --ports behaving as before.
@@ -564,14 +491,16 @@ func (c *Client) CreateTemplate(req *TemplateCreateRequest) (*Template, error) {
 	if len(ports) == 0 {
 		ports = v1DefaultTemplatePorts
 	}
-	body := &v2TemplateWrite{
+	body := types.CreateTemplateRequest{
 		Name:       req.Name,
 		Image:      req.ImageName,
 		Serverless: &req.IsServerless,
-		Ports:      ports,
-		Entrypoint: req.DockerEntrypoint,
-		Cmd:        req.DockerStartCmd,
-		Env:        req.Env,
+		Ports:      &ports,
+		Entrypoint: nonEmpty(req.DockerEntrypoint),
+		Cmd:        nonEmpty(req.DockerStartCmd),
+	}
+	if len(req.Env) > 0 {
+		body.Env = &req.Env
 	}
 	if req.ContainerDiskInGb > 0 {
 		body.Disk = &req.ContainerDiskInGb
@@ -580,37 +509,55 @@ func (c *Client) CreateTemplate(req *TemplateCreateRequest) (*Template, error) {
 		body.Registry = &req.ContainerRegistryAuthID
 	}
 	if req.VolumeInGb > 0 {
-		body.Mounts = &v2TemplateMounts{Persistent: &v2PersistentMount{Size: req.VolumeInGb, Path: req.VolumeMountPath}}
+		body.Mounts = &types.TemplateMounts{Persistent: &types.PersistentMount{Size: req.VolumeInGb, Path: req.VolumeMountPath}}
 	}
-	data, err := c.PostV2("/templates", body)
-	if err != nil {
-		return nil, err
-	}
-	return parseV2Template(data)
+	return c.writeTemplate(func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		// BACKWARD_COMPATIBILITY: an empty --name or --image is left out of the
+		// body, so the API answers with the same error as before. Next major:
+		// reject it locally.
+		return sdk.Templates.CreateTemplate(ctx, body, dropEmptyStrings("name", "image"))
+	})
 }
 
 // UpdateTemplate updates an existing template. Readme has no v2 field; callers
 // set it over graphql (GraphQLClient.UpdateTemplateReadme).
 func (c *Client) UpdateTemplate(templateID string, req *TemplateUpdateRequest) (*Template, error) {
-	body := &v2TemplateWrite{
-		Name:  req.Name,
-		Image: req.ImageName,
-		Ports: req.Ports,
-		Env:   req.Env,
-		Disk:  req.ContainerDiskInGb,
+	if err := requireID(templateID); err != nil {
+		return nil, err
 	}
-	if req.ContainerRegistryAuthID != nil {
-		body.Registry = req.ContainerRegistryAuthID
+	// an empty string clears the registry. v2 ignores null here, despite the
+	// schema allowing it (observed 2026-10-02).
+	body := types.UpdateTemplateRequest{
+		Name:     optional(req.Name),
+		Image:    optional(req.ImageName),
+		Ports:    nonEmpty(req.Ports),
+		Disk:     req.ContainerDiskInGb,
+		Registry: req.ContainerRegistryAuthID,
 	}
-	data, err := c.PatchV2("/templates/"+url.PathEscape(templateID), body)
+	if len(req.Env) > 0 {
+		body.Env = &req.Env
+	}
+	return c.writeTemplate(func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.Templates.UpdateTemplate(ctx, templateID, body)
+	})
+}
+
+func (c *Client) writeTemplate(call sdkRequest) (*Template, error) {
+	raw, err := sdkCall[types.Template](c, call)
 	if err != nil {
 		return nil, err
 	}
-	return parseV2Template(data)
+	t := templateFromSDK(*raw)
+	return &t, nil
 }
 
 // DeleteTemplate deletes a template
 func (c *Client) DeleteTemplate(templateID string) error {
-	_, err := c.DeleteV2("/templates/" + url.PathEscape(templateID))
+	if err := requireID(templateID); err != nil {
+		return err
+	}
+	_, err := c.sdkSend(func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.Templates.DeleteTemplate(ctx, templateID)
+	})
 	return err
 }

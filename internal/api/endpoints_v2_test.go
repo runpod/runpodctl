@@ -65,9 +65,7 @@ func (s *v2EndpointStub) client(t *testing.T) *Client {
 		}
 	}))
 	t.Cleanup(server.Close)
-	t.Setenv("RUNPOD_API_URL", server.URL)
 	client := newV2TestClient(t, server)
-	client.baseURL = server.URL
 	return client
 }
 
@@ -256,13 +254,13 @@ func (s *updateModelsStub) client(t *testing.T) *Client {
 	t.Cleanup(server.Close)
 
 	t.Setenv("RUNPOD_API_KEY", "test-key")
+	t.Setenv("RUNPOD_API_URL", "http://rest.invalid")
 	viper.Set("apiUrl", server.URL)
 
 	client, err := NewClient()
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	client.baseURL = "http://rest.invalid"
 	return client
 }
 

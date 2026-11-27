@@ -24,11 +24,11 @@ func TestCreateTemplateIncludesRegistryAuthID(t *testing.T) {
 	defer server.Close()
 
 	t.Setenv("RUNPOD_API_KEY", "test-key")
+	t.Setenv("RUNPOD_API_URL", server.URL)
 	client, err := NewClient()
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
-	client.baseURL = server.URL
 
 	_, err = client.CreateTemplate(&TemplateCreateRequest{
 		Name:                    "private-template",
@@ -62,11 +62,11 @@ func TestUpdateTemplateCanClearRegistryAuthID(t *testing.T) {
 	defer server.Close()
 
 	t.Setenv("RUNPOD_API_KEY", "test-key")
+	t.Setenv("RUNPOD_API_URL", server.URL)
 	client, err := NewClient()
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
-	client.baseURL = server.URL
 
 	empty := ""
 	_, err = client.UpdateTemplate("tpl-123", &TemplateUpdateRequest{

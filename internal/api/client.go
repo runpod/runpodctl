@@ -8,13 +8,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"runtime"
 	"strings"
 	"time"
 
+	runpod "github.com/runpod/go-sdk/v2"
 	"github.com/runpod/runpodctl/internal/agent"
-	"github.com/runpod/runpodctl/internal/clierr"
 	"github.com/runpod/runpodctl/internal/configenv"
 	"github.com/spf13/viper"
 )
@@ -40,6 +39,9 @@ type Client struct {
 	apiKey     string
 	httpClient *http.Client
 	userAgent  string
+
+	// sdk sends the rest v2 calls; see newSDK.
+	sdk *runpod.Client
 }
 
 // NewClient creates a new REST API client
@@ -59,11 +61,17 @@ func NewClientWithAPIKey(apiKey string) (*Client, error) {
 		timeout = DefaultTimeout
 	}
 
+	baseURL, userAgent := restBaseURL(), buildUserAgent()
+	sdk, err := newSDK(baseURL, apiKey, userAgent, timeout)
+	if err != nil {
+		return nil, err
+	}
 	return &Client{
-		baseURL:    restBaseURL(),
+		baseURL:    baseURL,
 		apiKey:     apiKey,
 		httpClient: &http.Client{Timeout: timeout, CheckRedirect: noRedirects},
-		userAgent:  buildUserAgent(),
+		userAgent:  userAgent,
+		sdk:        sdk,
 	}, nil
 }
 
@@ -184,103 +192,6 @@ func (c *Client) send(ctx context.Context, method, u string, jsonBody []byte) (*
 		return got, fmt.Errorf("failed to read response: %w", err)
 	}
 	return got, nil
-}
-
-// requestV2 is request against the rest v2 api.
-func (c *Client) requestV2(method, endpoint string, params url.Values, body interface{}) ([]byte, error) {
-	// an empty id leaves an empty path segment ("/registries/"), which v2
-	// redirects to the collection: a get would print an empty object and a
-	// delete would report success without deleting anything. an id of "." or
-	// ".." is the same hazard once anything on the way resolves dot segments.
-	// segments are checked decoded, so a caller that forgets url.PathEscape
-	// can't slip "%2e" or "%2f" past the check.
-	segs := strings.Split(strings.TrimPrefix(endpoint, "/"), "/")
-	for _, seg := range segs {
-		decoded, err := url.PathUnescape(seg)
-		if err != nil {
-			return nil, clierr.Usagef("invalid resource id %q", seg)
-		}
-		switch {
-		case decoded == "":
-			return nil, clierr.Usagef("a resource id is required")
-		case strings.Contains(decoded, "/") || decoded == "." || decoded == "..":
-			return nil, clierr.Usagef("invalid resource id %q", decoded)
-		}
-	}
-	u := strings.TrimRight(c.baseURL, "/") + endpoint
-	if len(params) > 0 {
-		u += "?" + params.Encode()
-	}
-	return c.requestURL(method, u, body)
-}
-
-// GetV2 makes a GET request against the rest v2 api
-func (c *Client) GetV2(endpoint string, params url.Values) ([]byte, error) {
-	return c.requestV2(http.MethodGet, endpoint, params, nil)
-}
-
-// PostV2 makes a POST request against the rest v2 api
-func (c *Client) PostV2(endpoint string, body interface{}) ([]byte, error) {
-	return c.requestV2(http.MethodPost, endpoint, nil, body)
-}
-
-// PatchV2 makes a PATCH request against the rest v2 api
-func (c *Client) PatchV2(endpoint string, body interface{}) ([]byte, error) {
-	return c.requestV2(http.MethodPatch, endpoint, nil, body)
-}
-
-// PutV2 makes a PUT request against the rest v2 api
-func (c *Client) PutV2(endpoint string, body interface{}) ([]byte, error) {
-	return c.requestV2(http.MethodPut, endpoint, nil, body)
-}
-
-// DeleteV2 makes a DELETE request against the rest v2 api
-func (c *Client) DeleteV2(endpoint string) ([]byte, error) {
-	return c.requestV2(http.MethodDelete, endpoint, nil, nil)
-}
-
-// getV2AllPages walks a cursor-paginated rest v2 list, handing each page body to
-// decode. v2 list routes cap a page (1000 by default), so reading only the first
-// page silently truncates a large account.
-func (c *Client) getV2AllPages(endpoint string, params url.Values, decode func([]byte) error) error {
-	query := url.Values{}
-	for k, v := range params {
-		query[k] = v
-	}
-	seen := map[string]bool{}
-	for {
-		data, err := c.GetV2(endpoint, query)
-		if err != nil {
-			return err
-		}
-		if err := decode(data); err != nil {
-			return err
-		}
-		var page struct {
-			Pagination struct {
-				NextCursor  *string `json:"nextCursor"`
-				HasNextPage bool    `json:"hasNextPage"`
-			} `json:"pagination"`
-		}
-		if err := json.Unmarshal(data, &page); err != nil {
-			return fmt.Errorf("failed to parse response: %w", err)
-		}
-		if !page.Pagination.HasNextPage {
-			return nil
-		}
-		next := page.Pagination.NextCursor
-		// more pages but no way to ask for them: stopping here would hand back
-		// a partial list as if it were the whole thing
-		if next == nil || *next == "" {
-			return fmt.Errorf("the api reported more pages of %s but no cursor to fetch them", endpoint)
-		}
-		// a cursor the api already handed out would loop forever
-		if seen[*next] {
-			return fmt.Errorf("the api repeated page cursor %q while listing %s", *next, endpoint)
-		}
-		seen[*next] = true
-		query.Set("cursor", *next)
-	}
 }
 
 // Error codes emitted by the cli via the ErrorCode() interface. These form the
