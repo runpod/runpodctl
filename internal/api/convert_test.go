@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/runpod/go-sdk/v2/lib/types"
 )
@@ -146,5 +147,60 @@ func TestTemplateFromSDK(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v\nwant %+v", got, want)
+	}
+}
+
+func sdkTestPod() types.Pod {
+	count, uptime, private, public := 2, 3600, 22, 40022
+	ip, tcp, dc := "203.0.113.10", "tcp", "EU-RO-1"
+	return types.Pod{
+		Id: "pod-abc123", Name: "my-pod", Status: "STARTING", Image: "runpod/pytorch:2.1.0",
+		CreatedAt: time.Date(2026, 6, 1, 12, 0, 0, 123000000, time.UTC),
+		Gpu:       &types.GpuConfig{Id: "NVIDIA A40", Count: &count, Memory: 62.5, VcpuCount: 16},
+		Disk:      50, Ports: []string{"8888/http", "22/tcp"}, Cost: 0.69, DataCenterId: &dc,
+		Cmd: &[]string{"sleep", "infinity"}, Entrypoint: &[]string{"/bin/bash", "-c"},
+		Env: map[string]string{"HF_HOME": "/workspace/hf"},
+		Mounts: types.Mounts{
+			Persistent: &types.PersistentMount{Size: 20, Path: "/workspace"},
+			Network:    &[]types.NetworkMount{{VolumeId: "vol-abc123", Path: "/data"}},
+		},
+		Runtime: &types.PodRuntime{Uptime: &uptime, Ports: &[]types.PodRuntimePort{{Ip: &ip, Private: &private, Public: &public, Type: &tcp}}},
+	}
+}
+
+func TestPodFromSDK(t *testing.T) {
+	got := podFromSDK(sdkTestPod())
+	// set by GetPod's options, or never reported by v2
+	requireAllFieldsSet(t, got, "UptimeSeconds", "NetworkVolume", "Machine", "Runtime")
+	want := Pod{
+		ID: "pod-abc123", Name: "my-pod", DesiredStatus: "RUNNING", CreatedAt: "2026-06-01 12:00:00.123 +0000 UTC",
+		ImageName: "runpod/pytorch:2.1.0", GpuTypeID: "NVIDIA A40", GpuCount: 2, VolumeInGb: 20, ContainerDiskInGb: 50,
+		MemoryInGb: 62, VcpuCount: 16, VolumeMountPath: "/workspace", Ports: []string{"8888/http", "22/tcp"},
+		DockerStartCmd: []string{"sleep", "infinity"}, DockerEntrypoint: []string{"/bin/bash", "-c"}, CostPerHr: 0.69,
+		NetworkVolumeID: "vol-abc123", Env: map[string]string{"HF_HOME": "/workspace/hf"},
+	}
+	got.legacy = nil
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v\nwant %+v", got, want)
+	}
+}
+
+func TestLegacyPodFromSDK(t *testing.T) {
+	got := legacyPodFromSDK(sdkTestPod())
+	// set by GetLegacyPods only
+	requireAllFieldsSet(t, got, "PodType", "Machine")
+	if got.CostPerHr != float32(0.69) || got.Env[0] != "HF_HOME=/workspace/hf" || got.Ports != "8888/http,22/tcp" || got.MemoryInGb != 62 {
+		t.Fatalf("got %+v", got)
+	}
+	port := got.Runtime.Ports[0]
+	if want := (LegacyPort{Ip: "203.0.113.10", IsIpPublic: true, PrivatePort: 22, PublicPort: 40022, PortType: "tcp"}); *port != want {
+		t.Fatalf("port = %+v, want %+v", *port, want)
+	}
+}
+
+func TestPodFromSDKCPUAndMissingTime(t *testing.T) {
+	got := podFromSDK(types.Pod{Id: "pod-def456", Status: "EXITED", Cpu: &types.CpuConfig{Id: "cpu3c", Memory: 4, VcpuCount: 2}})
+	if got.MemoryInGb != 4 || got.VcpuCount != 2 || got.CreatedAt != nil || got.DesiredStatus != "EXITED" || got.GpuTypeID != "" {
+		t.Fatalf("got %+v", got)
 	}
 }

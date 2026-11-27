@@ -2,6 +2,7 @@ package api
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/runpod/go-sdk/v2/lib/types"
 )
@@ -125,4 +126,116 @@ func templateFromSDK(t types.Template) Template {
 		out.VolumeMountPath = p.Path
 	}
 	return out
+}
+
+func deref[T any](p *T) T {
+	var zero T
+	if p == nil {
+		return zero
+	}
+	return *p
+}
+
+func podMemoryAndVcpu(p types.Pod) (memory, vcpu int) {
+	switch {
+	case p.Gpu != nil:
+		return int(p.Gpu.Memory), int(p.Gpu.VcpuCount)
+	case p.Cpu != nil:
+		return p.Cpu.Memory, p.Cpu.VcpuCount
+	}
+	return 0, 0
+}
+
+func podVolume(p types.Pod) (sizeGb int, mountPath, networkVolumeID string) {
+	if m := p.Mounts.Persistent; m != nil {
+		sizeGb, mountPath = m.Size, m.Path
+	}
+	if p.Mounts.Network != nil && len(*p.Mounts.Network) > 0 {
+		network := (*p.Mounts.Network)[0]
+		networkVolumeID = network.VolumeId
+		if mountPath == "" {
+			mountPath = network.Path
+		}
+	}
+	return sizeGb, mountPath, networkVolumeID
+}
+
+// podFromSDK converts a rest v2 pod read, carrying the runtime/ssh view of the
+// same read along (Pod.Legacy).
+//
+// BACKWARD_COMPATIBILITY: prints the field names v1 did (desiredStatus mapped
+// from v2's status, imageName, costPerHr, createdAt in Go's time.String
+// layout, ...). Next major: print the API's pod.
+func podFromSDK(p types.Pod) Pod {
+	memory, vcpu := podMemoryAndVcpu(p)
+	volumeInGb, mountPath, networkVolumeID := podVolume(p)
+	pod := Pod{
+		ID:                p.Id,
+		Name:              p.Name,
+		DesiredStatus:     legacyDesiredStatus(string(p.Status)),
+		CreatedAt:         legacyTimestamp(p.CreatedAt),
+		ImageName:         p.Image,
+		VolumeInGb:        volumeInGb,
+		ContainerDiskInGb: p.Disk,
+		MemoryInGb:        memory,
+		VcpuCount:         vcpu,
+		VolumeMountPath:   mountPath,
+		Ports:             p.Ports,
+		DockerStartCmd:    deref(p.Cmd),
+		DockerEntrypoint:  deref(p.Entrypoint),
+		CostPerHr:         float32To64(p.Cost),
+		NetworkVolumeID:   networkVolumeID,
+		legacy:            legacyPodFromSDK(p),
+	}
+	if p.Gpu != nil {
+		pod.GpuTypeID = p.Gpu.Id
+		pod.GpuCount = deref(p.Gpu.Count)
+	}
+	if len(p.Env) > 0 {
+		pod.Env = p.Env
+	}
+	return pod
+}
+
+// legacyPodFromSDK converts a rest v2 pod read into the runtime/ssh view that
+// internal/sshconnect, internal/podstate and the deprecated pod commands use.
+//
+// BACKWARD_COMPATIBILITY: the graphql-era shape (env as KEY=VALUE, ports as a
+// comma-separated string, isIpPublic per runtime port). Next major: use the
+// API's pod.
+func legacyPodFromSDK(p types.Pod) *LegacyPod {
+	memory, vcpu := podMemoryAndVcpu(p)
+	volumeInGb, mountPath, _ := podVolume(p)
+	legacy := &LegacyPod{
+		ID:                p.Id,
+		ContainerDiskInGb: p.Disk,
+		CostPerHr:         p.Cost,
+		DesiredStatus:     legacyDesiredStatus(string(p.Status)),
+		ImageName:         p.Image,
+		MemoryInGb:        memory,
+		Name:              p.Name,
+		Ports:             strings.Join(p.Ports, ","),
+		VcpuCount:         vcpu,
+		VolumeInGb:        volumeInGb,
+		VolumeMountPath:   mountPath,
+	}
+	if p.Gpu != nil {
+		legacy.GpuCount = deref(p.Gpu.Count)
+	}
+	for k, v := range p.Env {
+		legacy.Env = append(legacy.Env, k+"="+v)
+	}
+	if p.Runtime != nil {
+		runtime := &LegacyRuntime{UptimeInSeconds: p.Runtime.Uptime, Ports: []*LegacyPort{}}
+		for _, port := range deref(p.Runtime.Ports) {
+			lp := &LegacyPort{PrivatePort: deref(port.Private), PortType: deref(port.Type), Ip: deref(port.Ip), PublicPort: deref(port.Public)}
+			// reachable means a public address and a published port; a port
+			// v2 lists before it publishes one is not an endpoint yet. any
+			// type, as graphql's isIpPublic was; ssh checks for tcp itself
+			lp.IsIpPublic = port.Ip != nil && port.Public != nil && *port.Public > 0 && isPublicIP(*port.Ip)
+			runtime.Ports = append(runtime.Ports, lp)
+		}
+		legacy.Runtime = runtime
+	}
+	return legacy
 }

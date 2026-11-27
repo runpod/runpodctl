@@ -1,10 +1,13 @@
 package api
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
-	"net/url"
+	"net/http"
 	"strings"
+
+	runpod "github.com/runpod/go-sdk/v2"
+	"github.com/runpod/go-sdk/v2/lib/types"
 )
 
 // Pod represents a runpod pod
@@ -60,7 +63,7 @@ type PodUpdateRequest struct {
 
 // ListPods returns all pods
 func (c *Client) ListPods(opts *PodListOptions) ([]Pod, error) {
-	v2Pods, err := c.listV2Pods()
+	v2Pods, err := c.listSDKPods()
 	if err != nil {
 		return nil, err
 	}
@@ -69,8 +72,7 @@ func (c *Client) ListPods(opts *PodListOptions) ([]Pod, error) {
 	// every pod), so the filters are applied here. the name filter is an exact,
 	// case-insensitive match, as v1's was.
 	pods := make([]Pod, 0, len(v2Pods))
-	for i := range v2Pods {
-		p := &v2Pods[i]
+	for _, p := range v2Pods {
 		if opts != nil {
 			if opts.Name != "" && !strings.EqualFold(p.Name, opts.Name) {
 				continue
@@ -80,14 +82,14 @@ func (c *Client) ListPods(opts *PodListOptions) ([]Pod, error) {
 				strings.EqualFold(opts.ComputeType, "CPU") && p.Gpu != nil {
 				continue
 			}
-			if len(opts.GpuTypeIDs) > 0 && (p.Gpu == nil || !containsFold(opts.GpuTypeIDs, p.Gpu.ID)) {
+			if len(opts.GpuTypeIDs) > 0 && (p.Gpu == nil || !containsFold(opts.GpuTypeIDs, p.Gpu.Id)) {
 				continue
 			}
-			if len(opts.DataCenterIDs) > 0 && !containsFold(opts.DataCenterIDs, p.DataCenterID) {
+			if len(opts.DataCenterIDs) > 0 && !containsFold(opts.DataCenterIDs, deref(p.DataCenterId)) {
 				continue
 			}
 		}
-		pods = append(pods, p.toPod())
+		pods = append(pods, podFromSDK(p))
 	}
 	return pods, nil
 }
@@ -113,21 +115,16 @@ type PodListOptions struct {
 // reports only the data center and whether it is secure cloud. includeNetworkVolume
 // reads the attached volume separately, as v2 reports only its id.
 func (c *Client) GetPod(podID string, includeMachine, includeNetworkVolume bool) (*Pod, error) {
-	data, err := c.GetV2("/pods/"+url.PathEscape(podID), nil)
+	p, err := c.getSDKPod(podID)
 	if err != nil {
 		return nil, err
 	}
-
-	var p v2Pod
-	if err := json.Unmarshal(data, &p); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-	pod := p.toPod()
+	pod := podFromSDK(*p)
 
 	if includeMachine {
 		pod.Machine = map[string]interface{}{
-			"dataCenterId": p.DataCenterID,
-			"secureCloud":  strings.EqualFold(p.Cloud, "SECURE"),
+			"dataCenterId": deref(p.DataCenterId),
+			"secureCloud":  strings.EqualFold(string(p.Cloud), "SECURE"),
 		}
 	}
 	if includeNetworkVolume && pod.NetworkVolumeID != "" {
@@ -142,36 +139,23 @@ func (c *Client) GetPod(podID string, includeMachine, includeNetworkVolume bool)
 	return &pod, nil
 }
 
-// v2PodUpdate is the rest v2 pod PATCH body.
-type v2PodUpdate struct {
-	Name   string            `json:"name,omitempty"`
-	Image  string            `json:"image,omitempty"`
-	Disk   int               `json:"disk,omitempty"`
-	Ports  []string          `json:"ports,omitempty"`
-	Env    map[string]string `json:"env,omitempty"`
-	Mounts *v2PodMounts      `json:"mounts,omitempty"`
-}
-
-type v2NetworkMount struct {
-	VolumeID string `json:"volumeId"`
-	Path     string `json:"path"`
-}
-
-type v2PodMounts struct {
-	Persistent *v2PersistentMount `json:"persistent,omitempty"`
-	Network    []v2NetworkMount   `json:"network,omitempty"`
-}
-
 // UpdatePod updates an existing pod. v2 takes a mount whole (size and path) and
 // keeps its kind, where v1 took volumeInGb or volumeMountPath alone, so a volume
 // change is completed from the pod's current mount.
 func (c *Client) UpdatePod(podID string, req *PodUpdateRequest) (*Pod, error) {
-	body := &v2PodUpdate{
-		Name:  req.Name,
-		Image: req.ImageName,
-		Disk:  req.ContainerDiskInGb,
-		Ports: req.Ports,
-		Env:   req.Env,
+	if err := requireID(podID); err != nil {
+		return nil, err
+	}
+	body := types.UpdatePodRequest{
+		Name:  optional(req.Name),
+		Image: optional(req.ImageName),
+		Ports: nonEmpty(req.Ports),
+	}
+	if req.ContainerDiskInGb != 0 {
+		body.Disk = &req.ContainerDiskInGb
+	}
+	if len(req.Env) > 0 {
+		body.Env = &req.Env
 	}
 	if req.VolumeInGb > 0 || req.VolumeMountPath != "" {
 		current, err := c.GetPod(podID, false, false)
@@ -188,52 +172,65 @@ func (c *Client) UpdatePod(podID string, req *PodUpdateRequest) (*Pod, error) {
 			if req.VolumeInGb > 0 {
 				return nil, fmt.Errorf("pod %s uses network volume %s, which a pod update cannot resize; use 'runpodctl network-volume update %s --size <gb>'", podID, current.NetworkVolumeID, current.NetworkVolumeID)
 			}
-			body.Mounts = &v2PodMounts{Network: []v2NetworkMount{{VolumeID: current.NetworkVolumeID, Path: path}}}
+			body.Mounts = &types.UpdatePodMounts{Network: &[]types.NetworkMountPatch{{VolumeId: current.NetworkVolumeID, Path: &path}}}
 		} else {
 			size := req.VolumeInGb
 			if size == 0 {
 				size = current.VolumeInGb
 			}
-			body.Mounts = &v2PodMounts{Persistent: &v2PersistentMount{Size: size, Path: path}}
+			body.Mounts = &types.UpdatePodMounts{Persistent: &types.PersistentMountPatch{Size: &size, Path: &path}}
 		}
 	}
-	data, err := c.PatchV2("/pods/"+url.PathEscape(podID), body)
+	p, err := sdkCall[types.Pod](c, func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.Pods.UpdatePod(ctx, podID, body)
+	})
 	if err != nil {
 		return nil, err
 	}
-	return parseV2Pod(data)
+	pod := podFromSDK(*p)
+	return &pod, nil
 }
 
 // podAction triggers a v2 lifecycle action and returns the pod as it stands
 // afterwards.
-func (c *Client) podAction(podID, action string) (*Pod, error) {
-	data, err := c.PostV2("/pods/"+url.PathEscape(podID)+"/action", map[string]string{"action": action})
+func (c *Client) podAction(podID string, action types.PodAction) (*Pod, error) {
+	if err := requireID(podID); err != nil {
+		return nil, err
+	}
+	data, err := c.sdkSend(func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.Pods.PodAction(ctx, podID, types.PodActionRequest{Action: action})
+	})
 	if err != nil {
 		return nil, err
 	}
 	if len(strings.TrimSpace(string(data))) > 0 {
-		return parseV2Pod(data)
+		return parseSDKPod(data)
 	}
 	return c.GetPod(podID, false, false)
 }
 
 // StartPod starts a stopped pod
 func (c *Client) StartPod(podID string) (*Pod, error) {
-	return c.podAction(podID, "start")
+	return c.podAction(podID, types.PodActionStart)
 }
 
 // StopPod stops a running pod
 func (c *Client) StopPod(podID string) (*Pod, error) {
-	return c.podAction(podID, "stop")
+	return c.podAction(podID, types.PodActionStop)
 }
 
 // DeletePod deletes a pod
 func (c *Client) DeletePod(podID string) error {
-	_, err := c.DeleteV2("/pods/" + url.PathEscape(podID))
+	if err := requireID(podID); err != nil {
+		return err
+	}
+	_, err := c.sdkSend(func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.Pods.DeletePod(ctx, podID)
+	})
 	return err
 }
 
 // RestartPod restarts a pod
 func (c *Client) RestartPod(podID string) (*Pod, error) {
-	return c.podAction(podID, "restart")
+	return c.podAction(podID, types.PodActionRestart)
 }
