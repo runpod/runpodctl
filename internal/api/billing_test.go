@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -53,8 +54,9 @@ func TestBillingUsesV2RoutesAndFilters(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != tt.wantPath || r.URL.RawQuery != tt.wantQuery {
-					t.Errorf("got %s?%s, want %s?%s", r.URL.Path, r.URL.RawQuery, tt.wantPath, tt.wantQuery)
+				// parameter order is not behaviour; compare them sorted
+				if got := r.URL.Query().Encode(); r.URL.Path != tt.wantPath || got != tt.wantQuery {
+					t.Errorf("got %s?%s, want %s?%s", r.URL.Path, got, tt.wantPath, tt.wantQuery)
 				}
 				_, _ = io.WriteString(w, tt.body)
 			}))
@@ -87,5 +89,25 @@ func TestBillingEmptyIsAnEmptyList(t *testing.T) {
 	}
 	if records == nil || len(records) != 0 {
 		t.Fatalf("records = %#v, want an empty non-nil list so json prints []", records)
+	}
+}
+
+func TestBillingSendsUnparsableTimesForTheAPIToReject(t *testing.T) {
+	var gotQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query().Encode()
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = io.WriteString(w, `{"title":"Unprocessable Entity","status":422,"detail":"Request validation failed."}`)
+	}))
+	defer server.Close()
+
+	_, err := newV2TestClient(t, server).GetPodBilling(&BillingOptions{StartTime: "2026-11-01", EndTime: "2026-11-02T00:00:00Z"})
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusUnprocessableEntity || apiErr.ErrorCode() != "bad_request" {
+		t.Fatalf("err = %v, want the API's 422 bad_request", err)
+	}
+	if want := "endTime=2026-11-02T00%3A00%3A00Z&startTime=2026-11-01"; gotQuery != want {
+		t.Fatalf("query = %s, want %s", gotQuery, want)
 	}
 }

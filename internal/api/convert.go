@@ -1,6 +1,10 @@
 package api
 
-import "github.com/runpod/go-sdk/v2/lib/types"
+import (
+	"strconv"
+
+	"github.com/runpod/go-sdk/v2/lib/types"
+)
 
 // Converters from the generated SDK's types to the structs the cli prints. The
 // cli keeps its own structs so that its JSON output does not change shape when
@@ -8,4 +12,68 @@ import "github.com/runpod/go-sdk/v2/lib/types"
 
 func networkVolumeFromSDK(v types.NetworkVolume) NetworkVolume {
 	return NetworkVolume{ID: v.Id, Name: v.Name, Size: v.Size, DataCenterID: v.DataCenter}
+}
+
+// float32To64 widens an SDK float32 (the spec types prices as float) without
+// the binary noise a plain conversion adds: 0.69 stays 0.69, not
+// 0.6899999976158142.
+func float32To64(f float32) float64 {
+	v, _ := strconv.ParseFloat(strconv.FormatFloat(float64(f), 'g', -1, 32), 64)
+	return v
+}
+
+// gpuTypeFromSDK converts a catalog gpu read with pod availability. The overall
+// status is the better of v2's top-level availability and the best data center:
+// the top level also counts community stock that has no data center entry, but
+// it can read NONE while a data center reads LOW (observed 2026-10-03 for the
+// RTX A4000 without a cloud filter).
+func gpuTypeFromSDK(gpu types.GpuType) GpuTypeWithAvailability {
+	var stockStatus string
+	if gpu.Availability != nil {
+		stockStatus = legacyStockStatus(string(*gpu.Availability))
+	}
+	var perDC []GpuDataCenterAvailability
+	if gpu.DataCenters != nil {
+		for _, dc := range *gpu.DataCenters {
+			stock := legacyStockStatus(string(dc.Availability))
+			if betterStock(stock, stockStatus) {
+				stockStatus = stock
+			}
+			if stock == "" {
+				stock = "none"
+			}
+			perDC = append(perDC, GpuDataCenterAvailability{DataCenterID: dc.Id, StockStatus: stock})
+		}
+	}
+	return GpuTypeWithAvailability{
+		GpuType: GpuType{
+			ID:             gpu.Id,
+			DisplayName:    gpu.Name,
+			MemoryInGb:     gpu.Memory,
+			SecureCloud:    gpu.Secure,
+			CommunityCloud: gpu.Community,
+			SecurePrice:    float32To64(gpu.Price.Secure),
+			CommunityPrice: float32To64(gpu.Price.Community),
+		},
+		StockStatus:            stockStatus,
+		Available:              hasStock(stockStatus),
+		DataCenterAvailability: perDC,
+	}
+}
+
+// dataCenterFromSDK converts a data center read with gpu availability. v2
+// reports a region (e.g. NORTH_AMERICA) where graphql had a country-level
+// location; it is carried in Location.
+func dataCenterFromSDK(dc types.DataCenter) DataCenter {
+	out := DataCenter{ID: dc.Id, Name: dc.Name, Location: string(dc.Region)}
+	if dc.GpuAvailability != nil {
+		for _, g := range *dc.GpuAvailability {
+			out.GpuAvailability = append(out.GpuAvailability, GpuAvailabilityInDataCenter{
+				GpuTypeID:   g.Id,
+				DisplayName: g.Name,
+				StockStatus: legacyStockStatus(string(g.Availability)),
+			})
+		}
+	}
+	return out
 }

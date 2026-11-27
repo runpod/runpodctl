@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/google/shlex"
+	"github.com/runpod/go-sdk/v2/lib/types"
 	"github.com/runpod/runpodctl/internal/clierr"
 )
 
@@ -279,18 +280,21 @@ func (c *Client) placementDataCenters(req *PodCreateV2Request) ([]string, error)
 	}
 
 	if req.CountryCode != "" {
-		params := url.Values{"include": {"AVAILABILITY"}, "product": {"POD"}, "countryCodes": {strings.ToUpper(req.CountryCode)}}
+		params := podAvailabilityParams()
+		params.CountryCodes = &types.CountryCodesFilter{strings.ToUpper(req.CountryCode)}
 		gpus, err := c.listCatalogGpus(params)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve --country-code: %w", err)
 		}
 		var ids []string
 		for _, gpu := range gpus {
-			if req.GpuTypeID != "" && !strings.EqualFold(gpu.ID, req.GpuTypeID) {
+			if req.GpuTypeID != "" && !strings.EqualFold(gpu.Id, req.GpuTypeID) {
 				continue
 			}
-			for _, dc := range gpu.DataCenters {
-				ids = append(ids, dc.ID)
+			if gpu.DataCenters != nil {
+				for _, dc := range *gpu.DataCenters {
+					ids = append(ids, dc.Id)
+				}
 			}
 		}
 		if err := narrow(dedupe(ids), "--country-code "+req.CountryCode); err != nil {

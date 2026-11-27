@@ -1,9 +1,14 @@
 package api
 
 import (
-	"encoding/json"
-	"fmt"
+	"context"
+	"net/http"
 	"net/url"
+	"time"
+
+	runpod "github.com/runpod/go-sdk/v2"
+	"github.com/runpod/go-sdk/v2/lib/billing"
+	"github.com/runpod/go-sdk/v2/lib/types"
 )
 
 // Billing records are printed in the rest v2 shape: one record per resource per
@@ -51,36 +56,69 @@ type BillingOptions struct {
 	EndpointID string
 }
 
-func (o *BillingOptions) params(idParam, id string) url.Values {
-	params := url.Values{}
-	if o == nil {
-		return params
-	}
-	if o.StartTime != "" {
-		params.Set("startTime", o.StartTime)
-	}
-	if o.EndTime != "" {
-		params.Set("endTime", o.EndTime)
-	}
-	if o.BucketSize != "" {
-		params.Set("bucketSize", o.BucketSize)
-	}
-	if id != "" {
-		params.Set(idParam, id)
-	}
-	return params
+// billingQuery is the shared part of the billing list parameters.
+type billingQuery struct {
+	start, end *time.Time
+	bucket     *types.BillingBucketSize
+	// raw holds a time the cli could not parse, sent as typed so the API
+	// rejects it with its own validation error, as it always has.
+	raw url.Values
 }
 
-func getBillingRecords[T any](c *Client, path string, params url.Values) ([]T, error) {
-	data, err := c.GetV2(path, params)
+func (o *BillingOptions) query() billingQuery {
+	q := billingQuery{raw: url.Values{}}
+	if o == nil {
+		return q
+	}
+	parse := func(param, value string) *time.Time {
+		if value == "" {
+			return nil
+		}
+		t, err := time.Parse(time.RFC3339, value)
+		if err != nil {
+			q.raw.Set(param, value)
+			return nil
+		}
+		return &t
+	}
+	q.start = parse("startTime", o.StartTime)
+	q.end = parse("endTime", o.EndTime)
+	if o.BucketSize != "" {
+		b := types.BillingBucketSize(o.BucketSize)
+		q.bucket = &b
+	}
+	return q
+}
+
+// rawTimes adds the times the cli could not parse to the request's query.
+func (q billingQuery) rawTimes(_ context.Context, req *http.Request) error {
+	if len(q.raw) == 0 {
+		return nil
+	}
+	query := req.URL.Query()
+	for k, v := range q.raw {
+		query[k] = v
+	}
+	req.URL.RawQuery = query.Encode()
+	return nil
+}
+
+func optional(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// listBillingRecords decodes into the cli's own record types, which match the
+// wire shape: the SDK's records parse startTime and endTime into time.Time,
+// which would print them differently from what the API sent.
+func listBillingRecords[T any](c *Client, call sdkRequest) ([]T, error) {
+	resp, err := sdkCall[struct {
+		Records []T `json:"records"`
+	}](c, call)
 	if err != nil {
 		return nil, err
-	}
-	var resp struct {
-		Records []T `json:"records"`
-	}
-	if err := json.Unmarshal(data, &resp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 	if resp.Records == nil {
 		resp.Records = []T{}
@@ -90,25 +128,35 @@ func getBillingRecords[T any](c *Client, path string, params url.Values) ([]T, e
 
 // GetPodBilling returns billing history for pods
 func (c *Client) GetPodBilling(opts *BillingOptions) ([]PodBillingRecord, error) {
-	var podID string
+	q := opts.query()
+	params := &billing.ListPodBillingParams{StartTime: q.start, EndTime: q.end, BucketSize: q.bucket}
 	if opts != nil {
-		podID = opts.PodID
+		params.PodId = optional(opts.PodID)
 	}
-	return getBillingRecords[PodBillingRecord](c, "/billing/pods", opts.params("podId", podID))
+	return listBillingRecords[PodBillingRecord](c, func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.Billing.ListPodBilling(ctx, params, q.rawTimes)
+	})
 }
 
 // GetEndpointBilling returns billing history for serverless endpoints. this is
 // v2's /billing/serverless: v2's /billing/endpoints bills public endpoints, a
 // different product.
 func (c *Client) GetEndpointBilling(opts *BillingOptions) ([]ServerlessBillingRecord, error) {
-	var endpointID string
+	q := opts.query()
+	params := &billing.ListServerlessBillingParams{StartTime: q.start, EndTime: q.end, BucketSize: q.bucket}
 	if opts != nil {
-		endpointID = opts.EndpointID
+		params.ServerlessId = optional(opts.EndpointID)
 	}
-	return getBillingRecords[ServerlessBillingRecord](c, "/billing/serverless", opts.params("serverlessId", endpointID))
+	return listBillingRecords[ServerlessBillingRecord](c, func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.Billing.ListServerlessBilling(ctx, params, q.rawTimes)
+	})
 }
 
 // GetNetworkVolumeBilling returns billing history for network volumes
 func (c *Client) GetNetworkVolumeBilling(opts *BillingOptions) ([]NetworkVolumeBillingRecord, error) {
-	return getBillingRecords[NetworkVolumeBillingRecord](c, "/billing/network-volumes", opts.params("", ""))
+	q := opts.query()
+	params := &billing.ListNetworkVolumeBillingParams{StartTime: q.start, EndTime: q.end, BucketSize: q.bucket}
+	return listBillingRecords[NetworkVolumeBillingRecord](c, func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.Billing.ListNetworkVolumeBilling(ctx, params, q.rawTimes)
+	})
 }

@@ -292,7 +292,7 @@ func (c *Client) catalogGpuNames() map[string]string {
 		return names
 	}
 	for _, gpu := range gpus {
-		names[gpu.ID] = gpu.Name
+		names[gpu.Id] = gpu.Name
 	}
 	return names
 }

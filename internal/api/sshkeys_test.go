@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/runpod/go-sdk/v2/lib/types"
 )
 
 const (
@@ -26,9 +28,9 @@ func sshKeyServer(t *testing.T, keys []string, puts *[][]string) *httptest.Serve
 		}
 		switch r.Method {
 		case http.MethodGet:
-			_ = json.NewEncoder(w).Encode(sshKeysBody{Keys: keys})
+			_ = json.NewEncoder(w).Encode(types.SshKeys{Keys: keys})
 		case http.MethodPut:
-			var body sshKeysBody
+			var body types.UpdateSshKeysRequest
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			*puts = append(*puts, body.Keys)
 			_ = json.NewEncoder(w).Encode(body)

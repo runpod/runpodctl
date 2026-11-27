@@ -1,12 +1,16 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"sort"
 	"strings"
+
+	runpod "github.com/runpod/go-sdk/v2"
+	"github.com/runpod/go-sdk/v2/lib/catalog"
+	"github.com/runpod/go-sdk/v2/lib/types"
 
 	"github.com/runpod/runpodctl/internal/configenv"
 )
@@ -83,40 +87,25 @@ func (c *Client) graphqlRequest(query string, variables map[string]interface{}) 
 	return c.requestURL(http.MethodPost, apiURL, body)
 }
 
-// v2CatalogGpu is a gpu type from GET /v2/catalog/gpus.
-type v2CatalogGpu struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	Memory       int    `json:"memory"`
-	Secure       bool   `json:"secure"`
-	Community    bool   `json:"community"`
-	Pool         string `json:"pool"`
-	Availability string `json:"availability"`
-	Price        struct {
-		Secure    float64 `json:"secure"`
-		Community float64 `json:"community"`
-	} `json:"price"`
-	DataCenters []struct {
-		ID           string `json:"id"`
-		Availability string `json:"availability"`
-	} `json:"dataCenters"`
-}
-
 // listCatalogGpus reads the gpu catalog. the catalog routes return everything
 // in one response, with no pagination block (checked 2026-10-14), so one read
 // is the whole list.
-func (c *Client) listCatalogGpus(params url.Values) ([]v2CatalogGpu, error) {
-	data, err := c.GetV2("/catalog/gpus", params)
+func (c *Client) listCatalogGpus(params *catalog.ListGpuTypesParams) ([]types.GpuType, error) {
+	resp, err := sdkCall[types.ListGpuTypesResponse](c, func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.Catalog.ListGpuTypes(ctx, params)
+	})
 	if err != nil {
 		return nil, err
 	}
-	var resp struct {
-		Gpus []v2CatalogGpu `json:"gpus"`
-	}
-	if err := json.Unmarshal(data, &resp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
 	return resp.Gpus, nil
+}
+
+// podAvailabilityParams asks the gpu catalog for pod availability.
+func podAvailabilityParams() *catalog.ListGpuTypesParams {
+	return &catalog.ListGpuTypesParams{
+		Include: &types.CatalogIncludeParam{types.CatalogIncludeAvailability},
+		Product: &types.GpuProductFilter{types.ProductPod},
+	}
 }
 
 // legacyStockStatus spells a v2 availability (HIGH/MEDIUM/LOW/NONE) the way the
@@ -140,50 +129,21 @@ func legacyStockStatus(availability string) string {
 // ListGpuTypes returns all available GPU types (filters out deprecated/unavailable),
 // with pod availability from the v2 catalog.
 func (c *Client) ListGpuTypes(includeUnavailable bool) ([]GpuTypeWithAvailability, error) {
-	gpus, err := c.listCatalogGpus(url.Values{"include": {"AVAILABILITY"}, "product": {"POD"}})
+	gpus, err := c.listCatalogGpus(podAvailabilityParams())
 	if err != nil {
 		return nil, err
 	}
 
 	var result []GpuTypeWithAvailability
 	for _, gpu := range gpus {
-		// the overall status is the better of v2's top-level availability and the
-		// best data center: the top level also counts community stock that has no
-		// data center entry, but it can read NONE while a data center reads LOW
-		// (observed 2026-10-03 for the RTX A4000 without a cloud filter).
-		stockStatus := legacyStockStatus(gpu.Availability)
-		var perDC []GpuDataCenterAvailability
-		for _, dc := range gpu.DataCenters {
-			stock := legacyStockStatus(dc.Availability)
-			if betterStock(stock, stockStatus) {
-				stockStatus = stock
-			}
-			if stock == "" {
-				stock = "none"
-			}
-			perDC = append(perDC, GpuDataCenterAvailability{DataCenterID: dc.ID, StockStatus: stock})
-		}
-		available := hasStock(stockStatus)
-		if !includeUnavailable && !available {
+		out := gpuTypeFromSDK(gpu)
+		if !includeUnavailable && !out.Available {
 			continue
 		}
-		if gpu.ID == "unknown" {
+		if gpu.Id == "unknown" {
 			continue
 		}
-		result = append(result, GpuTypeWithAvailability{
-			GpuType: GpuType{
-				ID:             gpu.ID,
-				DisplayName:    gpu.Name,
-				MemoryInGb:     gpu.Memory,
-				SecureCloud:    gpu.Secure,
-				CommunityCloud: gpu.Community,
-				SecurePrice:    gpu.Price.Secure,
-				CommunityPrice: gpu.Price.Community,
-			},
-			StockStatus:            stockStatus,
-			Available:              available,
-			DataCenterAvailability: perDC,
-		})
+		result = append(result, out)
 	}
 	return result, nil
 }
@@ -248,16 +208,16 @@ func (c *Client) ListServerlessGpuPools() ([]ServerlessGpuPool, error) {
 	var pools []ServerlessGpuPool
 	index := map[string]int{}
 	for _, gpu := range gpus {
-		if gpu.Pool == "" {
+		if gpu.Pool == nil || *gpu.Pool == "" {
 			continue
 		}
-		i, ok := index[gpu.Pool]
+		i, ok := index[*gpu.Pool]
 		if !ok {
 			i = len(pools)
-			index[gpu.Pool] = i
-			pools = append(pools, ServerlessGpuPool{ID: gpu.Pool})
+			index[*gpu.Pool] = i
+			pools = append(pools, ServerlessGpuPool{ID: *gpu.Pool})
 		}
-		pools[i].GpuTypeIDs = append(pools[i].GpuTypeIDs, gpu.ID)
+		pools[i].GpuTypeIDs = append(pools[i].GpuTypeIDs, gpu.Id)
 	}
 	return pools, nil
 }
@@ -321,36 +281,17 @@ func (c *Client) ResolveServerlessGpuPoolID(gpuID string) (string, error) {
 // v2 reports a region (e.g. NORTH_AMERICA) where graphql had a country-level
 // location; it is carried in Location.
 func (c *Client) ListDataCenters() ([]DataCenter, error) {
-	data, err := c.GetV2("/catalog/datacenters", url.Values{"include": {"GPU_AVAILABILITY"}})
+	resp, err := sdkCall[types.ListDataCentersResponse](c, func(ctx context.Context, sdk *runpod.Client) (*http.Response, error) {
+		return sdk.Catalog.ListDataCenters(ctx, &catalog.ListDataCentersParams{
+			Include: &[]types.DataCenterInclude{types.DataCenterIncludeGpuAvailability},
+		})
+	})
 	if err != nil {
 		return nil, err
 	}
-	var resp struct {
-		DataCenters []struct {
-			ID              string `json:"id"`
-			Name            string `json:"name"`
-			Region          string `json:"region"`
-			GpuAvailability []struct {
-				ID           string `json:"id"`
-				Name         string `json:"name"`
-				Availability string `json:"availability"`
-			} `json:"gpuAvailability"`
-		} `json:"dataCenters"`
-	}
-	if err := json.Unmarshal(data, &resp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
 	dataCenters := make([]DataCenter, 0, len(resp.DataCenters))
 	for _, dc := range resp.DataCenters {
-		out := DataCenter{ID: dc.ID, Name: dc.Name, Location: dc.Region}
-		for _, g := range dc.GpuAvailability {
-			out.GpuAvailability = append(out.GpuAvailability, GpuAvailabilityInDataCenter{
-				GpuTypeID:   g.ID,
-				DisplayName: g.Name,
-				StockStatus: legacyStockStatus(g.Availability),
-			})
-		}
-		dataCenters = append(dataCenters, out)
+		dataCenters = append(dataCenters, dataCenterFromSDK(dc))
 	}
 	return dataCenters, nil
 }
