@@ -20,16 +20,11 @@ func testResponse(status int, body string) *http.Response {
 	return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}
 }
 
-func TestGetRequestConstructionErrorDoesNotRetry(t *testing.T) {
-	withRetryBackoff(t, time.Second)
-	client := newTestClient(t, "http://bad url")
-	start := time.Now()
-	_, err := client.GetV2("/x", nil)
-	if !errors.Is(err, errRequestConstruction) {
-		t.Fatalf("expected request construction error, got %v", err)
-	}
-	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
-		t.Fatalf("request construction took %v; it appears to have waited to retry", elapsed)
+func TestMalformedRESTURLFailsClientConstruction(t *testing.T) {
+	t.Setenv("RUNPOD_API_KEY", "test-key")
+	t.Setenv("RUNPOD_API_URL", "http://bad url")
+	if _, err := NewClient(); err == nil || !strings.Contains(err.Error(), "invalid rest api url") {
+		t.Fatalf("err = %v, want an invalid rest api url error", err)
 	}
 }
 
@@ -107,7 +102,6 @@ func newTestClient(t *testing.T, url string) *Client {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	c.baseURL = url
 	return c
 }
 

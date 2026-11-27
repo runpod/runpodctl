@@ -569,10 +569,10 @@ func TestGetV2AllPagesFailsOnMissingCursor(t *testing.T) {
 func newV2TestClient(t *testing.T, server *httptest.Server) *Client {
 	t.Helper()
 	t.Setenv("RUNPOD_API_KEY", "test-key")
+	t.Setenv("RUNPOD_API_URL", server.URL)
 	client, err := NewClient()
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.baseURL = server.URL
 	return client
 }

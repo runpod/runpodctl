@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	runpod "github.com/runpod/go-sdk/v2"
 	"github.com/runpod/runpodctl/internal/agent"
 	"github.com/runpod/runpodctl/internal/clierr"
 	"github.com/runpod/runpodctl/internal/configenv"
@@ -40,6 +41,9 @@ type Client struct {
 	apiKey     string
 	httpClient *http.Client
 	userAgent  string
+
+	// sdk sends the rest v2 calls; see newSDK.
+	sdk *runpod.Client
 }
 
 // NewClient creates a new REST API client
@@ -59,11 +63,17 @@ func NewClientWithAPIKey(apiKey string) (*Client, error) {
 		timeout = DefaultTimeout
 	}
 
+	baseURL, userAgent := restBaseURL(), buildUserAgent()
+	sdk, err := newSDK(baseURL, apiKey, userAgent, timeout)
+	if err != nil {
+		return nil, err
+	}
 	return &Client{
-		baseURL:    restBaseURL(),
+		baseURL:    baseURL,
 		apiKey:     apiKey,
 		httpClient: &http.Client{Timeout: timeout, CheckRedirect: noRedirects},
-		userAgent:  buildUserAgent(),
+		userAgent:  userAgent,
+		sdk:        sdk,
 	}, nil
 }
 
